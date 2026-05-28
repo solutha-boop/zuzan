@@ -1638,7 +1638,7 @@ function Registration({onComplete}) {
     try {
       // Register with real backend
       console.log("Registering with backend...", form.email);
-      const res = await fetch("http://localhost:8001/auth/register", {
+      const res = await fetch("https://zuzan-backend.onrender.com/auth/register", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -1664,7 +1664,7 @@ function Registration({onComplete}) {
       } else {
         // Email already registered — try login instead
         if (data.detail && data.detail.includes("already registered")) {
-          const loginRes = await fetch("http://localhost:8001/auth/login", {
+          const loginRes = await fetch("https://zuzan-backend.onrender.com/auth/login", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({email: form.email, password: (form.password || "").slice(0, 50)}),
