@@ -12,7 +12,7 @@ const C = {
   purple:"#6B2A8B", purpleLt:"#6B2A8B12",
 };
 
-const BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8001";
+const BASE_URL = "https://zuzan-backend.onrender.com";
 const fmt = n => `R${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2})}`;
 const fmtDate = d => new Date(d).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"});
 
