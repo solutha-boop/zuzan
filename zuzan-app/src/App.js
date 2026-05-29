@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 
 const C = {
@@ -1047,15 +1048,12 @@ function PrintBtn({onClick}) {
 
 function ExcelBtn({data,filename}) {
   const download = () => {
-    const rows = data.map(function(r){return Object.values(r).join(",");}).join("\n");
-    const header = Object.keys(data[0]||{}).join(",");
-    const blob = new Blob([header+"\n"+rows],{type:"text/csv"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href=url; a.download=filename; a.click();
-    URL.revokeObjectURL(url);
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Report");
+    XLSX.writeFile(wb, filename.replace(".csv",".xlsx"));
   };
-  return <button onClick={download} style={{background:C.greenLt,color:C.green,border:"1px solid "+C.green+"40",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Export CSV</button>;
+  return <button onClick={download} style={{background:C.greenLt,color:C.green,border:"1px solid "+C.green+"40",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Export Excel</button>;
 }
 
 function Reports({live = {}}) {
