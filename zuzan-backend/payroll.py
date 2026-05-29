@@ -263,140 +263,145 @@ async def monthly_trend(
     return months
 
 
-# ── PAYFAST PAYMENT GATEWAY ───────────────────────────────────────────────────
-payments_router = APIRouter()
-
-PAYFAST_MERCHANT_ID  = "10000100"
-PAYFAST_MERCHANT_KEY = "46f0cd694581a"
-PAYFAST_PASSPHRASE   = ""
-PAYFAST_SANDBOX      = True
-PAYFAST_URL = "https://sandbox.payfast.co.za/eng/process" if PAYFAST_SANDBOX else "https://www.payfast.co.za/eng/process"
-
-PLAN_PRICES = {
-    "starter":      {"monthly": 299,  "annual": 2990},
-    "professional": {"monthly": 699,  "annual": 6990},
-    "business":     {"monthly": 1299, "annual": 12990},
-}
-
-
-class PaymentInitRequest(BaseModel):
-    plan:            str
-    billing_cycle:   str = "monthly"
-    payroll_enabled: bool = False
-    employee_count:  int = 0
-
-
-def pf_signature(data: dict, passphrase: str = "") -> str:
-    params = {k: v for k, v in data.items() if v != ""}
-    param_string = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-    if passphrase:
-        param_string += f"&passphrase={passphrase}"
-    return hashlib.md5(param_string.encode()).hexdigest()
-
-
-@payments_router.post("/initiate")
-async def initiate_payment(
-    data: PaymentInitRequest,
+@reports_router.get("/balance-sheet")
+async def balance_sheet(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    plan_price   = PLAN_PRICES.get(data.plan, {}).get(data.billing_cycle, 299)
-    payroll_cost = max(99, data.employee_count * 17.50) if data.payroll_enabled else 0
-    total        = round(plan_price + payroll_cost, 2)
+    cid = current_user.company_id
+    now = datetime.utcnow()
 
-    payment = Payment(
-        company_id=current_user.company_id,
-        amount=total,
-        plan=data.plan,
-        billing_cycle=data.billing_cycle,
-        status="pending",
-    )
-    db.add(payment)
-    db.commit()
-    db.refresh(payment)
+    # Trade receivables = outstanding invoices
+    outstanding_invoices = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
+    ).all()
+    trade_receivables = round(sum(i.total_amount for i in outstanding_invoices), 2)
 
-    pf_data = {
-        "merchant_id":      PAYFAST_MERCHANT_ID,
-        "merchant_key":     PAYFAST_MERCHANT_KEY,
-        "return_url":       "http://localhost:3000/payment/success",
-        "cancel_url":       "http://localhost:3000/payment/cancel",
-        "notify_url":       "http://localhost:8001/payments/notify",
-        "name_first":       current_user.first_name,
-        "name_last":        current_user.last_name,
-        "email_address":    current_user.email,
-        "m_payment_id":     str(payment.id),
-        "amount":           f"{total:.2f}",
-        "item_name":        f"ZuZan {data.plan.capitalize()} Plan ({data.billing_cycle})",
-        "item_description": f"ZuZan subscription{' + Payroll' if data.payroll_enabled else ''}",
-        "custom_str1":      str(current_user.company_id),
-        "custom_str2":      data.plan,
-        "custom_str3":      data.billing_cycle,
-        "subscription_type": "1",
-        "billing_date":     datetime.utcnow().strftime("%Y-%m-%d"),
-        "recurring_amount": f"{plan_price:.2f}",
-        "frequency":        "3" if data.billing_cycle == "monthly" else "6",
-        "cycles":           "0",
-    }
-    pf_data["signature"] = pf_signature(pf_data, PAYFAST_PASSPHRASE)
+    # Cash approximation = total revenue collected - total expenses paid
+    all_paid = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status == InvoiceStatus.paid
+    ).all()
+    total_revenue_collected = sum(i.total_amount for i in all_paid)
+
+    all_expenses = db.query(Expense).filter(Expense.company_id == cid).all()
+    total_expenses_paid = sum(e.amount for e in all_expenses)
+
+    payslips = db.query(Payslip).join(Employee).filter(Employee.company_id == cid).all()
+    total_payroll_paid = sum(p.net_pay for p in payslips)
+
+    cash_and_equivalents = round(total_revenue_collected - total_expenses_paid - total_payroll_paid, 2)
+
+    # Liabilities: PAYE + UIF + SDL from last payroll run (current month)
+    month_start = datetime(now.year, now.month, 1)
+    recent_payslips = db.query(Payslip).join(Employee).filter(
+        Employee.company_id == cid,
+        Payslip.generated_at >= month_start
+    ).all()
+    paye_payable = round(sum(p.paye for p in recent_payslips), 2)
+    uif_payable  = round(sum(p.uif_employee + p.uif_employer for p in recent_payslips), 2)
+    sdl_payable  = round(sum(p.sdl for p in recent_payslips), 2)
+
+    total_assets      = round(cash_and_equivalents + trade_receivables, 2)
+    total_liabilities = round(paye_payable + uif_payable + sdl_payable, 2)
+    equity            = round(total_assets - total_liabilities, 2)
 
     return {
-        "payment_id":   payment.id,
-        "payfast_url":  PAYFAST_URL,
-        "payfast_data": pf_data,
-        "total":        total,
-        "sandbox":      PAYFAST_SANDBOX,
+        "date": now.strftime("%d %B %Y"),
+        "assets": {
+            "cash_and_equivalents": cash_and_equivalents,
+            "trade_receivables":    trade_receivables,
+            "total":                total_assets,
+        },
+        "liabilities": {
+            "paye_payable": paye_payable,
+            "uif_payable":  uif_payable,
+            "sdl_payable":  sdl_payable,
+            "total":        total_liabilities,
+        },
+        "equity": {
+            "retained_income": equity,
+            "total":           equity,
+        },
+        "total_liabilities_and_equity": round(total_liabilities + equity, 2),
     }
 
 
-@payments_router.post("/notify")
-async def payfast_notify(request: Request, db: Session = Depends(get_db)):
-    form   = await request.form()
-    data   = dict(form)
-    pf_id  = data.get("m_payment_id")
-    status = data.get("payment_status")
-
-    if not pf_id:
-        return JSONResponse(content={"status": "error"}, status_code=400)
-
-    payment = db.query(Payment).filter(Payment.id == int(pf_id)).first()
-    if not payment:
-        return JSONResponse(content={"status": "error"}, status_code=404)
-
-    if status == "COMPLETE":
-        payment.status    = "completed"
-        payment.payfast_id = data.get("pf_payment_id")
-        company = db.query(Company).filter(Company.id == int(data.get("custom_str1", 0))).first()
-        if company:
-            from database import SubscriptionStatus, PlanType, BillingCycle
-            company.subscription_status = SubscriptionStatus.active
-            company.plan          = PlanType(data.get("custom_str2", "starter"))
-            company.billing_cycle = BillingCycle(data.get("custom_str3", "monthly"))
-    else:
-        payment.status = "failed"
-
-    db.commit()
-    return JSONResponse(content={"status": "ok"})
-
-
-@payments_router.get("/subscription")
-async def subscription_status(
+@reports_router.get("/cash-flow")
+async def cash_flow(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    company    = db.query(Company).filter(Company.id == current_user.company_id).first()
-    plan_str   = str(company.plan).split(".")[-1]
-    billing_str = str(company.billing_cycle).split(".")[-1]
-    plan_price = PLAN_PRICES.get(plan_str, {}).get(billing_str, 299)
-    payroll_cost = max(99, company.payroll_employees * 17.50) if company.payroll_enabled else 0
+    cid = current_user.company_id
+    now = datetime.utcnow()
+    month_start = datetime(now.year, now.month, 1)
+
+    # Operating inflows: cash collected from customers this month
+    paid_this_month = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status == InvoiceStatus.paid,
+        Invoice.paid_date >= month_start
+    ).all()
+    cash_receipts = round(sum(i.total_amount for i in paid_this_month), 2)
+
+    # Operating outflows: expenses this month
+    expenses_this_month = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.expense_date >= month_start
+    ).all()
+    cash_payments = round(sum(e.amount for e in expenses_this_month), 2)
+
+    # Payroll outflows: net pay disbursed this month
+    payslips_this_month = db.query(Payslip).join(Employee).filter(
+        Employee.company_id == cid,
+        Payslip.generated_at >= month_start
+    ).all()
+    payroll_disbursed = round(sum(p.net_pay for p in payslips_this_month), 2)
+    sars_payments     = round(sum(p.paye + p.uif_employee + p.uif_employer + p.sdl for p in payslips_this_month), 2)
+
+    net_operating = round(cash_receipts - cash_payments - payroll_disbursed - sars_payments, 2)
 
     return {
-        "plan":              company.plan,
-        "billing_cycle":     company.billing_cycle,
-        "status":            company.subscription_status,
-        "trial_ends":        company.trial_ends.isoformat() if company.trial_ends else None,
-        "plan_price":        plan_price,
-        "payroll_cost":      payroll_cost,
-        "total_monthly":     plan_price + payroll_cost,
-        "payroll_enabled":   company.payroll_enabled,
-        "payroll_employees": company.payroll_employees,
+        "period": now.strftime("%B %Y"),
+        "operating": {
+            "cash_receipts_from_customers": cash_receipts,
+            "cash_paid_to_suppliers":       -cash_payments,
+            "payroll_net_pay":              -payroll_disbursed,
+            "sars_paye_uif_sdl":            -sars_payments,
+            "net_cash_from_operations":     net_operating,
+        },
+        "investing": {
+            "net_cash_from_investing": 0,
+        },
+        "financing": {
+            "net_cash_from_financing": 0,
+        },
+        "net_increase_in_cash": net_operating,
     }
+
+
+@reports_router.get("/emp201")
+async def emp201(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    cid = current_user.company_id
+    now = datetime.utcnow()
+    period = now.strftime("%Y-%m")
+    due_date = datetime(now.year, now.month + 1 if now.month < 12 else 1,
+                        7, tzinfo=None).strftime("%d %B %Y") if now.month < 12 else \
+               datetime(now.year + 1, 1, 7).strftime("%d %B %Y")
+
+    payslips = db.query(Payslip).join(Employee).filter(
+        Employee.company_id == cid,
+        Payslip.period == period
+    ).all()
+
+    employees_detail = []
+    for ps in payslips:
+        emp = db.query(Employee).filter(Employee.id == ps.employee_id).first()
+        employees_detail.append({
+            "employee_name":   f"{emp.first_name} {emp.last_name}",
+            "employee_number": emp.employee_number or f"EMP-{emp.id:03d}",
+            "gros
