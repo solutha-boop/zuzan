@@ -925,8 +925,8 @@ function Payroll({live = {}}) {
       </div>
       <div style={{background:`linear-gradient(135deg,${C.accentLt},transparent)`,border:`1px solid ${C.accent}40`,borderRadius:16,padding:"16px 24px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
-          <div style={{fontWeight:700,fontSize:15,color:C.ink}}>{new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})} Payroll</div>
-          <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Net pay: {fmt(totalNet)} — SARS due: 7 {new Date(new Date().getFullYear(),new Date().getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
+          <div style={{fontWeight:700,fontSize:15,color:C.ink}}>April 2025 Payroll</div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Net pay: {fmt(totalNet)} - SARS due: 7 May 2025</div>
         </div>
         <button onClick={async () => {
           try {
@@ -940,7 +940,7 @@ function Payroll({live = {}}) {
       </div>
       {payrollRun && (
         <div style={{background:C.surface,border:`2px solid ${C.green}`,borderRadius:16,padding:20,marginBottom:20}}>
-          <div style={{fontSize:16,fontWeight:700,color:C.green,marginBottom:12}}>Payroll Processed — {new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
+          <div style={{fontSize:16,fontWeight:700,color:C.green,marginBottom:12}}>Payroll Processed - April 2025</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
             {[["Net Disbursed",fmt(totalNet),C.green],["PAYE to SARS",fmt(totalPAYE),C.red],["UIF and SDL",fmt(totalUIF+totalSDL),C.gold],["ZuZan Fee",fmt(zuZanFee),C.accent]].map(([l,v,c]) => (
               <div key={l} style={{background:C.bg,borderRadius:10,padding:14}}>
@@ -1029,44 +1029,33 @@ function Payroll({live = {}}) {
     </div>
   );
 }
-// ── REPORTS ───────────────────────────────────────────────────────────────────
+// REPORTS
 function ReportRow({label,value,bold,border,large,indent,color}) {
   const isNeg = value < 0;
-  const displayVal = isNeg ? `(${fmt(Math.abs(value))})` : fmt(value);
+  const displayVal = isNeg ? "("+fmt(Math.abs(value))+")" : fmt(value);
   return (
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:`${large?"14px":"9px"} 0`,borderTop:border?`2px solid ${C.border}`:`1px solid ${C.border}20`}}>
+    <div style={{display:"flex",justifyContent:"space-between",padding:(large?"14px":"9px")+" 0",borderTop:border?"2px solid "+C.border:"1px solid "+C.border+"20"}}>
       <span style={{fontSize:large?15:13,fontWeight:bold?700:400,color:C.ink,paddingLeft:indent?20:0}}>{label}</span>
-      <span style={{fontSize:large?18:14,fontWeight:bold?800:500,color:color||(isNeg?C.red:C.green),fontFamily:large?"'Playfair Display',serif":"inherit"}}>{displayVal}</span>
+      <span style={{fontSize:large?18:14,fontWeight:bold?800:500,color:color||(isNeg?C.red:C.green)}}>{displayVal}</span>
     </div>
   );
 }
 
 function PrintBtn({onClick}) {
-  return (
-    <button onClick={onClick} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>🖨️ Print / PDF</button>
-  );
+  return <button onClick={onClick} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print PDF</button>;
 }
 
 function ExcelBtn({data,filename}) {
   const download = () => {
-    const rows = data.map(r => Object.values(r).join(",")).join("\n");
+    const rows = data.map(function(r){return Object.values(r).join(",");}).join("\n");
     const header = Object.keys(data[0]||{}).join(",");
     const blob = new Blob([header+"\n"+rows],{type:"text/csv"});
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href=url; a.download=filename; a.click();
+    const a = document.createElement("a");
+    a.href=url; a.download=filename; a.click();
     URL.revokeObjectURL(url);
   };
-  return (
-    <button onClick={download} style={{background:C.greenLt,color:C.green,border:`1px solid ${C.green}40`,borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>📥 Export CSV</button>
-  );
-}
-
-function printReport(title) {
-  const el = document.getElementById("report-print-area");
-  if (!el) return;
-  const w = window.open("","_blank");
-  w.document.write(`<html><head><title>${title}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#1A1209;}table{width:100%;border-collapse:collapse;}td,th{padding:8px 4px;font-size:13px;}.logo{font-size:24px;font-weight:800;color:#C8401A;margin-bottom:4px;}@media print{body{padding:20px;}}</style></head><body>${el.innerHTML}</body></html>`);
-  w.document.close(); w.print();
+  return <button onClick={download} style={{background:C.greenLt,color:C.green,border:"1px solid "+C.green+"40",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Export CSV</button>;
 }
 
 function Reports({live = {}}) {
@@ -1076,11 +1065,9 @@ function Reports({live = {}}) {
   const [emp201,  setEmp201]  = useState(null);
   const [mgmt,    setMgmt]    = useState(null);
   const [loading, setLoading] = useState(false);
-
   const d   = live.dashboard;
   const now = new Date();
   const period = d ? d.period : now.toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
-
   const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i=>i.status==="paid").reduce((s,i)=>s+i.amount,0);
   const totalExpenses = d ? d.total_expenses : MOCK_EXPENSES.reduce((s,e)=>s+e.amount,0);
   const totalPayroll  = d ? d.total_payroll  : MOCK_EMPLOYEES.reduce((s,e)=>s+calcPayroll(e.salary).totalCost,0);
@@ -1088,7 +1075,6 @@ function Reports({live = {}}) {
   const netProfit     = d ? d.net_profit     : grossProfit - totalPayroll;
   const taxProvision  = d ? d.tax_provision  : Math.max(0, netProfit * 0.27);
   const netAfterTax   = netProfit - taxProvision;
-
   const loadTab = async (tab) => {
     setActiveTab(tab);
     setLoading(true);
@@ -1099,307 +1085,237 @@ function Reports({live = {}}) {
       if (tab==="mgmt" && !mgmt)    setMgmt(await api("/reports/management").catch(()=>null));
     } finally { setLoading(false); }
   };
-
   const RTABS = [
-    {id:"pl",   label:"Income Statement", icon:"📈"},
-    {id:"bs",   label:"Balance Sheet",    icon:"⚖️"},
-    {id:"cf",   label:"Cash Flow",        icon:"💸"},
-    {id:"mgmt", label:"Management Pack",  icon:"📋"},
-    {id:"emp",  label:"EMP201 / IRP5",    icon:"🏛️"},
+    {id:"pl",   label:"Income Statement"},
+    {id:"bs",   label:"Balance Sheet"},
+    {id:"cf",   label:"Cash Flow"},
+    {id:"mgmt", label:"Management Pack"},
+    {id:"emp",  label:"EMP201 / IRP5"},
   ];
-
+  const renderBS = () => {
+    const bs = bsData || {date:now.toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"}),assets:{cash_and_equivalents:0,trade_receivables:0,total:0},liabilities:{paye_payable:0,uif_payable:0,sdl_payable:0,total:0},equity:{retained_income:0,total:0},total_liabilities_and_equity:0};
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
+          <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Balance Sheet</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>As at {bs.date}</div></div>
+          <ExcelBtn filename="balance-sheet.csv" data={[{Item:"Cash",Amount:bs.assets.cash_and_equivalents},{Item:"Trade Receivables",Amount:bs.assets.trade_receivables},{Item:"Total Assets",Amount:bs.assets.total},{Item:"PAYE Payable",Amount:bs.liabilities.paye_payable},{Item:"UIF Payable",Amount:bs.liabilities.uif_payable},{Item:"SDL Payable",Amount:bs.liabilities.sdl_payable},{Item:"Total Liabilities",Amount:bs.liabilities.total},{Item:"Retained Income",Amount:bs.equity.retained_income}]}/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:C.blue,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Assets</div>
+            <ReportRow label="Cash and Cash Equivalents"   value={bs.assets.cash_and_equivalents} color={C.blue}/>
+            <ReportRow label="Trade Receivables (Debtors)" value={bs.assets.trade_receivables}    color={C.blue}/>
+            <ReportRow label="Total Assets"                value={bs.assets.total} bold border color={C.blue}/>
+          </div>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Liabilities and Equity</div>
+            <ReportRow label="PAYE Payable (SARS)" value={bs.liabilities.paye_payable} indent color={C.red}/>
+            <ReportRow label="UIF Payable (SARS)"  value={bs.liabilities.uif_payable}  indent color={C.red}/>
+            <ReportRow label="SDL Payable (SARS)"  value={bs.liabilities.sdl_payable}  indent color={C.red}/>
+            <ReportRow label="Total Liabilities"   value={bs.liabilities.total} bold border color={C.red}/>
+            <div style={{height:12}}/>
+            <ReportRow label="Retained Income"              value={bs.equity.retained_income} color={C.green}/>
+            <ReportRow label="Total Equity"                 value={bs.equity.total} bold color={C.green}/>
+            <ReportRow label="Total Liabilities and Equity" value={bs.total_liabilities_and_equity} bold border large color={C.ink}/>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  const renderCF = () => {
+    const cf = cfData || {period,operating:{cash_receipts_from_customers:0,cash_paid_to_suppliers:0,payroll_net_pay:0,sars_paye_uif_sdl:0,net_cash_from_operations:0},investing:{net_cash_from_investing:0},financing:{net_cash_from_financing:0},net_increase_in_cash:0};
+    const op = cf.operating;
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
+          <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Cash Flow Statement</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the month ended {cf.period}</div></div>
+          <ExcelBtn filename="cash-flow.csv" data={[{Item:"Cash Receipts",Amount:op.cash_receipts_from_customers},{Item:"Cash Paid",Amount:op.cash_paid_to_suppliers},{Item:"Payroll",Amount:op.payroll_net_pay},{Item:"SARS",Amount:op.sars_paye_uif_sdl},{Item:"Net Operating",Amount:op.net_cash_from_operations},{Item:"Net Investing",Amount:cf.investing.net_cash_from_investing},{Item:"Net Financing",Amount:cf.financing.net_cash_from_financing},{Item:"Net Change",Amount:cf.net_increase_in_cash}]}/>
+        </div>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Operating Activities</div>
+        <ReportRow label="Cash receipts from customers"       value={op.cash_receipts_from_customers}  color={C.green} indent/>
+        <ReportRow label="Cash paid to suppliers"             value={op.cash_paid_to_suppliers}        indent/>
+        <ReportRow label="Payroll net pay"                    value={op.payroll_net_pay}               indent/>
+        <ReportRow label="SARS PAYE, UIF and SDL"             value={op.sars_paye_uif_sdl}            indent/>
+        <ReportRow label="Net cash from operating activities" value={op.net_cash_from_operations} bold border color={op.net_cash_from_operations>=0?C.green:C.red}/>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,marginTop:16,marginBottom:8}}>Investing Activities</div>
+        <ReportRow label="Net cash from investing" value={cf.investing.net_cash_from_investing} bold color={C.inkMid}/>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,marginTop:16,marginBottom:8}}>Financing Activities</div>
+        <ReportRow label="Net cash from financing" value={cf.financing.net_cash_from_financing} bold color={C.inkMid}/>
+        <ReportRow label="Net increase in cash"    value={cf.net_increase_in_cash} bold border large color={cf.net_increase_in_cash>=0?C.accent:C.red}/>
+      </div>
+    );
+  };
+  const renderMgmt = () => {
+    const m    = mgmt;
+    const pl   = m ? m.pl : {revenue:totalRevenue,total_expenses:totalExpenses,gross_profit:grossProfit,payroll_cost:totalPayroll,ebit:netProfit,tax_provision:taxProvision,net_profit:netAfterTax,gross_margin_pct:totalRevenue?Math.round(grossProfit/totalRevenue*100):0,net_margin_pct:totalRevenue?Math.round(netAfterTax/totalRevenue*100):0,expense_breakdown:{}};
+    const kpis = m ? m.kpis : {revenue:totalRevenue,net_profit:netAfterTax,outstanding:0,overdue_count:0,employee_count:MOCK_EMPLOYEES.length,payroll_cost:totalPayroll,gross_margin_pct:0,net_margin_pct:0};
+    const trend = m ? m.trend : live.trend || REVENUE_DATA;
+    const expBreakdown = pl.expense_breakdown || {};
+    return (
+      <div>
+        <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+          <KPI label="Revenue"     value={fmt(kpis.revenue)}      color={C.green}                           icon="Revenue"  sub={"Gross margin "+kpis.gross_margin_pct+"%"}/>
+          <KPI label="Net Profit"  value={fmt(kpis.net_profit)}   color={kpis.net_profit>=0?C.accent:C.red} icon="Profit"   sub={"Net margin "+kpis.net_margin_pct+"%"}/>
+          <KPI label="Outstanding" value={fmt(kpis.outstanding)}  color={C.gold}                            icon="Outstand" sub={kpis.overdue_count+" overdue"}/>
+          <KPI label="Payroll"     value={fmt(kpis.payroll_cost)} color={C.blue}                            icon="Payroll"  sub={kpis.employee_count+" employees"}/>
+        </div>
+        <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20,marginBottom:20}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>6-Month Revenue vs Expenses</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={trend} barGap={4}>
+              <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="month" tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false}/>
+              <YAxis tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false} width={45}/>
+              <Tooltip content={<Tooltip2/>}/>
+              <Bar dataKey="revenue"  name="Revenue"  fill={C.green}  radius={[4,4,0,0]}/>
+              <Bar dataKey="expenses" name="Expenses" fill={C.accent} radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Profit and Loss</div>
+            <ReportRow label="Revenue"            value={pl.revenue}         bold color={C.green}/>
+            <ReportRow label="Operating Expenses" value={-pl.total_expenses} indent/>
+            <ReportRow label="Gross Profit"        value={pl.gross_profit}    bold border/>
+            <ReportRow label="Payroll Cost"        value={-pl.payroll_cost}   indent/>
+            <ReportRow label="EBIT"                value={pl.ebit}            bold border color={pl.ebit>=0?C.ink:C.red}/>
+            <ReportRow label="Tax Provision 27%"   value={-pl.tax_provision} indent/>
+            <ReportRow label="Net Profit"          value={pl.net_profit}      bold border large color={pl.net_profit>=0?C.accent:C.red}/>
+          </div>
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Expense Breakdown</div>
+            {Object.keys(expBreakdown).length > 0
+              ? Object.entries(expBreakdown).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+                  <div key={cat} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.border+"20"}}>
+                    <span style={{fontSize:12,color:C.ink}}>{cat}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:C.red}}>{fmt(amt)}</span>
+                  </div>
+                ))
+              : <div style={{fontSize:12,color:C.inkDim,padding:"20px 0",textAlign:"center"}}>No expense data this month</div>
+            }
+          </div>
+        </div>
+      </div>
+    );
+  };
+  const renderEmp = () => {
+    const e       = emp201;
+    const totalPaye = e ? e.total_paye : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).paye,0);
+    const totalUif  = e ? e.total_uif  : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).uifEmployee+calcPayroll(emp.salary).uifEmployer,0);
+    const totalSdl  = e ? e.total_sdl  : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).sdl,0);
+    const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
+    const dueDate   = e ? e.due_date : "7 "+new Date(now.getFullYear(),now.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
+    const empList   = e ? e.employees : MOCK_EMPLOYEES.map(emp=>{const p=calcPayroll(emp.salary);return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+          <div>
+            <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>EMP201 Monthly Employer Return</h2>
+            <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Period: {e?e.period:period} — Due: <strong style={{color:C.red}}>{dueDate}</strong></p>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <ExcelBtn filename="emp201.csv" data={empList.map(emp=>({Name:emp.employee_name,Number:emp.employee_number,Gross:emp.gross_salary,PAYE:emp.paye,UIF_Emp:emp.uif_employee,UIF_Empr:emp.uif_employer,SDL:emp.sdl,Net_Pay:emp.net_pay}))}/>
+            <PrintBtn onClick={()=>{const el=document.getElementById("report-print-area");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:12,marginBottom:20}}>
+          <KPI label="PAYE Due"       value={fmt(totalPaye)} color={C.red}    icon="PAYE" sub="Income tax withheld"/>
+          <KPI label="UIF Due"        value={fmt(totalUif)}  color={C.gold}   icon="UIF"  sub="Emp + employer 1%"/>
+          <KPI label="SDL Due"        value={fmt(totalSdl)}  color={C.blue}   icon="SDL"  sub="Skills levy 1%"/>
+          <KPI label="Total Due SARS" value={fmt(totalDue)}  color={C.accent} icon="SARS" sub={"By "+dueDate}/>
+        </div>
+        <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:C.red}}>SARS eFiling Reminder</div>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>EMP201 due by the 7th. Late submission incurs a 10% penalty.</div>
+          </div>
+          <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling</a>
+        </div>
+        <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,overflow:"hidden"}}>
+          <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,fontSize:13,fontWeight:700,color:C.ink}}>Employee Tax Certificates (IRP5)</div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:C.bg,borderBottom:"1px solid "+C.border}}>
+                {["Employee","Emp #","Gross","PAYE","UIF (Emp)","UIF (Empr)","SDL","Net Pay"].map(h=>(
+                  <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {empList.map((emp,i)=>(
+                <tr key={i} style={{borderBottom:"1px solid "+C.border+"20"}}>
+                  <td style={{padding:"11px 14px",fontWeight:600,color:C.ink}}>{emp.employee_name}</td>
+                  <td style={{padding:"11px 14px",color:C.inkMid,fontSize:11}}>{emp.employee_number}</td>
+                  <td style={{padding:"11px 14px",fontWeight:600}}>{fmt(emp.gross_salary)}</td>
+                  <td style={{padding:"11px 14px",color:C.red}}>{fmt(emp.paye)}</td>
+                  <td style={{padding:"11px 14px",color:C.gold}}>{fmt(emp.uif_employee)}</td>
+                  <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.uif_employer)}</td>
+                  <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.sdl)}</td>
+                  <td style={{padding:"11px 14px",fontWeight:700,color:C.green}}>{fmt(emp.net_pay)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
+                <td colSpan={2} style={{padding:"11px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
+                <td style={{padding:"11px 14px",fontWeight:800}}>{fmt(empList.reduce((s,e)=>s+e.gross_salary,0))}</td>
+                <td style={{padding:"11px 14px",fontWeight:800,color:C.red}}>{fmt(totalPaye)}</td>
+                <td style={{padding:"11px 14px",fontWeight:800,color:C.gold}}>{fmt(empList.reduce((s,e)=>s+e.uif_employee,0))}</td>
+                <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(empList.reduce((s,e)=>s+e.uif_employer,0))}</td>
+                <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(totalSdl)}</td>
+                <td style={{padding:"11px 14px",fontWeight:800,color:C.green}}>{fmt(empList.reduce((s,e)=>s+e.net_pay,0))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    );
+  };
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
         <div>
-          <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:26,color:C.ink,margin:0}}>Reports</h2>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Reports</h2>
           <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>SARS-ready financial statements — {period}</p>
         </div>
-        <PrintBtn onClick={()=>printReport("ZuZan Report")}/>
+        <PrintBtn onClick={()=>{const el=document.getElementById("report-print-area");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
       </div>
-
-      <div style={{display:"flex",gap:4,marginBottom:24,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:5,width:"fit-content",flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:4,marginBottom:24,background:C.surface,border:"1px solid "+C.border,borderRadius:12,padding:5,width:"fit-content",flexWrap:"wrap"}}>
         {RTABS.map(t => (
-          <button key={t.id} onClick={()=>loadTab(t.id)} style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:activeTab===t.id?700:400,background:activeTab===t.id?C.accent:"transparent",color:activeTab===t.id?"#fff":C.inkMid,fontFamily:"inherit",whiteSpace:"nowrap"}}>
-            <span>{t.icon}</span>{t.label}
+          <button key={t.id} onClick={()=>loadTab(t.id)} style={{padding:"8px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:activeTab===t.id?700:400,background:activeTab===t.id?C.accent:"transparent",color:activeTab===t.id?"#fff":C.inkMid,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            {t.label}
           </button>
         ))}
       </div>
-
       <div id="report-print-area">
-
-      {activeTab==="pl" && (
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
-            <div>
-              <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:800,color:C.ink}}>Income Statement</div>
-              <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the month ended {period}</div>
+        {activeTab==="pl" && (
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
+              <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Income Statement</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the month ended {period}</div></div>
+              <ExcelBtn filename="income-statement.csv" data={[{Item:"Revenue",Amount:totalRevenue},{Item:"Expenses",Amount:-totalExpenses},{Item:"Gross Profit",Amount:grossProfit},{Item:"Payroll",Amount:-totalPayroll},{Item:"Net Profit Before Tax",Amount:netProfit},{Item:"Tax 27%",Amount:-taxProvision},{Item:"Net Profit After Tax",Amount:netAfterTax}]}/>
             </div>
-            <ExcelBtn filename="income-statement.csv" data={[
-              {Item:"Revenue",Amount:totalRevenue},
-              {Item:"Operating Expenses",Amount:-totalExpenses},
-              {Item:"Gross Profit",Amount:grossProfit},
-              {Item:"Payroll Costs",Amount:-totalPayroll},
-              {Item:"Net Profit Before Tax",Amount:netProfit},
-              {Item:"Tax Provision 27%",Amount:-taxProvision},
-              {Item:"Net Profit After Tax",Amount:netAfterTax},
-            ]}/>
+            <ReportRow label="Revenue" value={totalRevenue} bold color={C.green}/>
+            <ReportRow label="Less: Operating Expenses" value={-totalExpenses} indent/>
+            <ReportRow label="Gross Profit" value={grossProfit} bold border color={grossProfit>=0?C.ink:C.red}/>
+            <ReportRow label="Less: Payroll Costs" value={-totalPayroll} indent/>
+            <ReportRow label="Net Profit Before Tax" value={netProfit} bold border color={netProfit>=0?C.ink:C.red}/>
+            <ReportRow label="Less: Tax Provision (27%)" value={-taxProvision} indent/>
+            <ReportRow label="Net Profit After Tax" value={netAfterTax} bold border large color={netAfterTax>=0?C.accent:C.red}/>
+            <div style={{marginTop:24,display:"flex",gap:12}}>
+              {[["Gross Margin",totalRevenue?Math.round(grossProfit/totalRevenue*100):0,C.green,C.greenLt],["Net Margin",totalRevenue?Math.round(netAfterTax/totalRevenue*100):0,C.accent,C.accentLt],["Tax Rate",27,C.gold,C.goldLt]].map(([l,v,c,bg])=>(
+                <div key={l} style={{flex:1,background:bg,border:"1px solid "+c+"30",borderRadius:12,padding:16,textAlign:"center"}}>
+                  <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>{l}</div>
+                  <div style={{fontSize:22,fontWeight:800,color:c}}>{v}%</div>
+                </div>
+              ))}
+            </div>
           </div>
-          <ReportRow label="Revenue" value={totalRevenue} bold color={C.green}/>
-          <ReportRow label="Less: Operating Expenses" value={-totalExpenses} indent/>
-          <ReportRow label="Gross Profit" value={grossProfit} bold border color={grossProfit>=0?C.ink:C.red}/>
-          <ReportRow label="Less: Payroll Costs" value={-totalPayroll} indent/>
-          <ReportRow label="Net Profit Before Tax" value={netProfit} bold border color={netProfit>=0?C.ink:C.red}/>
-          <ReportRow label="Less: Corporate Tax Provision (27%)" value={-taxProvision} indent/>
-          <ReportRow label="Net Profit After Tax" value={netAfterTax} bold border large color={netAfterTax>=0?C.accent:C.red}/>
-          <div style={{marginTop:24,display:"flex",gap:12}}>
-            {[["Gross Margin",totalRevenue?Math.round(grossProfit/totalRevenue*100):0,"%",C.green,C.greenLt],
-              ["Net Margin",  totalRevenue?Math.round(netAfterTax/totalRevenue*100):0,"%",C.accent,C.accentLt],
-              ["Tax Rate",27,"%",C.gold,C.goldLt]].map(([l,v,u,c,bg])=>(
-              <div key={l} style={{flex:1,background:bg,border:`1px solid ${c}30`,borderRadius:12,padding:16,textAlign:"center"}}>
-                <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>{l}</div>
-                <div style={{fontSize:22,fontWeight:800,color:c}}>{v}{u}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {activeTab==="bs" && (
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
-          {loading && <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading balance sheet...</div>}
-          {!loading && (()=>{
-            const bs = bsData || {date:now.toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"}),assets:{cash_and_equivalents:0,trade_receivables:0,total:0},liabilities:{paye_payable:0,uif_payable:0,sdl_payable:0,total:0},equity:{retained_income:0,total:0},total_liabilities_and_equity:0};
-            return (
-              <>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
-                  <div>
-                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:800,color:C.ink}}>Balance Sheet</div>
-                    <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>As at {bs.date}</div>
-                  </div>
-                  <ExcelBtn filename="balance-sheet.csv" data={[{Item:"Cash",Amount:bs.assets.cash_and_equivalents},{Item:"Trade Receivables",Amount:bs.assets.trade_receivables},{Item:"Total Assets",Amount:bs.assets.total},{Item:"PAYE Payable",Amount:bs.liabilities.paye_payable},{Item:"UIF Payable",Amount:bs.liabilities.uif_payable},{Item:"SDL Payable",Amount:bs.liabilities.sdl_payable},{Item:"Total Liabilities",Amount:bs.liabilities.total},{Item:"Retained Income",Amount:bs.equity.retained_income}]}/>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
-                  <div>
-                    <div style={{fontSize:11,fontWeight:700,color:C.blue,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>🏛️ Assets</div>
-                    <ReportRow label="Cash and Cash Equivalents"    value={bs.assets.cash_and_equivalents} color={C.blue}/>
-                    <ReportRow label="Trade Receivables (Debtors)"  value={bs.assets.trade_receivables}    color={C.blue}/>
-                    <ReportRow label="Total Assets"                 value={bs.assets.total} bold border color={C.blue}/>
-                  </div>
-                  <div>
-                    <div style={{fontSize:11,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>📋 Liabilities & Equity</div>
-                    <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6}}>Current Liabilities</div>
-                    <ReportRow label="PAYE Payable (SARS)"  value={bs.liabilities.paye_payable} indent color={C.red}/>
-                    <ReportRow label="UIF Payable (SARS)"   value={bs.liabilities.uif_payable}  indent color={C.red}/>
-                    <ReportRow label="SDL Payable (SARS)"   value={bs.liabilities.sdl_payable}  indent color={C.red}/>
-                    <ReportRow label="Total Liabilities"    value={bs.liabilities.total} bold border color={C.red}/>
-                    <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,marginTop:12}}>Equity</div>
-                    <ReportRow label="Retained Income"      value={bs.equity.retained_income} color={C.green}/>
-                    <ReportRow label="Total Equity"         value={bs.equity.total} bold color={C.green}/>
-                    <ReportRow label="Total Liabilities & Equity" value={bs.total_liabilities_and_equity} bold border large color={C.ink}/>
-                  </div>
-                </div>
-                {Math.abs(bs.assets.total - bs.total_liabilities_and_equity) < 1 && (
-                  <div style={{marginTop:20,background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"10px 16px",fontSize:12,color:C.green,fontWeight:600}}>
-                    ✓ Balance sheet balances — Assets = Liabilities + Equity
-                  </div>
-                )}
-              </>
-            );
-          })()}
-        </div>
-      )}
-
-      {activeTab==="cf" && (
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
-          {loading && <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading cash flow...</div>}
-          {!loading && (()=>{
-            const cf = cfData || {period,operating:{cash_receipts_from_customers:0,cash_paid_to_suppliers:0,payroll_net_pay:0,sars_paye_uif_sdl:0,net_cash_from_operations:0},investing:{net_cash_from_investing:0},financing:{net_cash_from_financing:0},net_increase_in_cash:0};
-            const op = cf.operating;
-            return (
-              <>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
-                  <div>
-                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:800,color:C.ink}}>Cash Flow Statement</div>
-                    <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the month ended {cf.period}</div>
-                  </div>
-                  <ExcelBtn filename="cash-flow.csv" data={[{Item:"Cash Receipts from Customers",Amount:op.cash_receipts_from_customers},{Item:"Cash Paid to Suppliers",Amount:op.cash_paid_to_suppliers},{Item:"Payroll Net Pay",Amount:op.payroll_net_pay},{Item:"SARS PAYE/UIF/SDL",Amount:op.sars_paye_uif_sdl},{Item:"Net Cash from Operations",Amount:op.net_cash_from_operations},{Item:"Net Cash from Investing",Amount:cf.investing.net_cash_from_investing},{Item:"Net Cash from Financing",Amount:cf.financing.net_cash_from_financing},{Item:"Net Increase in Cash",Amount:cf.net_increase_in_cash}]}/>
-                </div>
-                <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Operating Activities</div>
-                <ReportRow label="Cash receipts from customers"        value={op.cash_receipts_from_customers}  color={C.green} indent/>
-                <ReportRow label="Cash paid to suppliers"              value={op.cash_paid_to_suppliers}        indent/>
-                <ReportRow label="Payroll — net pay disbursed"         value={op.payroll_net_pay}               indent/>
-                <ReportRow label="SARS — PAYE, UIF & SDL"              value={op.sars_paye_uif_sdl}            indent/>
-                <ReportRow label="Net cash from operating activities"  value={op.net_cash_from_operations} bold border color={op.net_cash_from_operations>=0?C.green:C.red}/>
-                <div style={{fontSize:12,fontWeight:700,color:C.ink,marginTop:16,marginBottom:8}}>Investing Activities</div>
-                <ReportRow label="Net cash from investing activities"  value={cf.investing.net_cash_from_investing} bold color={C.inkMid}/>
-                <div style={{fontSize:12,fontWeight:700,color:C.ink,marginTop:16,marginBottom:8}}>Financing Activities</div>
-                <ReportRow label="Net cash from financing activities"  value={cf.financing.net_cash_from_financing} bold color={C.inkMid}/>
-                <ReportRow label="Net increase / (decrease) in cash"  value={cf.net_increase_in_cash} bold border large color={cf.net_increase_in_cash>=0?C.accent:C.red}/>
-              </>
-            );
-          })()}
-        </div>
-      )}
-
-      {activeTab==="mgmt" && (
-        <div>
-          {loading && <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading management accounts...</div>}
-          {!loading && (()=>{
-            const m    = mgmt;
-            const pl   = m ? m.pl : {revenue:totalRevenue,total_expenses:totalExpenses,gross_profit:grossProfit,payroll_cost:totalPayroll,ebit:netProfit,tax_provision:taxProvision,net_profit:netAfterTax,gross_margin_pct:totalRevenue?Math.round(grossProfit/totalRevenue*100):0,net_margin_pct:totalRevenue?Math.round(netAfterTax/totalRevenue*100):0,expense_breakdown:{}};
-            const kpis = m ? m.kpis : {revenue:totalRevenue,net_profit:netAfterTax,outstanding:0,overdue_count:0,employee_count:MOCK_EMPLOYEES.length,payroll_cost:totalPayroll,gross_margin_pct:0,net_margin_pct:0};
-            const trend = m ? m.trend : live.trend || REVENUE_DATA;
-            const expBreakdown = pl.expense_breakdown || {};
-            return (
-              <>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
-                  <div>
-                    <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:22,color:C.ink,margin:0}}>Management Accounts</h2>
-                    <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>{m?m.period:period} — Internal Use Only</p>
-                  </div>
-                  <PrintBtn onClick={()=>printReport("Management Accounts")}/>
-                </div>
-                <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-                  <KPI label="Revenue"     value={fmt(kpis.revenue)}     color={C.green}                          icon="💰" sub={`Gross margin ${kpis.gross_margin_pct}%`}/>
-                  <KPI label="Net Profit"  value={fmt(kpis.net_profit)}  color={kpis.net_profit>=0?C.accent:C.red} icon="📊" sub={`Net margin ${kpis.net_margin_pct}%`}/>
-                  <KPI label="Outstanding" value={fmt(kpis.outstanding)} color={C.gold}                           icon="⏳" sub={`${kpis.overdue_count} overdue`}/>
-                  <KPI label="Payroll"     value={fmt(kpis.payroll_cost)} color={C.blue}                          icon="👥" sub={`${kpis.employee_count} employees`}/>
-                </div>
-                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:20}}>
-                  <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>6-Month Revenue vs Expenses</div>
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={trend} barGap={4}>
-                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false}/>
-                      <XAxis dataKey="month" tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false}/>
-                      <YAxis tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false} tickFormatter={v=>`R${v/1000}k`} width={45}/>
-                      <Tooltip content={<Tooltip2/>}/>
-                      <Bar dataKey="revenue"  name="Revenue"  fill={C.green}  radius={[4,4,0,0]}/>
-                      <Bar dataKey="expenses" name="Expenses" fill={C.accent} radius={[4,4,0,0]}/>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-                  <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20}}>
-                    <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Profit & Loss Summary</div>
-                    <ReportRow label="Revenue"             value={pl.revenue}          bold color={C.green}/>
-                    <ReportRow label="Operating Expenses"  value={-pl.total_expenses}  indent/>
-                    <ReportRow label="Gross Profit"        value={pl.gross_profit}      bold border/>
-                    <ReportRow label="Payroll Cost"        value={-pl.payroll_cost}     indent/>
-                    <ReportRow label="EBIT"                value={pl.ebit}              bold border color={pl.ebit>=0?C.ink:C.red}/>
-                    <ReportRow label="Tax Provision (27%)" value={-pl.tax_provision}   indent/>
-                    <ReportRow label="Net Profit"          value={pl.net_profit}        bold border large color={pl.net_profit>=0?C.accent:C.red}/>
-                  </div>
-                  <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20}}>
-                    <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Expense Breakdown</div>
-                    {Object.keys(expBreakdown).length > 0
-                      ? Object.entries(expBreakdown).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
-                          <div key={cat} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}20`}}>
-                            <div style={{display:"flex",alignItems:"center",gap:8}}>
-                              <div style={{width:8,height:8,borderRadius:"50%",background:C.accent}}/>
-                              <span style={{fontSize:12,color:C.ink}}>{cat}</span>
-                            </div>
-                            <div style={{textAlign:"right"}}>
-                              <div style={{fontSize:12,fontWeight:700,color:C.red}}>{fmt(amt)}</div>
-                              <div style={{fontSize:10,color:C.inkDim}}>{pl.total_expenses?Math.round(amt/pl.total_expenses*100):0}%</div>
-                            </div>
-                          </div>
-                        ))
-                      : <div style={{fontSize:12,color:C.inkDim,padding:"20px 0",textAlign:"center"}}>No expense data this month</div>
-                    }
-                  </div>
-                </div>
-              </>
-            );
-          })()}
-        </div>
-      )}
-
-      {activeTab==="emp" && (
-        <div>
-          {loading && <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div>}
-          {!loading && (()=>{
-            const e       = emp201;
-            const totalPaye = e ? e.total_paye : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).paye,0);
-            const totalUif  = e ? e.total_uif  : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).uifEmployee+calcPayroll(emp.salary).uifEmployer,0);
-            const totalSdl  = e ? e.total_sdl  : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).sdl,0);
-            const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
-            const dueDate   = e ? e.due_date : `7 ${new Date(now.getFullYear(),now.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}`;
-            const empList   = e ? e.employees : MOCK_EMPLOYEES.map(emp=>{const p=calcPayroll(emp.salary);return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
-            return (
-              <>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
-                  <div>
-                    <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:22,color:C.ink,margin:0}}>EMP201 — Monthly Employer Return</h2>
-                    <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Period: {e?e.period:period} — Due: <strong style={{color:C.red}}>{dueDate}</strong></p>
-                  </div>
-                  <div style={{display:"flex",gap:8}}>
-                    <ExcelBtn filename="emp201.csv" data={empList.map(emp=>({Name:emp.employee_name,Number:emp.employee_number,Gross:emp.gross_salary,PAYE:emp.paye,UIF_Emp:emp.uif_employee,UIF_Empr:emp.uif_employer,SDL:emp.sdl,Net_Pay:emp.net_pay}))}/>
-                    <PrintBtn onClick={()=>printReport("EMP201")}/>
-                  </div>
-                </div>
-                <div style={{display:"flex",gap:12,marginBottom:20}}>
-                  <KPI label="PAYE Due"       value={fmt(totalPaye)} color={C.red}    icon="🏛️" sub="Income tax withheld"/>
-                  <KPI label="UIF Due"        value={fmt(totalUif)}  color={C.gold}   icon="🛡️" sub="Emp + employer 1%"/>
-                  <KPI label="SDL Due"        value={fmt(totalSdl)}  color={C.blue}   icon="📚" sub="Skills levy 1%"/>
-                  <KPI label="Total Due SARS" value={fmt(totalDue)}  color={C.accent} icon="💳" sub={`By ${dueDate}`}/>
-                </div>
-                <div style={{background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:700,color:C.red}}>⚠️ SARS eFiling Reminder</div>
-                    <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>EMP201 due by the <strong>7th of {new Date(now.getFullYear(),now.getMonth()+1).toLocaleDateString("en-ZA",{month:"long"})}</strong>. Late submission incurs a 10% penalty.</div>
-                  </div>
-                  <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling ↗</a>
-                </div>
-                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
-                  <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:C.ink}}>Employee Tax Certificates (IRP5)</div>
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                    <thead>
-                      <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-                        {["Employee","Emp #","Gross","PAYE","UIF (Emp)","UIF (Empr)","SDL","Net Pay"].map(h=>(
-                          <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {empList.map((emp,i)=>(
-                        <tr key={i} style={{borderBottom:`1px solid ${C.border}20`}}>
-                          <td style={{padding:"11px 14px",fontWeight:600,color:C.ink}}>{emp.employee_name}</td>
-                          <td style={{padding:"11px 14px",color:C.inkMid,fontSize:11}}>{emp.employee_number}</td>
-                          <td style={{padding:"11px 14px",fontWeight:600}}>{fmt(emp.gross_salary)}</td>
-                          <td style={{padding:"11px 14px",color:C.red}}>{fmt(emp.paye)}</td>
-                          <td style={{padding:"11px 14px",color:C.gold}}>{fmt(emp.uif_employee)}</td>
-                          <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.uif_employer)}</td>
-                          <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.sdl)}</td>
-                          <td style={{padding:"11px 14px",fontWeight:700,color:C.green}}>{fmt(emp.net_pay)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr style={{background:C.bg,borderTop:`2px solid ${C.border}`}}>
-                        <td colSpan={2} style={{padding:"11px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
-                        <td style={{padding:"11px 14px",fontWeight:800}}>{fmt(empList.reduce((s,e)=>s+e.gross_salary,0))}</td>
-                        <td style={{padding:"11px 14px",fontWeight:800,color:C.red}}>{fmt(totalPaye)}</td>
-                        <td style={{padding:"11px 14px",fontWeight:800,color:C.gold}}>{fmt(empList.reduce((s,e)=>s+e.uif_employee,0))}</td>
-                        <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(empList.reduce((s,e)=>s+e.uif_employer,0))}</td>
-                        <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(totalSdl)}</td>
-                        <td style={{padding:"11px 14px",fontWeight:800,color:C.green}}>{fmt(empList.reduce((s,e)=>s+e.net_pay,0))}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-                <div style={{marginTop:16,background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:16,fontSize:12,color:C.inkMid,lineHeight:1.8}}>
-                  <strong style={{color:C.ink}}>SARS Reference — 2025/2026</strong><br/>
-                  PAYE: Primary rebate R17,235/year — EMP201 due 7th of each month<br/>
-                  UIF: 1% employee + 1% employer — Capped at R17,712/month<br/>
-                  SDL: 1% of gross payroll — Payable if annual payroll exceeds R500,000
-                </div>
-              </>
-            );
-          })()}
-        </div>
-      )}
-
+        )}
+        {activeTab==="bs"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderBS()}</div>}
+        {activeTab==="cf"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderCF()}</div>}
+        {activeTab==="mgmt" && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderMgmt()}</div>}
+        {activeTab==="emp"  && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderEmp()}</div>}
       </div>
     </div>
   );
@@ -1534,7 +1450,7 @@ function ChartOfAccounts() {
                 <span style={{fontFamily:"serif",fontSize:16,fontWeight:700,color:gc.color}}>{group}</span>
                 <span style={{fontSize:11,background:gc.color+"20",color:gc.color,padding:"2px 8px",borderRadius:10,fontWeight:600}}>{groupAccounts.length} accounts</span>
               </div>
-              <span style={{color:gc.color,fontSize:14}}>{isExpanded ? "▼" : "▶"}</span>
+              <span style={{color:gc.color,fontSize:16}}>{isExpanded ? "v" : ">"}</span>
             </div>
             {isExpanded && (
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
@@ -1955,4 +1871,326 @@ function Registration({onComplete}) {
 
   const handlePayment = async () => {
     setProcessing(true);
-    let
+    let token = null;
+    let userData = {...form, plan:selectedPlan, billing, payroll:payrollEnabled, employees:empCount};
+    try {
+      // Register with real backend
+      console.log("Registering with backend...", form.email);
+      const res = await fetch("https://zuzan-backend.onrender.com/auth/register", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          company_name:    form.companyName || "My Company",
+          reg_number:      form.regNumber  || "",
+          industry:        form.industry   || "",
+          first_name:      form.firstName  || "User",
+          last_name:       form.lastName   || "",
+          email:           form.email      || `user${Date.now()}@zuzan.co.za`,
+          phone:           form.phone      || "",
+          password:        (form.password  || "Zuzan2025!").slice(0, 50),
+          plan:            selectedPlan ? selectedPlan.id : "starter",
+          billing_cycle:   billing || "monthly",
+          payroll_enabled: payrollEnabled || false,
+          employee_count:  empCount || 0,
+        }),
+      });
+      const data = await res.json();
+      console.log("Registration response:", res.status, data);
+      if (res.ok && data.access_token) {
+        token = data.access_token;
+        userData = {...userData, ...data.user, company: data.company};
+      } else {
+        // Email already registered — try login instead
+        if (data.detail && data.detail.includes("already registered")) {
+          const loginRes = await fetch("https://zuzan-backend.onrender.com/auth/login", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({email: form.email, password: (form.password || "").slice(0, 50)}),
+          });
+          const loginData = await loginRes.json();
+          if (loginRes.ok && loginData.access_token) {
+            token = loginData.access_token;
+            userData = {...userData, ...loginData.user};
+          }
+        }
+      }
+    } catch(err) {
+      console.error("Backend registration error:", err.message);
+    }
+    // Save token (real or demo)
+    console.log("Token obtained:", token ? "REAL TOKEN" : "NO TOKEN - demo mode");
+    if (token) {
+      localStorage.setItem("zuzan_token", token);
+      console.log("Real token saved!");
+    } else {
+      localStorage.setItem("zuzan_token", "demo_" + Date.now());
+      console.log("Demo token saved - backend unreachable");
+    }
+    setProcessing(false);
+    setComplete(true);
+    setTimeout(() => onComplete({...userData, access_token: token || "demo"}), 1500);
+  };
+
+  if (complete) return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{textAlign:"center",maxWidth:480}}>
+        <div style={{fontSize:64,marginBottom:20}}>🎉</div>
+        <h2 style={{fontFamily:"serif",fontSize:36,color:C.ink,marginBottom:12}}>Welcome to ZuZan!</h2>
+        <p style={{color:C.inkMid,fontSize:15,lineHeight:1.7}}>Your account is ready. Setting up your dashboard...</p>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg}}>
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"16px 32px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{fontFamily:"serif",fontSize:24,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+        <div style={{display:"flex",gap:8}}>
+          {["Plan","Account","Payment","Confirm"].map((s,i) => (
+            <div key={i} style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:26,height:26,borderRadius:"50%",background:step>i+1?C.green:step===i+1?C.accent:C.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:step>=i+1?"#fff":C.inkMid}}>{step>i+1?"v":i+1}</div>
+              <span style={{fontSize:12,color:step===i+1?C.ink:C.inkDim,fontWeight:step===i+1?600:400}}>{s}</span>
+              {i<3 && <div style={{width:24,height:1,background:C.border,marginLeft:2}}/>}
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:12,color:C.inkMid}}>Already have an account? <span style={{color:C.accent,cursor:"pointer",fontWeight:600}} onClick={() => onComplete({access_token:"demo_token"})}>Sign in</span></div>
+      </div>
+      <div style={{maxWidth:860,margin:"0 auto",padding:"48px 24px"}}>
+        {step === 1 && (
+          <div>
+            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:6}}>Choose your plan</h1>
+            <p style={{color:C.inkMid,fontSize:15,marginBottom:28}}>14-day free trial on all plans. No credit card charged until trial ends.</p>
+            <div style={{display:"inline-flex",background:C.border,borderRadius:10,padding:3,marginBottom:28}}>
+              {["monthly","annual"].map(b => <button key={b} onClick={() => setBilling(b)} style={{padding:"8px 20px",borderRadius:8,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,fontFamily:"inherit",background:billing===b?C.surface:"transparent",color:billing===b?C.ink:C.inkMid}}>{b==="monthly"?"Monthly":"Annual (Save 17%)"}</button>)}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:28}}>
+              {PLANS.map(plan => {
+                const price = billing === "monthly" ? plan.monthly : Math.round(plan.annual / 12);
+                const sel = selectedPlan && selectedPlan.id === plan.id;
+                return (
+                  <div key={plan.id} onClick={() => setPlan(plan)} style={{background:C.surface,border:`2px solid ${sel?plan.color:C.border}`,borderRadius:18,padding:24,cursor:"pointer",position:"relative",transform:sel?"translateY(-3px)":"none",boxShadow:sel?`0 8px 32px ${plan.color}20`:"none"}}>
+                    {plan.popular && <div style={{position:"absolute",top:-11,left:"50%",transform:"translateX(-50%)",background:C.accent,color:"#fff",fontSize:9,fontWeight:700,letterSpacing:1,padding:"3px 14px",borderRadius:20,textTransform:"uppercase"}}>Most Popular</div>}
+                    <div style={{fontSize:28,marginBottom:10}}>{plan.icon}</div>
+                    <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1.5,textTransform:"uppercase",marginBottom:6}}>{plan.name}</div>
+                    <div style={{fontFamily:"serif",fontSize:36,fontWeight:800,color:C.ink,letterSpacing:-1,marginBottom:2}}>R{price.toLocaleString()}</div>
+                    <div style={{fontSize:11,color:C.inkDim,marginBottom:14}}>{plan.users} users - {plan.invoices} invoices{plan.invoices!=="Unlimited"?"/mo":""}</div>
+                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:12}}>
+                      {plan.features.slice(0,5).map((f,i) => <div key={i} style={{display:"flex",gap:8,fontSize:12,color:C.inkMid,marginBottom:6}}><span style={{color:C.green}}>ok</span>{f}</div>)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{background:C.surface,border:`2px solid ${payrollEnabled?C.accent:C.border}`,borderRadius:18,padding:24,marginBottom:28}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:payrollEnabled?20:0}}>
+                <div style={{display:"flex",gap:14,alignItems:"flex-start"}}>
+                  <span style={{fontSize:32}}>👥</span>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:4}}>Payroll Module</div>
+                    <div style={{fontSize:13,color:C.inkMid}}>SARS-compliant PAYE, UIF, SDL - EMP201 and IRP5 - <strong style={{color:C.accent}}>R17.50/employee/month</strong> (min R99/month)</div>
+                  </div>
+                </div>
+                <button onClick={() => setPayroll(!payrollEnabled)} style={{padding:"8px 18px",borderRadius:8,border:`1.5px solid ${payrollEnabled?C.accent:C.border}`,background:payrollEnabled?C.accentLt:"transparent",color:payrollEnabled?C.accent:C.inkMid,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{payrollEnabled?"Added":"Add Payroll"}</button>
+              </div>
+              {payrollEnabled && (
+                <div style={{display:"flex",alignItems:"center",gap:16,padding:"16px 0 0",borderTop:`1px solid ${C.border}`}}>
+                  <span style={{fontSize:13,color:C.inkMid}}>Number of employees:</span>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <button onClick={() => setEmpCount(Math.max(1,empCount-1))} style={{width:32,height:32,borderRadius:"50%",border:`1px solid ${C.border}`,background:C.bg,cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>-</button>
+                    <span style={{fontSize:20,fontWeight:700,color:C.ink,minWidth:30,textAlign:"center"}}>{empCount}</span>
+                    <button onClick={() => setEmpCount(empCount+1)} style={{width:32,height:32,borderRadius:"50%",border:`1px solid ${C.border}`,background:C.bg,cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>+</button>
+                  </div>
+                  <span style={{fontSize:13,color:C.accent,fontWeight:700}}>= {fmt(Math.max(99,empCount*17.50))}/month</span>
+                </div>
+              )}
+            </div>
+            {selectedPlan && (
+              <div style={{background:C.ink,borderRadius:16,padding:"20px 24px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.5)",marginBottom:4}}>MONTHLY TOTAL</div>
+                  <div style={{fontFamily:"serif",fontSize:32,color:"#fff",fontWeight:800}}>{fmt(totalMonthly)}</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,0.4)"}}>{selectedPlan.name}{payrollEnabled?` + Payroll (${empCount} employees)`:""}</div>
+                </div>
+                <button onClick={() => setStep(2)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"14px 32px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Continue</button>
+              </div>
+            )}
+          </div>
+        )}
+        {step === 2 && (
+          <div style={{maxWidth:560,margin:"0 auto"}}>
+            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:24}}>Create your account</h1>
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Business Details</div>
+              {[{l:"Company Name",k:"companyName",p:"Acme Pty Ltd"},{l:"Registration Number",k:"regNumber",p:"2020/123456/07"}].map(f => (
+                <div key={f.k} style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+            </div>
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Your Details</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+                {[{l:"First Name",k:"firstName",p:"John"},{l:"Last Name",k:"lastName",p:"Smith"}].map(f => (
+                  <div key={f.k}>
+                    <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                    <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                ))}
+              </div>
+              {[{l:"Email Address",k:"email",t:"email",p:"john@acme.co.za"},{l:"Password",k:"password",t:"password",p:"Min 8 characters"},{l:"Confirm Password",k:"confirm",t:"password",p:"Repeat password"}].map(f => (
+                <div key={f.k} style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <button onClick={() => setStep(1)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
+              <button onClick={() => setStep(3)} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Continue</button>
+            </div>
+          </div>
+        )}
+        {step === 3 && (
+          <div style={{maxWidth:560,margin:"0 auto"}}>
+            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:6}}>Payment details</h1>
+            <p style={{color:C.inkMid,fontSize:15,marginBottom:24}}>14-day free trial. No charge until trial ends.</p>
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Order Summary</div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>{selectedPlan ? selectedPlan.name : ""} Plan ({billing})</span><span style={{fontWeight:600}}>{fmt(planPrice)}/mo</span></div>
+              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R17.50)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
+              <div style={{borderTop:`1px solid ${C.border}`,marginTop:12,paddingTop:12,display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
+            </div>
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Card Details</div>
+              {[{l:"Name on Card",k:"cardName",p:"John Smith"},{l:"Card Number",k:"cardNumber",p:"4242 4242 4242 4242"},{l:"Expiry Date",k:"expiry",p:"MM/YY"},{l:"CVV",k:"cvv",p:"123"}].map(f => (
+                <div key={f.k} style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input placeholder={f.p} value={payment[f.k]} onChange={e => setPayment({...payment,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 14px",background:C.greenLt,borderRadius:8}}>
+                <span style={{fontSize:14}}>🔒</span>
+                <span style={{fontSize:11,color:C.green}}>256-bit SSL encryption - PCI DSS compliant - Powered by PayFast</span>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:12}}>
+              <button onClick={() => setStep(2)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
+              <button onClick={() => setStep(4)} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Review Order</button>
+            </div>
+          </div>
+        )}
+        {step === 4 && (
+          <div style={{maxWidth:560,margin:"0 auto"}}>
+            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:24}}>Confirm and Start Trial</h1>
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
+              {[
+                {label:"Company",value:form.companyName || "Your Company"},
+                {label:"Plan",value:`${selectedPlan ? selectedPlan.name : ""} (${billing})`},
+                {label:"Users",value:`Up to ${selectedPlan ? selectedPlan.users : ""}`},
+                {label:"Invoices",value:selectedPlan ? `${selectedPlan.invoices}${selectedPlan.invoices !== "Unlimited" ? " per month" : ""}` : ""},
+                {label:"Payroll",value:payrollEnabled ? `${empCount} employees x R17.50 = ${fmt(payrollCost)}/mo` : "Not included"},
+                {label:"Trial Period",value:"14 days FREE"},
+                {label:"First Charge",value:`${fmt(totalMonthly)}/month after trial`},
+              ].map((r,i) => (
+                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"11px 0",borderBottom:i<6?`1px solid ${C.border}30`:"none",fontSize:13}}>
+                  <span style={{color:C.inkMid}}>{r.label}</span>
+                  <span style={{fontWeight:600,color:C.ink}}>{r.value}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{fontSize:11,color:C.inkDim,marginBottom:20,lineHeight:1.7}}>By starting your trial you agree to ZuZan's Terms of Service and Privacy Policy. Cancel anytime before trial ends.</div>
+            <div style={{display:"flex",gap:12}}>
+              <button onClick={() => setStep(3)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
+              <button onClick={handlePayment} disabled={processing} style={{flex:2,padding:"15px",border:"none",borderRadius:10,background:processing?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:processing?"wait":"pointer",fontFamily:"inherit"}}>{processing ? "Processing..." : "Start Free Trial"}</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN APP ──────────────────────────────────────────────────────────────────
+function ZuZanApp({user, onLogout}) {
+  const [tab, setTab] = useState("dashboard");
+  const live = useLiveData();
+  const TABS = [
+    {id:"dashboard", label:"Dashboard",   icon:"🏠"},
+    {id:"invoicing", label:"Invoices",    icon:"🧾"},
+    {id:"expenses",  label:"Expenses",    icon:"💳"},
+    {id:"payroll",   label:"Payroll",     icon:"👥"},
+    {id:"reports",   label:"Reports",     icon:"📊"},
+    {id:"coa",       label:"Accounts",    icon:"📒"},
+    {id:"bankimport",label:"Bank Import", icon:"🏦"},
+    {id:"settings",  label:"Settings",    icon:"⚙️"},
+  ];
+  const screens = {
+    dashboard:  <Dashboard  live={live}/>,
+    invoicing:  <Invoicing  live={live}/>,
+    expenses:   <Expenses   live={live}/>,
+    payroll:    <Payroll    live={live}/>,
+    reports:    <Reports    live={live}/>,
+    coa:        <ChartOfAccounts/>,
+    bankimport: <BankImport live={live} onNavigate={setTab}/>,
+    settings:   <AppSettings user={user} onLogout={onLogout}/>,
+  };
+  return (
+    <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",display:"flex"}}>
+      <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:${C.border};}button:hover{opacity:0.9;}`}</style>
+      <div style={{width:230,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:10}}>
+        <div style={{padding:"24px 20px 20px",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <div style={{fontSize:10,color:C.inkMid,marginTop:3,letterSpacing:0.5}}>SA BOOKKEEPING PLATFORM</div>
+        </div>
+        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user && user.companyName ? user.companyName : "Your Company Pty Ltd"}</div>
+          <div style={{fontSize:10,color:C.inkDim}}>{user && user.plan ? user.plan.name : "Professional"} Plan</div>
+          <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
+          <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>Trial: 9 days remaining</div>
+        </div>
+        <nav style={{flex:1,padding:"12px 10px"}}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:tab===t.id?700:400,marginBottom:3,background:tab===t.id?C.accentLt:"transparent",color:tab===t.id?C.accent:C.inkMid,textAlign:"left"}}>
+              <span style={{fontSize:17}}>{t.icon}</span>
+              {t.label}
+              {tab === t.id && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
+            </button>
+          ))}
+        </nav>
+        <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{user && user.firstName ? user.firstName : "User"} {user && user.lastName ? user.lastName : ""}</div>
+          <div style={{fontSize:10,color:C.inkDim,marginBottom:8}}>{user && user.email ? user.email : "user@company.co.za"}</div>
+          <button onClick={onLogout} style={{fontSize:11,color:C.inkDim,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit"}}>Sign out</button>
+        </div>
+      </div>
+      <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
+        {screens[tab]}
+      </div>
+    </div>
+  );
+}
+
+// ── ROOT ──────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [screen, setScreen] = useState("registration");
+  const [user, setUser] = useState(null);
+
+  const handleRegistrationComplete = userData => {
+    // Token already saved in handlePayment
+    // Just update user state and navigate to app
+    const savedToken = localStorage.getItem("zuzan_token");
+    if (!savedToken || savedToken.startsWith("demo_")) {
+      localStorage.setItem("zuzan_token", "demo_" + Date.now());
+    }
+    setUser(userData);
+    setScreen("app");
+  };
+
+  if (screen === "registration") {
+    return <Registration onComplete={handleRegistrationComplete}/>;
+  }
+
+  return <ZuZanApp user={user} onLogout={() => { setUser(null); setScreen("registration"); }}/>;
+}
