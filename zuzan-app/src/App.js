@@ -126,19 +126,19 @@ const EXPENSE_PIE = [
 const ALL_CATS = ["Revenue","Interest Income","Cost of Sales","Utilities","Telecoms","Office","Banking","Insurance","Tax","Equipment","Travel","Salaries","Rent","Marketing","Professional Fees","Other"];
 
 const BRACKETS = [
-  {min:0,      max:237100,  rate:0.18,base:0},
-  {min:237101, max:370500,  rate:0.26,base:42678},
-  {min:370501, max:512800,  rate:0.31,base:77362},
-  {min:512801, max:673000,  rate:0.36,base:121475},
-  {min:673001, max:857900,  rate:0.39,base:179147},
-  {min:857901, max:1817000, rate:0.41,base:251258},
-  {min:1817001,max:9999999, rate:0.45,base:644489},
+  {min:0,       max:245100,  rate:0.18,base:0},
+  {min:245101,  max:383100,  rate:0.26,base:44118},
+  {min:383101,  max:530200,  rate:0.31,base:79998},
+  {min:530201,  max:695800,  rate:0.36,base:125599},
+  {min:695801,  max:887000,  rate:0.39,base:185215},
+  {min:887001,  max:1878600, rate:0.41,base:259783},
+  {min:1878601, max:9999999, rate:0.45,base:666339},
 ];
 
 function calcPAYE(annual) {
   const b = BRACKETS.find(b => annual >= b.min && annual <= b.max);
   if (!b) return 0;
-  return Math.max(0, b.base + (annual - b.min) * b.rate - 17235);
+  return Math.max(0, b.base + (annual - b.min) * b.rate - 17820);
 }
 
 function calcPayroll(salary) {
@@ -841,7 +841,7 @@ function PayslipModal({employee, payroll, period, company, onClose}) {
 
           {/* SARS info */}
           <div style={{background:C.bg,borderRadius:10,padding:"12px 16px",fontSize:11,color:C.inkMid,lineHeight:1.8}}>
-            <strong style={{color:C.ink}}>SARS Reference (2025/2026)</strong><br/>
+            <strong style={{color:C.ink}}>SARS Reference (2026/2027)</strong><br/>
             PAYE calculated on annual income of {fmt(p.gross * 12)} — Primary rebate R17,235/year<br/>
             UIF: 1% employee + 1% employer — capped at R17,712/month<br/>
             SDL: 1% of gross payroll
@@ -1013,7 +1013,7 @@ function Payroll({live = {}}) {
       </div>
       <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:16,fontSize:12,color:C.inkMid,lineHeight:1.8}}>
         <strong style={{color:C.ink}}>SARS Compliance Notes 2025/2026</strong><br/>
-        PAYE: 2025/2026 tax tables - Primary rebate R17,235/year - Due 7th of each month<br/>
+        PAYE: 2026/2027 tax tables - Primary rebate R17,820/year - Due 7th of each month<br/>
         UIF: 1 percent employee plus 1 percent employer - Capped at R17,712/month<br/>
         SDL: 1 percent of gross payroll - Payable if annual payroll exceeds R500,000
       </div>

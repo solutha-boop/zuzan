@@ -15,18 +15,18 @@ import logging
 
 logger = logging.getLogger("zuzan.payroll")
 
-# SA TAX TABLES 2025/2026
+# SA TAX TABLES 2026/2027
 PAYE_BRACKETS = [
-    {"min": 0,       "max": 237100,  "rate": 0.18, "base": 0},
-    {"min": 237101,  "max": 370500,  "rate": 0.26, "base": 42678},
-    {"min": 370501,  "max": 512800,  "rate": 0.31, "base": 77362},
-    {"min": 512801,  "max": 673000,  "rate": 0.36, "base": 121475},
-    {"min": 673001,  "max": 857900,  "rate": 0.39, "base": 179147},
-    {"min": 857901,  "max": 1817000, "rate": 0.41, "base": 251258},
-    {"min": 1817001, "max": 9999999, "rate": 0.45, "base": 644489},
+    {"min": 0,        "max": 245100,   "rate": 0.18, "base": 0},
+    {"min": 245101,   "max": 383100,   "rate": 0.26, "base": 44118},
+    {"min": 383101,   "max": 530200,   "rate": 0.31, "base": 79998},
+    {"min": 530201,   "max": 695800,   "rate": 0.36, "base": 125599},
+    {"min": 695801,   "max": 887000,   "rate": 0.39, "base": 185215},
+    {"min": 887001,   "max": 1878600,  "rate": 0.41, "base": 259783},
+    {"min": 1878601,  "max": 9999999,  "rate": 0.45, "base": 666339},
 ]
 
-PRIMARY_REBATE  = 17235
+PRIMARY_REBATE  = 17820
 UIF_RATE        = 0.01
 UIF_CEIL        = 17712
 SDL_RATE        = 0.01
