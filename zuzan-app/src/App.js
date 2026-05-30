@@ -125,25 +125,33 @@ const EXPENSE_PIE = [
 
 const ALL_CATS = ["Revenue","Interest Income","Cost of Sales","Utilities","Telecoms","Office","Banking","Insurance","Tax","Equipment","Travel","Salaries","Rent","Marketing","Professional Fees","Other"];
 
-const BRACKETS = [
-  {min:0,       max:245100,  rate:0.18,base:0},
-  {min:245101,  max:383100,  rate:0.26,base:44118},
-  {min:383101,  max:530200,  rate:0.31,base:79998},
-  {min:530201,  max:695800,  rate:0.36,base:125599},
-  {min:695801,  max:887000,  rate:0.39,base:185215},
-  {min:887001,  max:1878600, rate:0.41,base:259783},
-  {min:1878601, max:9999999, rate:0.45,base:666339},
-];
+const TAX_YEARS = {
+  "2024/2025": {
+    brackets: [{min:0,max:237100,rate:0.18,base:0},{min:237101,max:370500,rate:0.26,base:42678},{min:370501,max:512800,rate:0.31,base:77362},{min:512801,max:673000,rate:0.36,base:121475},{min:673001,max:857900,rate:0.39,base:179147},{min:857901,max:1817000,rate:0.41,base:251258},{min:1817001,max:9999999,rate:0.45,base:644489}],
+    rebate: 17235, uifCeil: 17712,
+  },
+  "2025/2026": {
+    brackets: [{min:0,max:237100,rate:0.18,base:0},{min:237101,max:370500,rate:0.26,base:42678},{min:370501,max:512800,rate:0.31,base:77362},{min:512801,max:673000,rate:0.36,base:121475},{min:673001,max:857900,rate:0.39,base:179147},{min:857901,max:1817000,rate:0.41,base:251258},{min:1817001,max:9999999,rate:0.45,base:644489}],
+    rebate: 17235, uifCeil: 17712,
+  },
+  "2026/2027": {
+    brackets: [{min:0,max:245100,rate:0.18,base:0},{min:245101,max:383100,rate:0.26,base:44118},{min:383101,max:530200,rate:0.31,base:79998},{min:530201,max:695800,rate:0.36,base:125599},{min:695801,max:887000,rate:0.39,base:185215},{min:887001,max:1878600,rate:0.41,base:259783},{min:1878601,max:9999999,rate:0.45,base:666339}],
+    rebate: 17820, uifCeil: 17712,
+  },
+};
+const CURRENT_TAX_YEAR = "2026/2027";
 
-function calcPAYE(annual) {
-  const b = BRACKETS.find(b => annual >= b.min && annual <= b.max);
+function calcPAYE(annual, taxYear) {
+  const yr = TAX_YEARS[taxYear || CURRENT_TAX_YEAR] || TAX_YEARS[CURRENT_TAX_YEAR];
+  const b = yr.brackets.find(b => annual >= b.min && annual <= b.max);
   if (!b) return 0;
-  return Math.max(0, b.base + (annual - b.min) * b.rate - 17820);
+  return Math.max(0, b.base + (annual - b.min) * b.rate - yr.rebate);
 }
 
-function calcPayroll(salary) {
-  const paye = calcPAYE(salary*12)/12;
-  const uifBase = Math.min(salary,17712);
+function calcPayroll(salary, taxYear) {
+  const yr = TAX_YEARS[taxYear || CURRENT_TAX_YEAR] || TAX_YEARS[CURRENT_TAX_YEAR];
+  const paye = calcPAYE(salary*12, taxYear)/12;
+  const uifBase = Math.min(salary, yr.uifCeil);
   const uifEmp = uifBase*0.01, uifEmpr = uifBase*0.01, sdl = salary*0.01;
   return {
     gross:salary,
@@ -857,6 +865,7 @@ function PayslipModal({employee, payroll, period, company, onClose}) {
 function Payroll({live = {}}) {
   const liveEmployees = live.employees;
   const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
+  const [taxYear, setTaxYear] = useState(CURRENT_TAX_YEAR);
 
   useEffect(() => { if (liveEmployees && liveEmployees.length > 0) setEmployees(liveEmployees.map(e => ({...e, name: `${e.first_name} ${e.last_name}`, salary: e.gross_salary, dept: e.department || "General"}))); }, [liveEmployees]);
   const [showNew, setShowNew] = useState(false);
@@ -864,11 +873,11 @@ function Payroll({live = {}}) {
   const [form, setForm] = useState({name:"",position:"",salary:"",dept:""});
   const [viewPayslip, setViewPayslip] = useState(null);
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
-  const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary).paye, 0);
-  const totalNet = employees.reduce((s,e) => s + calcPayroll(e.salary).netPay, 0);
-  const totalCost = employees.reduce((s,e) => s + calcPayroll(e.salary).totalCost, 0);
-  const totalUIF = employees.reduce((s,e) => s + calcPayroll(e.salary).uifEmployer, 0);
-  const totalSDL = employees.reduce((s,e) => s + calcPayroll(e.salary).sdl, 0);
+  const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).paye, 0);
+  const totalNet = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).netPay, 0);
+  const totalCost = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).totalCost, 0);
+  const totalUIF = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).uifEmployer, 0);
+  const totalSDL = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).sdl, 0);
   const zuZanFee = Math.max(99, employees.length * 17.50);
   const handleAdd = async () => {
     const nameParts = form.name.trim().split(" ");
@@ -913,7 +922,23 @@ function Payroll({live = {}}) {
   };
   return (
     <div>
-      <SectionHeader title="Payroll" sub="SARS-compliant PAYE, UIF, SDL, EMP201, IRP5" action="+ Add Employee" onAction={() => setShowNew(true)}/>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Payroll</h2>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>SARS-compliant PAYE, UIF, SDL, EMP201, IRP5</p>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:12,color:C.inkMid,fontWeight:600}}>Tax Year:</span>
+            <select value={taxYear} onChange={e=>setTaxYear(e.target.value)} style={{padding:"7px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",fontWeight:700}}>
+              {Object.keys(TAX_YEARS).reverse().map(y=>(
+                <option key={y} value={y}>{y}{y===CURRENT_TAX_YEAR?" (current)":""}</option>
+              ))}
+            </select>
+          </div>
+          <button onClick={()=>setShowNew(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add Employee</button>
+        </div>
+      </div>
       <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R17.50 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
         <Badge label="Active" color={C.green} bg={C.greenLt}/>
@@ -979,7 +1004,7 @@ function Payroll({live = {}}) {
           </thead>
           <tbody>
             {employees.map((emp) => {
-              const p = calcPayroll(emp.salary);
+              const p = calcPayroll(emp.salary, taxYear);
               return (
                 <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
                   <td style={{padding:"13px 14px"}}><div style={{fontWeight:600,color:C.ink}}>{emp.name}</div><div style={{fontSize:10,color:C.inkMid}}>{emp.id}</div></td>
@@ -992,7 +1017,7 @@ function Payroll({live = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.green}}>{fmt(p.netPay)}</td>
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
-                    <button onClick={()=>setViewPayslip({employee:emp,payroll:p})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
+                    <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                   </td>
                 </tr>
               );
@@ -1012,7 +1037,7 @@ function Payroll({live = {}}) {
         </table>
       </div>
       <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:16,fontSize:12,color:C.inkMid,lineHeight:1.8}}>
-        <strong style={{color:C.ink}}>SARS Compliance Notes 2025/2026</strong><br/>
+        <strong style={{color:C.ink}}>SARS Compliance Notes {taxYear}</strong><br/>
         PAYE: 2026/2027 tax tables - Primary rebate R17,820/year - Due 7th of each month<br/>
         UIF: 1 percent employee plus 1 percent employer - Capped at R17,712/month<br/>
         SDL: 1 percent of gross payroll - Payable if annual payroll exceeds R500,000
@@ -1060,9 +1085,10 @@ function Reports({live = {}}) {
   const [activeTab, setActiveTab] = useState("pl");
   const [bsData,  setBsData]  = useState(null);
   const [cfData,  setCfData]  = useState(null);
-  const [emp201,  setEmp201]  = useState(null);
-  const [mgmt,    setMgmt]    = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [emp201,   setEmp201]   = useState(null);
+  const [mgmt,     setMgmt]     = useState(null);
+  const [provTax,  setProvTax]  = useState(null);
+  const [loading,  setLoading]  = useState(false);
   const d   = live.dashboard;
   const now = new Date();
   const period = d ? d.period : now.toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
@@ -1079,8 +1105,9 @@ function Reports({live = {}}) {
     try {
       if (tab==="bs"   && !bsData)  setBsData(await api("/reports/balance-sheet").catch(()=>null));
       if (tab==="cf"   && !cfData)  setCfData(await api("/reports/cash-flow").catch(()=>null));
-      if (tab==="emp"  && !emp201)  setEmp201(await api("/reports/emp201").catch(()=>null));
-      if (tab==="mgmt" && !mgmt)    setMgmt(await api("/reports/management").catch(()=>null));
+      if (tab==="emp"   && !emp201)   setEmp201(await api("/reports/emp201").catch(()=>null));
+      if (tab==="mgmt"  && !mgmt)     setMgmt(await api("/reports/management").catch(()=>null));
+      if (tab==="prov"  && !provTax)  setProvTax(await api("/reports/provisional-tax").catch(()=>null));
     } finally { setLoading(false); }
   };
   const RTABS = [
@@ -1089,6 +1116,7 @@ function Reports({live = {}}) {
     {id:"cf",   label:"Cash Flow"},
     {id:"mgmt", label:"Management Pack"},
     {id:"emp",  label:"EMP201 / IRP5"},
+    {id:"prov", label:"Provisional Tax"},
   ];
   const renderBS = () => {
     const bs = bsData || {date:now.toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"}),assets:{cash_and_equivalents:0,trade_receivables:0,total:0},liabilities:{paye_payable:0,uif_payable:0,sdl_payable:0,total:0},equity:{retained_income:0,total:0},total_liabilities_and_equity:0};
@@ -1270,6 +1298,69 @@ function Reports({live = {}}) {
       </div>
     );
   };
+  const renderProvTax = () => {
+    const p = provTax;
+    const now = new Date();
+    const ytd   = p ? p.ytd   : {revenue:totalRevenue, expenses:totalExpenses, payroll_cost:totalPayroll, taxable_income:totalRevenue-totalExpenses-totalPayroll};
+    const ann   = p ? p.annualised : {taxable_income:Math.max(0,(totalRevenue-totalExpenses-totalPayroll)/now.getMonth()*12), estimated_tax:0};
+    const irp6  = p ? p.irp6  : {first_payment:0, first_due:"31 August "+now.getFullYear(), second_payment:0, second_due:"28 February "+(now.getFullYear()+1)};
+    const notes = p ? p.notes : [];
+    const taxable = ytd.taxable_income;
+    const estTax  = ann.estimated_tax || Math.max(0, ann.taxable_income * 0.27);
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+          <div>
+            <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Provisional Tax (IRP6)</h2>
+            <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Corporate tax @ 27% — Tax year {p?p.tax_year:now.getFullYear()+"/"+(now.getFullYear()+1)}</p>
+          </div>
+          <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.accent,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none"}}>Submit IRP6 on eFiling</a>
+        </div>
+        <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+          <KPI label="YTD Revenue"         value={fmt(ytd.revenue)}          color={C.green}  icon="Revenue" sub="Year to date"/>
+          <KPI label="YTD Expenses"        value={fmt(ytd.expenses+ytd.payroll_cost)} color={C.red} icon="Expenses" sub="Incl. payroll"/>
+          <KPI label="Taxable Income"      value={fmt(Math.max(0,taxable))}  color={taxable>=0?C.ink:C.red} icon="Tax" sub="Est. annual basis"/>
+          <KPI label="Estimated Tax (27%)" value={fmt(estTax)}               color={C.accent} icon="SARS" sub="Before deductions"/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>YTD Income Statement</div>
+            <ReportRow label="Revenue (invoiced + paid)"  value={ytd.revenue}       bold color={C.green}/>
+            <ReportRow label="Less: Operating Expenses"   value={-ytd.expenses}     indent/>
+            <ReportRow label="Less: Payroll Cost"         value={-ytd.payroll_cost} indent/>
+            <ReportRow label="YTD Taxable Income"         value={taxable} bold border color={taxable>=0?C.ink:C.red}/>
+            <ReportRow label="Annualised Taxable Income"  value={ann.taxable_income} bold color={C.inkMid}/>
+            <ReportRow label="Estimated Annual Tax (27%)" value={estTax} bold border large color={C.accent}/>
+          </div>
+          <div>
+            <div style={{background:C.surface,border:"2px solid "+C.accent,borderRadius:16,padding:24,marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:12}}>First IRP6 Payment</div>
+              <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent,marginBottom:6}}>{fmt(irp6.first_payment)}</div>
+              <div style={{fontSize:12,color:C.inkMid}}>50% of estimated annual tax</div>
+              <div style={{marginTop:12,padding:"8px 12px",background:C.redLt,borderRadius:8,fontSize:12,fontWeight:700,color:C.red}}>Due: {irp6.first_due}</div>
+            </div>
+            <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24}}>
+              <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:12}}>Second IRP6 Payment</div>
+              <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.ink,marginBottom:6}}>{fmt(irp6.second_payment)}</div>
+              <div style={{fontSize:12,color:C.inkMid}}>Balance of estimated annual tax</div>
+              <div style={{marginTop:12,padding:"8px 12px",background:C.goldLt,borderRadius:8,fontSize:12,fontWeight:700,color:C.gold}}>Due: {irp6.second_due}</div>
+            </div>
+          </div>
+        </div>
+        {notes.length > 0 && (
+          <div style={{background:C.bg,border:"1px solid "+C.border,borderRadius:12,padding:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:10}}>Important Notes</div>
+            {notes.map((n,i)=>(
+              <div key={i} style={{fontSize:12,color:C.inkMid,marginBottom:6,display:"flex",gap:8}}>
+                <span style={{color:C.gold}}>•</span>{n}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
@@ -1314,6 +1405,7 @@ function Reports({live = {}}) {
         {activeTab==="cf"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderCF()}</div>}
         {activeTab==="mgmt" && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderMgmt()}</div>}
         {activeTab==="emp"  && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderEmp()}</div>}
+        {activeTab==="prov" && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderProvTax()}</div>}
       </div>
     </div>
   );

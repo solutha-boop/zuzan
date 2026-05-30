@@ -15,41 +15,79 @@ import logging
 
 logger = logging.getLogger("zuzan.payroll")
 
-# SA TAX TABLES 2026/2027
-PAYE_BRACKETS = [
-    {"min": 0,        "max": 245100,   "rate": 0.18, "base": 0},
-    {"min": 245101,   "max": 383100,   "rate": 0.26, "base": 44118},
-    {"min": 383101,   "max": 530200,   "rate": 0.31, "base": 79998},
-    {"min": 530201,   "max": 695800,   "rate": 0.36, "base": 125599},
-    {"min": 695801,   "max": 887000,   "rate": 0.39, "base": 185215},
-    {"min": 887001,   "max": 1878600,  "rate": 0.41, "base": 259783},
-    {"min": 1878601,  "max": 9999999,  "rate": 0.45, "base": 666339},
-]
+# SA TAX TABLES — Multi-year for audit history
+TAX_YEARS = {
+    "2024/2025": {
+        "brackets": [
+            {"min": 0,        "max": 237100,   "rate": 0.18, "base": 0},
+            {"min": 237101,   "max": 370500,   "rate": 0.26, "base": 42678},
+            {"min": 370501,   "max": 512800,   "rate": 0.31, "base": 77362},
+            {"min": 512801,   "max": 673000,   "rate": 0.36, "base": 121475},
+            {"min": 673001,   "max": 857900,   "rate": 0.39, "base": 179147},
+            {"min": 857901,   "max": 1817000,  "rate": 0.41, "base": 251258},
+            {"min": 1817001,  "max": 9999999,  "rate": 0.45, "base": 644489},
+        ],
+        "primary_rebate": 17235,
+        "uif_ceil": 17712,
+    },
+    "2025/2026": {
+        "brackets": [
+            {"min": 0,        "max": 237100,   "rate": 0.18, "base": 0},
+            {"min": 237101,   "max": 370500,   "rate": 0.26, "base": 42678},
+            {"min": 370501,   "max": 512800,   "rate": 0.31, "base": 77362},
+            {"min": 512801,   "max": 673000,   "rate": 0.36, "base": 121475},
+            {"min": 673001,   "max": 857900,   "rate": 0.39, "base": 179147},
+            {"min": 857901,   "max": 1817000,  "rate": 0.41, "base": 251258},
+            {"min": 1817001,  "max": 9999999,  "rate": 0.45, "base": 644489},
+        ],
+        "primary_rebate": 17235,
+        "uif_ceil": 17712,
+    },
+    "2026/2027": {
+        "brackets": [
+            {"min": 0,        "max": 245100,   "rate": 0.18, "base": 0},
+            {"min": 245101,   "max": 383100,   "rate": 0.26, "base": 44118},
+            {"min": 383101,   "max": 530200,   "rate": 0.31, "base": 79998},
+            {"min": 530201,   "max": 695800,   "rate": 0.36, "base": 125599},
+            {"min": 695801,   "max": 887000,   "rate": 0.39, "base": 185215},
+            {"min": 887001,   "max": 1878600,  "rate": 0.41, "base": 259783},
+            {"min": 1878601,  "max": 9999999,  "rate": 0.45, "base": 666339},
+        ],
+        "primary_rebate": 17820,
+        "uif_ceil": 17712,
+    },
+}
 
-PRIMARY_REBATE  = 17820
+CURRENT_TAX_YEAR = "2026/2027"
+
+# Active tables (current year)
+PAYE_BRACKETS = TAX_YEARS[CURRENT_TAX_YEAR]["brackets"]
+PRIMARY_REBATE = TAX_YEARS[CURRENT_TAX_YEAR]["primary_rebate"]
+UIF_CEIL       = TAX_YEARS[CURRENT_TAX_YEAR]["uif_ceil"]
 UIF_RATE        = 0.01
-UIF_CEIL        = 17712
 SDL_RATE        = 0.01
 PAYROLL_PER_EMP = 17.50
 PAYROLL_MIN     = 99.00
 
 
-def calc_paye(annual_income: float) -> float:
+def calc_paye(annual_income: float, tax_year: str = None) -> float:
+    yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
     bracket = None
-    for b in PAYE_BRACKETS:
+    for b in yr["brackets"]:
         if b["min"] <= annual_income <= b["max"]:
             bracket = b
             break
     if not bracket:
         return 0
-    tax = bracket["base"] + (annual_income - bracket["min"]) * bracket["rate"] - PRIMARY_REBATE
+    tax = bracket["base"] + (annual_income - bracket["min"]) * bracket["rate"] - yr["primary_rebate"]
     return max(0, tax)
 
 
-def calc_payroll(gross_monthly: float) -> dict:
-    annual_paye = calc_paye(gross_monthly * 12)
+def calc_payroll(gross_monthly: float, tax_year: str = None) -> dict:
+    yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
+    annual_paye = calc_paye(gross_monthly * 12, tax_year)
     monthly_paye = annual_paye / 12
-    uif_base = min(gross_monthly, UIF_CEIL)
+    uif_base = min(gross_monthly, yr["uif_ceil"])
     uif_employee = uif_base * UIF_RATE
     uif_employer = uif_base * UIF_RATE
     sdl = gross_monthly * SDL_RATE
@@ -63,6 +101,7 @@ def calc_payroll(gross_monthly: float) -> dict:
         "sdl":          round(sdl, 2),
         "net_pay":      round(net_pay, 2),
         "total_cost":   round(total_cost, 2),
+        "tax_year":     tax_year or CURRENT_TAX_YEAR,
     }
 
 
@@ -157,6 +196,14 @@ async def run_payroll(
 
 # REPORTS ROUTER
 reports_router = APIRouter()
+
+
+@reports_router.get("/tax-years")
+async def get_tax_years(current_user: User = Depends(get_current_user)):
+    return {
+        "current": CURRENT_TAX_YEAR,
+        "available": list(TAX_YEARS.keys()),
+    }
 
 
 @reports_router.get("/dashboard")
@@ -520,6 +567,93 @@ async def management_accounts(
         "trend": trend,
     }
 
+
+
+@reports_router.get("/provisional-tax")
+async def provisional_tax(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Calculates provisional tax (IRP6) for the company.
+    SA corporate tax rate: 27% of taxable income.
+    Provisional tax is paid in two installments per tax year.
+    First payment: 6 months into the tax year.
+    Second payment: last day of the tax year.
+    """
+    cid = current_user.company_id
+    now = datetime.utcnow()
+    CORP_TAX_RATE = 0.27
+
+    # Get all revenue and expenses for the current calendar year (YTD)
+    year_start = datetime(now.year, 1, 1)
+
+    paid_invoices = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status == InvoiceStatus.paid,
+        Invoice.created_at >= year_start
+    ).all()
+    ytd_revenue = round(sum(i.total_amount for i in paid_invoices), 2)
+
+    expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.expense_date >= year_start
+    ).all()
+    ytd_expenses = round(sum(e.amount for e in expenses), 2)
+
+    payslips = db.query(Payslip).join(Employee).filter(
+        Employee.company_id == cid,
+        Payslip.generated_at >= year_start
+    ).all()
+    ytd_payroll = round(sum(p.total_cost for p in payslips), 2)
+
+    # YTD taxable income
+    ytd_taxable_income = round(ytd_revenue - ytd_expenses - ytd_payroll, 2)
+
+    # Annualise based on months elapsed
+    months_elapsed = now.month
+    annual_taxable_income = round((ytd_taxable_income / months_elapsed * 12) if months_elapsed > 0 else 0, 2)
+
+    # Corporate tax on estimated annual income
+    estimated_annual_tax = round(max(0, annual_taxable_income * CORP_TAX_RATE), 2)
+
+    # Provisional tax payments
+    # First IRP6: 50% of estimated annual tax — due last day of month 6 of tax year
+    # Second IRP6: balance (50%) — due last day of tax year (assume Feb year-end = 28 Feb)
+    first_payment  = round(estimated_annual_tax / 2, 2)
+    second_payment = round(estimated_annual_tax - first_payment, 2)
+
+    # Due dates (assuming 28 Feb financial year-end — standard for SA companies)
+    first_due  = datetime(now.year, 8, 31).strftime("%d %B %Y")   # 31 Aug
+    second_due = datetime(now.year + 1, 2, 28).strftime("%d %B %Y")  # 28 Feb next year
+
+    return {
+        "tax_year":                 f"{now.year}/{now.year + 1}",
+        "corp_tax_rate_pct":        27,
+        "months_elapsed":           months_elapsed,
+        "ytd": {
+            "revenue":              ytd_revenue,
+            "expenses":             ytd_expenses,
+            "payroll_cost":         ytd_payroll,
+            "taxable_income":       ytd_taxable_income,
+        },
+        "annualised": {
+            "taxable_income":       annual_taxable_income,
+            "estimated_tax":        estimated_annual_tax,
+        },
+        "irp6": {
+            "first_payment":        first_payment,
+            "first_due":            first_due,
+            "second_payment":       second_payment,
+            "second_due":           second_due,
+        },
+        "notes": [
+            "Based on annualised YTD figures — update when actual year-end figures are known.",
+            "Small Business Corporations (SBC) qualify for reduced tax rates — consult your accountant.",
+            "Submit IRP6 via SARS eFiling before due dates to avoid penalties.",
+            "Turnover tax may apply if annual turnover is below R1,000,000.",
+        ]
+    }
 
 # PAYFAST PAYMENT GATEWAY
 payments_router = APIRouter()
