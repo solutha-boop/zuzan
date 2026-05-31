@@ -995,7 +995,7 @@ function Payroll({live = {}}) {
           </div>
         </div>
       )}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden",marginBottom:16}}>
+      <div key={taxYear} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden",marginBottom:16}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
           <thead>
             <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
@@ -1017,7 +1017,7 @@ function Payroll({live = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.green}}>{fmt(p.netPay)}</td>
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
-                    <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
+                    <button onClick={()=>setViewPayslip({employee:emp,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                   </td>
                 </tr>
               );
@@ -1407,6 +1407,244 @@ function Reports({live = {}}) {
         {activeTab==="emp"  && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderEmp()}</div>}
         {activeTab==="prov" && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderProvTax()}</div>}
       </div>
+    </div>
+  );
+}
+
+
+// ── DEBTORS ───────────────────────────────────────────────────────────────────
+function Debtors({live = {}}) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(null);
+
+  useEffect(() => {
+    api("/reports/debtors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
+  }, []);
+
+  const BUCKETS = [
+    {key:"not_due", label:"Not Yet Due",  color:C.blue},
+    {key:"current", label:"0 – 30 Days",  color:C.green},
+    {key:"31_60",   label:"31 – 60 Days", color:C.gold},
+    {key:"61_90",   label:"61 – 90 Days", color:C.accent},
+    {key:"over_90", label:"90+ Days",     color:C.red},
+  ];
+
+  // Mock debtors for demo mode
+  const mockBuckets = {
+    not_due: [{id:"INV-003",client:"SA Retail Group",amount:67200,due_date:"2025-06-15",days_overdue:0,status:"sent"}],
+    current: [{id:"INV-002",client:"BuildRight CC",amount:28500,due_date:"2025-05-10",days_overdue:20,status:"sent"}],
+    "31_60": [{id:"INV-004",client:"Cape Town Motors",amount:15800,due_date:"2025-04-20",days_overdue:40,status:"overdue"}],
+    "61_90": [],
+    over_90: [],
+  };
+  const mockTotals = {not_due:67200,current:28500,"31_60":15800,"61_90":0,over_90:0,grand:111500};
+
+  const buckets = data ? data.buckets : mockBuckets;
+  const totals  = data ? data.totals  : mockTotals;
+  const asAt    = data ? data.as_at   : new Date().toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"});
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Debtors Book</h2>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Accounts receivable — as at {asAt}</p>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          {!data && <Badge label="Demo Mode" color={C.gold} bg={C.goldLt}/>}
+          <KPI label="Total Outstanding" value={fmt(totals.grand)} color={C.accent} icon="Total"/>
+        </div>
+      </div>
+      {loading && <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading debtors...</div>}
+      {!loading && (
+        <div>
+          <div style={{display:"flex",gap:12,marginBottom:24,flexWrap:"wrap"}}>
+            {BUCKETS.map(b => (
+              <div key={b.key} onClick={()=>setExpanded(expanded===b.key?null:b.key)}
+                style={{flex:1,minWidth:140,background:C.surface,border:`2px solid ${expanded===b.key?b.color:C.border}`,borderRadius:14,padding:16,cursor:"pointer"}}>
+                <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>{b.label}</div>
+                <div style={{fontSize:20,fontWeight:800,color:b.color,marginBottom:4}}>{fmt(totals[b.key])}</div>
+                <div style={{fontSize:11,color:C.inkDim}}>{(buckets[b.key]||[]).length} invoice{(buckets[b.key]||[]).length!==1?"s":""}</div>
+              </div>
+            ))}
+          </div>
+          {BUCKETS.map(b => expanded===b.key && (buckets[b.key]||[]).length>0 && (
+            <div key={b.key} style={{background:C.surface,border:`1px solid ${b.color}40`,borderRadius:16,overflow:"hidden",marginBottom:16}}>
+              <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:b.color}}>{b.label} — {fmt(totals[b.key])}</div>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                    {["Invoice","Client","Amount","Due Date","Days Overdue","Status"].map(h=>(
+                      <th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(buckets[b.key]||[]).map((inv,i)=>(
+                    <tr key={i} style={{borderBottom:`1px solid ${C.border}20`}}>
+                      <td style={{padding:"12px 16px",fontWeight:700,color:C.accent}}>{inv.id}</td>
+                      <td style={{padding:"12px 16px",fontWeight:500}}>{inv.client}</td>
+                      <td style={{padding:"12px 16px",fontWeight:700}}>{fmt(inv.amount)}</td>
+                      <td style={{padding:"12px 16px",color:C.inkMid}}>{inv.due_date ? new Date(inv.due_date).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"}) : "—"}</td>
+                      <td style={{padding:"12px 16px"}}>
+                        <Badge label={inv.days_overdue===0?"Current":inv.days_overdue+" days"} color={b.color} bg={b.color+"15"}/>
+                      </td>
+                      <td style={{padding:"12px 16px"}}><StatusBadge status={inv.status}/></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+            <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:C.ink}}>Aging Summary</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                  {["Age Bucket","Invoices","Amount","% of Total"].map(h=>(
+                    <th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {BUCKETS.map(b=>(
+                  <tr key={b.key} style={{borderBottom:`1px solid ${C.border}20`}}>
+                    <td style={{padding:"12px 16px"}}><Badge label={b.label} color={b.color} bg={b.color+"15"}/></td>
+                    <td style={{padding:"12px 16px",color:C.inkMid}}>{(buckets[b.key]||[]).length}</td>
+                    <td style={{padding:"12px 16px",fontWeight:700,color:b.color}}>{fmt(totals[b.key])}</td>
+                    <td style={{padding:"12px 16px",color:C.inkMid}}>{totals.grand?Math.round(totals[b.key]/totals.grand*100):0}%</td>
+                  </tr>
+                ))}
+                <tr style={{background:C.bg,borderTop:`2px solid ${C.border}`}}>
+                  <td style={{padding:"12px 16px",fontWeight:800}}>TOTAL</td>
+                  <td style={{padding:"12px 16px",fontWeight:800}}>{Object.values(buckets).reduce((s,b)=>s+(b||[]).length,0)}</td>
+                  <td style={{padding:"12px 16px",fontWeight:800,color:C.accent}}>{fmt(totals.grand)}</td>
+                  <td style={{padding:"12px 16px",fontWeight:800}}>100%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CREDITORS ─────────────────────────────────────────────────────────────────
+function Creditors({live = {}}) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(null);
+
+  useEffect(() => {
+    api("/reports/creditors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (live.reload) {
+      api("/reports/creditors-aging").then(setData).catch(()=>null);
+    }
+  }, [live.expenses]); // eslint-disable-line
+
+  const BUCKETS = [
+    {key:"current", label:"0 – 30 Days",  color:C.green},
+    {key:"31_60",   label:"31 – 60 Days", color:C.gold},
+    {key:"61_90",   label:"61 – 90 Days", color:C.accent},
+    {key:"over_90", label:"90+ Days",     color:C.red},
+  ];
+
+  const mockVendors = [
+    {vendor:"Eskom",        total:3200,  invoices:[{id:"EXP-001",description:"Electricity",category:"Utilities",amount:3200,date:"2025-05-02",days_old:28,bucket:"current"}]},
+    {vendor:"Telkom",       total:1850,  invoices:[{id:"EXP-002",description:"Fibre + phone",category:"Telecoms",amount:1850,date:"2025-04-05",days_old:55,bucket:"31_60"}]},
+    {vendor:"Discovery",    total:4200,  invoices:[{id:"EXP-005",description:"Business insurance",category:"Insurance",amount:4200,date:"2025-04-12",days_old:48,bucket:"31_60"}]},
+  ];
+  const mockTotals = {current:3200,"31_60":6050,"61_90":0,over_90:0,grand:9250};
+
+  const vendors = data ? data.vendors : mockVendors;
+  const totals  = data ? data.totals  : mockTotals;
+  const asAt    = data ? data.as_at   : new Date().toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"});
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Creditors Book</h2>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Accounts payable by vendor — as at {asAt}</p>
+        </div>
+        {!data && <Badge label="Demo Mode" color={C.gold} bg={C.goldLt}/>}
+      </div>
+      {loading && <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading creditors...</div>}
+      {!loading && (
+        <div>
+          <div style={{display:"flex",gap:12,marginBottom:24,flexWrap:"wrap"}}>
+            {BUCKETS.map(b=>(
+              <div key={b.key} style={{flex:1,minWidth:140,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:16}}>
+                <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>{b.label}</div>
+                <div style={{fontSize:20,fontWeight:800,color:b.color,marginBottom:4}}>{fmt(totals[b.key])}</div>
+              </div>
+            ))}
+            <div style={{flex:1,minWidth:140,background:C.ink,borderRadius:14,padding:16}}>
+              <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Total Creditors</div>
+              <div style={{fontSize:20,fontWeight:800,color:"#fff",marginBottom:4}}>{fmt(totals.grand)}</div>
+            </div>
+          </div>
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+            <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:C.ink}}>Creditor Ledger by Vendor</div>
+            {vendors.map((v,vi)=>(
+              <div key={vi}>
+                <div onClick={()=>setExpanded(expanded===vi?null:vi)}
+                  style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 20px",borderBottom:`1px solid ${C.border}20`,cursor:"pointer",background:expanded===vi?C.accentLt:"transparent"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <span style={{fontSize:14,fontWeight:700,color:C.ink}}>{v.vendor}</span>
+                    <Badge label={v.invoices.length+" transaction"+(v.invoices.length!==1?"s":"")} color={C.blue} bg={C.blueLt}/>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:16}}>
+                    <span style={{fontWeight:700,color:C.red}}>{fmt(v.total)}</span>
+                    <span style={{fontSize:12,color:C.inkDim}}>{expanded===vi?"▼":"▶"}</span>
+                  </div>
+                </div>
+                {expanded===vi && (
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,background:C.bg}}>
+                    <thead>
+                      <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                        {["Ref","Description","Category","Date","Age","Amount"].map(h=>(
+                          <th key={h} style={{padding:"9px 20px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {v.invoices.map((exp,i)=>{
+                        const bc = BUCKETS.find(b=>b.key===exp.bucket)||BUCKETS[0];
+                        return (
+                          <tr key={i} style={{borderBottom:`1px solid ${C.border}20`}}>
+                            <td style={{padding:"10px 20px",color:C.inkMid,fontSize:11}}>{exp.id}</td>
+                            <td style={{padding:"10px 20px"}}>{exp.description}</td>
+                            <td style={{padding:"10px 20px"}}><Badge label={exp.category} color={C.blue} bg={C.blueLt}/></td>
+                            <td style={{padding:"10px 20px",color:C.inkMid}}>{exp.date?new Date(exp.date).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"}):"—"}</td>
+                            <td style={{padding:"10px 20px"}}><Badge label={exp.days_old+" days"} color={bc.color} bg={bc.color+"15"}/></td>
+                            <td style={{padding:"10px 20px",fontWeight:700,color:C.red}}>{fmt(exp.amount)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{borderTop:`1px solid ${C.border}`}}>
+                        <td colSpan={5} style={{padding:"10px 20px",fontWeight:700,color:C.ink}}>Vendor Total</td>
+                        <td style={{padding:"10px 20px",fontWeight:800,color:C.red}}>{fmt(v.total)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                )}
+              </div>
+            ))}
+            <div style={{display:"flex",justifyContent:"space-between",padding:"14px 20px",borderTop:`2px solid ${C.border}`,fontWeight:800,fontSize:14}}>
+              <span>TOTAL CREDITORS</span>
+              <span style={{color:C.red}}>{fmt(totals.grand)}</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2212,6 +2450,8 @@ function ZuZanApp({user, onLogout}) {
     {id:"expenses",  label:"Expenses",    icon:"💳"},
     {id:"payroll",   label:"Payroll",     icon:"👥"},
     {id:"reports",   label:"Reports",     icon:"📊"},
+    {id:"debtors",   label:"Debtors",     icon:"📥"},
+    {id:"creditors", label:"Creditors",   icon:"📤"},
     {id:"coa",       label:"Accounts",    icon:"📒"},
     {id:"bankimport",label:"Bank Import", icon:"🏦"},
     {id:"settings",  label:"Settings",    icon:"⚙️"},
@@ -2222,6 +2462,8 @@ function ZuZanApp({user, onLogout}) {
     expenses:   <Expenses   live={live}/>,
     payroll:    <Payroll    live={live}/>,
     reports:    <Reports    live={live}/>,
+    debtors:    <Debtors    live={live}/>,
+    creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
     settings:   <AppSettings user={user} onLogout={onLogout}/>,

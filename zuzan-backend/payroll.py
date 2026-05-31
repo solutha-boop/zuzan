@@ -655,6 +655,114 @@ async def provisional_tax(
         ]
     }
 
+
+@reports_router.get("/debtors-aging")
+async def debtors_aging(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Debtors book with aging — outstanding invoices owed TO the company."""
+    cid = current_user.company_id
+    now = datetime.utcnow()
+
+    outstanding = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
+    ).all()
+
+    buckets = {"current": [], "31_60": [], "61_90": [], "over_90": [], "not_due": []}
+
+    for inv in outstanding:
+        due = inv.due_date or inv.created_at
+        days_overdue = (now - due).days if due else 0
+        entry = {
+            "id":             inv.invoice_number,
+            "client":         inv.client_name,
+            "amount":         round(inv.total_amount, 2),
+            "due_date":       due.strftime("%Y-%m-%d") if due else None,
+            "days_overdue":   max(0, days_overdue),
+            "status":         str(inv.status).split(".")[-1],
+        }
+        if days_overdue < 0:
+            buckets["not_due"].append(entry)
+        elif days_overdue <= 30:
+            buckets["current"].append(entry)
+        elif days_overdue <= 60:
+            buckets["31_60"].append(entry)
+        elif days_overdue <= 90:
+            buckets["61_90"].append(entry)
+        else:
+            buckets["over_90"].append(entry)
+
+    def bucket_total(b): return round(sum(i["amount"] for i in b), 2)
+
+    return {
+        "as_at":      now.strftime("%d %B %Y"),
+        "buckets":    buckets,
+        "totals": {
+            "not_due":  bucket_total(buckets["not_due"]),
+            "current":  bucket_total(buckets["current"]),
+            "31_60":    bucket_total(buckets["31_60"]),
+            "61_90":    bucket_total(buckets["61_90"]),
+            "over_90":  bucket_total(buckets["over_90"]),
+            "grand":    bucket_total(buckets["not_due"]) + bucket_total(buckets["current"]) +
+                        bucket_total(buckets["31_60"]) + bucket_total(buckets["61_90"]) +
+                        bucket_total(buckets["over_90"]),
+        }
+    }
+
+
+@reports_router.get("/creditors-aging")
+async def creditors_aging(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Creditors book with aging — expenses grouped by vendor."""
+    cid = current_user.company_id
+    now = datetime.utcnow()
+
+    expenses = db.query(Expense).filter(
+        Expense.company_id == cid
+    ).order_by(Expense.expense_date.desc()).all()
+
+    # Group by vendor
+    vendor_map = {}
+    for exp in expenses:
+        v = exp.vendor or "Unknown"
+        if v not in vendor_map:
+            vendor_map[v] = {"vendor": v, "invoices": [], "total": 0}
+        exp_date = exp.expense_date or exp.created_at
+        days_old = (now - exp_date).days if exp_date else 0
+        entry = {
+            "id":       f"EXP-{exp.id:03d}",
+            "description": exp.description or "",
+            "category": exp.category or "Other",
+            "amount":   round(exp.amount, 2),
+            "date":     exp_date.strftime("%Y-%m-%d") if exp_date else None,
+            "days_old": days_old,
+            "bucket":   "current" if days_old <= 30 else "31_60" if days_old <= 60 else "61_90" if days_old <= 90 else "over_90",
+        }
+        vendor_map[v]["invoices"].append(entry)
+        vendor_map[v]["total"] = round(vendor_map[v]["total"] + exp.amount, 2)
+
+    vendors = sorted(vendor_map.values(), key=lambda x: x["total"], reverse=True)
+
+    # Bucket totals across all vendors
+    all_exp = [e for v in vendors for e in v["invoices"]]
+    def btotal(bucket): return round(sum(e["amount"] for e in all_exp if e["bucket"] == bucket), 2)
+
+    return {
+        "as_at":   now.strftime("%d %B %Y"),
+        "vendors": vendors,
+        "totals": {
+            "current": btotal("current"),
+            "31_60":   btotal("31_60"),
+            "61_90":   btotal("61_90"),
+            "over_90": btotal("over_90"),
+            "grand":   round(sum(e["amount"] for e in all_exp), 2),
+        }
+    }
+
 # PAYFAST PAYMENT GATEWAY
 payments_router = APIRouter()
 
