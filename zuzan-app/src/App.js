@@ -486,7 +486,7 @@ function Invoicing({live = {}}) {
   useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
   const [showNew, setShowNew] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [form, setForm] = useState({client:"",amount:"",desc:"",due:""});
+  const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true});
 
   const totalPaid = invoices.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
   const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + i.amount, 0);
@@ -511,10 +511,11 @@ function Invoicing({live = {}}) {
       await api("/invoices/", {
         method: "POST",
         body: JSON.stringify({
-          client_name:  form.client,
-          description:  form.desc,
-          amount:       +form.amount,
-          due_date:     form.due || null,
+          client_name:     form.client,
+          description:     form.desc,
+          amount:          +form.amount,
+          vat_applicable:  form.vatApplicable,
+          due_date:        form.due || null,
         }),
       });
       if (live && live.reload) live.reload();
@@ -535,12 +536,25 @@ function Invoicing({live = {}}) {
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Invoice</h3>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-            {[{l:"Client Name",k:"client",p:"Acme Pty Ltd",t:"text"},{l:"Amount (ZAR)",k:"amount",p:"50000",t:"number"},{l:"Description",k:"desc",p:"Services rendered",t:"text"},{l:"Due Date",k:"due",p:"",t:"date"}].map(f => (
+            {[{l:"Client Name",k:"client",p:"Acme Pty Ltd",t:"text"},{l:"Amount (ZAR excl. VAT)",k:"amount",p:"50000",t:"number"},{l:"Description",k:"desc",p:"Services rendered",t:"text"},{l:"Due Date",k:"due",p:"",t:"date"}].map(f => (
               <div key={f.k}>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
                 <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
               </div>
             ))}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+              <input type="checkbox" checked={form.vatApplicable} onChange={e=>setForm({...form,vatApplicable:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
+              Apply VAT @ 15%
+            </label>
+            {form.amount && (
+              <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:12}}>
+                <span style={{color:C.inkMid}}>Excl. VAT: <strong style={{color:C.ink}}>{fmt(+form.amount||0)}</strong></span>
+                {form.vatApplicable && <span style={{color:C.inkMid}}>VAT: <strong style={{color:C.gold}}>{fmt((+form.amount||0)*0.15)}</strong></span>}
+                <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmt((+form.amount||0)*(form.vatApplicable?1.15:1))}</strong></span>
+              </div>
+            )}
           </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={handleCreate} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Create Invoice</button>
@@ -617,7 +631,7 @@ function Expenses({live = {}}) {
   useEffect(() => { if (liveExpenses && liveExpenses.length > 0) setExpenses(liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, category: e.category || "Other", id: `EXP-${String(e.id).padStart(3,"0")}`}))); }, [liveExpenses]);
   const [showNew, setShowNew] = useState(false);
   const [filter, setFilter] = useState("All");
-  const [form, setForm] = useState({vendor:"",amount:"",category:"Office",desc:""});
+  const [form, setForm] = useState({vendor:"",amount:"",category:"Office",desc:"",vatApplicable:true});
   const cats = ["All","Assets","Liabilities","Equity","Income","Cost of Sales","Expenses"];
   const filtered = filter === "All" ? expenses : expenses.filter(e => e.category === filter);
   const total = filtered.reduce((s,e) => s + e.amount, 0);
@@ -639,11 +653,12 @@ function Expenses({live = {}}) {
       await api("/expenses/", {
         method: "POST",
         body: JSON.stringify({
-          vendor:       form.vendor,
-          description:  form.desc,
-          amount:       +form.amount,
-          category:     form.category,
-          expense_date: new Date().toISOString().slice(0,10),
+          vendor:          form.vendor,
+          description:     form.desc,
+          amount:          +form.amount,
+          vat_applicable:  form.vatApplicable,
+          category:        form.category,
+          expense_date:    new Date().toISOString().slice(0,10),
         }),
       });
       if (live && live.reload) live.reload();
@@ -658,7 +673,7 @@ function Expenses({live = {}}) {
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>Add Expense</h3>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-            {[{l:"Vendor",k:"vendor",p:"Eskom"},{l:"Amount (ZAR)",k:"amount",p:"1500"},{l:"Description",k:"desc",p:"Monthly bill"}].map(f => (
+            {[{l:"Vendor",k:"vendor",p:"Eskom"},{l:"Amount (ZAR excl. VAT)",k:"amount",p:"1500"},{l:"Description",k:"desc",p:"Monthly bill"}].map(f => (
               <div key={f.k}>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
                 <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
@@ -677,6 +692,19 @@ function Expenses({live = {}}) {
                 ))}
               </select>
             </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+              <input type="checkbox" checked={form.vatApplicable} onChange={e=>setForm({...form,vatApplicable:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
+              Apply VAT @ 15%
+            </label>
+            {form.amount && (
+              <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:12}}>
+                <span style={{color:C.inkMid}}>Excl. VAT: <strong style={{color:C.ink}}>{fmt(+form.amount||0)}</strong></span>
+                {form.vatApplicable && <span style={{color:C.inkMid}}>VAT: <strong style={{color:C.gold}}>{fmt((+form.amount||0)*0.15)}</strong></span>}
+                <span style={{color:C.inkMid}}>Total: <strong style={{color:C.red}}>{fmt((+form.amount||0)*(form.vatApplicable?1.15:1))}</strong></span>
+              </div>
+            )}
           </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={handleAdd} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add</button>
@@ -1088,6 +1116,8 @@ function Reports({live = {}}) {
   const [emp201,   setEmp201]   = useState(null);
   const [mgmt,     setMgmt]     = useState(null);
   const [provTax,  setProvTax]  = useState(null);
+  const [vat201,   setVat201]   = useState(null);
+  const [vatPeriod,setVatPeriod]= useState(new Date().toISOString().slice(0,7));
   const [loading,  setLoading]  = useState(false);
   const d   = live.dashboard;
   const now = new Date();
@@ -1108,6 +1138,7 @@ function Reports({live = {}}) {
       if (tab==="emp"   && !emp201)   setEmp201(await api("/reports/emp201").catch(()=>null));
       if (tab==="mgmt"  && !mgmt)     setMgmt(await api("/reports/management").catch(()=>null));
       if (tab==="prov"  && !provTax)  setProvTax(await api("/reports/provisional-tax").catch(()=>null));
+      if (tab==="vat")                setVat201(await api("/reports/vat201?period="+vatPeriod).catch(()=>null));
     } finally { setLoading(false); }
   };
   const RTABS = [
@@ -1117,6 +1148,7 @@ function Reports({live = {}}) {
     {id:"mgmt", label:"Management Pack"},
     {id:"emp",  label:"EMP201 / IRP5"},
     {id:"prov", label:"Provisional Tax"},
+    {id:"vat",  label:"VAT201"},
   ];
   const renderBS = () => {
     const bs = bsData || {date:now.toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"}),assets:{cash_and_equivalents:0,trade_receivables:0,total:0},liabilities:{paye_payable:0,uif_payable:0,sdl_payable:0,total:0},equity:{retained_income:0,total:0},total_liabilities_and_equity:0};
@@ -1298,6 +1330,122 @@ function Reports({live = {}}) {
       </div>
     );
   };
+  const renderVat201 = () => {
+    const v = vat201;
+    const now = new Date();
+    const out  = v ? v.output : {field_1a_standard_supplies_excl_vat:totalRevenue*100/115,field_4a_output_vat:totalRevenue*15/115,invoice_count:0,total_invoiced_incl_vat:totalRevenue,vat_recorded_on_invoices:0,field_1b_zero_rated_supplies:0};
+    const inp  = v ? v.input  : {field_14_input_vat:totalExpenses*15/115,total_expenses_incl_vat:totalExpenses,total_expenses_excl_vat:totalExpenses*100/115,expense_count:0,expense_breakdown:{},note:""};
+    const net  = v ? v.net    : {field_15_net_vat:(totalRevenue-totalExpenses)*15/115,status:(totalRevenue>totalExpenses?"payable":"refundable"),amount:Math.abs((totalRevenue-totalExpenses)*15/115)};
+    const periodLabel = v ? v.period : now.toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
+    const dueDate     = v ? v.due_date : "";
+    const isPayable   = net.status === "payable";
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+          <div>
+            <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>VAT201 Return</h2>
+            <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>VAT @ 15% — Period: {periodLabel}{dueDate?" — Due: ":""}<strong style={{color:C.red}}>{dueDate}</strong></p>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:12,color:C.inkMid,fontWeight:600}}>Period:</span>
+              <input type="month" value={vatPeriod} onChange={e=>{setVatPeriod(e.target.value);setVat201(null);}} style={{padding:"7px 12px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+              <button onClick={()=>api("/reports/vat201?period="+vatPeriod).then(setVat201).catch(()=>null)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Load</button>
+            </div>
+            <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.blue,color:"#fff",padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none"}}>Submit on eFiling</a>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:24}}>
+          <div style={{background:C.greenLt,border:"1px solid "+C.green+"30",borderRadius:14,padding:20}}>
+            <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Output VAT (Field 4A)</div>
+            <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.green}}>{fmt(out.field_4a_output_vat)}</div>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>VAT collected on {out.invoice_count} invoice{out.invoice_count!==1?"s":""}</div>
+          </div>
+          <div style={{background:C.accentLt,border:"1px solid "+C.accent+"30",borderRadius:14,padding:20}}>
+            <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Input VAT (Field 14)</div>
+            <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>{fmt(inp.field_14_input_vat)}</div>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>VAT on {inp.expense_count} expense{inp.expense_count!==1?"s":""} (est.)</div>
+          </div>
+          <div style={{background:isPayable?C.redLt:C.greenLt,border:"1px solid "+(isPayable?C.red:C.green)+"30",borderRadius:14,padding:20}}>
+            <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Net VAT (Field 15)</div>
+            <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:isPayable?C.red:C.green}}>{fmt(net.amount)}</div>
+            <div style={{fontSize:11,color:isPayable?C.red:C.green,marginTop:4,fontWeight:700}}>{isPayable?"Payable to SARS":"Refund due from SARS"}</div>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:16}}>Section A — Output Tax</div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Field 1(a) Standard rated supplies (excl. VAT)</span>
+              <span style={{fontWeight:700}}>{fmt(out.field_1a_standard_supplies_excl_vat)}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Field 1(b) Zero-rated supplies</span>
+              <span style={{fontWeight:700}}>{fmt(out.field_1b_zero_rated_supplies)}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"2px solid "+C.border,fontSize:13}}>
+              <span style={{color:C.inkMid}}>Total invoiced (incl. VAT)</span>
+              <span style={{fontWeight:700}}>{fmt(out.total_invoiced_incl_vat)}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"12px 0",fontSize:14,fontWeight:800}}>
+              <span style={{color:C.green}}>Field 4(a) Output VAT</span>
+              <span style={{color:C.green}}>{fmt(out.field_4a_output_vat)}</span>
+            </div>
+          </div>
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:16}}>Section B — Input Tax</div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Total expenses (incl. VAT)</span>
+              <span style={{fontWeight:700}}>{fmt(inp.total_expenses_incl_vat)}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Total expenses (excl. VAT)</span>
+              <span style={{fontWeight:700}}>{fmt(inp.total_expenses_excl_vat)}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"2px solid "+C.border,fontSize:13}}>
+              <span style={{color:C.inkMid}}>Estimated input VAT (15/115)</span>
+              <span style={{fontWeight:700}}>{fmt(inp.field_14_input_vat)}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"12px 0",fontSize:14,fontWeight:800}}>
+              <span style={{color:C.accent}}>Field 14 Input VAT claimed</span>
+              <span style={{color:C.accent}}>{fmt(inp.field_14_input_vat)}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{background:isPayable?C.redLt:C.greenLt,border:"2px solid "+(isPayable?C.red:C.green),borderRadius:16,padding:24,marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:isPayable?C.red:C.green,marginBottom:4}}>Field 15 — Net VAT {isPayable?"Payable":"Refundable"}</div>
+              <div style={{fontSize:12,color:C.inkMid}}>Output VAT {fmt(out.field_4a_output_vat)} {isPayable?"minus":"minus"} Input VAT {fmt(inp.field_14_input_vat)}</div>
+              {dueDate && <div style={{fontSize:12,fontWeight:700,color:isPayable?C.red:C.green,marginTop:8}}>Due date: {dueDate}</div>}
+            </div>
+            <div style={{fontFamily:"serif",fontSize:36,fontWeight:800,color:isPayable?C.red:C.green}}>{fmt(net.amount)}</div>
+          </div>
+        </div>
+        {Object.keys(inp.expense_breakdown||{}).length > 0 && (
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24,marginBottom:20}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Expense Breakdown (for VAT audit trail)</div>
+            {Object.entries(inp.expense_breakdown).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>(
+              <div key={cat} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+                <span style={{color:C.ink}}>{cat}</span>
+                <div style={{textAlign:"right"}}>
+                  <span style={{fontWeight:600}}>{fmt(amt)}</span>
+                  <span style={{color:C.inkDim,fontSize:11,marginLeft:12}}>VAT est. {fmt(amt*15/115)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{background:C.goldLt,border:"1px solid "+C.gold+"40",borderRadius:12,padding:16,fontSize:12,color:C.inkMid,lineHeight:1.8}}>
+          <strong style={{color:C.ink}}>VAT201 Notes</strong><br/>
+          Input VAT is estimated at 15/115 of total expenses assuming all are VAT-inclusive. Exclude zero-rated and exempt purchases before submitting.<br/>
+          VAT is due by the 25th of the month following the tax period. Late submission incurs a 10% penalty plus interest.<br/>
+          Ensure your VAT registration number appears on all tax invoices issued and received.
+        </div>
+      </div>
+    );
+  };
+
   const renderProvTax = () => {
     const p = provTax;
     const now = new Date();
@@ -1406,6 +1554,7 @@ function Reports({live = {}}) {
         {activeTab==="mgmt" && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderMgmt()}</div>}
         {activeTab==="emp"  && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderEmp()}</div>}
         {activeTab==="prov" && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderProvTax()}</div>}
+        {activeTab==="vat"  && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{renderVat201()}</div>}
       </div>
     </div>
   );
@@ -2181,8 +2330,81 @@ function AppSettings({user, onLogout}) {
   );
 }
 
+
+// ── LOGIN ─────────────────────────────────────────────────────────────────────
+function Login({onLogin, onRegister}) {
+  const [form, setForm] = useState({email:"", password:""});
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    if (!form.email || !form.password) { setError("Please enter your email and password."); return; }
+    setLoading(true); setError("");
+    try {
+      const res = await fetch("https://zuzan-backend.onrender.com/auth/login", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({email: form.email, password: form.password}),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || "Invalid email or password."); return; }
+      localStorage.setItem("zuzan_token", data.access_token);
+      onLogin({
+        firstName:   data.user.first_name,
+        lastName:    data.user.last_name,
+        email:       data.user.email,
+        companyName: data.company.name,
+        plan:        {name: data.company.plan, id: data.company.plan},
+        access_token: data.access_token,
+      });
+    } catch(e) {
+      setError("Could not connect to server. Please try again.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{width:"100%",maxWidth:420}}>
+        <div style={{textAlign:"center",marginBottom:40}}>
+          <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:8}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <div style={{fontSize:13,color:C.inkMid}}>SA Bookkeeping Platform</div>
+        </div>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:36,boxShadow:"0 4px 24px rgba(0,0,0,0.06)"}}>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:"0 0 8px"}}>Welcome back</h2>
+          <p style={{fontSize:13,color:C.inkMid,marginBottom:28}}>Sign in to your ZuZan account</p>
+          <div style={{marginBottom:16}}>
+            <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Email Address</label>
+            <input type="email" placeholder="you@company.co.za" value={form.email}
+              onChange={e=>setForm({...form,email:e.target.value})}
+              onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+              style={{width:"100%",padding:"12px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+          <div style={{marginBottom:24}}>
+            <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Password</label>
+            <input type="password" placeholder="Your password" value={form.password}
+              onChange={e=>setForm({...form,password:e.target.value})}
+              onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+              style={{width:"100%",padding:"12px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+          {error && <div style={{background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13,color:C.red}}>{error}</div>}
+          <button onClick={handleLogin} disabled={loading} style={{width:"100%",padding:"13px",border:"none",borderRadius:10,background:loading?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:loading?"wait":"pointer",fontFamily:"inherit",marginBottom:16}}>
+            {loading ? "Signing in..." : "Sign In"}
+          </button>
+          <div style={{textAlign:"center",fontSize:13,color:C.inkMid}}>
+            Don't have an account?{" "}
+            <span onClick={onRegister} style={{color:C.accent,fontWeight:700,cursor:"pointer"}}>Start free trial</span>
+          </div>
+        </div>
+        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:C.inkDim}}>
+          Secure 256-bit SSL — Powered by PayFast — SARS compliant
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── REGISTRATION ──────────────────────────────────────────────────────────────
-function Registration({onComplete}) {
+function Registration({onComplete, onLogin}) {
   const [step, setStep] = useState(1);
   const [billing, setBilling] = useState("monthly");
   const [selectedPlan, setPlan] = useState(null);
@@ -2282,7 +2504,7 @@ function Registration({onComplete}) {
             </div>
           ))}
         </div>
-        <div style={{fontSize:12,color:C.inkMid}}>Already have an account? <span style={{color:C.accent,cursor:"pointer",fontWeight:600}} onClick={() => onComplete({access_token:"demo_token"})}>Sign in</span></div>
+        <div style={{fontSize:12,color:C.inkMid}}>Already have an account? <span style={{color:C.accent,cursor:"pointer",fontWeight:600}} onClick={() => onLogin && onLogin()}>Sign in</span></div>
       </div>
       <div style={{maxWidth:860,margin:"0 auto",padding:"48px 24px"}}>
         {step === 1 && (
@@ -2506,12 +2728,33 @@ function ZuZanApp({user, onLogout}) {
 
 // ── ROOT ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen] = useState("registration");
-  const [user, setUser] = useState(null);
+  const [screen, setScreen] = useState("loading");
+  const [user,   setUser]   = useState(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem("zuzan_token");
+    if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
+    fetch("https://zuzan-backend.onrender.com/auth/me", {
+      headers: {"Authorization": "Bearer " + token}
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
+        setUser({
+          firstName:    data.user.first_name,
+          lastName:     data.user.last_name,
+          email:        data.user.email,
+          companyName:  data.company.name,
+          plan:         {name: data.company.plan, id: data.company.plan},
+          access_token: token,
+        });
+        setScreen("app");
+      })
+      .catch(() => { localStorage.removeItem("zuzan_token"); setScreen("login"); });
+  }, []);
+
+  const handleLogin = userData => { setUser(userData); setScreen("app"); };
 
   const handleRegistrationComplete = userData => {
-    // Token already saved in handlePayment
-    // Just update user state and navigate to app
     const savedToken = localStorage.getItem("zuzan_token");
     if (!savedToken || savedToken.startsWith("demo_")) {
       localStorage.setItem("zuzan_token", "demo_" + Date.now());
@@ -2520,9 +2763,62 @@ export default function App() {
     setScreen("app");
   };
 
-  if (screen === "registration") {
-    return <Registration onComplete={handleRegistrationComplete}/>;
-  }
+  const handleLogout = () => {
+    localStorage.removeItem("zuzan_token");
+    setUser(null);
+    setScreen("login");
+  };
 
-  return <ZuZanApp user={user} onLogout={() => { setUser(null); setScreen("registration"); }}/>;
+  if (screen === "loading") return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:12}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+        <div style={{fontSize:13,color:C.inkMid}}>Loading your account...</div>
+      </div>
+    </div>
+  );
+
+  if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
+  if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
+
+  return <ZuZanApp user={user} onLogout={handleLogout}/>;
+}
+ata.company.plan},
+          access_token: token,
+        });
+        setScreen("app");
+      })
+      .catch(() => { localStorage.removeItem("zuzan_token"); setScreen("login"); });
+  }, []);
+
+  const handleLogin = userData => { setUser(userData); setScreen("app"); };
+
+  const handleRegistrationComplete = userData => {
+    const savedToken = localStorage.getItem("zuzan_token");
+    if (!savedToken || savedToken.startsWith("demo_")) {
+      localStorage.setItem("zuzan_token", "demo_" + Date.now());
+    }
+    setUser(userData);
+    setScreen("app");
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("zuzan_token");
+    setUser(null);
+    setScreen("login");
+  };
+
+  if (screen === "loading") return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:12}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+        <div style={{fontSize:13,color:C.inkMid}}>Loading your account...</div>
+      </div>
+    </div>
+  );
+
+  if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
+  if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
+
+  return <ZuZanApp user={user} onLogout={handleLogout}/>;
 }
