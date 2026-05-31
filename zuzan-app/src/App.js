@@ -85,42 +85,28 @@ const PLANS = [
 ];
 
 const MOCK_INVOICES = [
-  {id:"INV-001",client:"Acme Pty Ltd",    amount:45000,date:"2025-04-01",due:"2025-05-01",status:"paid",   desc:"Web development services"},
-  {id:"INV-002",client:"BuildRight CC",   amount:28500,date:"2025-04-10",due:"2025-05-10",status:"pending",desc:"IT consulting"},
-  {id:"INV-003",client:"SA Retail Group", amount:67200,date:"2025-04-15",due:"2025-05-15",status:"overdue",desc:"Software licence"},
-  {id:"INV-004",client:"Cape Town Motors",amount:15800,date:"2025-04-20",due:"2025-05-20",status:"paid",   desc:"Monthly retainer"},
+  {id:"INV-001",client:"Example Client (Pty) Ltd",amount:10000,date:"2026-05-01",due:"2026-06-01",status:"sent",desc:"Add your first invoice using the + New Invoice button"},
 ];
 
 const MOCK_EXPENSES = [
-  {id:"EXP-001",vendor:"Eskom",          amount:3200,date:"2025-04-02",category:"Utilities",desc:"Electricity"},
-  {id:"EXP-002",vendor:"Telkom",         amount:1850,date:"2025-04-05",category:"Telecoms", desc:"Fibre + phone"},
-  {id:"EXP-003",vendor:"Office National",amount:2400,date:"2025-04-08",category:"Office",   desc:"Stationery"},
-  {id:"EXP-004",vendor:"FNB",            amount:450, date:"2025-04-10",category:"Banking",  desc:"Bank charges"},
-  {id:"EXP-005",vendor:"Discovery",      amount:4200,date:"2025-04-12",category:"Insurance",desc:"Business insurance"},
+  {id:"EXP-001",vendor:"Example Supplier",amount:1150,date:"2026-05-01",category:"6360 - Bank Charges",desc:"Add your first expense using the + Add Expense button"},
 ];
 
 const MOCK_EMPLOYEES = [
-  {id:"EMP-001",name:"Sipho Dlamini",     position:"Developer",    salary:45000,dept:"Tech"},
-  {id:"EMP-002",name:"Priya Naidoo",      position:"Accountant",   salary:38000,dept:"Finance"},
-  {id:"EMP-003",name:"Johan van der Berg",position:"Sales Manager",salary:52000,dept:"Sales"},
-  {id:"EMP-004",name:"Nomsa Khumalo",     position:"Admin",        salary:22000,dept:"Admin"},
+  {id:"EMP-001",name:"Example Employee",position:"Position",salary:25000,dept:"General"},
 ];
 
 const REVENUE_DATA = [
-  {month:"Nov",revenue:85000, expenses:52000,profit:33000},
-  {month:"Dec",revenue:112000,expenses:61000,profit:51000},
-  {month:"Jan",revenue:78000, expenses:48000,profit:30000},
-  {month:"Feb",revenue:95000, expenses:55000,profit:40000},
-  {month:"Mar",revenue:103000,expenses:58000,profit:45000},
-  {month:"Apr",revenue:156500,expenses:24600,profit:131900},
+  {month:"Jan",revenue:0,expenses:0,profit:0},
+  {month:"Feb",revenue:0,expenses:0,profit:0},
+  {month:"Mar",revenue:0,expenses:0,profit:0},
+  {month:"Apr",revenue:0,expenses:0,profit:0},
+  {month:"May",revenue:0,expenses:0,profit:0},
+  {month:"Jun",revenue:0,expenses:0,profit:0},
 ];
 
 const EXPENSE_PIE = [
-  {name:"Salaries",value:157000,color:C.accent},
-  {name:"Utilities",value:5050, color:C.blue},
-  {name:"Office",   value:2850, color:C.gold},
-  {name:"Insurance",value:4200, color:C.green},
-  {name:"Banking",  value:450,  color:C.inkDim},
+  {name:"No data yet",value:1,color:C.inkDim},
 ];
 
 const ALL_CATS = ["Revenue","Interest Income","Cost of Sales","Utilities","Telecoms","Office","Banking","Insurance","Tax","Equipment","Travel","Salaries","Rent","Marketing","Professional Fees","Other"];
@@ -2745,45 +2731,6 @@ export default function App() {
           email:        data.user.email,
           companyName:  data.company.name,
           plan:         {name: data.company.plan, id: data.company.plan},
-          access_token: token,
-        });
-        setScreen("app");
-      })
-      .catch(() => { localStorage.removeItem("zuzan_token"); setScreen("login"); });
-  }, []);
-
-  const handleLogin = userData => { setUser(userData); setScreen("app"); };
-
-  const handleRegistrationComplete = userData => {
-    const savedToken = localStorage.getItem("zuzan_token");
-    if (!savedToken || savedToken.startsWith("demo_")) {
-      localStorage.setItem("zuzan_token", "demo_" + Date.now());
-    }
-    setUser(userData);
-    setScreen("app");
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem("zuzan_token");
-    setUser(null);
-    setScreen("login");
-  };
-
-  if (screen === "loading") return (
-    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{textAlign:"center"}}>
-        <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:12}}><span style={{color:C.accent}}>Zu</span>Zan</div>
-        <div style={{fontSize:13,color:C.inkMid}}>Loading your account...</div>
-      </div>
-    </div>
-  );
-
-  if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
-  if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
-
-  return <ZuZanApp user={user} onLogout={handleLogout}/>;
-}
-ata.company.plan},
           access_token: token,
         });
         setScreen("app");

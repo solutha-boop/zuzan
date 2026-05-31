@@ -79,7 +79,7 @@ class Expense(Base):
     id=Column(Integer,primary_key=True,index=True)
     company_id=Column(Integer,ForeignKey("companies.id"))
     vendor=Column(String,nullable=False); description=Column(Text)
-    amount=Column(Float,nullable=False); category=Column(String)
+    amount=Column(Float,nullable=False); vat_amount=Column(Float,default=0); category=Column(String)
     expense_date=Column(DateTime,default=datetime.utcnow)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="expenses")
@@ -120,6 +120,14 @@ class Payment(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Migrate: add vat_amount to expenses if missing
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE expenses ADD COLUMN vat_amount FLOAT DEFAULT 0"))
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
 
 def get_db():
     db = SessionLocal()

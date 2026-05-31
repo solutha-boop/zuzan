@@ -54,13 +54,16 @@ companies_router = router
 # ── INVOICES ──────────────────────────────────────────────────────────────────
 invoices_router = APIRouter()
 
+VAT_RATE = 0.15  # SA standard VAT rate
+
 class InvoiceCreate(BaseModel):
-    client_name:  str
-    client_email: Optional[str] = None
-    description:  str
-    amount:       float
-    due_date:     Optional[str] = None
-    notes:        Optional[str] = None
+    client_name:     str
+    client_email:    Optional[str] = None
+    description:     str
+    amount:          float           # Always excl. VAT
+    vat_applicable:  bool = True     # Apply 15% VAT
+    due_date:        Optional[str] = None
+    notes:           Optional[str] = None
 
 class InvoiceUpdate(BaseModel):
     status:       Optional[str] = None
@@ -96,6 +99,9 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     if monthly_count >= limit:
         raise HTTPException(status_code=403, detail=f"Monthly invoice limit ({limit}) reached. Upgrade your plan.")
 
+    vat_amount   = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
+    total_amount = round(data.amount + vat_amount, 2)
+
     invoice = Invoice(
         company_id=current_user.company_id,
         invoice_number=next_invoice_number(current_user.company_id, db),
@@ -103,7 +109,8 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         client_email=data.client_email,
         description=data.description,
         amount=data.amount,
-        total_amount=data.amount,
+        vat_amount=vat_amount,
+        total_amount=total_amount,
         due_date=datetime.fromisoformat(data.due_date) if data.due_date else None,
         notes=data.notes,
         status=InvoiceStatus.sent,
@@ -144,11 +151,12 @@ async def delete_invoice(invoice_id: int, current_user: User = Depends(get_curre
 expenses_router = APIRouter()
 
 class ExpenseCreate(BaseModel):
-    vendor:       str
-    description:  str
-    amount:       float
-    category:     Optional[str] = "General"
-    expense_date: Optional[str] = None
+    vendor:          str
+    description:     str
+    amount:          float           # Always excl. VAT
+    vat_applicable:  bool = True     # Apply 15% VAT
+    category:        Optional[str] = "General"
+    expense_date:    Optional[str] = None
 
 class ExpenseUpdate(BaseModel):
     vendor:       Optional[str] = None
@@ -164,11 +172,15 @@ async def list_expenses(current_user: User = Depends(get_current_user), db: Sess
 
 @expenses_router.post("/")
 async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    exp_vat    = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
+    exp_total  = round(data.amount + exp_vat, 2)
+
     expense = Expense(
         company_id=current_user.company_id,
         vendor=data.vendor,
         description=data.description,
-        amount=data.amount,
+        amount=exp_total,       # Store VAT-inclusive total
+        vat_amount=exp_vat,
         category=data.category,
         expense_date=datetime.fromisoformat(data.expense_date) if data.expense_date else datetime.utcnow(),
     )

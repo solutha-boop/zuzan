@@ -763,6 +763,108 @@ async def creditors_aging(
         }
     }
 
+
+@reports_router.get("/vat201")
+async def vat201(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    period: Optional[str] = None,
+):
+    """
+    VAT201 return calculation.
+    SA VAT rate: 15%. Filed monthly or bi-monthly.
+    Output VAT: from invoice vat_amount fields.
+    Input VAT: estimated at 15/115 of expenses (VAT-inclusive assumption).
+    period: YYYY-MM format, defaults to current month.
+    """
+    cid = current_user.company_id
+    now = datetime.utcnow()
+    VAT_RATE = 0.15
+
+    # Determine period
+    if period:
+        try:
+            year, month = int(period.split("-")[0]), int(period.split("-")[1])
+        except Exception:
+            year, month = now.year, now.month
+    else:
+        year, month = now.year, now.month
+
+    start = datetime(year, month, 1)
+    end_month = month + 1 if month < 12 else 1
+    end_year  = year if month < 12 else year + 1
+    end = datetime(end_year, end_month, 1)
+
+    period_label = start.strftime("%B %Y")
+    due_date = datetime(end_year, end_month + 1 if end_month < 12 else 1, 25).strftime("%d %B %Y") if end_month < 12 else datetime(end_year + 1, 2, 25).strftime("%d %B %Y")
+
+    # ── OUTPUT TAX ─────────────────────────────────────────────────────────────
+    # All invoices issued in the period (tax point = invoice date)
+    all_invoices = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.created_at >= start,
+        Invoice.created_at < end,
+    ).all()
+
+    # Standard rated supplies (excl. VAT)
+    standard_supplies_incl = round(sum(i.total_amount for i in all_invoices), 2)
+    output_vat_exact        = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
+    # If no vat_amount recorded, estimate from total
+    output_vat = output_vat_exact if output_vat_exact > 0 else round(standard_supplies_incl * VAT_RATE / (1 + VAT_RATE), 2)
+    standard_supplies_excl  = round(standard_supplies_incl - output_vat, 2)
+
+    # ── INPUT TAX ──────────────────────────────────────────────────────────────
+    expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.expense_date >= start,
+        Expense.expense_date < end,
+    ).all()
+
+    total_expenses_incl = round(sum(e.amount for e in expenses), 2)
+    # Use stored vat_amount if available, else estimate at 15/115
+    stored_input_vat = round(sum(getattr(e, "vat_amount", 0) or 0 for e in expenses), 2)
+    input_vat_estimated = stored_input_vat if stored_input_vat > 0 else round(total_expenses_incl * VAT_RATE / (1 + VAT_RATE), 2)
+    vat_is_exact = stored_input_vat > 0
+    total_expenses_excl = round(total_expenses_incl - input_vat_estimated, 2)
+
+    # Expense breakdown by category for audit trail
+    cat_breakdown: dict = {}
+    for e in expenses:
+        key = e.category or "Other"
+        cat_breakdown[key] = round(cat_breakdown.get(key, 0) + e.amount, 2)
+
+    # ── NET VAT ────────────────────────────────────────────────────────────────
+    net_vat = round(output_vat - input_vat_estimated, 2)
+
+    return {
+        "period":          period_label,
+        "period_code":     start.strftime("%Y-%m"),
+        "due_date":        due_date,
+        "vat_rate_pct":    15,
+        "output": {
+            "field_1a_standard_supplies_excl_vat": standard_supplies_excl,
+            "field_1b_zero_rated_supplies":         0,
+            "field_4a_output_vat":                  output_vat,
+            "invoice_count":                         len(all_invoices),
+            "total_invoiced_incl_vat":               standard_supplies_incl,
+            "vat_recorded_on_invoices":              output_vat_exact,
+        },
+        "input": {
+            "field_14_input_vat":                    input_vat_estimated,
+            "total_expenses_incl_vat":               total_expenses_incl,
+            "total_expenses_excl_vat":               total_expenses_excl,
+            "expense_count":                          len(expenses),
+            "expense_breakdown":                      cat_breakdown,
+            "note": ("Input VAT from stored expense records." if vat_is_exact else "Input VAT estimated at 15/115 of expenses. Adjust for any zero-rated or exempt purchases."),
+            "is_exact": vat_is_exact,
+        },
+        "net": {
+            "field_15_net_vat":  net_vat,
+            "status":             "payable" if net_vat >= 0 else "refundable",
+            "amount":             abs(net_vat),
+        },
+    }
+
 # PAYFAST PAYMENT GATEWAY
 payments_router = APIRouter()
 
