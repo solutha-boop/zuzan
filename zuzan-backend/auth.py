@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
+import secrets
 from typing import Optional
 from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus
 
@@ -210,3 +211,56 @@ async def get_me(
             "payroll_employees":   company.payroll_employees,
         },
     }
+
+# In-memory reset tokens {token: {email, expires}}
+_reset_tokens: dict = {}
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token:        str
+    new_password: str
+
+
+@router.post("/forgot-password")
+async def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == data.email.lower().strip()).first()
+    if not user:
+        # Don't reveal whether email exists
+        return {"message": "If that email is registered, a reset code has been generated.", "reset_code": None}
+
+    token = secrets.token_hex(4).upper()  # 8-char code e.g. A3F9B21C
+    _reset_tokens[token] = {
+        "email":   data.email.lower().strip(),
+        "expires": datetime.utcnow() + timedelta(minutes=30),
+    }
+
+    return {
+        "message":    "Reset code generated. In production this will be emailed. For now use the code below.",
+        "reset_code": token,
+        "expires_in": "30 minutes",
+    }
+
+
+@router.post("/reset-password")
+async def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    entry = _reset_tokens.get(data.token.upper().strip())
+    if not entry:
+        raise HTTPException(status_code=400, detail="Invalid reset code.")
+    if datetime.utcnow() > entry["expires"]:
+        del _reset_tokens[data.token.upper().strip()]
+        raise HTTPException(status_code=400, detail="Reset code has expired. Please request a new one.")
+    if len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+
+    user = db.query(User).filter(User.email == entry["email"]).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    user.hashed_password = pwd_context.hash(data.new_password)
+    db.commit()
+    del _reset_tokens[data.token.upper().strip()]
+
+    return {"message": "Password updated successfully. You can now sign in."}

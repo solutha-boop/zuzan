@@ -2319,8 +2319,13 @@ function AppSettings({user, onLogout}) {
 
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
 function Login({onLogin, onRegister}) {
-  const [form, setForm] = useState({email:"", password:""});
-  const [error, setError] = useState("");
+  const [view,    setView]    = useState("login");   // login | forgot | reset
+  const [form,    setForm]    = useState({email:"", password:""});
+  const [forgot,  setForgot]  = useState({email:""});
+  const [reset,   setReset]   = useState({code:"", password:"", confirm:""});
+  const [msg,     setMsg]     = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [error,   setError]   = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
@@ -2328,25 +2333,53 @@ function Login({onLogin, onRegister}) {
     setLoading(true); setError("");
     try {
       const res = await fetch("https://zuzan-backend.onrender.com/auth/login", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({email: form.email, password: form.password}),
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({email:form.email, password:form.password}),
       });
       const data = await res.json();
       if (!res.ok) { setError(data.detail || "Invalid email or password."); return; }
       localStorage.setItem("zuzan_token", data.access_token);
-      onLogin({
-        firstName:   data.user.first_name,
-        lastName:    data.user.last_name,
-        email:       data.user.email,
-        companyName: data.company.name,
-        plan:        {name: data.company.plan, id: data.company.plan},
-        access_token: data.access_token,
-      });
-    } catch(e) {
-      setError("Could not connect to server. Please try again.");
-    } finally { setLoading(false); }
+      onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
+        companyName:data.company.name, plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token});
+    } catch(e) { setError("Could not connect to server. Please try again."); }
+    finally { setLoading(false); }
   };
+
+  const handleForgot = async () => {
+    if (!forgot.email) { setError("Please enter your email address."); return; }
+    setLoading(true); setError(""); setMsg("");
+    try {
+      const res = await fetch("https://zuzan-backend.onrender.com/auth/forgot-password", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({email: forgot.email}),
+      });
+      const data = await res.json();
+      setMsg(data.message);
+      if (data.reset_code) { setResetCode(data.reset_code); setView("reset"); }
+    } catch(e) { setError("Could not connect to server."); }
+    finally { setLoading(false); }
+  };
+
+  const handleReset = async () => {
+    if (!reset.code) { setError("Please enter the reset code."); return; }
+    if (!reset.password || reset.password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (reset.password !== reset.confirm) { setError("Passwords do not match."); return; }
+    setLoading(true); setError(""); setMsg("");
+    try {
+      const res = await fetch("https://zuzan-backend.onrender.com/auth/reset-password", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({token: reset.code, new_password: reset.password}),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || "Reset failed."); return; }
+      setMsg(data.message);
+      setTimeout(() => { setView("login"); setMsg(""); setReset({code:"",password:"",confirm:""}); }, 2000);
+    } catch(e) { setError("Could not connect to server."); }
+    finally { setLoading(false); }
+  };
+
+  const inputStyle = {width:"100%",padding:"12px 14px",border:"1.5px solid "+C.border,borderRadius:10,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const labelStyle = {display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5};
 
   return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
@@ -2355,31 +2388,100 @@ function Login({onLogin, onRegister}) {
           <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:8}}><span style={{color:C.accent}}>Zu</span>Zan</div>
           <div style={{fontSize:13,color:C.inkMid}}>SA Bookkeeping Platform</div>
         </div>
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:36,boxShadow:"0 4px 24px rgba(0,0,0,0.06)"}}>
-          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:"0 0 8px"}}>Welcome back</h2>
-          <p style={{fontSize:13,color:C.inkMid,marginBottom:28}}>Sign in to your ZuZan account</p>
-          <div style={{marginBottom:16}}>
-            <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Email Address</label>
-            <input type="email" placeholder="you@company.co.za" value={form.email}
-              onChange={e=>setForm({...form,email:e.target.value})}
-              onKeyDown={e=>e.key==="Enter"&&handleLogin()}
-              style={{width:"100%",padding:"12px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
-          </div>
-          <div style={{marginBottom:24}}>
-            <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Password</label>
-            <input type="password" placeholder="Your password" value={form.password}
-              onChange={e=>setForm({...form,password:e.target.value})}
-              onKeyDown={e=>e.key==="Enter"&&handleLogin()}
-              style={{width:"100%",padding:"12px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
-          </div>
-          {error && <div style={{background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13,color:C.red}}>{error}</div>}
-          <button onClick={handleLogin} disabled={loading} style={{width:"100%",padding:"13px",border:"none",borderRadius:10,background:loading?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:loading?"wait":"pointer",fontFamily:"inherit",marginBottom:16}}>
-            {loading ? "Signing in..." : "Sign In"}
-          </button>
-          <div style={{textAlign:"center",fontSize:13,color:C.inkMid}}>
-            Don't have an account?{" "}
-            <span onClick={onRegister} style={{color:C.accent,fontWeight:700,cursor:"pointer"}}>Start free trial</span>
-          </div>
+        <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:20,padding:36,boxShadow:"0 4px 24px rgba(0,0,0,0.06)"}}>
+
+          {view === "login" && (
+            <>
+              <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:"0 0 8px"}}>Welcome back</h2>
+              <p style={{fontSize:13,color:C.inkMid,marginBottom:28}}>Sign in to your ZuZan account</p>
+              <div style={{marginBottom:16}}>
+                <label style={labelStyle}>Email Address</label>
+                <input type="email" placeholder="you@company.co.za" value={form.email}
+                  onChange={e=>setForm({...form,email:e.target.value})}
+                  onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={inputStyle}/>
+              </div>
+              <div style={{marginBottom:8}}>
+                <label style={labelStyle}>Password</label>
+                <input type="password" placeholder="Your password" value={form.password}
+                  onChange={e=>setForm({...form,password:e.target.value})}
+                  onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={inputStyle}/>
+              </div>
+              <div style={{textAlign:"right",marginBottom:20}}>
+                <span onClick={()=>{setView("forgot");setError("");setMsg("");}} style={{fontSize:12,color:C.accent,cursor:"pointer",fontWeight:600}}>Forgot password?</span>
+              </div>
+              {error && <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13,color:C.red}}>{error}</div>}
+              <button onClick={handleLogin} disabled={loading} style={{width:"100%",padding:"13px",border:"none",borderRadius:10,background:loading?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:loading?"wait":"pointer",fontFamily:"inherit",marginBottom:16}}>
+                {loading ? "Signing in..." : "Sign In"}
+              </button>
+              <div style={{textAlign:"center",fontSize:13,color:C.inkMid}}>
+                Don't have an account?{" "}
+                <span onClick={onRegister} style={{color:C.accent,fontWeight:700,cursor:"pointer"}}>Start free trial</span>
+              </div>
+            </>
+          )}
+
+          {view === "forgot" && (
+            <>
+              <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 8px"}}>Reset Password</h2>
+              <p style={{fontSize:13,color:C.inkMid,marginBottom:28}}>Enter your email address and we'll generate a reset code.</p>
+              <div style={{marginBottom:20}}>
+                <label style={labelStyle}>Email Address</label>
+                <input type="email" placeholder="you@company.co.za" value={forgot.email}
+                  onChange={e=>setForgot({...forgot,email:e.target.value})}
+                  onKeyDown={e=>e.key==="Enter"&&handleForgot()} style={inputStyle}/>
+              </div>
+              {error && <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13,color:C.red}}>{error}</div>}
+              {msg && <div style={{background:C.goldLt,border:"1px solid "+C.gold+"30",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13,color:C.gold}}>{msg}</div>}
+              <button onClick={handleForgot} disabled={loading} style={{width:"100%",padding:"13px",border:"none",borderRadius:10,background:loading?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:loading?"wait":"pointer",fontFamily:"inherit",marginBottom:16}}>
+                {loading ? "Sending..." : "Get Reset Code"}
+              </button>
+              <div style={{textAlign:"center",fontSize:13,color:C.inkMid}}>
+                <span onClick={()=>{setView("login");setError("");setMsg("");}} style={{color:C.accent,fontWeight:700,cursor:"pointer"}}>Back to Sign In</span>
+              </div>
+            </>
+          )}
+
+          {view === "reset" && (
+            <>
+              <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 8px"}}>Set New Password</h2>
+              <p style={{fontSize:13,color:C.inkMid,marginBottom:20}}>Enter the reset code and your new password.</p>
+              {resetCode && (
+                <div style={{background:C.blueLt,border:"1px solid "+C.blue+"30",borderRadius:10,padding:"12px 16px",marginBottom:20}}>
+                  <div style={{fontSize:11,color:C.blue,fontWeight:700,marginBottom:4}}>YOUR RESET CODE</div>
+                  <div style={{fontFamily:"monospace",fontSize:24,fontWeight:800,color:C.blue,letterSpacing:4}}>{resetCode}</div>
+                  <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Valid for 30 minutes. Email delivery coming soon.</div>
+                </div>
+              )}
+              <div style={{marginBottom:14}}>
+                <label style={labelStyle}>Reset Code</label>
+                <input placeholder="e.g. A3F9B21C" value={reset.code}
+                  onChange={e=>setReset({...reset,code:e.target.value.toUpperCase()})}
+                  style={{...inputStyle,fontFamily:"monospace",letterSpacing:2,fontSize:16}}/>
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={labelStyle}>New Password</label>
+                <input type="password" placeholder="Min 6 characters" value={reset.password}
+                  onChange={e=>setReset({...reset,password:e.target.value})} style={inputStyle}/>
+              </div>
+              <div style={{marginBottom:20}}>
+                <label style={labelStyle}>Confirm New Password</label>
+                <input type="password" placeholder="Repeat password" value={reset.confirm}
+                  onChange={e=>setReset({...reset,confirm:e.target.value})}
+                  onKeyDown={e=>e.key==="Enter"&&handleReset()} style={inputStyle}/>
+              </div>
+              {error && <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13,color:C.red}}>{error}</div>}
+              {msg   && <div style={{background:C.greenLt,border:"1px solid "+C.green+"30",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13,color:C.green,fontWeight:700}}>{msg}</div>}
+              <button onClick={handleReset} disabled={loading} style={{width:"100%",padding:"13px",border:"none",borderRadius:10,background:loading?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:loading?"wait":"pointer",fontFamily:"inherit",marginBottom:16}}>
+                {loading ? "Updating..." : "Set New Password"}
+              </button>
+              <div style={{textAlign:"center",fontSize:13,color:C.inkMid}}>
+                <span onClick={()=>{setView("forgot");setError("");setMsg("");setResetCode("");}} style={{color:C.accent,fontWeight:700,cursor:"pointer"}}>Request new code</span>
+                {" · "}
+                <span onClick={()=>{setView("login");setError("");setMsg("");}} style={{color:C.accent,fontWeight:700,cursor:"pointer"}}>Back to Sign In</span>
+              </div>
+            </>
+          )}
+
         </div>
         <div style={{textAlign:"center",marginTop:20,fontSize:11,color:C.inkDim}}>
           Secure 256-bit SSL — Powered by PayFast — SARS compliant
