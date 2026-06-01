@@ -736,6 +736,10 @@ function PayslipModal({employee, payroll, period, company, onClose}) {
   const handlePrint = () => {
     const printContent = document.getElementById("payslip-content").innerHTML;
     const win = window.open("", "_blank");
+    if (!win) {
+      alert("Please allow popups for this site to print payslips.");
+      return;
+    }
     win.document.write(`
       <html><head><title>Payslip - ${employee.name}</title>
       <style>
@@ -755,7 +759,11 @@ function PayslipModal({employee, payroll, period, company, onClose}) {
       </style></head><body>${printContent}</body></html>
     `);
     win.document.close();
-    win.print();
+    win.onload = () => {
+      win.focus();
+      win.print();
+      win.close();
+    };
   };
 
   return (
