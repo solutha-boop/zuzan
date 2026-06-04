@@ -58,6 +58,7 @@ class User(Base):
     phone=Column(String); hashed_password=Column(String,nullable=False)
     role=Column(String,default="owner"); is_active=Column(Boolean,default=True)
     created_at=Column(DateTime,default=datetime.utcnow)
+    reset_token=Column(String,nullable=True); reset_token_expires=Column(DateTime,nullable=True)
     company=relationship("Company",back_populates="users")
 
 class Invoice(Base):
