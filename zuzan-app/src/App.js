@@ -1159,9 +1159,41 @@ function Reports({live = {}}) {
   const [vat201,   setVat201]   = useState(null);
   const [vatPeriod,setVatPeriod]= useState(new Date().toISOString().slice(0,7));
   const [loading,  setLoading]  = useState(false);
-  const d   = live.dashboard;
+
+  // ── Date range ──────────────────────────────────────────────────
   const now = new Date();
-  const period = d ? d.period : now.toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
+  const firstOfMonth  = new Date(now.getFullYear(), now.getMonth(), 1);
+  const firstOfLast   = new Date(now.getFullYear(), now.getMonth()-1, 1);
+  const lastOfLast    = new Date(now.getFullYear(), now.getMonth(), 0);
+  // SA financial year: 1 Mar – last Feb
+  const fyStart = now.getMonth() >= 2
+    ? new Date(now.getFullYear(), 2, 1)
+    : new Date(now.getFullYear()-1, 2, 1);
+  const fyEnd   = new Date(fyStart.getFullYear()+1, 1, 28);
+  const toISO   = d => d.toISOString().slice(0,10);
+  const PRESETS = [
+    {label:"Current Month",  from:toISO(firstOfMonth), to:toISO(now)},
+    {label:"Last Month",     from:toISO(firstOfLast),  to:toISO(lastOfLast)},
+    {label:"Financial Year", from:toISO(fyStart),      to:toISO(fyEnd)},
+    {label:"Custom",         from:"",                  to:""},
+  ];
+  const [preset,   setPreset]   = useState("Current Month");
+  const [dateFrom, setDateFrom] = useState(toISO(firstOfMonth));
+  const [dateTo,   setDateTo]   = useState(toISO(now));
+  const handlePreset = (label) => {
+    setPreset(label);
+    const p = PRESETS.find(p => p.label === label);
+    if (label !== "Custom") { setDateFrom(p.from); setDateTo(p.to); }
+  };
+  const periodLabel = preset === "Custom"
+    ? `${dateFrom} to ${dateTo}`
+    : preset === "Financial Year"
+      ? `FY ${fyStart.getFullYear()}/${fyEnd.getFullYear()}`
+      : preset;
+  // ────────────────────────────────────────────────────────────────
+
+  const d   = live.dashboard;
+  const period = d ? d.period : periodLabel;
   const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i=>i.status==="paid").reduce((s,i)=>s+i.amount,0);
   const totalExpenses = d ? d.total_expenses : MOCK_EXPENSES.reduce((s,e)=>s+e.amount,0);
   const totalPayroll  = d ? d.total_payroll  : MOCK_EMPLOYEES.reduce((s,e)=>s+calcPayroll(e.salary).totalCost,0);
@@ -1554,10 +1586,34 @@ function Reports({live = {}}) {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:20}}>
         <div>
           <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Reports</h2>
-          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>SARS-ready financial statements — {period}</p>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>SARS-ready financial statements — {periodLabel}</p>
         </div>
         <PrintBtn onClick={()=>{const el=document.getElementById("report-print-area");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
       </div>
+
+      {/* Date range selector */}
+      <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:12,padding:"14px 18px",marginBottom:20,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+        <span style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5}}>Period</span>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {PRESETS.map(p => (
+            <button key={p.label} onClick={()=>handlePreset(p.label)}
+              style={{padding:"6px 14px",borderRadius:20,border:"1px solid "+(preset===p.label?C.accent:C.border),background:preset===p.label?C.accentLt:"transparent",color:preset===p.label?C.accent:C.inkMid,fontSize:12,fontWeight:preset===p.label?700:400,cursor:"pointer",fontFamily:"inherit"}}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+        {preset === "Custom" && (
+          <div style={{display:"flex",gap:8,alignItems:"center",marginLeft:4}}>
+            <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)}
+              style={{padding:"6px 10px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+            <span style={{fontSize:12,color:C.inkMid}}>to</span>
+            <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)}
+              style={{padding:"6px 10px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+          </div>
+        )}
+        <div style={{marginLeft:"auto",fontSize:12,color:C.inkMid,fontStyle:"italic"}}>{periodLabel}</div>
+      </div>
+
       <div style={{display:"flex",gap:4,marginBottom:24,background:C.surface,border:"1px solid "+C.border,borderRadius:12,padding:5,width:"fit-content",flexWrap:"wrap"}}>
         {RTABS.map(t => (
           <button key={t.id} onClick={()=>loadTab(t.id)} style={{padding:"8px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:activeTab===t.id?700:400,background:activeTab===t.id?C.accent:"transparent",color:activeTab===t.id?"#fff":C.inkMid,fontFamily:"inherit",whiteSpace:"nowrap"}}>
