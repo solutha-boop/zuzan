@@ -2405,17 +2405,30 @@ function Login({onLogin, onRegister}) {
   const handleLogin = async () => {
     if (!form.email || !form.password) { setError("Please enter your email and password."); return; }
     setLoading(true); setError("");
-    try {
+    const attempt = async () => {
       const res = await fetch("https://zuzan-backend.onrender.com/auth/login", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({email:form.email, password:form.password}),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.detail || "Invalid email or password."); return; }
+      if (!res.ok) throw new Error(data.detail || "Invalid email or password.");
+      return data;
+    };
+    try {
+      let data;
+      try {
+        data = await attempt();
+      } catch(e) {
+        if (e.message.includes("Invalid email") || e.message.includes("password")) throw e;
+        // Server likely sleeping — show message and retry once after 8s
+        setError("Server is waking up, please wait...");
+        await new Promise(r => setTimeout(r, 8000));
+        data = await attempt();
+      }
       localStorage.setItem("zuzan_token", data.access_token);
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
         companyName:data.company.name, plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token});
-    } catch(e) { setError("Could not connect to server. Please try again."); }
+    } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
 
