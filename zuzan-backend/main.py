@@ -18,6 +18,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan)
 
+@app.get("/health")
+async def health(): return {"status": "ok"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
