@@ -121,14 +121,18 @@ class Payment(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
-    # Migrate: add vat_amount to expenses if missing
     from sqlalchemy import text
     with engine.connect() as conn:
-        try:
-            conn.execute(text("ALTER TABLE expenses ADD COLUMN vat_amount FLOAT DEFAULT 0"))
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
+        for sql in [
+            "ALTER TABLE expenses ADD COLUMN vat_amount FLOAT DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN reset_token VARCHAR",
+            "ALTER TABLE users ADD COLUMN reset_token_expires TIMESTAMP",
+        ]:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                pass  # Column already exists
 
 def get_db():
     db = SessionLocal()
