@@ -2401,6 +2401,27 @@ function Login({onLogin, onRegister}) {
   const [resetCode, setResetCode] = useState("");
   const [error,   setError]   = useState("");
   const [loading, setLoading] = useState(false);
+  const [serverStatus, setServerStatus] = useState("checking"); // checking | ready | sleeping
+
+  // Ping backend on mount to wake it up before user clicks Sign In
+  useEffect(() => {
+    const ping = async () => {
+      try {
+        const res = await fetch("https://zuzan-backend.onrender.com/health", {method:"GET"});
+        if (res.ok) { setServerStatus("ready"); return; }
+      } catch(e) {}
+      setServerStatus("sleeping");
+      // Retry every 5s until awake
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch("https://zuzan-backend.onrender.com/health", {method:"GET"});
+          if (res.ok) { setServerStatus("ready"); clearInterval(interval); }
+        } catch(e) {}
+      }, 5000);
+      setTimeout(() => clearInterval(interval), 90000); // give up after 90s
+    };
+    ping();
+  }, []);
 
   const handleLogin = async () => {
     if (!form.email || !form.password) { setError("Please enter your email and password."); return; }
@@ -2480,7 +2501,17 @@ function Login({onLogin, onRegister}) {
           {view === "login" && (
             <>
               <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:"0 0 8px"}}>Welcome back</h2>
-              <p style={{fontSize:13,color:C.inkMid,marginBottom:28}}>Sign in to your ZuZan account</p>
+              <p style={{fontSize:13,color:C.inkMid,marginBottom:16}}>Sign in to your ZuZan account</p>
+              {serverStatus === "sleeping" && (
+                <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.gold,display:"flex",alignItems:"center",gap:8}}>
+                  <span>⏳</span> Server is starting up, please wait a moment...
+                </div>
+              )}
+              {serverStatus === "ready" && (
+                <div style={{background:C.greenLt,border:`1px solid ${C.green}40`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.green,display:"flex",alignItems:"center",gap:8}}>
+                  <span>🟢</span> Server is ready
+                </div>
+              )}
               <div style={{marginBottom:16}}>
                 <label style={labelStyle}>Email Address</label>
                 <input type="email" placeholder="you@company.co.za" value={form.email}
