@@ -609,52 +609,62 @@ function Invoicing({live = {}}) {
   );
 }
 // ── EXPENSES ──────────────────────────────────────────────────────────────────
+// An expense is "posted" (categorised) when its category is a COA code e.g. "6220 - Electricity and Water"
+const isPosted = cat => cat && /^\d{4}/.test(cat);
+
 function Expenses({live = {}}) {
   const liveExpenses = live.expenses;
   const [expenses, setExpenses] = useState(MOCK_EXPENSES);
+  const [pendingCats, setPendingCats] = useState({}); // {id: selectedCategory}
+  const [view, setView] = useState("unposted"); // "unposted" | "posted"
 
-  // Sync live expenses when they load
-  useEffect(() => { if (liveExpenses && liveExpenses.length > 0) setExpenses(liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, category: e.category || "Other", id: `EXP-${String(e.id).padStart(3,"0")}`}))); }, [liveExpenses]);
+  useEffect(() => { if (liveExpenses && liveExpenses.length > 0) setExpenses(liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, category: e.category || "", id: `EXP-${String(e.id).padStart(3,"0")}`}))); }, [liveExpenses]);
+
   const [showNew, setShowNew] = useState(false);
-  const [filter, setFilter] = useState("All");
-  const [form, setForm] = useState({vendor:"",amount:"",category:"Office",desc:"",vatApplicable:true});
-  const cats = ["All","Assets","Liabilities","Equity","Income","Cost of Sales","Expenses"];
-  const filtered = filter === "All" ? expenses : expenses.filter(e => e.category === filter);
-  const total = filtered.reduce((s,e) => s + e.amount, 0);
+  const [form, setForm] = useState({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
+
+  const unposted = expenses.filter(e => !isPosted(e.category));
+  const posted   = expenses.filter(e => isPosted(e.category));
+  const displayed = view === "unposted" ? unposted : posted;
+  const total = displayed.reduce((s,e) => s + e.amount, 0);
+
+  const handlePost = async (exp) => {
+    const cat = pendingCats[exp.id];
+    if (!cat || !isPosted(cat)) return;
+    setExpenses(prev => prev.map(e => e.id === exp.id ? {...e, category: cat} : e));
+    setPendingCats(prev => { const n = {...prev}; delete n[exp.id]; return n; });
+    try {
+      await api(`/expenses/${exp.id}`, { method:"PATCH", body: JSON.stringify({category: cat}) });
+      if (live && live.reload) live.reload();
+    } catch(err) { console.warn("Category save failed:", err.message); }
+  };
+
   const handleAdd = async () => {
     const newExp = {
       id:`EXP-00${expenses.length+1}`,
-      vendor:form.vendor,
-      amount:+form.amount,
+      vendor:form.vendor, amount:+form.amount,
       date:new Date().toISOString().slice(0,10),
-      category:form.category,
-      desc:form.desc
+      category:form.category, desc:form.desc
     };
-    // Update local state immediately
     setExpenses([newExp,...expenses]);
     setShowNew(false);
-    setForm({vendor:"",amount:"",category:"Office",desc:""});
-    // Save to backend
+    setForm({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
     try {
-      await api("/expenses/", {
-        method: "POST",
-        body: JSON.stringify({
-          vendor:          form.vendor,
-          description:     form.desc,
-          amount:          +form.amount,
-          vat_applicable:  form.vatApplicable,
-          category:        form.category,
-          expense_date:    new Date().toISOString().slice(0,10),
-        }),
-      });
+      await api("/expenses/", { method:"POST", body: JSON.stringify({ vendor:form.vendor, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, category:form.category, expense_date:new Date().toISOString().slice(0,10) }) });
       if (live && live.reload) live.reload();
-    } catch(err) {
-      console.warn("Expense save failed:", err.message);
-    }
+    } catch(err) { console.warn("Expense save failed:", err.message); }
   };
+
   return (
     <div>
-      <SectionHeader title="Expenses" sub="Track and categorise business expenses" action="+ Add Expense" onAction={() => setShowNew(true)}/>
+      <SectionHeader title="Expenses" sub="Categorise expenses to post them to the Income Statement" action="+ Add Expense" onAction={() => setShowNew(true)}/>
+
+      {/* Summary bar */}
+      <div style={{display:"flex",gap:12,marginBottom:20}}>
+        <KPI label="To Categorise" value={unposted.length} sub={fmt(unposted.reduce((s,e)=>s+e.amount,0))} color={C.gold} icon="⏳"/>
+        <KPI label="Posted to Accounts" value={posted.length} sub={fmt(posted.reduce((s,e)=>s+e.amount,0))} color={C.green} icon="✅"/>
+      </div>
+
       {showNew && (
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>Add Expense</h3>
@@ -666,9 +676,9 @@ function Expenses({live = {}}) {
               </div>
             ))}
             <div>
-              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Category</label>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account (optional)</label>
               <select value={form.category} onChange={e => setForm({...form,category:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
-                <option value="">-- Select Account --</option>
+                <option value="">-- Categorise later --</option>
                 {COA_GROUPS.map(group => (
                   <optgroup key={group} label={group}>
                     {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
@@ -698,30 +708,66 @@ function Expenses({live = {}}) {
           </div>
         </div>
       )}
-      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
-        {cats.map(c => <button key={c} onClick={() => setFilter(c)} style={{padding:"6px 14px",borderRadius:20,border:`1px solid ${filter===c?C.accent:C.border}`,background:filter===c?C.accentLt:"transparent",color:filter===c?C.accent:C.inkMid,fontSize:12,fontWeight:filter===c?700:400,cursor:"pointer",fontFamily:"inherit"}}>{c}</button>)}
-        <div style={{marginLeft:"auto",fontSize:14,fontWeight:700,color:C.ink}}>Total: {fmt(total)}</div>
+
+      {/* View toggle */}
+      <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
+        {[["unposted","⏳ Needs Categorising"],["posted","✅ Posted to Accounts"]].map(([v,l]) => (
+          <button key={v} onClick={()=>setView(v)} style={{padding:"7px 16px",borderRadius:20,border:`1px solid ${view===v?C.accent:C.border}`,background:view===v?C.accentLt:"transparent",color:view===v?C.accent:C.inkMid,fontSize:12,fontWeight:view===v?700:400,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+        ))}
+        <div style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:C.ink}}>Total: {fmt(total)}</div>
       </div>
+
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-          <thead>
-            <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-              {["#","Vendor","Description","Category","Date","Amount"].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((exp) => (
-              <tr key={exp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
-                <td style={{padding:"13px 16px",fontWeight:600,color:C.inkMid,fontSize:11}}>{exp.id}</td>
-                <td style={{padding:"13px 16px",fontWeight:600}}>{exp.vendor}</td>
-                <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{exp.desc}</td>
-                <td style={{padding:"13px 16px"}}><Badge label={exp.category} color={C.blue} bg={C.blueLt}/></td>
-                <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(exp.date)}</td>
-                <td style={{padding:"13px 16px",fontWeight:700,color:C.red}}>{fmt(exp.amount)}</td>
+        {displayed.length === 0 ? (
+          <div style={{padding:40,textAlign:"center",color:C.inkMid,fontSize:13}}>
+            {view==="unposted" ? "All expenses have been categorised." : "No posted expenses yet."}
+          </div>
+        ) : (
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                {["#","Vendor","Description","Date","Amount", view==="unposted"?"Assign Account":"Account",""].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {displayed.map((exp) => (
+                <tr key={exp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                  <td style={{padding:"13px 16px",fontWeight:600,color:C.inkMid,fontSize:11}}>{exp.id}</td>
+                  <td style={{padding:"13px 16px",fontWeight:600}}>{exp.vendor}</td>
+                  <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{exp.desc}</td>
+                  <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(exp.date)}</td>
+                  <td style={{padding:"13px 16px",fontWeight:700,color:C.red}}>{fmt(exp.amount)}</td>
+                  <td style={{padding:"13px 16px"}}>
+                    {view === "unposted" ? (
+                      <select value={pendingCats[exp.id] || ""} onChange={e => setPendingCats(p=>({...p,[exp.id]:e.target.value}))}
+                        style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:220}}>
+                        <option value="">-- Select Account --</option>
+                        {COA_GROUPS.map(group => (
+                          <optgroup key={group} label={group}>
+                            {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
+                              <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    ) : (
+                      <Badge label={exp.category} color={C.green} bg={C.greenLt}/>
+                    )}
+                  </td>
+                  <td style={{padding:"13px 16px"}}>
+                    {view === "unposted" && (
+                      <button onClick={() => handlePost(exp)}
+                        disabled={!isPosted(pendingCats[exp.id])}
+                        style={{background:isPosted(pendingCats[exp.id])?C.green:"transparent",color:isPosted(pendingCats[exp.id])?"#fff":C.inkDim,border:`1px solid ${isPosted(pendingCats[exp.id])?C.green:C.border}`,borderRadius:6,padding:"5px 12px",fontSize:11,cursor:isPosted(pendingCats[exp.id])?"pointer":"default",fontFamily:"inherit",fontWeight:700}}>
+                        Post →
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -1527,7 +1573,27 @@ function Reports({live = {}}) {
               <ExcelBtn filename="income-statement.csv" data={[{Item:"Revenue",Amount:totalRevenue},{Item:"Expenses",Amount:-totalExpenses},{Item:"Gross Profit",Amount:grossProfit},{Item:"Payroll",Amount:-totalPayroll},{Item:"Net Profit Before Tax",Amount:netProfit},{Item:"Tax 27%",Amount:-taxProvision},{Item:"Net Profit After Tax",Amount:netAfterTax}]}/>
             </div>
             <ReportRow label="Revenue" value={totalRevenue} bold color={C.green}/>
-            <ReportRow label="Less: Operating Expenses" value={-totalExpenses} indent/>
+            {/* Posted expenses broken down by COA account */}
+            {(() => {
+              const postedExps = (live.expenses || MOCK_EXPENSES).filter(e => isPosted(e.category));
+              const byAccount = postedExps.reduce((acc, e) => {
+                const key = e.category;
+                acc[key] = (acc[key] || 0) + e.amount;
+                return acc;
+              }, {});
+              const accountEntries = Object.entries(byAccount).sort(([a],[b]) => a.localeCompare(b));
+              return accountEntries.length > 0 ? (
+                <>
+                  <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",padding:"12px 0 4px",borderTop:"1px solid "+C.border+"50"}}>Operating Expenses</div>
+                  {accountEntries.map(([account, amount]) => (
+                    <ReportRow key={account} label={account} value={-amount} indent color={C.red}/>
+                  ))}
+                  <ReportRow label="Total Operating Expenses" value={-postedExps.reduce((s,e)=>s+e.amount,0)} bold/>
+                </>
+              ) : (
+                <ReportRow label="Less: Operating Expenses" value={-totalExpenses} indent/>
+              );
+            })()}
             <ReportRow label="Gross Profit" value={grossProfit} bold border color={grossProfit>=0?C.ink:C.red}/>
             <ReportRow label="Less: Payroll Costs" value={-totalPayroll} indent/>
             <ReportRow label="Net Profit Before Tax" value={netProfit} bold border color={netProfit>=0?C.ink:C.red}/>
