@@ -58,7 +58,7 @@ async def root():
 
 
 # ── PUBLIC API (API key authenticated) ───────────────────────────────────────
-from fastapi import Header
+from fastapi import Header, Depends, HTTPException
 from api_keys import get_company_from_api_key
 from database import Invoice, Expense, Employee
 from sqlalchemy.orm import Session
