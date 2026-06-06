@@ -9,7 +9,8 @@ import secrets
 from typing import Optional
 from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus
 
-SECRET_KEY = "zuzan-secret-key-2025"
+import os
+SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
