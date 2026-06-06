@@ -192,6 +192,7 @@ const SectionHeader = ({title,sub,action,onAction}) => (
 );
 // ── COA DATA ──────────────────────────────────────────────────────────────────
 const COA_GROUPS = ["Assets","Liabilities","Equity","Income","Cost of Sales","Expenses"];
+const EXPENSE_COA_GROUPS = ["Cost of Sales","Expenses"];
 
 const GROUP_COLORS = {
   "Assets":        {color:C.blue,  bg:C.blueLt,  icon:"🏛️"},
@@ -833,7 +834,7 @@ function Expenses({live = {}}) {
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account (optional)</label>
               <select value={form.category} onChange={e => setForm({...form,category:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
                 <option value="">-- Categorise later --</option>
-                {COA_GROUPS.map(group => (
+                {EXPENSE_COA_GROUPS.map(group => (
                   <optgroup key={group} label={group}>
                     {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
                       <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
@@ -899,7 +900,7 @@ function Expenses({live = {}}) {
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account</label>
               <select value={editExp.category||""} onChange={e=>setEditExp({...editExp,category:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
                 <option value="">-- Uncategorised --</option>
-                {COA_GROUPS.map(group=>(
+                {EXPENSE_COA_GROUPS.map(group=>(
                   <optgroup key={group} label={group}>
                     {DEFAULT_COA.filter(a=>a.group===group&&a.type==="Detail").map(a=>(
                       <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
@@ -956,7 +957,7 @@ function Expenses({live = {}}) {
                       <select value={pendingCats[exp.id] || ""} onChange={e => setPendingCats(p=>({...p,[exp.id]:e.target.value}))}
                         style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:220}}>
                         <option value="">-- Select Account --</option>
-                        {COA_GROUPS.map(group => (
+                        {EXPENSE_COA_GROUPS.map(group => (
                           <optgroup key={group} label={group}>
                             {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
                               <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
