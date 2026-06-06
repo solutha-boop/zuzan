@@ -468,47 +468,78 @@ function Dashboard({live = {}}) {
 function Invoicing({live = {}}) {
   const liveInvoices = live.invoices;
   const [invoices, setInvoices] = useState(MOCK_INVOICES);
-
   useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
-  const [showNew, setShowNew] = useState(false);
-  const [preview, setPreview] = useState(null);
+
+  const [showNew,   setShowNew]   = useState(false);
+  const [preview,   setPreview]   = useState(null);   // view modal
+  const [editInv,   setEditInv]   = useState(null);   // amend modal
+  const [matching,  setMatching]  = useState(null);   // invoice being matched
+  const [bankTxns,  setBankTxns]  = useState([]);     // bank transactions for matching
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true});
 
-  const totalPaid = invoices.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
+  const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
   const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + i.amount, 0);
   const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + i.amount, 0);
 
+  // Load bank transactions for matching
+  const loadBankTxns = async (inv) => {
+    setMatching(inv);
+    try {
+      const data = await api("/expenses/?type=credit").catch(() => null);
+      setBankTxns(data && data.length ? data : MOCK_INVOICES.map((i,idx) => ({
+        id: idx+1, date: i.date, description: `Payment from ${i.client}`, amount: i.amount, type:"credit"
+      })));
+    } catch(e) { setBankTxns([]); }
+  };
+
+  const handleMatch = async (inv, txn) => {
+    setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid", matchedTxn: txn.id} : i));
+    setMatching(null);
+    try {
+      await api(`/invoices/${inv.id}`, { method:"PATCH", body: JSON.stringify({status:"paid"}) });
+      if (live && live.reload) live.reload();
+    } catch(e) { console.warn("Match failed:", e.message); }
+  };
+
   const handleCreate = async () => {
-    const newInv = {
-      id:`INV-00${invoices.length+1}`,
-      client:form.client,
-      amount:+form.amount,
-      date:new Date().toISOString().slice(0,10),
-      due:form.due,
-      status:"pending",
-      desc:form.desc
-    };
-    // Update local state immediately
+    const newInv = { id:`INV-00${invoices.length+1}`, client:form.client, amount:+form.amount, date:new Date().toISOString().slice(0,10), due:form.due, status:"pending", desc:form.desc };
     setInvoices([newInv,...invoices]);
     setShowNew(false);
-    setForm({client:"",amount:"",desc:"",due:""});
-    // Save to backend
+    setForm({client:"",amount:"",desc:"",due:"",vatApplicable:true});
     try {
-      await api("/invoices/", {
-        method: "POST",
-        body: JSON.stringify({
-          client_name:     form.client,
-          description:     form.desc,
-          amount:          +form.amount,
-          vat_applicable:  form.vatApplicable,
-          due_date:        form.due || null,
-        }),
-      });
+      await api("/invoices/", { method:"POST", body: JSON.stringify({ client_name:form.client, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, due_date:form.due||null }) });
       if (live && live.reload) live.reload();
-    } catch(err) {
-      console.warn("Invoice save failed:", err.message);
-    }
+    } catch(err) { console.warn("Invoice save failed:", err.message); }
   };
+
+  const handleAmend = async () => {
+    setInvoices(prev => prev.map(i => i.id === editInv.id ? {...editInv} : i));
+    setEditInv(null);
+    try {
+      await api(`/invoices/${editInv.id}`, { method:"PATCH", body: JSON.stringify({ client_name:editInv.client, description:editInv.desc, amount:+editInv.amount, due_date:editInv.due||null, status:editInv.status }) });
+      if (live && live.reload) live.reload();
+    } catch(err) { console.warn("Amend failed:", err.message); }
+  };
+
+  const InvFormFields = ({data, onChange}) => (
+    <>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        {[{l:"Client Name",k:"client",t:"text",p:"Acme Pty Ltd"},{l:"Amount (ZAR excl. VAT)",k:"amount",t:"number",p:"50000"},{l:"Description",k:"desc",t:"text",p:"Services rendered"},{l:"Due Date",k:"due",t:"date",p:""}].map(f => (
+          <div key={f.k}>
+            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+            <input type={f.t} placeholder={f.p} value={data[f.k]||""} onChange={e=>onChange({...data,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+        ))}
+      </div>
+      {data.amount && (
+        <div style={{display:"flex",gap:16,fontSize:12,marginBottom:12}}>
+          <span style={{color:C.inkMid}}>Excl. VAT: <strong>{fmt(+data.amount||0)}</strong></span>
+          <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmt((+data.amount||0)*0.15)}</strong></span>
+          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmt((+data.amount||0)*1.15)}</strong></span>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div>
@@ -518,48 +549,26 @@ function Invoicing({live = {}}) {
         <KPI label="Pending" value={fmt(totalPending)} color={C.gold} icon="⏳"/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red} icon="⚠️"/>
       </div>
+
+      {/* New Invoice */}
       {showNew && (
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Invoice</h3>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-            {[{l:"Client Name",k:"client",p:"Acme Pty Ltd",t:"text"},{l:"Amount (ZAR excl. VAT)",k:"amount",p:"50000",t:"number"},{l:"Description",k:"desc",p:"Services rendered",t:"text"},{l:"Due Date",k:"due",p:"",t:"date"}].map(f => (
-              <div key={f.k}>
-                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
-              </div>
-            ))}
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
-            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
-              <input type="checkbox" checked={form.vatApplicable} onChange={e=>setForm({...form,vatApplicable:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
-              Apply VAT @ 15%
-            </label>
-            {form.amount && (
-              <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:12}}>
-                <span style={{color:C.inkMid}}>Excl. VAT: <strong style={{color:C.ink}}>{fmt(+form.amount||0)}</strong></span>
-                {form.vatApplicable && <span style={{color:C.inkMid}}>VAT: <strong style={{color:C.gold}}>{fmt((+form.amount||0)*0.15)}</strong></span>}
-                <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmt((+form.amount||0)*(form.vatApplicable?1.15:1))}</strong></span>
-              </div>
-            )}
-          </div>
+          <InvFormFields data={form} onChange={setForm}/>
           <div style={{display:"flex",gap:8}}>
             <button onClick={handleCreate} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Create Invoice</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
       )}
+
+      {/* View Modal */}
       {preview && (
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={() => setPreview(null)}>
           <div style={{background:"#fff",borderRadius:20,padding:40,width:560,maxHeight:"80vh",overflow:"auto"}} onClick={e => e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:32}}>
-              <div>
-                <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div>
-                <div style={{fontSize:11,color:C.inkMid}}>Your Company Pty Ltd</div>
-              </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontSize:20,fontWeight:800,color:C.ink}}>TAX INVOICE</div>
-                <div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div>
-              </div>
+              <div><div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div><div style={{fontSize:11,color:C.inkMid}}>Your Company Pty Ltd</div></div>
+              <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:C.ink}}>TAX INVOICE</div><div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div></div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
               <div><div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Bill To</div><div style={{fontWeight:700,color:C.ink}}>{preview.client}</div></div>
@@ -574,17 +583,77 @@ function Invoicing({live = {}}) {
             </div>
             <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>Banking: FNB Business - Acc: 62XXXXXXXXX - Branch: 250655</div>
             <div style={{display:"flex",gap:8,marginTop:20}}>
+              <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={() => window.print()} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={() => setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Amend Modal */}
+      {editInv && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={() => setEditInv(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:580,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 20px"}}>Amend Invoice — {editInv.id}</h3>
+            <InvFormFields data={editInv} onChange={setEditInv}/>
+            <div style={{marginBottom:16}}>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Status</label>
+              <select value={editInv.status} onChange={e=>setEditInv({...editInv,status:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="pending">Pending</option>
+                <option value="paid">Paid</option>
+                <option value="overdue">Overdue</option>
+              </select>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleAmend} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+              <button onClick={() => setEditInv(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bank Match Modal */}
+      {matching && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={() => setMatching(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:640,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 6px"}}>Match Invoice — {matching.id}</h3>
+            <p style={{fontSize:13,color:C.inkMid,marginBottom:20}}>Select the bank payment that matches {matching.client} — {fmt(matching.amount)}</p>
+            {bankTxns.length === 0 ? (
+              <div style={{textAlign:"center",padding:32,color:C.inkMid,fontSize:13}}>No bank transactions loaded. Import a bank statement first.</div>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {bankTxns.map(txn => {
+                  const diff = Math.abs(txn.amount - matching.amount);
+                  const isClose = diff < matching.amount * 0.05;
+                  return (
+                    <div key={txn.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 16px",borderRadius:12,border:`2px solid ${isClose?C.green:C.border}`,background:isClose?C.greenLt:"transparent",cursor:"pointer"}}
+                      onClick={() => handleMatch(matching, txn)}>
+                      <div>
+                        <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{txn.description}</div>
+                        <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{txn.date}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontSize:14,fontWeight:700,color:C.green}}>{fmt(txn.amount)}</div>
+                        {isClose && <div style={{fontSize:10,color:C.green,fontWeight:600}}>Best match</div>}
+                        {!isClose && <div style={{fontSize:10,color:C.inkDim}}>Diff: {fmt(diff)}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <button onClick={() => setMatching(null)} style={{marginTop:20,background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Invoice Table */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
           <thead>
             <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-              {["Invoice #","Client","Description","Amount","Date","Due","Status",""].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
+              {["Invoice #","Client","Description","Amount","Date","Due","Status","Actions"].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
@@ -595,10 +664,16 @@ function Invoicing({live = {}}) {
                 <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{inv.desc}</td>
                 <td style={{padding:"13px 16px",fontWeight:700}}>{fmt(inv.amount)}</td>
                 <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
-                <td style={{padding:"13px 16px",color:inv.status === "overdue" ? C.red : C.inkMid}}>{fmtDate(inv.due)}</td>
+                <td style={{padding:"13px 16px",color:inv.status==="overdue"?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
                 <td style={{padding:"13px 16px"}}><StatusBadge status={inv.status}/></td>
                 <td style={{padding:"13px 16px"}}>
-                  <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
+                    <button onClick={() => setEditInv({...inv})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
+                    {inv.status !== "paid" && (
+                      <button onClick={() => loadBankTxns(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Match</button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
