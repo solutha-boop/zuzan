@@ -692,6 +692,8 @@ function Expenses({live = {}}) {
   const [expenses, setExpenses] = useState(MOCK_EXPENSES);
   const [pendingCats, setPendingCats] = useState({}); // {id: selectedCategory}
   const [view, setView] = useState("unposted"); // "unposted" | "posted"
+  const [viewExp,  setViewExp]  = useState(null);
+  const [editExp,  setEditExp]  = useState(null);
 
   useEffect(() => { if (liveExpenses && liveExpenses.length > 0) setExpenses(liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, category: e.category || "", id: `EXP-${String(e.id).padStart(3,"0")}`}))); }, [liveExpenses]);
 
@@ -702,6 +704,15 @@ function Expenses({live = {}}) {
   const posted   = expenses.filter(e => isPosted(e.category));
   const displayed = view === "unposted" ? unposted : posted;
   const total = displayed.reduce((s,e) => s + e.amount, 0);
+
+  const handleAmendExp = async () => {
+    setExpenses(prev => prev.map(e => e.id === editExp.id ? {...editExp} : e));
+    setEditExp(null);
+    try {
+      await api(`/expenses/${editExp.id}`, { method:"PATCH", body: JSON.stringify({ vendor:editExp.vendor, description:editExp.desc, amount:+editExp.amount, category:editExp.category, expense_date:editExp.date }) });
+      if (live && live.reload) live.reload();
+    } catch(e) { console.warn("Amend expense failed:", e.message); }
+  };
 
   const handlePost = async (exp) => {
     const cat = pendingCats[exp.id];
@@ -784,6 +795,59 @@ function Expenses({live = {}}) {
         </div>
       )}
 
+      {/* View Expense Modal */}
+      {viewExp && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={() => setViewExp(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:480}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 20px"}}>Expense — {viewExp.id}</h3>
+            {[["Vendor",viewExp.vendor],["Description",viewExp.desc],["Date",fmtDate(viewExp.date)],["Amount",fmt(viewExp.amount)],["Account",viewExp.category||"Uncategorised"]].map(([l,v])=>(
+              <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:`1px solid ${C.border}30`,fontSize:13}}>
+                <span style={{color:C.inkMid,fontWeight:600}}>{l}</span>
+                <span style={{color:C.ink,fontWeight:l==="Amount"?700:400}}>{v}</span>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:8,marginTop:20}}>
+              <button onClick={() => { setViewExp(null); setEditExp({...viewExp}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"10px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
+              <button onClick={() => setViewExp(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"10px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Amend Expense Modal */}
+      {editExp && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={() => setEditExp(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:520}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 20px"}}>Amend Expense — {editExp.id}</h3>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+              {[{l:"Vendor",k:"vendor",t:"text"},{l:"Amount (ZAR)",k:"amount",t:"number"},{l:"Description",k:"desc",t:"text"},{l:"Date",k:"date",t:"date"}].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} value={editExp[f.k]||""} onChange={e=>setEditExp({...editExp,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+            </div>
+            <div style={{marginBottom:16}}>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account</label>
+              <select value={editExp.category||""} onChange={e=>setEditExp({...editExp,category:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="">-- Uncategorised --</option>
+                {COA_GROUPS.map(group=>(
+                  <optgroup key={group} label={group}>
+                    {DEFAULT_COA.filter(a=>a.group===group&&a.type==="Detail").map(a=>(
+                      <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleAmendExp} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+              <button onClick={() => setEditExp(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* View toggle */}
       <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
         {[["unposted","⏳ Needs Categorising"],["posted","✅ Posted to Accounts"]].map(([v,l]) => (
@@ -801,7 +865,7 @@ function Expenses({live = {}}) {
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
             <thead>
               <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-                {["#","Vendor","Description","Date","Amount", view==="unposted"?"Assign Account":"Account",""].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
+                {["#","Vendor","Description","Date","Amount", view==="unposted"?"Assign Account":"Account","Actions"].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -830,13 +894,17 @@ function Expenses({live = {}}) {
                     )}
                   </td>
                   <td style={{padding:"13px 16px"}}>
-                    {view === "unposted" && (
-                      <button onClick={() => handlePost(exp)}
-                        disabled={!isPosted(pendingCats[exp.id])}
-                        style={{background:isPosted(pendingCats[exp.id])?C.green:"transparent",color:isPosted(pendingCats[exp.id])?"#fff":C.inkDim,border:`1px solid ${isPosted(pendingCats[exp.id])?C.green:C.border}`,borderRadius:6,padding:"5px 12px",fontSize:11,cursor:isPosted(pendingCats[exp.id])?"pointer":"default",fontFamily:"inherit",fontWeight:700}}>
-                        Post →
-                      </button>
-                    )}
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={() => setViewExp(exp)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
+                      <button onClick={() => setEditExp({...exp})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
+                      {view === "unposted" && (
+                        <button onClick={() => handlePost(exp)}
+                          disabled={!isPosted(pendingCats[exp.id])}
+                          style={{background:isPosted(pendingCats[exp.id])?C.green:"transparent",color:isPosted(pendingCats[exp.id])?"#fff":C.inkDim,border:`1px solid ${isPosted(pendingCats[exp.id])?C.green:C.border}`,borderRadius:6,padding:"5px 10px",fontSize:11,cursor:isPosted(pendingCats[exp.id])?"pointer":"default",fontFamily:"inherit",fontWeight:700}}>
+                          Post →
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
