@@ -38,6 +38,7 @@ from companies import (
     bank_router,
 )
 from payroll import payroll_router, reports_router, payments_router
+from api_keys import router as api_keys_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -48,11 +49,62 @@ app.include_router(payroll_router,   prefix="/payroll",   tags=["Payroll"])
 app.include_router(payments_router,  prefix="/payments",  tags=["Payments"])
 app.include_router(reports_router,   prefix="/reports",   tags=["Reports"])
 app.include_router(bank_router,      prefix="/bank",      tags=["Bank Import"])
+app.include_router(api_keys_router,  prefix="/api-keys",  tags=["API Keys"])
 
 
 @app.get("/")
 async def root():
     return {"status": "ZuZan API running", "version": "1.0.0"}
+
+
+# ── PUBLIC API (API key authenticated) ───────────────────────────────────────
+from fastapi import Header
+from api_keys import get_company_from_api_key
+from database import Invoice, Expense, Employee
+from sqlalchemy.orm import Session
+
+def get_db_session():
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def require_api_key(x_api_key: str = Header(...), db: Session = Depends(get_db_session)):
+    company, key_record = get_company_from_api_key(x_api_key, db)
+    if not company:
+        raise HTTPException(status_code=401, detail="Invalid or expired API key.")
+    return company, key_record, db
+
+@app.get("/v1/invoices", tags=["Public API"])
+async def api_list_invoices(auth=Depends(require_api_key)):
+    company, _, db = auth
+    items = db.query(Invoice).filter(Invoice.company_id == company.id).all()
+    return [{"id":i.id,"invoice_number":i.invoice_number,"client_name":i.client_name,"amount":i.total_amount,"status":str(i.status.value),"issue_date":str(i.issue_date)[:10],"due_date":str(i.due_date)[:10] if i.due_date else None} for i in items]
+
+@app.get("/v1/expenses", tags=["Public API"])
+async def api_list_expenses(auth=Depends(require_api_key)):
+    company, _, db = auth
+    items = db.query(Expense).filter(Expense.company_id == company.id).all()
+    return [{"id":e.id,"vendor":e.vendor,"description":e.description,"amount":e.amount,"category":e.category,"date":str(e.expense_date)[:10] if e.expense_date else None} for e in items]
+
+@app.get("/v1/employees", tags=["Public API"])
+async def api_list_employees(auth=Depends(require_api_key)):
+    company, key_record, db = auth
+    if "payroll" not in (key_record.scopes or ""):
+        raise HTTPException(status_code=403, detail="This API key does not have the 'payroll' scope.")
+    items = db.query(Employee).filter(Employee.company_id == company.id, Employee.is_active == True).all()
+    return [{"id":e.id,"name":f"{e.first_name} {e.last_name}","position":e.position,"department":e.department,"gross_salary":e.gross_salary} for e in items]
+
+@app.get("/v1/summary", tags=["Public API"])
+async def api_summary(auth=Depends(require_api_key)):
+    company, _, db = auth
+    from sqlalchemy import func
+    total_revenue  = db.query(func.sum(Invoice.total_amount)).filter(Invoice.company_id==company.id, Invoice.status=="paid").scalar() or 0
+    total_expenses = db.query(func.sum(Expense.amount)).filter(Expense.company_id==company.id).scalar() or 0
+    outstanding    = db.query(func.sum(Invoice.total_amount)).filter(Invoice.company_id==company.id, Invoice.status!="paid").scalar() or 0
+    return {"company":company.name,"total_revenue":round(total_revenue,2),"total_expenses":round(total_expenses,2),"outstanding":round(outstanding,2),"net_profit":round(total_revenue-total_expenses,2)}
 
 
 # ── AI CHAT ───────────────────────────────────────────────────────────────────

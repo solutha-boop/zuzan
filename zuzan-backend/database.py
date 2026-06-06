@@ -48,6 +48,7 @@ class Company(Base):
     expenses=relationship("Expense",back_populates="company")
     employees=relationship("Employee",back_populates="company")
     payments=relationship("Payment",back_populates="company")
+    api_keys=relationship("APIKey",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -112,6 +113,20 @@ class Payslip(Base):
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
+class APIKey(Base):
+    __tablename__ = "api_keys"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    name=Column(String,nullable=False)            # e.g. "My Integration"
+    key_hash=Column(String,nullable=False,unique=True)  # hashed key
+    key_prefix=Column(String,nullable=False)       # first 8 chars for display
+    scopes=Column(String,default="read")           # comma-separated: read,write,payroll
+    is_active=Column(Boolean,default=True)
+    last_used=Column(DateTime,nullable=True)
+    requests_today=Column(Integer,default=0)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="api_keys")
+
 class Payment(Base):
     __tablename__ = "payments"
     id=Column(Integer,primary_key=True,index=True)
@@ -137,6 +152,7 @@ def init_db():
             "ALTER TABLE employees ADD COLUMN account_number VARCHAR",
             "ALTER TABLE employees ADD COLUMN branch_code VARCHAR",
             "ALTER TABLE employees ADD COLUMN account_type VARCHAR",
+            "ALTER TABLE api_keys ADD COLUMN requests_today INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(text(sql))
