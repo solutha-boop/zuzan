@@ -2589,6 +2589,103 @@ function ChartOfAccounts() {
     </div>
   );
 }
+// ── DIRECT BANK FEEDS ─────────────────────────────────────────────────────────
+const SA_BANKS = [
+  {id:"fnb",          name:"FNB",           logo:"🟢",color:"#007A39"},
+  {id:"absa",         name:"ABSA",          logo:"🔴",color:"#C8102E"},
+  {id:"standardbank", name:"Standard Bank", logo:"🔵",color:"#0033A0"},
+  {id:"nedbank",      name:"Nedbank",       logo:"🟩",color:"#009A44"},
+  {id:"capitec",      name:"Capitec",       logo:"🟦",color:"#1E4A8C"},
+  {id:"discovery",    name:"Discovery Bank",logo:"🟣",color:"#6B2A8B"},
+  {id:"tymebank",     name:"TymeBank",      logo:"🩵",color:"#00B4D8"},
+];
+
+function BankFeeds() {
+  const [linked,    setLinked]   = useState([]);
+  const [showLink,  setShowLink] = useState(false);
+  const [linking,   setLinking]  = useState(null);
+  const STITCH_CONFIGURED = false; // Set to true once Stitch API credentials are added
+
+  const handleLink = async (bank) => {
+    if (!STITCH_CONFIGURED) {
+      alert("Direct bank feeds are coming soon! We are completing our integration with Stitch Money. In the meantime, use the Bank Import tab to upload CSV statements.");
+      return;
+    }
+    setLinking(bank);
+    // Stitch OAuth flow will go here
+    try {
+      const res = await api("/bank/link-initiate", {method:"POST", body:JSON.stringify({bank_id: bank.id})});
+      window.location.href = res.auth_url; // Redirect to Stitch OAuth
+    } catch(e) { alert("Could not initiate bank link: " + e.message); setLinking(null); }
+  };
+
+  const handleUnlink = (id) => {
+    if(!window.confirm("Unlink this account?")) return;
+    setLinked(l => l.filter(a => a.id !== id));
+  };
+
+  return (
+    <div style={{marginBottom:24}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Direct Bank Feeds</div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Connect your bank for automatic transaction imports</div>
+        </div>
+        <button onClick={()=>setShowLink(o=>!o)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"9px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Link Bank Account</button>
+      </div>
+
+      {!STITCH_CONFIGURED && (
+        <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",gap:12,alignItems:"flex-start"}}>
+          <span style={{fontSize:20}}>⏳</span>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:4}}>Coming Soon — Stitch Money Integration</div>
+            <div style={{fontSize:12,color:C.inkMid,lineHeight:1.6}}>We're finalising our approval with Stitch Money to enable live bank feeds for all major SA banks. Once approved, you'll be able to connect your bank and transactions will import automatically every few hours. Use the CSV import below in the meantime.</div>
+          </div>
+        </div>
+      )}
+
+      {linked.length === 0 ? (
+        <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:14,padding:32,textAlign:"center",color:C.inkMid,fontSize:13}}>
+          No bank accounts linked yet. Click <strong>Link Bank Account</strong> to connect.
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {linked.map(acc=>(
+            <div key={acc.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                <span style={{fontSize:24}}>{acc.logo}</span>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{acc.name}</div>
+                  <div style={{fontSize:11,color:C.inkMid}}>{acc.accountNumber} · Last synced: {acc.lastSync}</div>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <Badge label="Connected" color={C.green} bg={C.greenLt}/>
+                <button onClick={()=>handleUnlink(acc.id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Unlink</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showLink && (
+        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginTop:16}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Select your bank to connect</div>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            {SA_BANKS.map(bank=>(
+              <button key={bank.id} onClick={()=>handleLink(bank)} disabled={!!linking}
+                style={{display:"flex",alignItems:"center",gap:8,padding:"12px 18px",borderRadius:12,border:`2px solid ${C.border}`,background:C.bg,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:600,color:C.ink,opacity:linking?0.6:1}}>
+                <span style={{fontSize:22}}>{bank.logo}</span>{bank.name}
+              </button>
+            ))}
+          </div>
+          <button onClick={()=>setShowLink(false)} style={{marginTop:16,background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── BANK IMPORT ───────────────────────────────────────────────────────────────
 function BankImport({live = {}, onNavigate}) {
   const [step, setStep] = useState("select");
@@ -2722,8 +2819,13 @@ function BankImport({live = {}, onNavigate}) {
   return (
     <div>
       <div style={{marginBottom:24}}>
-        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank Statement Import</h2>
-        <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Upload your bank CSV to auto-import expenses</p>
+        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank</h2>
+        <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Connect your bank or import a CSV statement</p>
+      </div>
+      <BankFeeds/>
+      <div style={{borderTop:`2px solid ${C.border}`,paddingTop:20,marginBottom:20}}>
+        <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:4}}>CSV Statement Import</div>
+        <div style={{fontSize:12,color:C.inkMid}}>Upload a bank statement CSV to import transactions manually</div>
       </div>
       <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",width:"fit-content",marginBottom:24}}>
         {[["select","1. Select Bank"],["preview","2. Preview"],["categorise","3. Categorise"],["done","4. Done"]].map(([id,label],i) => {
@@ -3757,6 +3859,199 @@ function AIAssistant() {
   );
 }
 
+// ── INVENTORY ─────────────────────────────────────────────────────────────────
+function Inventory() {
+  const [items,    setItems]   = useState([]);
+  const [summary,  setSummary] = useState(null);
+  const [showNew,  setShowNew] = useState(false);
+  const [editItem, setEditItem]= useState(null);
+  const [adjItem,  setAdjItem] = useState(null);
+  const [adjQty,   setAdjQty]  = useState("");
+  const [adjReason,setAdjReason]=useState("");
+  const [search,   setSearch]  = useState("");
+  const [loading,  setLoading] = useState(true);
+  const [form, setForm] = useState({name:"",sku:"",category:"",description:"",unit_cost:"",unit_price:"",quantity_on_hand:"",reorder_level:"5",unit_of_measure:"Unit"});
+
+  useEffect(()=>{ load(); },[]);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [it, sm] = await Promise.all([
+        api("/inventory/").catch(()=>[]),
+        api("/inventory/summary").catch(()=>null),
+      ]);
+      setItems(it); setSummary(sm);
+    } finally { setLoading(false); }
+  };
+
+  const handleCreate = async () => {
+    try {
+      await api("/inventory/",{method:"POST",body:JSON.stringify({...form,unit_cost:+form.unit_cost||0,unit_price:+form.unit_price||0,quantity_on_hand:+form.quantity_on_hand||0,reorder_level:+form.reorder_level||5})});
+      setShowNew(false);
+      setForm({name:"",sku:"",category:"",description:"",unit_cost:"",unit_price:"",quantity_on_hand:"",reorder_level:"5",unit_of_measure:"Unit"});
+      load();
+    } catch(e) { alert("Failed: "+e.message); }
+  };
+
+  const handleUpdate = async () => {
+    try {
+      await api(`/inventory/${editItem.id}`,{method:"PUT",body:JSON.stringify({...editItem,unit_cost:+editItem.unit_cost||0,unit_price:+editItem.unit_price||0,quantity_on_hand:+editItem.quantity_on_hand||0,reorder_level:+editItem.reorder_level||5})});
+      setEditItem(null); load();
+    } catch(e) { alert("Failed: "+e.message); }
+  };
+
+  const handleAdjust = async () => {
+    try {
+      await api(`/inventory/${adjItem.id}/adjust`,{method:"POST",body:JSON.stringify({quantity:+adjQty,reason:adjReason})});
+      setAdjItem(null); setAdjQty(""); setAdjReason(""); load();
+    } catch(e) { alert("Failed: "+e.message); }
+  };
+
+  const handleDelete = async (id,name) => {
+    if(!window.confirm(`Delete "${name}"?`)) return;
+    await api(`/inventory/${id}`,{method:"DELETE"});
+    load();
+  };
+
+  const filtered = items.filter(i=>(i.name||"").toLowerCase().includes(search.toLowerCase())||(i.sku||"").toLowerCase().includes(search.toLowerCase())||(i.category||"").toLowerCase().includes(search.toLowerCase()));
+  const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const lb = (t) => <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{t}</label>;
+
+  return (
+    <div>
+      <SectionHeader title="Inventory" sub="Track stock levels, costs and reorder alerts" action="+ Add Item" onAction={()=>setShowNew(true)}/>
+
+      {/* Summary KPIs */}
+      <div style={{display:"flex",gap:12,marginBottom:24}}>
+        <KPI label="Total Items"      value={summary?.total_items||items.length}        color={C.blue}   icon="📦"/>
+        <KPI label="Stock Value (Cost)" value={fmt(summary?.total_cost_value||0)}       color={C.ink}    icon="💰"/>
+        <KPI label="Retail Value"     value={fmt(summary?.total_retail_value||0)}       color={C.green}  icon="🏷️"/>
+        <KPI label="Low Stock Alerts" value={summary?.low_stock_count||0}               color={C.red}    icon="⚠️"/>
+      </div>
+
+      {/* Low stock banner */}
+      {summary?.low_stock_items?.length > 0 && (
+        <div style={{background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:12,padding:"12px 18px",marginBottom:20}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:6}}>⚠️ Low Stock — Reorder needed</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {summary.low_stock_items.map(i=>(
+              <span key={i.id} style={{background:C.surface,border:`1px solid ${C.red}30`,borderRadius:8,padding:"4px 10px",fontSize:12,color:C.red}}>{i.name} — {i.quantity_on_hand} {i.unit_of_measure} left</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Add item form */}
+      {showNew && (
+        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
+          <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Inventory Item</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+            <div>{lb("Item Name")}<input placeholder="Widget A" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={is}/></div>
+            <div>{lb("SKU / Code")}<input placeholder="WGT-001" value={form.sku} onChange={e=>setForm(f=>({...f,sku:e.target.value}))} style={is}/></div>
+            <div>{lb("Category")}<input placeholder="Electronics" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} style={is}/></div>
+            <div>{lb("Cost Price (ZAR)")}<input type="number" placeholder="100" value={form.unit_cost} onChange={e=>setForm(f=>({...f,unit_cost:e.target.value}))} style={is}/></div>
+            <div>{lb("Selling Price (ZAR)")}<input type="number" placeholder="150" value={form.unit_price} onChange={e=>setForm(f=>({...f,unit_price:e.target.value}))} style={is}/></div>
+            <div>{lb("Unit of Measure")}<select value={form.unit_of_measure} onChange={e=>setForm(f=>({...f,unit_of_measure:e.target.value}))} style={is}>{["Unit","Each","Box","Kg","Litre","Metre","Hour"].map(u=><option key={u}>{u}</option>)}</select></div>
+            <div>{lb("Opening Stock")}<input type="number" placeholder="0" value={form.quantity_on_hand} onChange={e=>setForm(f=>({...f,quantity_on_hand:e.target.value}))} style={is}/></div>
+            <div>{lb("Reorder Level")}<input type="number" placeholder="5" value={form.reorder_level} onChange={e=>setForm(f=>({...f,reorder_level:e.target.value}))} style={is}/></div>
+            <div>{lb("Description")}<input placeholder="Optional description" value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} style={is}/></div>
+          </div>
+          {form.unit_cost && form.unit_price && (
+            <div style={{background:C.greenLt,borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:C.green}}>
+              Margin: {fmt(+form.unit_price - +form.unit_cost)} ({form.unit_cost>0?Math.round(((+form.unit_price - +form.unit_cost)/+form.unit_cost)*100):0}%)
+            </div>
+          )}
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={handleCreate} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add Item</button>
+            <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Edit modal */}
+      {editItem && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setEditItem(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:580,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:20,color:C.ink,margin:"0 0 20px"}}>Edit Item — {editItem.name}</h3>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+              {[{l:"Item Name",k:"name"},{l:"SKU",k:"sku"},{l:"Category",k:"category"},{l:"Cost Price",k:"unit_cost",t:"number"},{l:"Selling Price",k:"unit_price",t:"number"},{l:"Stock on Hand",k:"quantity_on_hand",t:"number"},{l:"Reorder Level",k:"reorder_level",t:"number"}].map(f=>(
+                <div key={f.k}>{lb(f.l)}<input type={f.t||"text"} value={editItem[f.k]||""} onChange={e=>setEditItem(i=>({...i,[f.k]:e.target.value}))} style={is}/></div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleUpdate} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save</button>
+              <button onClick={()=>setEditItem(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock adjustment modal */}
+      {adjItem && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setAdjItem(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:420}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:20,color:C.ink,margin:"0 0 6px"}}>Adjust Stock — {adjItem.name}</h3>
+            <p style={{fontSize:12,color:C.inkMid,marginBottom:20}}>Current: {adjItem.quantity_on_hand} {adjItem.unit_of_measure}</p>
+            <div style={{marginBottom:14}}>{lb("Quantity (+ receive / − issue)")}<input type="number" placeholder="e.g. 10 or -5" value={adjQty} onChange={e=>setAdjQty(e.target.value)} style={is}/></div>
+            <div style={{marginBottom:20}}>{lb("Reason")}<input placeholder="Purchase order, sale, write-off..." value={adjReason} onChange={e=>setAdjReason(e.target.value)} style={is}/></div>
+            {adjQty && <div style={{background:C.greenLt,borderRadius:8,padding:"8px 14px",marginBottom:14,fontSize:12,color:C.green}}>New stock: {Math.max(0,adjItem.quantity_on_hand + +adjQty)} {adjItem.unit_of_measure}</div>}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleAdjust} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Apply</button>
+              <button onClick={()=>setAdjItem(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Search */}
+      <div style={{marginBottom:16}}>
+        <input placeholder="Search by name, SKU or category..." value={search} onChange={e=>setSearch(e.target.value)} style={{...is,maxWidth:360}}/>
+      </div>
+
+      {/* Table */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+        {loading ? <div style={{padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> :
+        filtered.length===0 ? <div style={{padding:40,textAlign:"center",color:C.inkMid}}>No items yet. Add your first inventory item.</div> : (
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                {["SKU","Name","Category","Cost","Price","Margin","Stock","Value","Status","Actions"].map(h=><th key={h} style={{textAlign:"left",padding:"11px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(item=>{
+                const margin = item.unit_price>0?Math.round(((item.unit_price-item.unit_cost)/item.unit_price)*100):0;
+                const isLow  = item.quantity_on_hand <= item.reorder_level;
+                return (
+                  <tr key={item.id} style={{borderBottom:`1px solid ${C.border}20`,background:isLow?"#FFF5F520":"transparent"}}>
+                    <td style={{padding:"12px 14px",fontFamily:"monospace",color:C.inkMid,fontSize:11}}>{item.sku||"—"}</td>
+                    <td style={{padding:"12px 14px",fontWeight:600,color:C.ink}}>{item.name}</td>
+                    <td style={{padding:"12px 14px"}}>{item.category?<Badge label={item.category} color={C.blue} bg={C.blueLt}/>:"—"}</td>
+                    <td style={{padding:"12px 14px",color:C.inkMid}}>{fmt(item.unit_cost)}</td>
+                    <td style={{padding:"12px 14px",fontWeight:600}}>{fmt(item.unit_price)}</td>
+                    <td style={{padding:"12px 14px",color:margin>=30?C.green:margin>=15?C.gold:C.red,fontWeight:600}}>{margin}%</td>
+                    <td style={{padding:"12px 14px",fontWeight:700,color:isLow?C.red:C.ink}}>{item.quantity_on_hand} {item.unit_of_measure}</td>
+                    <td style={{padding:"12px 14px",color:C.green,fontWeight:600}}>{fmt(item.stock_value)}</td>
+                    <td style={{padding:"12px 14px"}}>{isLow?<Badge label="Low Stock" color={C.red} bg={C.redLt}/>:<Badge label="OK" color={C.green} bg={C.greenLt}/>}</td>
+                    <td style={{padding:"12px 14px"}}>
+                      <div style={{display:"flex",gap:5}}>
+                        <button onClick={()=>setAdjItem(item)} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Adjust</button>
+                        <button onClick={()=>setEditItem({...item})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                        <button onClick={()=>handleDelete(item.id,item.name)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Del</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── DEVELOPER / API ACCESS ────────────────────────────────────────────────────
 function Developer() {
   const [keys,     setKeys]     = useState([]);
@@ -4069,7 +4364,8 @@ curl ${BASE}/v1/summary \\
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout, onUserUpdate}) {
-  const [tab, setTab] = useState("dashboard");
+  const [tab,     setTab]     = useState("dashboard");
+  const [navOpen, setNavOpen] = useState(false);
   const live = useLiveData();
   const TABS = [
     {id:"dashboard", label:"Dashboard",   icon:"🏠"},
@@ -4081,7 +4377,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"debtors",   label:"Debtors",     icon:"📥"},
     {id:"creditors", label:"Creditors",   icon:"📤"},
     {id:"coa",       label:"Accounts",    icon:"📒"},
-    {id:"bankimport",label:"Bank Import", icon:"🏦"},
+    {id:"inventory", label:"Inventory",   icon:"📦"},
+    {id:"bankimport",label:"Bank",        icon:"🏦"},
     {id:"settings",  label:"Settings",    icon:"⚙️"},
   ];
   const screens = {
@@ -4094,13 +4391,37 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     debtors:    <Debtors    live={live}/>,
     creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
+    inventory:  <Inventory/>,
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
     settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
   };
   return (
     <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",display:"flex"}}>
-      <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:${C.border};}button:hover{opacity:0.9;}`}</style>
-      <div style={{width:230,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:10}}>
+      <style>{`
+        *{box-sizing:border-box;margin:0;padding:0;}
+        ::-webkit-scrollbar{width:4px;}
+        ::-webkit-scrollbar-thumb{background:${C.border};}
+        button:hover{opacity:0.9;}
+        @media(max-width:768px){
+          .zuzan-sidebar{transform:translateX(-100%);transition:transform 0.25s ease;}
+          .zuzan-sidebar.open{transform:translateX(0);}
+          .zuzan-main{margin-left:0!important;padding:16px!important;}
+          .zuzan-topbar{display:flex!important;}
+        }
+        @media(min-width:769px){
+          .zuzan-sidebar{transform:none!important;}
+          .zuzan-topbar{display:none!important;}
+        }
+      `}</style>
+      {/* Mobile top bar */}
+      <div className="zuzan-topbar" style={{display:"none",position:"fixed",top:0,left:0,right:0,height:52,background:C.surface,borderBottom:`1px solid ${C.border}`,alignItems:"center",justifyContent:"space-between",padding:"0 16px",zIndex:20}}>
+        <button onClick={()=>setNavOpen(o=>!o)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.ink}}>☰</button>
+        <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+        <div style={{width:32}}/>
+      </div>
+      {/* Overlay for mobile nav */}
+      {navOpen && <div onClick={()=>setNavOpen(false)} style={{position:"fixed",inset:0,background:"#00000040",zIndex:9}}/>}
+      <div className={`zuzan-sidebar${navOpen?" open":""}`} style={{width:230,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:10}}>
         <div style={{padding:"24px 20px 20px",borderBottom:`1px solid ${C.border}`}}>
           <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
           <div style={{fontSize:10,color:C.inkMid,marginTop:3,letterSpacing:0.5}}>SA BOOKKEEPING PLATFORM</div>
@@ -4113,7 +4434,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         </div>
         <nav style={{flex:1,padding:"12px 10px"}}>
           {TABS.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:tab===t.id?700:400,marginBottom:3,background:tab===t.id?C.accentLt:"transparent",color:tab===t.id?C.accent:C.inkMid,textAlign:"left"}}>
+            <button key={t.id} onClick={() => { setTab(t.id); setNavOpen(false); }} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:tab===t.id?700:400,marginBottom:3,background:tab===t.id?C.accentLt:"transparent",color:tab===t.id?C.accent:C.inkMid,textAlign:"left"}}>
               <span style={{fontSize:17}}>{t.icon}</span>
               {t.label}
               {tab === t.id && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
@@ -4126,7 +4447,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <button onClick={onLogout} style={{fontSize:11,color:C.inkDim,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit"}}>Sign out</button>
         </div>
       </div>
-      <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
+      <div className="zuzan-main" style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh",paddingTop:"36px"}}>
         {screens[tab]}
       </div>
       <AIAssistant/>
