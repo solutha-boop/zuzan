@@ -4362,11 +4362,182 @@ curl ${BASE}/v1/summary \\
   );
 }
 
+// ── MOBILE DASHBOARD ──────────────────────────────────────────────────────────
+function MobileDashboard({live, user, onNavigate}) {
+  const d = live.dashboard;
+  const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i=>i.status==="paid").reduce((s,i)=>s+i.amount,0);
+  const totalExpenses = d ? d.total_expenses : MOCK_EXPENSES.reduce((s,e)=>s+e.amount,0);
+  const outstanding   = d ? d.total_outstanding : MOCK_INVOICES.filter(i=>i.status!=="paid").reduce((s,i)=>s+i.amount,0);
+  const profit        = totalRevenue - totalExpenses;
+
+  return (
+    <div style={{padding:"0 0 100px"}}>
+      {/* Header */}
+      <div style={{background:`linear-gradient(135deg,${C.accent},#A03010)`,padding:"28px 20px 32px",marginBottom:-16}}>
+        <div style={{fontSize:13,color:"rgba(255,255,255,0.7)",marginBottom:4}}>Good morning</div>
+        <div style={{fontFamily:"serif",fontSize:24,color:"#fff",fontWeight:800}}>{user?.companyName||"Your Company"}</div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.6)",marginTop:2}}>{new Date().toLocaleDateString("en-ZA",{weekday:"long",day:"numeric",month:"long"})}</div>
+      </div>
+
+      <div style={{padding:"0 16px"}}>
+        {/* Main KPI card */}
+        <div style={{background:C.surface,borderRadius:20,padding:20,boxShadow:"0 4px 24px rgba(0,0,0,0.08)",marginBottom:16}}>
+          <div style={{fontSize:11,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Net Profit This Month</div>
+          <div style={{fontFamily:"serif",fontSize:36,fontWeight:800,color:profit>=0?C.green:C.red}}>{fmt(profit)}</div>
+          <div style={{display:"flex",gap:16,marginTop:12}}>
+            <div><div style={{fontSize:10,color:C.inkMid}}>Revenue</div><div style={{fontSize:15,fontWeight:700,color:C.green}}>{fmt(totalRevenue)}</div></div>
+            <div style={{width:1,background:C.border}}/>
+            <div><div style={{fontSize:10,color:C.inkMid}}>Expenses</div><div style={{fontSize:15,fontWeight:700,color:C.red}}>{fmt(totalExpenses)}</div></div>
+            <div style={{width:1,background:C.border}}/>
+            <div><div style={{fontSize:10,color:C.inkMid}}>Outstanding</div><div style={{fontSize:15,fontWeight:700,color:C.gold}}>{fmt(outstanding)}</div></div>
+          </div>
+        </div>
+
+        {/* Quick actions */}
+        <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:10}}>Quick Actions</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+          {[
+            {label:"New Invoice",   icon:"🧾",tab:"invoicing", color:C.accent},
+            {label:"Add Expense",   icon:"💳",tab:"expenses",  color:C.blue},
+            {label:"View Reports",  icon:"📊",tab:"reports",   color:C.green},
+            {label:"Run Payroll",   icon:"👥",tab:"payroll",   color:C.gold},
+          ].map(a=>(
+            <button key={a.tab} onClick={()=>onNavigate(a.tab)}
+              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 14px",display:"flex",alignItems:"center",gap:10,cursor:"pointer",fontFamily:"inherit",textAlign:"left",boxShadow:"0 2px 8px rgba(0,0,0,0.04)"}}>
+              <div style={{width:40,height:40,borderRadius:12,background:a.color+"15",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>{a.icon}</div>
+              <span style={{fontSize:13,fontWeight:600,color:C.ink}}>{a.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Recent invoices */}
+        <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:10}}>Recent Invoices</div>
+        {MOCK_INVOICES.slice(0,4).map(inv=>{
+          const statusColor = inv.status==="paid"?C.green:inv.status==="overdue"?C.red:C.gold;
+          const statusBg    = inv.status==="paid"?C.greenLt:inv.status==="overdue"?C.redLt:C.goldLt;
+          return (
+            <div key={inv.id} style={{background:C.surface,borderRadius:14,padding:"14px 16px",marginBottom:10,boxShadow:"0 2px 8px rgba(0,0,0,0.04)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:700,color:C.ink}}>{inv.client}</div>
+                  <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{inv.id} · Due {fmtDate(inv.due)}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:15,fontWeight:800,color:C.ink}}>{fmt(inv.amount)}</div>
+                  <div style={{marginTop:4,fontSize:10,fontWeight:700,color:statusColor,background:statusBg,padding:"2px 8px",borderRadius:10,textTransform:"uppercase"}}>{inv.status}</div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── MOBILE SHELL ──────────────────────────────────────────────────────────────
+function MobileApp({user, onLogout, onUserUpdate, live}) {
+  const [tab, setTab] = useState("home");
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const BOTTOM_TABS = [
+    {id:"home",      label:"Home",     icon:"🏠"},
+    {id:"invoicing", label:"Invoices", icon:"🧾"},
+    {id:"expenses",  label:"Expenses", icon:"💳"},
+    {id:"payroll",   label:"Payroll",  icon:"👥"},
+    {id:"more",      label:"More",     icon:"⋯"},
+  ];
+
+  const MORE_ITEMS = [
+    {id:"quotes",    label:"Quotes",      icon:"📝"},
+    {id:"reports",   label:"Reports",     icon:"📊"},
+    {id:"inventory", label:"Inventory",   icon:"📦"},
+    {id:"bankimport",label:"Bank",        icon:"🏦"},
+    {id:"debtors",   label:"Debtors",     icon:"📥"},
+    {id:"creditors", label:"Creditors",   icon:"📤"},
+    {id:"coa",       label:"Accounts",    icon:"📒"},
+    {id:"settings",  label:"Settings",    icon:"⚙️"},
+  ];
+
+  const navigate = (id) => { setTab(id); setMoreOpen(false); };
+
+  const screens = {
+    home:       <MobileDashboard live={live} user={user} onNavigate={navigate}/>,
+    invoicing:  <div style={{padding:"16px 16px 100px"}}><Invoicing  live={live} user={user}/></div>,
+    expenses:   <div style={{padding:"16px 16px 100px"}}><Expenses   live={live}/></div>,
+    payroll:    <div style={{padding:"16px 16px 100px"}}><Payroll    live={live} user={user}/></div>,
+    quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate}/></div>,
+    reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live}/></div>,
+    inventory:  <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
+    bankimport: <div style={{padding:"16px 16px 100px"}}><BankImport live={live} onNavigate={navigate}/></div>,
+    debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
+    creditors:  <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div>,
+    coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
+    settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/></div>,
+  };
+
+  const activeLabel = [...BOTTOM_TABS,...MORE_ITEMS].find(t=>t.id===tab)?.label || "ZuZan";
+
+  return (
+    <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",minHeight:"100dvh"}}>
+      <style>{`*{box-sizing:border-box;margin:0;padding:0;}button:active{opacity:0.7;}`}</style>
+
+      {/* Top bar */}
+      <div style={{position:"fixed",top:0,left:0,right:0,height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",zIndex:50}}>
+        <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+        <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{activeLabel}</div>
+        <button onClick={()=>navigate("settings")} style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}}>{user?.firstName?.[0]||"👤"}</button>
+      </div>
+
+      {/* Content */}
+      <div style={{paddingTop:56,minHeight:"100vh",overflowY:"auto"}}>
+        {screens[tab] || screens.home}
+      </div>
+
+      {/* More drawer */}
+      {moreOpen && (
+        <>
+          <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,background:"#00000050",zIndex:60}}/>
+          <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.surface,borderRadius:"24px 24px 0 0",padding:"12px 0 40px",zIndex:70}}>
+            <div style={{width:40,height:4,background:C.border,borderRadius:2,margin:"0 auto 20px"}}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4,padding:"0 16px"}}>
+              {MORE_ITEMS.map(item=>(
+                <button key={item.id} onClick={()=>navigate(item.id)}
+                  style={{background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",padding:"12px 4px",display:"flex",flexDirection:"column",alignItems:"center",gap:6,borderRadius:12,background:tab===item.id?C.accentLt:"transparent"}}>
+                  <span style={{fontSize:26}}>{item.icon}</span>
+                  <span style={{fontSize:10,color:tab===item.id?C.accent:C.inkMid,fontWeight:tab===item.id?700:400}}>{item.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Bottom navigation */}
+      <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",paddingBottom:"env(safe-area-inset-bottom)",zIndex:50}}>
+        {BOTTOM_TABS.map(t=>{
+          const active = t.id==="more" ? moreOpen : tab===t.id;
+          return (
+            <button key={t.id} onClick={()=>{ if(t.id==="more"){setMoreOpen(o=>!o);}else{setTab(t.id);setMoreOpen(false);}}}
+              style={{flex:1,background:"none",border:"none",cursor:"pointer",padding:"10px 4px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:3,fontFamily:"inherit"}}>
+              <span style={{fontSize:22}}>{t.icon}</span>
+              <span style={{fontSize:10,color:active?C.accent:C.inkMid,fontWeight:active?700:400}}>{t.label}</span>
+              {active && t.id!=="more" && <div style={{width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
+            </button>
+          );
+        })}
+      </div>
+      <AIAssistant/>
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout, onUserUpdate}) {
-  const [tab,     setTab]     = useState("dashboard");
-  const [navOpen, setNavOpen] = useState(false);
   const live = useLiveData();
+  const [tab, setTab] = useState("dashboard");
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+
   const TABS = [
     {id:"dashboard", label:"Dashboard",   icon:"🏠"},
     {id:"invoicing", label:"Invoices",    icon:"🧾"},
@@ -4381,6 +4552,9 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"bankimport",label:"Bank",        icon:"🏦"},
     {id:"settings",  label:"Settings",    icon:"⚙️"},
   ];
+
+  if (isMobile) return <MobileApp user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} live={live}/>;
+
   const screens = {
     dashboard:  <Dashboard  live={live}/>,
     invoicing:  <Invoicing  live={live} user={user}/>,
@@ -4395,59 +4569,36 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
     settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
   };
+
   return (
     <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",display:"flex"}}>
-      <style>{`
-        *{box-sizing:border-box;margin:0;padding:0;}
-        ::-webkit-scrollbar{width:4px;}
-        ::-webkit-scrollbar-thumb{background:${C.border};}
-        button:hover{opacity:0.9;}
-        @media(max-width:768px){
-          .zuzan-sidebar{transform:translateX(-100%);transition:transform 0.25s ease;}
-          .zuzan-sidebar.open{transform:translateX(0);}
-          .zuzan-main{margin-left:0!important;padding:16px!important;}
-          .zuzan-topbar{display:flex!important;}
-        }
-        @media(min-width:769px){
-          .zuzan-sidebar{transform:none!important;}
-          .zuzan-topbar{display:none!important;}
-        }
-      `}</style>
-      {/* Mobile top bar */}
-      <div className="zuzan-topbar" style={{display:"none",position:"fixed",top:0,left:0,right:0,height:52,background:C.surface,borderBottom:`1px solid ${C.border}`,alignItems:"center",justifyContent:"space-between",padding:"0 16px",zIndex:20}}>
-        <button onClick={()=>setNavOpen(o=>!o)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.ink}}>☰</button>
-        <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
-        <div style={{width:32}}/>
-      </div>
-      {/* Overlay for mobile nav */}
-      {navOpen && <div onClick={()=>setNavOpen(false)} style={{position:"fixed",inset:0,background:"#00000040",zIndex:9}}/>}
-      <div className={`zuzan-sidebar${navOpen?" open":""}`} style={{width:230,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:10}}>
+      <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:${C.border};}button:hover{opacity:0.9;}`}</style>
+      <div style={{width:230,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:10}}>
         <div style={{padding:"24px 20px 20px",borderBottom:`1px solid ${C.border}`}}>
           <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
           <div style={{fontSize:10,color:C.inkMid,marginTop:3,letterSpacing:0.5}}>SA BOOKKEEPING PLATFORM</div>
         </div>
         <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user && user.companyName ? user.companyName : "Your Company Pty Ltd"}</div>
-          <div style={{fontSize:10,color:C.inkDim}}>{user && user.plan ? user.plan.name : "Professional"} Plan</div>
+          <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user?.companyName||"Your Company"}</div>
+          <div style={{fontSize:10,color:C.inkDim}}>{user?.plan?.name||"Professional"} Plan</div>
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>Trial: 9 days remaining</div>
         </div>
-        <nav style={{flex:1,padding:"12px 10px"}}>
+        <nav style={{flex:1,padding:"12px 10px",overflowY:"auto"}}>
           {TABS.map(t => (
-            <button key={t.id} onClick={() => { setTab(t.id); setNavOpen(false); }} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:tab===t.id?700:400,marginBottom:3,background:tab===t.id?C.accentLt:"transparent",color:tab===t.id?C.accent:C.inkMid,textAlign:"left"}}>
-              <span style={{fontSize:17}}>{t.icon}</span>
-              {t.label}
-              {tab === t.id && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
+            <button key={t.id} onClick={()=>setTab(t.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:tab===t.id?700:400,marginBottom:3,background:tab===t.id?C.accentLt:"transparent",color:tab===t.id?C.accent:C.inkMid,textAlign:"left"}}>
+              <span style={{fontSize:17}}>{t.icon}</span>{t.label}
+              {tab===t.id && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
             </button>
           ))}
         </nav>
         <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{user && user.firstName ? user.firstName : "User"} {user && user.lastName ? user.lastName : ""}</div>
-          <div style={{fontSize:10,color:C.inkDim,marginBottom:8}}>{user && user.email ? user.email : "user@company.co.za"}</div>
+          <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{user?.firstName||"User"} {user?.lastName||""}</div>
+          <div style={{fontSize:10,color:C.inkDim,marginBottom:8}}>{user?.email||"user@company.co.za"}</div>
           <button onClick={onLogout} style={{fontSize:11,color:C.inkDim,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit"}}>Sign out</button>
         </div>
       </div>
-      <div className="zuzan-main" style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh",paddingTop:"36px"}}>
+      <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
         {screens[tab]}
       </div>
       <AIAssistant/>
