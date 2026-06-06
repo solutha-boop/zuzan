@@ -525,18 +525,32 @@ function Invoicing({live = {}, user = {}}) {
   const InvFormFields = ({data, onChange}) => (
     <>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        {[{l:"Client Name",k:"client",t:"text",p:"Acme Pty Ltd"},{l:"Amount (ZAR excl. VAT)",k:"amount",t:"number",p:"50000"},{l:"Description",k:"desc",t:"text",p:"Services rendered"},{l:"Due Date",k:"due",t:"date",p:""}].map(f => (
+        {[{l:"Client Name",k:"client",t:"text",p:"Acme Pty Ltd"},{l:"Amount (excl. VAT)",k:"amount",t:"number",p:"50000"},{l:"Description",k:"desc",t:"text",p:"Services rendered"},{l:"Due Date",k:"due",t:"date",p:""}].map(f => (
           <div key={f.k}>
             <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
             <input type={f.t} placeholder={f.p} value={data[f.k]||""} onChange={e=>onChange({...data,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
           </div>
         ))}
+        <div>
+          <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Currency</label>
+          <select value={data.currency||"ZAR"} onChange={e=>onChange({...data,currency:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+            <option value="ZAR">ZAR — South African Rand</option>
+            <option value="USD">USD — US Dollar</option>
+          </select>
+        </div>
+        {data.currency==="USD" && (
+          <div>
+            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 USD = R)</label>
+            <input type="number" value={data.exchangeRate||"18.5"} onChange={e=>onChange({...data,exchangeRate:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+        )}
       </div>
       {data.amount && (
         <div style={{display:"flex",gap:16,fontSize:12,marginBottom:12}}>
-          <span style={{color:C.inkMid}}>Excl. VAT: <strong>{fmt(+data.amount||0)}</strong></span>
-          <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmt((+data.amount||0)*0.15)}</strong></span>
-          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmt((+data.amount||0)*1.15)}</strong></span>
+          <span style={{color:C.inkMid}}>Amount: <strong>{fmtCurrency(+data.amount||0,data.currency||"ZAR")}</strong></span>
+          <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmtCurrency((+data.amount||0)*0.15,data.currency||"ZAR")}</strong></span>
+          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmtCurrency((+data.amount||0)*1.15,data.currency||"ZAR")}</strong></span>
+          {data.currency==="USD" && <span style={{color:C.blue}}>≈ {fmt((+data.amount||0)*(+data.exchangeRate||18.5))} ZAR</span>}
         </div>
       )}
     </>
@@ -585,7 +599,20 @@ function Invoicing({live = {}, user = {}}) {
             </div>
             <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>{user.bankingDetails || "Banking details not set — update in Settings"}</div>
             </div>{/* end invoice-preview-content */}
-            <div style={{display:"flex",gap:8,marginTop:20}}>
+            {/* PayFast payment link */}
+            {user.payfastMerchantId && (
+              <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"12px 16px",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div><div style={{fontSize:12,fontWeight:700,color:C.green}}>Online Payment</div><div style={{fontSize:11,color:C.inkMid}}>Send client a PayFast payment link</div></div>
+                <button onClick={()=>{
+                  const params = new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});
+                  window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");
+                }} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Open PayFast →</button>
+              </div>
+            )}
+            {!user.payfastMerchantId && (
+              <div style={{background:C.goldLt,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"10px 16px",marginTop:12,fontSize:11,color:C.inkMid}}>Add your PayFast Merchant ID in Settings to enable online payments.</div>
+            )}
+            <div style={{display:"flex",gap:8,marginTop:16}}>
               <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={() => { const el=document.getElementById("invoice-preview-content"); if(!el)return; const w=window.open("","_blank"); if(!w){alert("Allow popups to print.");return;} w.document.write(`<html><head><title>Invoice ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#1A1209;}@media print{body{padding:20px;}}</style></head><body>${el.innerHTML}</body></html>`); w.document.close(); w.onload=()=>{w.focus();w.print();w.close();}; }} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={() => setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
@@ -819,7 +846,37 @@ function Expenses({live = {}}) {
 
       {showNew && (
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
-          <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>Add Expense</h3>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <h3 style={{fontFamily:"serif",margin:0,color:C.ink}}>Add Expense</h3>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",padding:"8px 14px",borderRadius:10,border:`1px solid ${C.border}`,background:C.bg,fontSize:12,color:C.blue,fontWeight:600}}>
+              📷 Scan Receipt
+              <input type="file" accept="image/*" capture="camera" style={{display:"none"}} onChange={async e=>{
+                const file = e.target.files[0];
+                if(!file) return;
+                const reader = new FileReader();
+                reader.onload = async ev => {
+                  // Show receipt preview
+                  setForm(f=>({...f,receiptImage:ev.target.result}));
+                  // Try OCR via backend
+                  try {
+                    const res = await api("/expenses/scan-receipt",{method:"POST",body:JSON.stringify({image:ev.target.result.split(",")[1]})});
+                    if(res.vendor)  setForm(f=>({...f,vendor:res.vendor}));
+                    if(res.amount)  setForm(f=>({...f,amount:String(res.amount)}));
+                    if(res.date)    setForm(f=>({...f,date:res.date}));
+                    if(res.desc)    setForm(f=>({...f,desc:res.desc}));
+                  } catch(err) { console.warn("OCR failed:",err.message); }
+                };
+                reader.readAsDataURL(file);
+              }}/>
+            </label>
+          </div>
+          {form.receiptImage && (
+            <div style={{marginBottom:12,position:"relative"}}>
+              <img src={form.receiptImage} alt="Receipt" style={{width:"100%",maxHeight:180,objectFit:"cover",borderRadius:8,border:`1px solid ${C.border}`}}/>
+              <button onClick={()=>setForm(f=>({...f,receiptImage:null}))} style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.6)",color:"#fff",border:"none",borderRadius:"50%",width:24,height:24,cursor:"pointer",fontSize:12}}>✕</button>
+              <div style={{background:C.greenLt,borderRadius:6,padding:"6px 10px",marginTop:6,fontSize:11,color:C.green}}>✓ Receipt captured — fields pre-filled where possible</div>
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
             <div>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Vendor</label>
@@ -2853,7 +2910,9 @@ function AppSettings({user, onLogout, onUserUpdate}) {
     bankName:       user?.bankName       || "",
     bankAccount:    user?.bankAccount    || "",
     branchCode:     user?.branchCode     || "",
-    bankingDetails: user?.bankingDetails || "",
+    bankingDetails:    user?.bankingDetails    || "",
+    payfastMerchantId: user?.payfastMerchantId || "",
+    payfastMerchantKey:user?.payfastMerchantKey|| "",
   });
   const [saved, setSaved] = useState(false);
 
@@ -2879,7 +2938,9 @@ function AppSettings({user, onLogout, onUserUpdate}) {
       bankName:       form.bankName,
       bankAccount:    form.bankAccount,
       branchCode:     form.branchCode,
-      bankingDetails: `${form.bankName} - Acc: ${form.bankAccount} - Branch: ${form.branchCode}`,
+      bankingDetails:    `${form.bankName} - Acc: ${form.bankAccount} - Branch: ${form.branchCode}`,
+      payfastMerchantId: form.payfastMerchantId,
+      payfastMerchantKey:form.payfastMerchantKey,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -2931,6 +2992,16 @@ function AppSettings({user, onLogout, onUserUpdate}) {
             </div>
           ))}
         </div>
+        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12,marginTop:4}}>PayFast Online Payments</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+          {[{l:"PayFast Merchant ID",k:"payfastMerchantId",p:"10000100"},{l:"PayFast Merchant Key",k:"payfastMerchantKey",p:"46f0cd694581a"}].map(f=>(
+            <div key={f.k}>
+              <label style={labelStyle}>{f.l}</label>
+              <input placeholder={f.p} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
+            </div>
+          ))}
+        </div>
+        <div style={{background:C.goldLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:11,color:C.inkMid}}>Get your Merchant ID and Key from <strong>payfast.co.za → Account → Settings → API Credentials</strong></div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <button onClick={handleSave} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
           {saved && <span style={{fontSize:12,color:C.green,fontWeight:600}}>✓ Saved</span>}
@@ -3427,6 +3498,247 @@ function Registration({onComplete, onLogin}) {
   );
 }
 
+// ── CURRENCY HELPERS ─────────────────────────────────────────────────────────
+const CURRENCIES = {ZAR:{symbol:"R",code:"ZAR"},USD:{symbol:"$",code:"USD"}};
+function fmtCurrency(amount, currency="ZAR") {
+  const c = CURRENCIES[currency] || CURRENCIES.ZAR;
+  return `${c.symbol}${Number(amount).toLocaleString("en-ZA",{minimumFractionDigits:2})}`;
+}
+
+// ── QUOTES / ESTIMATES ────────────────────────────────────────────────────────
+const QUOTE_STATUSES = {draft:["Draft",C.inkMid,"#E8E0D5"],sent:["Sent",C.blue,C.blueLt],accepted:["Accepted",C.green,C.greenLt],declined:["Declined",C.red,C.redLt]};
+function Quotes({live={},user={},onNavigate}) {
+  const [quotes,    setQuotes]    = useState([]);
+  const [showNew,   setShowNew]   = useState(false);
+  const [preview,   setPreview]   = useState(null);
+  const [form,      setForm]      = useState({client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:""});
+
+  const totalAccepted = quotes.filter(q=>q.status==="accepted").reduce((s,q)=>s+q.amount,0);
+  const totalPending  = quotes.filter(q=>q.status==="sent").reduce((s,q)=>s+q.amount,0);
+
+  const handleCreate = async () => {
+    const q = {id:`QTE-${String(quotes.length+1).padStart(3,"0")}`,client:form.client,amount:+form.amount,date:new Date().toISOString().slice(0,10),validUntil:form.validUntil,status:"draft",desc:form.desc,currency:form.currency,rate:+form.rate,notes:form.notes};
+    setQuotes([q,...quotes]);
+    setShowNew(false);
+    setForm({client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:""});
+  };
+
+  const updateStatus = (id,status) => setQuotes(prev=>prev.map(q=>q.id===id?{...q,status}:q));
+
+  const convertToInvoice = async (q) => {
+    try {
+      await api("/invoices/",{method:"POST",body:JSON.stringify({client_name:q.client,description:q.desc,amount:q.amount,due_date:null})});
+      updateStatus(q.id,"accepted");
+      alert(`${q.id} converted to invoice. Go to Invoices tab.`);
+      if(onNavigate) onNavigate("invoicing");
+    } catch(e) { updateStatus(q.id,"accepted"); if(onNavigate) onNavigate("invoicing"); }
+  };
+
+  const inputStyle = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+
+  return (
+    <div>
+      <SectionHeader title="Quotes & Estimates" sub="Send quotes and convert to invoices" action="+ New Quote" onAction={()=>setShowNew(true)}/>
+      <div style={{display:"flex",gap:12,marginBottom:24}}>
+        <KPI label="Accepted" value={fmtCurrency(totalAccepted)} color={C.green} icon="✅" sub={`${quotes.filter(q=>q.status==="accepted").length} quotes`}/>
+        <KPI label="Pending" value={fmtCurrency(totalPending)} color={C.gold} icon="⏳" sub={`${quotes.filter(q=>q.status==="sent").length} sent`}/>
+        <KPI label="Total Quotes" value={quotes.length} color={C.blue} icon="📝"/>
+      </div>
+
+      {showNew && (
+        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
+          <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Quote</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Client Name</label><input placeholder="Acme Pty Ltd" value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} style={inputStyle}/></div>
+            <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Amount</label><input type="number" placeholder="50000" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} style={inputStyle}/></div>
+            <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Description</label><input placeholder="Services rendered" value={form.desc} onChange={e=>setForm(f=>({...f,desc:e.target.value}))} style={inputStyle}/></div>
+            <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Valid Until</label><input type="date" value={form.validUntil} onChange={e=>setForm(f=>({...f,validUntil:e.target.value}))} style={inputStyle}/></div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Currency</label>
+              <select value={form.currency} onChange={e=>setForm(f=>({...f,currency:e.target.value}))} style={inputStyle}>
+                <option value="ZAR">ZAR — South African Rand</option>
+                <option value="USD">USD — US Dollar</option>
+              </select>
+            </div>
+            {form.currency==="USD" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 USD = R...)</label><input type="number" value={form.rate} onChange={e=>setForm(f=>({...f,rate:e.target.value}))} style={inputStyle}/></div>}
+            <div style={{gridColumn:"1/-1"}}><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Notes (optional)</label><input placeholder="Payment terms, delivery details..." value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} style={inputStyle}/></div>
+          </div>
+          {form.amount && form.currency==="USD" && (
+            <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.blue}}>
+              USD {fmtCurrency(form.amount,"USD")} = {fmt(+form.amount * +form.rate)} at R{form.rate}/USD
+            </div>
+          )}
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={handleCreate} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Create Quote</button>
+            <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Quote Preview Modal */}
+      {preview && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setPreview(null)}>
+          <div style={{background:"#fff",borderRadius:20,padding:40,width:580,maxHeight:"85vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div id="quote-print-content">
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${C.accent}`}}>
+                <div><div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div><div style={{fontSize:11,color:C.inkMid}}>{user.companyName||"Your Company"}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:C.ink}}>QUOTE / ESTIMATE</div><div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div><div style={{fontSize:12,color:C.inkMid}}>Valid until: {preview.validUntil?fmtDate(preview.validUntil):"30 days"}</div></div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
+                <div><div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Prepared For</div><div style={{fontWeight:700,color:C.ink}}>{preview.client}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:12,color:C.inkMid}}>Date: {fmtDate(preview.date)}</div></div>
+              </div>
+              <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
+                <thead><tr style={{background:C.bg}}><th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:C.inkMid}}>Description</th><th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.inkMid}}>Amount</th></tr></thead>
+                <tbody><tr><td style={{padding:"12px",color:C.ink}}>{preview.desc}</td><td style={{padding:"12px",textAlign:"right",fontWeight:600}}>{fmtCurrency(preview.amount,preview.currency)}</td></tr></tbody>
+              </table>
+              {preview.currency==="USD" && <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.blue}}>ZAR equivalent: {fmt(preview.amount*(preview.rate||18.5))} at R{preview.rate||18.5}/USD</div>}
+              {preview.notes && <div style={{background:C.bg,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.inkMid}}><strong>Notes:</strong> {preview.notes}</div>}
+              <div style={{borderTop:`2px solid ${C.border}`,paddingTop:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0"}}><span style={{fontWeight:800,fontSize:15}}>TOTAL</span><span style={{fontWeight:800,fontSize:18,color:C.accent}}>{fmtCurrency(preview.amount,preview.currency)}</span></div>
+              </div>
+              <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>This quote is valid for 30 days from the date of issue. Prices exclude VAT unless stated.</div>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:20}}>
+              <button onClick={()=>convertToInvoice(preview)} style={{flex:1,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Convert to Invoice</button>
+              <button onClick={()=>{const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;}</style></head><body>${document.getElementById("quote-print-content").innerHTML}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();};}} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
+              <button onClick={()=>setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+        {quotes.length===0 ? (
+          <div style={{padding:48,textAlign:"center",color:C.inkMid,fontSize:13}}>No quotes yet. Create your first quote above.</div>
+        ) : (
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Quote #","Client","Description","Amount","Currency","Valid Until","Status","Actions"].map(h=><th key={h} style={{textAlign:"left",padding:"12px 14px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
+            <tbody>
+              {quotes.map(q=>{
+                const [label,color,bg] = QUOTE_STATUSES[q.status]||QUOTE_STATUSES.draft;
+                return (
+                  <tr key={q.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                    <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{q.id}</td>
+                    <td style={{padding:"13px 14px",fontWeight:500}}>{q.client}</td>
+                    <td style={{padding:"13px 14px",color:C.inkMid,fontSize:12}}>{q.desc}</td>
+                    <td style={{padding:"13px 14px",fontWeight:700}}>{fmtCurrency(q.amount,q.currency)}</td>
+                    <td style={{padding:"13px 14px"}}><Badge label={q.currency} color={C.blue} bg={C.blueLt}/></td>
+                    <td style={{padding:"13px 14px",color:C.inkMid}}>{q.validUntil?fmtDate(q.validUntil):"—"}</td>
+                    <td style={{padding:"13px 14px"}}><Badge label={label} color={color} bg={bg}/></td>
+                    <td style={{padding:"13px 14px"}}>
+                      <div style={{display:"flex",gap:5}}>
+                        <button onClick={()=>setPreview(q)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
+                        {q.status==="draft" && <button onClick={()=>updateStatus(q.id,"sent")} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Send</button>}
+                        {q.status==="sent"  && <button onClick={()=>convertToInvoice(q)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Accept</button>}
+                        {q.status==="sent"  && <button onClick={()=>updateStatus(q.id,"declined")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Decline</button>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── MULTI-CURRENCY: update Invoicing form to support USD ──────────────────────
+// (currency selector added inline in Invoicing component below via patch)
+
+// ── AI ASSISTANT ──────────────────────────────────────────────────────────────
+const AI_SUGGESTIONS = [
+  "How do I categorise a fuel expense?",
+  "What is the PAYE rate for R35,000/month?",
+  "When is EMP201 due?",
+  "How do I record a bad debt?",
+  "What is the VAT rate in South Africa?",
+];
+function AIAssistant() {
+  const [open,     setOpen]     = useState(false);
+  const [messages, setMessages] = useState([{role:"assistant",text:"Hi! I'm ZuZan AI. Ask me anything about bookkeeping, payroll, or SARS compliance."}]);
+  const [input,    setInput]    = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const bottomRef = useRef(null);
+
+  useEffect(() => { if(bottomRef.current) bottomRef.current.scrollIntoView({behavior:"smooth"}); }, [messages]);
+
+  const send = async (text) => {
+    const q = text || input;
+    if (!q.trim()) return;
+    setInput("");
+    setMessages(m=>[...m,{role:"user",text:q}]);
+    setLoading(true);
+    try {
+      const res = await api("/ai/chat",{method:"POST",body:JSON.stringify({message:q,context:"ZuZan SA bookkeeping app"})});
+      setMessages(m=>[...m,{role:"assistant",text:res.reply||res.message||"I can help with that. Please check the relevant section of the app."}]);
+    } catch(e) {
+      // Fallback local answers
+      const lower = q.toLowerCase();
+      let reply = "I'm not connected to the AI service right now. Please try again later.";
+      if(lower.includes("paye") && lower.includes("35000")) reply = "For R35,000/month gross: Annual income R420,000. PAYE ≈ R4,673/month after the R17,235 primary rebate. Check the Payroll tab for exact figures.";
+      else if(lower.includes("emp201")) reply = "EMP201 is due by the 7th of each month following the payroll period. You can download the EMP201 from the Payroll tab after running payroll.";
+      else if(lower.includes("vat")) reply = "The standard VAT rate in South Africa is 15%. Some items are zero-rated (basic foods, exports). VAT201 is due monthly or bi-monthly depending on your registration.";
+      else if(lower.includes("fuel") || lower.includes("petrol")) reply = "Fuel should be categorised to account 6510 - Fuel and Oil under Expenses. If the vehicle is used partly for business and partly private, only the business portion is deductible.";
+      else if(lower.includes("bad debt")) reply = "Record a bad debt by creating an expense to account 7300 - Bad Debts Written Off, matching it against the outstanding invoice. This reduces your debtors and is tax deductible.";
+      else if(lower.includes("uif")) reply = "UIF is 1% employee + 1% employer, capped at R17,712/month gross. Both amounts are calculated automatically in the Payroll tab.";
+      setMessages(m=>[...m,{role:"assistant",text:reply}]);
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <>
+      {/* Floating button */}
+      <button onClick={()=>setOpen(o=>!o)} style={{position:"fixed",bottom:28,right:28,width:56,height:56,borderRadius:"50%",background:C.accent,color:"#fff",border:"none",fontSize:24,cursor:"pointer",boxShadow:"0 4px 20px rgba(200,64,26,0.4)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        {open?"✕":"🤖"}
+      </button>
+
+      {/* Chat panel */}
+      {open && (
+        <div style={{position:"fixed",bottom:96,right:28,width:360,height:480,background:C.surface,borderRadius:20,boxShadow:"0 8px 40px rgba(0,0,0,0.2)",zIndex:500,display:"flex",flexDirection:"column",overflow:"hidden",border:`1px solid ${C.border}`}}>
+          <div style={{padding:"14px 18px",background:C.accent,color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div><div style={{fontWeight:700,fontSize:14}}>ZuZan AI Assistant</div><div style={{fontSize:11,opacity:0.8}}>Bookkeeping & SARS help</div></div>
+          </div>
+
+          {/* Messages */}
+          <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:10}}>
+            {messages.map((m,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+                <div style={{maxWidth:"80%",padding:"10px 14px",borderRadius:m.role==="user"?"16px 16px 4px 16px":"16px 16px 16px 4px",background:m.role==="user"?C.accent:C.bg,color:m.role==="user"?"#fff":C.ink,fontSize:13,lineHeight:1.5}}>
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div style={{display:"flex",justifyContent:"flex-start"}}>
+                <div style={{padding:"10px 14px",borderRadius:"16px 16px 16px 4px",background:C.bg,fontSize:13,color:C.inkMid}}>Thinking...</div>
+              </div>
+            )}
+            <div ref={bottomRef}/>
+          </div>
+
+          {/* Suggestions */}
+          {messages.length <= 1 && (
+            <div style={{padding:"0 12px 8px",display:"flex",flexWrap:"wrap",gap:6}}>
+              {AI_SUGGESTIONS.map(s=>(
+                <button key={s} onClick={()=>send(s)} style={{padding:"5px 10px",borderRadius:14,border:`1px solid ${C.border}`,background:C.bg,color:C.inkMid,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>{s}</button>
+              ))}
+            </div>
+          )}
+
+          {/* Input */}
+          <div style={{padding:"10px 12px",borderTop:`1px solid ${C.border}`,display:"flex",gap:8}}>
+            <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Ask a bookkeeping question..." style={{flex:1,padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+            <button onClick={()=>send()} disabled={loading} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"9px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Send</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout}) {
   const [tab, setTab] = useState("dashboard");
@@ -3434,6 +3746,7 @@ function ZuZanApp({user, onLogout}) {
   const TABS = [
     {id:"dashboard", label:"Dashboard",   icon:"🏠"},
     {id:"invoicing", label:"Invoices",    icon:"🧾"},
+    {id:"quotes",    label:"Quotes",      icon:"📝"},
     {id:"expenses",  label:"Expenses",    icon:"💳"},
     {id:"payroll",   label:"Payroll",     icon:"👥"},
     {id:"reports",   label:"Reports",     icon:"📊"},
@@ -3446,6 +3759,7 @@ function ZuZanApp({user, onLogout}) {
   const screens = {
     dashboard:  <Dashboard  live={live}/>,
     invoicing:  <Invoicing  live={live} user={user}/>,
+    quotes:     <Quotes     live={live} user={user} onNavigate={setTab}/>,
     expenses:   <Expenses   live={live}/>,
     payroll:    <Payroll    live={live} user={user}/>,
     reports:    <Reports    live={live}/>,
@@ -3487,6 +3801,7 @@ function ZuZanApp({user, onLogout}) {
       <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
         {screens[tab]}
       </div>
+      <AIAssistant/>
     </div>
   );
 }
