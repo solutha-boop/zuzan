@@ -372,7 +372,7 @@ function Dashboard({live = {}}) {
       <div style={{marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div>
           <h1 style={{fontFamily:"serif",fontSize:28,color:C.ink,margin:"0 0 4px"}}>Good morning</h1>
-          <p style={{color:C.inkMid,fontSize:13}}>Financial overview - {d ? d.period : "April 2025"}</p>
+          <p style={{color:C.inkMid,fontSize:13}}>Financial overview - {d ? d.period : new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</p>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:20,background:isLive?C.greenLt:C.goldLt,border:`1px solid ${isLive?C.green:C.gold}`}}>
           <div style={{width:6,height:6,borderRadius:"50%",background:isLive?C.green:C.gold}}/>
@@ -736,8 +736,9 @@ function Expenses({live = {}}) {
     return null;
   };
 
-  // Run auto-categorise whenever expenses change
+  // Run auto-categorise when expenses load — but NOT while form is open (avoids focus loss)
   useEffect(() => {
+    if (showNew) return;
     const memory = buildMemory(expenses);
     if (Object.keys(memory).length === 0) return;
     const toPost = [];
@@ -816,12 +817,18 @@ function Expenses({live = {}}) {
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>Add Expense</h3>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-            {[{l:"Vendor",k:"vendor",p:"Eskom"},{l:"Amount (ZAR excl. VAT)",k:"amount",p:"1500"},{l:"Description",k:"desc",p:"Monthly bill"}].map(f => (
-              <div key={f.k}>
-                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
-              </div>
-            ))}
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Vendor</label>
+              <input placeholder="Eskom" value={form.vendor} onChange={e => setForm(f=>({...f,vendor:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Amount (ZAR excl. VAT)</label>
+              <input placeholder="1500" value={form.amount} onChange={e => setForm(f=>({...f,amount:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Description</label>
+              <input placeholder="Monthly bill" value={form.desc} onChange={e => setForm(f=>({...f,desc:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+            </div>
             <div>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account (optional)</label>
               <select value={form.category} onChange={e => setForm({...form,category:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
@@ -1230,8 +1237,8 @@ function Payroll({live = {}}) {
       </div>
       <div style={{background:`linear-gradient(135deg,${C.accentLt},transparent)`,border:`1px solid ${C.accent}40`,borderRadius:16,padding:"16px 24px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
-          <div style={{fontWeight:700,fontSize:15,color:C.ink}}>April 2025 Payroll</div>
-          <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Net pay: {fmt(totalNet)} - SARS due: 7 May 2025</div>
+          <div style={{fontWeight:700,fontSize:15,color:C.ink}}>{new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})} Payroll</div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Net pay: {fmt(totalNet)} - SARS due: 7 {new Date(new Date().getFullYear(),new Date().getMonth()+1,7).toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
         </div>
         <button onClick={async () => {
           try {
@@ -1245,7 +1252,7 @@ function Payroll({live = {}}) {
       </div>
       {payrollRun && (
         <div style={{background:C.surface,border:`2px solid ${C.green}`,borderRadius:16,padding:20,marginBottom:20}}>
-          <div style={{fontSize:16,fontWeight:700,color:C.green,marginBottom:12}}>Payroll Processed - April 2025</div>
+          <div style={{fontSize:16,fontWeight:700,color:C.green,marginBottom:12}}>Payroll Processed - {new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
             {[["Net Disbursed",fmt(totalNet),C.green],["PAYE to SARS",fmt(totalPAYE),C.red],["UIF and SDL",fmt(totalUIF+totalSDL),C.gold],["ZuZan Fee",fmt(zuZanFee),C.accent]].map(([l,v,c]) => (
               <div key={l} style={{background:C.bg,borderRadius:10,padding:14}}>
