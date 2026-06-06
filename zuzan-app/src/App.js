@@ -1157,7 +1157,7 @@ function Payroll({live = {}}) {
   useEffect(() => { if (liveEmployees && liveEmployees.length > 0) setEmployees(liveEmployees.map(e => ({...e, name: `${e.first_name} ${e.last_name}`, salary: e.gross_salary, dept: e.department || "General"}))); }, [liveEmployees]);
   const [showNew, setShowNew] = useState(false);
   const [payrollRun, setPayrollRun] = useState(false);
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:""});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
   const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).paye, 0);
@@ -1171,35 +1171,39 @@ function Payroll({live = {}}) {
     const firstName = nameParts[0] || form.name;
     const lastName  = nameParts.slice(1).join(" ") || "";
     const newEmp = {
-      id:`EMP-00${employees.length+1}`,
-      name:form.name,
-      position:form.position,
-      salary:+form.salary,
-      dept:form.dept
+      id: form.empNo || `EMP-${String(employees.length+1).padStart(3,"0")}`,
+      name:form.name, position:form.position, salary:+form.salary, dept:form.dept,
+      idNumber:form.idNumber, taxNumber:form.taxNumber, dob:form.dob,
+      appointmentDate:form.appointmentDate, address:form.address,
+      bankName:form.bankName, accountNumber:form.accountNumber,
+      branchCode:form.branchCode, accountType:form.accountType,
     };
     setEmployees([...employees, newEmp]);
     setShowNew(false);
-    setForm({name:"",position:"",salary:"",dept:""});
-    // Save to backend
+    setForm({name:"",position:"",salary:"",dept:"",empNo:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
     try {
-      // Enable payroll if not already enabled
       const token = localStorage.getItem("zuzan_token");
       if (token && !token.startsWith("demo_")) {
-        try {
-          await api("/companies/me", {
-            method: "PUT",
-            body: JSON.stringify({payroll_enabled: true}),
-          });
-        } catch(e) { /* ignore */ }
+        try { await api("/companies/me", {method:"PUT",body:JSON.stringify({payroll_enabled:true})}); } catch(e) {}
       }
       await api("/employees/", {
         method: "POST",
         body: JSON.stringify({
-          first_name:   firstName,
-          last_name:    lastName,
-          position:     form.position,
-          department:   form.dept,
-          gross_salary: +form.salary,
+          first_name:       firstName,
+          last_name:        lastName,
+          position:         form.position,
+          department:       form.dept,
+          gross_salary:     +form.salary,
+          employee_number:  form.empNo,
+          id_number:        form.idNumber,
+          tax_number:       form.taxNumber,
+          date_of_birth:    form.dob || null,
+          appointment_date: form.appointmentDate || null,
+          address:          form.address,
+          bank_name:        form.bankName,
+          account_number:   form.accountNumber,
+          branch_code:      form.branchCode,
+          account_type:     form.accountType,
         }),
       });
       if (live && live.reload) live.reload();
@@ -1266,18 +1270,75 @@ function Payroll({live = {}}) {
         </div>
       )}
       {showNew && (
-        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
-          <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Employee</h3>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-            {[{l:"Full Name",k:"name",p:"Sipho Dlamini"},{l:"Position",k:"position",p:"Developer"},{l:"Monthly Salary (ZAR)",k:"salary",p:"35000"},{l:"Department",k:"dept",p:"Tech"}].map(f => (
+        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:28,marginBottom:20}}>
+          <h3 style={{fontFamily:"serif",fontSize:20,margin:"0 0 20px",color:C.ink}}>New Employee</h3>
+
+          {/* Employment Details */}
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Employment Details</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+            {[
+              {l:"Employee #",        k:"empNo",           p:"EMP-001",    t:"text"},
+              {l:"Full Name",         k:"name",            p:"Sipho Dlamini",t:"text"},
+              {l:"Position / Title",  k:"position",        p:"Developer",  t:"text"},
+              {l:"Department",        k:"dept",            p:"Tech",       t:"text"},
+              {l:"Monthly Salary (ZAR)",k:"salary",        p:"35000",      t:"number"},
+              {l:"Date of Appointment",k:"appointmentDate",p:"",           t:"date"},
+            ].map(f => (
               <div key={f.k}>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
               </div>
             ))}
           </div>
+
+          {/* Personal Details */}
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Personal Details</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+            {[
+              {l:"SA ID Number",  k:"idNumber",   p:"8001015009087", t:"text"},
+              {l:"Tax Number",    k:"taxNumber",  p:"1234567890",    t:"text"},
+              {l:"Date of Birth", k:"dob",        p:"",              t:"date"},
+            ].map(f => (
+              <div key={f.k}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            ))}
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Residential Address</label>
+              <input placeholder="123 Main St, Johannesburg, 2000" value={form.address} onChange={e=>setForm(v=>({...v,address:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+          </div>
+
+          {/* Bank Details */}
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:20}}>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Bank Name</label>
+              <select value={form.bankName} onChange={e=>setForm(v=>({...v,bankName:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="">-- Select Bank --</option>
+                {["ABSA","Capitec","FNB","Nedbank","Standard Bank","Investec","TymeBank","African Bank"].map(b=><option key={b}>{b}</option>)}
+              </select>
+            </div>
+            {[
+              {l:"Account Number", k:"accountNumber", p:"62123456789"},
+              {l:"Branch Code",    k:"branchCode",    p:"250655"},
+            ].map(f=>(
+              <div key={f.k}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                <input placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            ))}
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Type</label>
+              <select value={form.accountType} onChange={e=>setForm(v=>({...v,accountType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                {["Cheque","Savings","Transmission"].map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+
           <div style={{display:"flex",gap:8}}>
-            <button onClick={handleAdd} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add Employee</button>
+            <button onClick={handleAdd} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add Employee</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
