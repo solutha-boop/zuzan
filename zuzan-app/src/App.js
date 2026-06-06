@@ -487,12 +487,19 @@ function InvFormFields({data, onChange}) {
           <div>{lb("Exchange Rate (1 USD = R)")}<input type="number" value={data.exchangeRate||"18.5"} onChange={e=>onChange(d=>({...d,exchangeRate:e.target.value}))} style={is}/></div>
         )}
       </div>
+      {/* VAT toggle */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+        <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+          <input type="checkbox" checked={data.vatApplicable !== false} onChange={e=>onChange(d=>({...d,vatApplicable:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+          Apply VAT @ 15%
+        </label>
+      </div>
       {data.amount && (
-        <div style={{display:"flex",gap:16,fontSize:12,marginBottom:12,flexWrap:"wrap"}}>
-          <span style={{color:C.inkMid}}>Amount: <strong>{fmtCurrency(+data.amount||0,data.currency||"ZAR")}</strong></span>
-          <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmtCurrency((+data.amount||0)*0.15,data.currency||"ZAR")}</strong></span>
-          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmtCurrency((+data.amount||0)*1.15,data.currency||"ZAR")}</strong></span>
-          {data.currency==="USD" && <span style={{color:C.blue}}>≈ {fmt((+data.amount||0)*(+data.exchangeRate||18.5))} ZAR</span>}
+        <div style={{display:"flex",gap:16,fontSize:12,marginBottom:12,flexWrap:"wrap",background:C.bg,padding:"10px 14px",borderRadius:8}}>
+          <span style={{color:C.inkMid}}>Excl. VAT: <strong>{fmtCurrency(+data.amount||0,data.currency||"ZAR")}</strong></span>
+          {data.vatApplicable !== false && <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmtCurrency((+data.amount||0)*0.15,data.currency||"ZAR")}</strong></span>}
+          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmtCurrency((+data.amount||0)*(data.vatApplicable!==false?1.15:1),data.currency||"ZAR")}</strong></span>
+          {data.currency==="USD" && <span style={{color:C.blue}}>≈ {fmt((+data.amount||0)*(data.vatApplicable!==false?1.15:1)*(+data.exchangeRate||18.5))} ZAR</span>}
         </div>
       )}
     </>
