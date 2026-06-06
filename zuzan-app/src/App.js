@@ -2911,6 +2911,7 @@ function BankImport({live = {}, onNavigate}) {
 }
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
 function AppSettings({user, onLogout, onUserUpdate}) {
+  const [settingsTab, setSettingsTab] = useState("company"); // company | developer
   const [form, setForm] = useState({
     companyName:    user?.companyName    || "",
     regNumber:      user?.regNumber      || "",
@@ -2960,12 +2961,19 @@ function AppSettings({user, onLogout, onUserUpdate}) {
 
   return (
     <div>
-      <div style={{marginBottom:24}}>
-        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Settings</h2>
-        <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Manage your ZuZan account</p>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:24}}>
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Settings</h2>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Manage your ZuZan account</p>
+        </div>
+        <div style={{display:"flex",gap:4,background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:4}}>
+          {[["company","⚙️ General"],["developer","🔑 Developer API"]].map(([id,label])=>(
+            <button key={id} onClick={()=>setSettingsTab(id)} style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:settingsTab===id?700:400,background:settingsTab===id?C.surface:"transparent",color:settingsTab===id?C.ink:C.inkMid,fontFamily:"inherit",boxShadow:settingsTab===id?"0 1px 4px rgba(0,0,0,0.08)":"none"}}>{label}</button>
+          ))}
+        </div>
       </div>
 
-      {/* Subscription */}
+      {settingsTab === "developer" ? <Developer/> : <>
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
         <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Subscription</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -3025,6 +3033,7 @@ function AppSettings({user, onLogout, onUserUpdate}) {
           <button style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
         </div>
       </div>
+      </>}
     </div>
   );
 }
@@ -4073,7 +4082,6 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"creditors", label:"Creditors",   icon:"📤"},
     {id:"coa",       label:"Accounts",    icon:"📒"},
     {id:"bankimport",label:"Bank Import", icon:"🏦"},
-    {id:"developer", label:"Developer",   icon:"🔑"},
     {id:"settings",  label:"Settings",    icon:"⚙️"},
   ];
   const screens = {
@@ -4087,7 +4095,6 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
-    developer:  <Developer/>,
     settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
   };
   return (
