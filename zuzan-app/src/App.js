@@ -1154,10 +1154,10 @@ const ACCOUNT_TYPE_CODE = { Cheque:"1", Savings:"2", Transmission:"3" };
 const payDate = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10).replace(/-/g,""); };
 
 function downloadCSV(filename, content) {
-  const blob = new Blob([content], {type:"text/csv"});
+  const blob = new Blob([content], {type:"text/plain"});
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
+  a.href = url; a.download = filename.replace(".csv",".txt"); a.click();
   URL.revokeObjectURL(url);
 }
 
