@@ -91,9 +91,12 @@ class Employee(Base):
     company_id=Column(Integer,ForeignKey("companies.id"))
     employee_number=Column(String); first_name=Column(String,nullable=False)
     last_name=Column(String,nullable=False); id_number=Column(String)
+    tax_number=Column(String); date_of_birth=Column(DateTime)
+    appointment_date=Column(DateTime); address=Column(String)
     position=Column(String); department=Column(String)
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
     bank_name=Column(String); bank_account=Column(String)
+    account_number=Column(String); branch_code=Column(String); account_type=Column(String)
     is_active=Column(Boolean,default=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="employees")
@@ -127,6 +130,13 @@ def init_db():
             "ALTER TABLE expenses ADD COLUMN vat_amount FLOAT DEFAULT 0",
             "ALTER TABLE users ADD COLUMN reset_token VARCHAR",
             "ALTER TABLE users ADD COLUMN reset_token_expires TIMESTAMP",
+            "ALTER TABLE employees ADD COLUMN tax_number VARCHAR",
+            "ALTER TABLE employees ADD COLUMN date_of_birth TIMESTAMP",
+            "ALTER TABLE employees ADD COLUMN appointment_date TIMESTAMP",
+            "ALTER TABLE employees ADD COLUMN address VARCHAR",
+            "ALTER TABLE employees ADD COLUMN account_number VARCHAR",
+            "ALTER TABLE employees ADD COLUMN branch_code VARCHAR",
+            "ALTER TABLE employees ADD COLUMN account_type VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))

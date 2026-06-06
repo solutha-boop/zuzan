@@ -215,23 +215,36 @@ async def delete_expense(expense_id: int, current_user: User = Depends(get_curre
 employees_router = APIRouter()
 
 class EmployeeCreate(BaseModel):
-    first_name:   str
-    last_name:    str
-    id_number:    Optional[str] = None
-    position:     Optional[str] = None
-    department:   Optional[str] = None
-    gross_salary: float
-    bank_name:    Optional[str] = None
-    bank_account: Optional[str] = None
-    start_date:   Optional[str] = None
+    first_name:       str
+    last_name:        str
+    id_number:        Optional[str] = None
+    tax_number:       Optional[str] = None
+    date_of_birth:    Optional[str] = None
+    appointment_date: Optional[str] = None
+    address:          Optional[str] = None
+    position:         Optional[str] = None
+    department:       Optional[str] = None
+    gross_salary:     float
+    employee_number:  Optional[str] = None
+    bank_name:        Optional[str] = None
+    bank_account:     Optional[str] = None
+    account_number:   Optional[str] = None
+    branch_code:      Optional[str] = None
+    account_type:     Optional[str] = None
+    start_date:       Optional[str] = None
 
 class EmployeeUpdate(BaseModel):
-    position:     Optional[str] = None
-    department:   Optional[str] = None
-    gross_salary: Optional[float] = None
-    bank_name:    Optional[str] = None
-    bank_account: Optional[str] = None
-    is_active:    Optional[bool] = None
+    position:         Optional[str] = None
+    department:       Optional[str] = None
+    gross_salary:     Optional[float] = None
+    tax_number:       Optional[str] = None
+    address:          Optional[str] = None
+    bank_name:        Optional[str] = None
+    bank_account:     Optional[str] = None
+    account_number:   Optional[str] = None
+    branch_code:      Optional[str] = None
+    account_type:     Optional[str] = None
+    is_active:        Optional[bool] = None
 
 
 @employees_router.get("/")
@@ -252,15 +265,22 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(get
     count = db.query(Employee).filter(Employee.company_id == current_user.company_id).count()
     emp = Employee(
         company_id=current_user.company_id,
-        employee_number=f"EMP-{str(count + 1).zfill(3)}",
+        employee_number=data.employee_number or f"EMP-{str(count + 1).zfill(3)}",
         first_name=data.first_name,
         last_name=data.last_name,
         id_number=data.id_number,
+        tax_number=data.tax_number,
+        date_of_birth=datetime.fromisoformat(data.date_of_birth) if data.date_of_birth else None,
+        appointment_date=datetime.fromisoformat(data.appointment_date) if data.appointment_date else None,
+        address=data.address,
         position=data.position,
         department=data.department,
         gross_salary=data.gross_salary,
         bank_name=data.bank_name,
         bank_account=data.bank_account,
+        account_number=data.account_number,
+        branch_code=data.branch_code,
+        account_type=data.account_type,
         start_date=datetime.fromisoformat(data.start_date) if data.start_date else datetime.utcnow(),
     )
     db.add(emp)
