@@ -1148,6 +1148,152 @@ function PayslipModal({employee, payroll, period, company, onClose}) {
   );
 }
 
+// ── BATCH PAYMENT HELPERS ─────────────────────────────────────────────────────
+const SARS_BANKING = { bank:"ABSA", branch:"632005", account:"4048718850", type:"Cheque" };
+const ACCOUNT_TYPE_CODE = { Cheque:"1", Savings:"2", Transmission:"3" };
+const payDate = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10).replace(/-/g,""); };
+
+function downloadCSV(filename, content) {
+  const blob = new Blob([content], {type:"text/csv"});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Generic EFT format — accepted by FNB, Standard Bank, Nedbank, Capitec, TymeBank
+function buildGenericEFT(rows) {
+  const header = "Action,BranchCode,AccountNumber,AccountType,AccountName,Amount,OwnReference,BeneficiaryReference";
+  const lines  = rows.map(r =>
+    `CREDIT,${r.branch},${r.account},${ACCOUNT_TYPE_CODE[r.type]||"1"},"${r.name}",${r.amount.toFixed(2)},"${r.ownRef}","${r.benRef}"`
+  );
+  return [header, ...lines].join("\r\n");
+}
+
+// ABSA-specific format
+function buildABSA(rows) {
+  const header = "RecordIdentifier,DestinationBranch,DestinationAccount,AccountType,DestinationName,Amount,ActionDate,OwnStatement,DestinationStatement";
+  const lines  = rows.map(r =>
+    `10,${r.branch},${r.account},${ACCOUNT_TYPE_CODE[r.type]||"1"},"${r.name}",${Math.round(r.amount*100)},${payDate()},"${r.ownRef}","${r.benRef}"`
+  );
+  return [header, ...lines].join("\r\n");
+}
+
+// FNB-specific format (Pay & Clear)
+function buildFNB(rows) {
+  const header = "TransactionType,BranchCode,AccountNumber,AccountType,AccountName,Amount,Reference";
+  const lines  = rows.map(r =>
+    `EFT,${r.branch},${r.account},${ACCOUNT_TYPE_CODE[r.type]||"1"},"${r.name}",${r.amount.toFixed(2)},"${r.benRef}"`
+  );
+  return [header, ...lines].join("\r\n");
+}
+
+// Standard Bank format
+function buildStdBank(rows) {
+  const header = "SequenceNo,BranchCode,AccountNo,AccountType,BeneficiaryName,Amount,OurRef,TheirRef,Email";
+  const lines  = rows.map((r,i) =>
+    `${i+1},${r.branch},${r.account},${ACCOUNT_TYPE_CODE[r.type]||"1"},"${r.name}",${r.amount.toFixed(2)},"${r.ownRef}","${r.benRef}",""`
+  );
+  return [header, ...lines].join("\r\n");
+}
+
+function BatchPaymentModal({employees, payroll, period, onClose}) {
+  const periodStr = period || new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
+  const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary).paye, 0);
+  const totalUIF  = employees.reduce((s,e) => s + calcPayroll(e.salary).uifEmployee + calcPayroll(e.salary).uifEmployer, 0);
+  const totalSDL  = employees.reduce((s,e) => s + calcPayroll(e.salary).sdl, 0);
+  const sarsTotal = totalPAYE + totalUIF + totalSDL;
+
+  const empRows = employees.map(e => {
+    const p = calcPayroll(e.salary);
+    return {
+      branch:  e.branchCode  || "250655",
+      account: e.accountNumber || "000000000",
+      type:    e.accountType  || "Cheque",
+      name:    e.name,
+      amount:  p.netPay,
+      ownRef:  `SALARY ${periodStr}`,
+      benRef:  `SALARY ${periodStr}`,
+    };
+  });
+
+  const sarsRow = [{
+    branch:  SARS_BANKING.branch,
+    account: SARS_BANKING.account,
+    type:    SARS_BANKING.type,
+    name:    "SARS",
+    amount:  sarsTotal,
+    ownRef:  `EMP201 ${periodStr}`,
+    benRef:  `EMP201 ${periodStr}`,
+  }];
+
+  const FORMATS = [
+    { label:"Generic EFT (FNB / Nedbank / Capitec / TymeBank)", icon:"🏦", color:C.blue,
+      dlSalary: () => downloadCSV(`salary-eft-${periodStr}.csv`,   buildGenericEFT(empRows)),
+      dlSars:   () => downloadCSV(`sars-eft-${periodStr}.csv`,     buildGenericEFT(sarsRow)) },
+    { label:"ABSA Batch Payment", icon:"🔴", color:"#B11116",
+      dlSalary: () => downloadCSV(`salary-absa-${periodStr}.csv`,  buildABSA(empRows)),
+      dlSars:   () => downloadCSV(`sars-absa-${periodStr}.csv`,    buildABSA(sarsRow)) },
+    { label:"FNB Pay & Clear",    icon:"🟢", color:"#007A39",
+      dlSalary: () => downloadCSV(`salary-fnb-${periodStr}.csv`,   buildFNB(empRows)),
+      dlSars:   () => downloadCSV(`sars-fnb-${periodStr}.csv`,     buildFNB(sarsRow)) },
+    { label:"Standard Bank",      icon:"🔵", color:"#0033A0",
+      dlSalary: () => downloadCSV(`salary-std-${periodStr}.csv`,   buildStdBank(empRows)),
+      dlSars:   () => downloadCSV(`sars-std-${periodStr}.csv`,     buildStdBank(sarsRow)) },
+  ];
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"#00000070",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
+      <div style={{background:C.surface,borderRadius:20,width:660,maxHeight:"90vh",overflow:"auto",boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}} onClick={e=>e.stopPropagation()}>
+        <div style={{padding:"20px 28px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:C.ink}}>Batch Payment Files</div>
+            <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>{periodStr} — download and import into your bank</div>
+          </div>
+          <button onClick={onClose} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
+        </div>
+
+        {/* Summary */}
+        <div style={{padding:"16px 28px",background:C.bg,borderBottom:`1px solid ${C.border}`,display:"flex",gap:20}}>
+          {[
+            ["Salary Payments", fmt(empRows.reduce((s,r)=>s+r.amount,0)), `${employees.length} employees`, C.green],
+            ["PAYE",  fmt(totalPAYE), "To SARS", C.red],
+            ["UIF",   fmt(totalUIF),  "To SARS", C.gold],
+            ["SDL",   fmt(totalSDL),  "To SARS", C.blue],
+            ["SARS Total", fmt(sarsTotal), "EMP201", C.red],
+          ].map(([l,v,s,c])=>(
+            <div key={l} style={{flex:1}}>
+              <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>{l}</div>
+              <div style={{fontSize:15,fontWeight:800,color:c}}>{v}</div>
+              <div style={{fontSize:10,color:C.inkDim}}>{s}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Format rows */}
+        <div style={{padding:"20px 28px"}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:14}}>Select your bank format</div>
+          {FORMATS.map((f,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderRadius:12,border:`1px solid ${C.border}`,marginBottom:10,background:C.bg}}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <span style={{fontSize:22}}>{f.icon}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.ink}}>{f.label}</span>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={f.dlSalary} style={{background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Salary EFT</button>
+                <button onClick={f.dlSars}   style={{background:C.redLt,  color:C.red,  border:`1px solid ${C.red}30`,  borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ SARS EMP201</button>
+              </div>
+            </div>
+          ))}
+          <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"12px 16px",marginTop:8,fontSize:12,color:C.inkMid,lineHeight:1.7}}>
+            <strong style={{color:C.ink}}>How to import:</strong> Log in to your bank's business banking portal → Payments → Batch Payments / EFT → Import File → select the downloaded CSV. SARS EMP201 payment due by the 7th of each month.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── PAYROLL ───────────────────────────────────────────────────────────────────
 function Payroll({live = {}}) {
   const liveEmployees = live.employees;
@@ -1159,6 +1305,7 @@ function Payroll({live = {}}) {
   const [payrollRun, setPayrollRun] = useState(false);
   const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
   const [viewPayslip, setViewPayslip] = useState(null);
+  const [showBatch,   setShowBatch]   = useState(false);
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
   const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).paye, 0);
   const totalNet = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).netPay, 0);
@@ -1266,8 +1413,19 @@ function Payroll({live = {}}) {
               </div>
             ))}
           </div>
-          <div style={{marginTop:12,fontSize:12,color:C.inkMid}}>EMP201 generated - Payslips ready - SARS eFiling export ready</div>
+          <div style={{marginTop:16,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{fontSize:12,color:C.inkMid}}>EMP201 generated · Payslips ready · SARS eFiling export ready</div>
+            <button onClick={()=>setShowBatch(true)} style={{background:C.ink,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download Payment Files</button>
+          </div>
         </div>
+      )}
+      {showBatch && (
+        <BatchPaymentModal
+          employees={employees}
+          payroll={employees.map(e=>calcPayroll(e.salary))}
+          period={new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
+          onClose={()=>setShowBatch(false)}
+        />
       )}
       {showNew && (
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:28,marginBottom:20}}>
