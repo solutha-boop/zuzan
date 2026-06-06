@@ -466,7 +466,7 @@ function Dashboard({live = {}}) {
 }
 
 // ── INVOICING ─────────────────────────────────────────────────────────────────
-function Invoicing({live = {}}) {
+function Invoicing({live = {}, user = {}}) {
   const liveInvoices = live.invoices;
   const [invoices, setInvoices] = useState(MOCK_INVOICES);
   useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
@@ -497,7 +497,7 @@ function Invoicing({live = {}}) {
     setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid", matchedTxn: txn.id} : i));
     setMatching(null);
     try {
-      await api(`/invoices/${inv.id}`, { method:"PATCH", body: JSON.stringify({status:"paid"}) });
+      await api(`/invoices/${inv.id}`, { method:"PUT", body: JSON.stringify({status:"paid"}) });
       if (live && live.reload) live.reload();
     } catch(e) { console.warn("Match failed:", e.message); }
   };
@@ -517,7 +517,7 @@ function Invoicing({live = {}}) {
     setInvoices(prev => prev.map(i => i.id === editInv.id ? {...editInv} : i));
     setEditInv(null);
     try {
-      await api(`/invoices/${editInv.id}`, { method:"PATCH", body: JSON.stringify({ client_name:editInv.client, description:editInv.desc, amount:+editInv.amount, due_date:editInv.due||null, status:editInv.status }) });
+      await api(`/invoices/${editInv.id}`, { method:"PUT", body: JSON.stringify({ client_name:editInv.client, description:editInv.desc, amount:+editInv.amount, due_date:editInv.due||null, status:editInv.status }) });
       if (live && live.reload) live.reload();
     } catch(err) { console.warn("Amend failed:", err.message); }
   };
@@ -567,8 +567,9 @@ function Invoicing({live = {}}) {
       {preview && (
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={() => setPreview(null)}>
           <div style={{background:"#fff",borderRadius:20,padding:40,width:560,maxHeight:"80vh",overflow:"auto"}} onClick={e => e.stopPropagation()}>
+            <div id="invoice-preview-content">
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:32}}>
-              <div><div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div><div style={{fontSize:11,color:C.inkMid}}>Your Company Pty Ltd</div></div>
+              <div><div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div><div style={{fontSize:11,color:C.inkMid}}>{user.companyName || "Your Company"}</div></div>
               <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:C.ink}}>TAX INVOICE</div><div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div></div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
@@ -582,10 +583,11 @@ function Invoicing({live = {}}) {
             <div style={{borderTop:`2px solid ${C.border}`,paddingTop:16}}>
               <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0"}}><span style={{fontWeight:800,fontSize:15}}>TOTAL DUE</span><span style={{fontWeight:800,fontSize:18,color:C.accent}}>{fmt(preview.amount)}</span></div>
             </div>
-            <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>Banking: FNB Business - Acc: 62XXXXXXXXX - Branch: 250655</div>
+            <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>{user.bankingDetails || "Banking details not set — update in Settings"}</div>
+            </div>{/* end invoice-preview-content */}
             <div style={{display:"flex",gap:8,marginTop:20}}>
               <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
-              <button onClick={() => window.print()} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
+              <button onClick={() => { const el=document.getElementById("invoice-preview-content"); if(!el)return; const w=window.open("","_blank"); if(!w){alert("Allow popups to print.");return;} w.document.write(`<html><head><title>Invoice ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#1A1209;}@media print{body{padding:20px;}}</style></head><body>${el.innerHTML}</body></html>`); w.document.close(); w.onload=()=>{w.focus();w.print();w.close();}; }} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={() => setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
             </div>
           </div>
@@ -674,6 +676,7 @@ function Invoicing({live = {}}) {
                     {inv.status !== "paid" && (
                       <button onClick={() => loadBankTxns(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Match</button>
                     )}
+                    <button onClick={async()=>{ if(!window.confirm(`Delete ${inv.id}?`))return; setInvoices(p=>p.filter(i=>i.id!==inv.id)); try{await api(`/invoices/${inv.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
                   </div>
                 </td>
               </tr>
@@ -763,7 +766,7 @@ function Expenses({live = {}}) {
     setTimeout(() => setAutoNotice(""), 5000);
     // Save to backend
     toPost.forEach(e => {
-      api(`/expenses/${e.id}`, { method:"PATCH", body: JSON.stringify({category: e.category}) }).catch(()=>{});
+      api(`/expenses/${e.id}`, { method:"PUT", body: JSON.stringify({category: e.category}) }).catch(()=>{});
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expenses.length, posted.length]);
@@ -772,7 +775,7 @@ function Expenses({live = {}}) {
     setExpenses(prev => prev.map(e => e.id === editExp.id ? {...editExp} : e));
     setEditExp(null);
     try {
-      await api(`/expenses/${editExp.id}`, { method:"PATCH", body: JSON.stringify({ vendor:editExp.vendor, description:editExp.desc, amount:+editExp.amount, category:editExp.category, expense_date:editExp.date }) });
+      await api(`/expenses/${editExp.id}`, { method:"PUT", body: JSON.stringify({ vendor:editExp.vendor, description:editExp.desc, amount:+editExp.amount, category:editExp.category, expense_date:editExp.date }) });
       if (live && live.reload) live.reload();
     } catch(e) { console.warn("Amend expense failed:", e.message); }
   };
@@ -783,7 +786,7 @@ function Expenses({live = {}}) {
     setExpenses(prev => prev.map(e => e.id === exp.id ? {...e, category: cat} : e));
     setPendingCats(prev => { const n = {...prev}; delete n[exp.id]; return n; });
     try {
-      await api(`/expenses/${exp.id}`, { method:"PATCH", body: JSON.stringify({category: cat}) });
+      await api(`/expenses/${exp.id}`, { method:"PUT", body: JSON.stringify({category: cat}) });
       if (live && live.reload) live.reload();
     } catch(err) { console.warn("Category save failed:", err.message); }
   };
@@ -980,6 +983,7 @@ function Expenses({live = {}}) {
                           Post →
                         </button>
                       )}
+                      <button onClick={async()=>{ if(!window.confirm(`Delete ${exp.id}?`))return; setExpenses(p=>p.filter(e=>e.id!==exp.id)); try{await api(`/expenses/${exp.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -1295,7 +1299,7 @@ function BatchPaymentModal({employees, payroll, period, onClose}) {
 }
 
 // ── PAYROLL ───────────────────────────────────────────────────────────────────
-function Payroll({live = {}}) {
+function Payroll({live = {}, user = {}}) {
   const liveEmployees = live.employees;
   const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
   const [taxYear, setTaxYear] = useState(CURRENT_TAX_YEAR);
@@ -1554,7 +1558,7 @@ function Payroll({live = {}}) {
           employee={viewPayslip.employee}
           payroll={viewPayslip.payroll}
           period={new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
-          company="Your Company Pty Ltd"
+          company={user.companyName || "Your Company"}
           onClose={()=>setViewPayslip(null)}
         />
       )}
@@ -1639,18 +1643,21 @@ function Reports({live = {}}) {
   const netProfit     = d ? d.net_profit     : grossProfit - totalPayroll;
   const taxProvision  = d ? d.tax_provision  : Math.max(0, netProfit * 0.27);
   const netAfterTax   = netProfit - taxProvision;
-  const loadTab = async (tab) => {
+  const dateParams = `date_from=${dateFrom}&date_to=${dateTo}`;
+  const loadTab = async (tab, forceReload=false) => {
     setActiveTab(tab);
     setLoading(true);
     try {
-      if (tab==="bs"   && !bsData)  setBsData(await api("/reports/balance-sheet").catch(()=>null));
-      if (tab==="cf"   && !cfData)  setCfData(await api("/reports/cash-flow").catch(()=>null));
-      if (tab==="emp"   && !emp201)   setEmp201(await api("/reports/emp201").catch(()=>null));
-      if (tab==="mgmt"  && !mgmt)     setMgmt(await api("/reports/management").catch(()=>null));
-      if (tab==="prov"  && !provTax)  setProvTax(await api("/reports/provisional-tax").catch(()=>null));
-      if (tab==="vat")                setVat201(await api("/reports/vat201?period="+vatPeriod).catch(()=>null));
+      if (tab==="bs")   setBsData(await api(`/reports/balance-sheet?${dateParams}`).catch(()=>null));
+      if (tab==="cf")   setCfData(await api(`/reports/cash-flow?${dateParams}`).catch(()=>null));
+      if (tab==="emp")  setEmp201(await api(`/reports/emp201?${dateParams}`).catch(()=>null));
+      if (tab==="mgmt") setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
+      if (tab==="prov") setProvTax(await api(`/reports/provisional-tax?${dateParams}`).catch(()=>null));
+      if (tab==="vat")  setVat201(await api(`/reports/vat201?period=${vatPeriod}&${dateParams}`).catch(()=>null));
     } finally { setLoading(false); }
   };
+  // Reload current tab when date range changes
+  useEffect(() => { if (activeTab !== "pl") loadTab(activeTab, true); }, [dateFrom, dateTo]);
   const RTABS = [
     {id:"pl",   label:"Income Statement"},
     {id:"bs",   label:"Balance Sheet"},
@@ -2837,18 +2844,63 @@ function BankImport({live = {}, onNavigate}) {
   );
 }
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
-function AppSettings({user, onLogout}) {
+function AppSettings({user, onLogout, onUserUpdate}) {
+  const [form, setForm] = useState({
+    companyName:    user?.companyName    || "",
+    regNumber:      user?.regNumber      || "",
+    industry:       user?.industry       || "",
+    vatNumber:      user?.vatNumber      || "",
+    bankName:       user?.bankName       || "",
+    bankAccount:    user?.bankAccount    || "",
+    branchCode:     user?.branchCode     || "",
+    bankingDetails: user?.bankingDetails || "",
+  });
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = async () => {
+    try {
+      await api("/companies/me", { method:"PUT", body: JSON.stringify({
+        name:            form.companyName,
+        reg_number:      form.regNumber,
+        industry:        form.industry,
+        vat_number:      form.vatNumber,
+        bank_name:       form.bankName,
+        bank_account:    form.bankAccount,
+        branch_code:     form.branchCode,
+      })});
+    } catch(e) { console.warn("Settings save failed:", e.message); }
+    // Update local user context
+    if (onUserUpdate) onUserUpdate({
+      ...user,
+      companyName:    form.companyName,
+      regNumber:      form.regNumber,
+      industry:       form.industry,
+      vatNumber:      form.vatNumber,
+      bankName:       form.bankName,
+      bankAccount:    form.bankAccount,
+      branchCode:     form.branchCode,
+      bankingDetails: `${form.bankName} - Acc: ${form.bankAccount} - Branch: ${form.branchCode}`,
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+  };
+
+  const inputStyle = {width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const labelStyle = {fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5};
+
   return (
     <div>
       <div style={{marginBottom:24}}>
         <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Settings</h2>
         <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Manage your ZuZan account</p>
       </div>
+
+      {/* Subscription */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
         <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Subscription</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <div>
-            <div style={{fontSize:16,fontWeight:700,color:C.ink}}>{user && user.plan ? user.plan.name : "Professional"} Plan</div>
+            <div style={{fontSize:16,fontWeight:700,color:C.ink}}>{user?.plan?.name || "Professional"} Plan</div>
             <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Trial ends in 9 days</div>
           </div>
           <Badge label="Trial Active" color={C.gold} bg={C.goldLt}/>
@@ -2858,21 +2910,34 @@ function AppSettings({user, onLogout}) {
           <button style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
         </div>
       </div>
+
+      {/* Company Details */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
         <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Details</div>
-        {[
-          {label:"Company Name",value:user && user.companyName ? user.companyName : "Your Company Pty Ltd"},
-          {label:"Reg Number",value:user && user.regNumber ? user.regNumber : "2020/123456/07"},
-          {label:"Industry",value:user && user.industry ? user.industry : "Technology"},
-          {label:"Financial Year End",value:"28 February"},
-          {label:"VAT Status",value:"Not VAT Registered"},
-        ].map((r,i) => (
-          <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:i<4?`1px solid ${C.border}30`:"none",fontSize:13}}>
-            <span style={{color:C.inkMid}}>{r.label}</span>
-            <span style={{fontWeight:600,color:C.ink}}>{r.value}</span>
-          </div>
-        ))}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+          {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"Industry",k:"industry"},{l:"VAT Number",k:"vatNumber"}].map(f=>(
+            <div key={f.k}>
+              <label style={labelStyle}>{f.l}</label>
+              <input value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12,marginTop:4}}>Banking Details (shown on invoices)</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:16}}>
+          {[{l:"Bank Name",k:"bankName"},{l:"Account Number",k:"bankAccount"},{l:"Branch Code",k:"branchCode"}].map(f=>(
+            <div key={f.k}>
+              <label style={labelStyle}>{f.l}</label>
+              <input value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button onClick={handleSave} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+          {saved && <span style={{fontSize:12,color:C.green,fontWeight:600}}>✓ Saved</span>}
+        </div>
       </div>
+
+      {/* Danger Zone */}
       <div style={{background:C.surface,border:`1px solid ${C.red}40`,borderRadius:16,padding:24}}>
         <div style={{fontSize:12,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Danger Zone</div>
         <div style={{display:"flex",gap:8}}>
@@ -3380,15 +3445,15 @@ function ZuZanApp({user, onLogout}) {
   ];
   const screens = {
     dashboard:  <Dashboard  live={live}/>,
-    invoicing:  <Invoicing  live={live}/>,
+    invoicing:  <Invoicing  live={live} user={user}/>,
     expenses:   <Expenses   live={live}/>,
-    payroll:    <Payroll    live={live}/>,
+    payroll:    <Payroll    live={live} user={user}/>,
     reports:    <Reports    live={live}/>,
     debtors:    <Debtors    live={live}/>,
     creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
-    settings:   <AppSettings user={user} onLogout={onLogout}/>,
+    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={setUser}/>,
   };
   return (
     <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",display:"flex"}}>
