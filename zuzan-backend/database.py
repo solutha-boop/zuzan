@@ -57,6 +57,7 @@ class Company(Base):
     employees=relationship("Employee",back_populates="company")
     payments=relationship("Payment",back_populates="company")
     api_keys=relationship("APIKey",back_populates="company")
+    inventory=relationship("InventoryItem",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -110,6 +111,21 @@ class Employee(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="employees")
     payslips=relationship("Payslip",back_populates="employee")
+
+class InventoryItem(Base):
+    __tablename__ = "inventory"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    sku=Column(String); name=Column(String,nullable=False)
+    description=Column(Text); category=Column(String)
+    unit_cost=Column(Float,default=0)        # cost price (COGS)
+    unit_price=Column(Float,default=0)       # selling price
+    quantity_on_hand=Column(Float,default=0)
+    reorder_level=Column(Float,default=5)    # alert when stock falls below
+    unit_of_measure=Column(String,default="Unit")
+    is_active=Column(Boolean,default=True)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="inventory")
 
 class Payslip(Base):
     __tablename__ = "payslips"
