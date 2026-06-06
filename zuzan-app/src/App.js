@@ -4052,7 +4052,7 @@ curl ${BASE}/v1/summary \\
 }
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
-function ZuZanApp({user, onLogout}) {
+function ZuZanApp({user, onLogout, onUserUpdate}) {
   const [tab, setTab] = useState("dashboard");
   const live = useLiveData();
   const TABS = [
@@ -4081,7 +4081,7 @@ function ZuZanApp({user, onLogout}) {
     coa:        <ChartOfAccounts/>,
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
     developer:  <Developer/>,
-    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={setUser}/>,
+    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
   };
   return (
     <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",display:"flex"}}>
@@ -4175,5 +4175,5 @@ export default function App() {
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
 
-  return <ZuZanApp user={user} onLogout={handleLogout}/>;
+  return <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>;
 }
