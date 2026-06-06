@@ -465,6 +465,40 @@ function Dashboard({live = {}}) {
   );
 }
 
+// Defined outside Invoicing so it never remounts on parent re-render (fixes cursor-jump bug)
+function InvFormFields({data, onChange}) {
+  const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const lb = (txt) => <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{txt}</label>;
+  return (
+    <>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+        <div>{lb("Client Name")}<input placeholder="Acme Pty Ltd" value={data.client||""} onChange={e=>onChange(d=>({...d,client:e.target.value}))} style={is}/></div>
+        <div>{lb("Amount (excl. VAT)")}<input type="number" placeholder="50000" value={data.amount||""} onChange={e=>onChange(d=>({...d,amount:e.target.value}))} style={is}/></div>
+        <div>{lb("Description")}<input placeholder="Services rendered" value={data.desc||""} onChange={e=>onChange(d=>({...d,desc:e.target.value}))} style={is}/></div>
+        <div>{lb("Due Date")}<input type="date" value={data.due||""} onChange={e=>onChange(d=>({...d,due:e.target.value}))} style={is}/></div>
+        <div>
+          {lb("Currency")}
+          <select value={data.currency||"ZAR"} onChange={e=>onChange(d=>({...d,currency:e.target.value}))} style={is}>
+            <option value="ZAR">ZAR — South African Rand</option>
+            <option value="USD">USD — US Dollar</option>
+          </select>
+        </div>
+        {data.currency==="USD" && (
+          <div>{lb("Exchange Rate (1 USD = R)")}<input type="number" value={data.exchangeRate||"18.5"} onChange={e=>onChange(d=>({...d,exchangeRate:e.target.value}))} style={is}/></div>
+        )}
+      </div>
+      {data.amount && (
+        <div style={{display:"flex",gap:16,fontSize:12,marginBottom:12,flexWrap:"wrap"}}>
+          <span style={{color:C.inkMid}}>Amount: <strong>{fmtCurrency(+data.amount||0,data.currency||"ZAR")}</strong></span>
+          <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmtCurrency((+data.amount||0)*0.15,data.currency||"ZAR")}</strong></span>
+          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmtCurrency((+data.amount||0)*1.15,data.currency||"ZAR")}</strong></span>
+          {data.currency==="USD" && <span style={{color:C.blue}}>≈ {fmt((+data.amount||0)*(+data.exchangeRate||18.5))} ZAR</span>}
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── INVOICING ─────────────────────────────────────────────────────────────────
 function Invoicing({live = {}, user = {}}) {
   const liveInvoices = live.invoices;
@@ -522,39 +556,7 @@ function Invoicing({live = {}, user = {}}) {
     } catch(err) { console.warn("Amend failed:", err.message); }
   };
 
-  const InvFormFields = ({data, onChange}) => (
-    <>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        {[{l:"Client Name",k:"client",t:"text",p:"Acme Pty Ltd"},{l:"Amount (excl. VAT)",k:"amount",t:"number",p:"50000"},{l:"Description",k:"desc",t:"text",p:"Services rendered"},{l:"Due Date",k:"due",t:"date",p:""}].map(f => (
-          <div key={f.k}>
-            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-            <input type={f.t} placeholder={f.p} value={data[f.k]||""} onChange={e=>onChange({...data,[f.k]:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
-          </div>
-        ))}
-        <div>
-          <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Currency</label>
-          <select value={data.currency||"ZAR"} onChange={e=>onChange({...data,currency:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
-            <option value="ZAR">ZAR — South African Rand</option>
-            <option value="USD">USD — US Dollar</option>
-          </select>
-        </div>
-        {data.currency==="USD" && (
-          <div>
-            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 USD = R)</label>
-            <input type="number" value={data.exchangeRate||"18.5"} onChange={e=>onChange({...data,exchangeRate:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
-          </div>
-        )}
-      </div>
-      {data.amount && (
-        <div style={{display:"flex",gap:16,fontSize:12,marginBottom:12}}>
-          <span style={{color:C.inkMid}}>Amount: <strong>{fmtCurrency(+data.amount||0,data.currency||"ZAR")}</strong></span>
-          <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmtCurrency((+data.amount||0)*0.15,data.currency||"ZAR")}</strong></span>
-          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmtCurrency((+data.amount||0)*1.15,data.currency||"ZAR")}</strong></span>
-          {data.currency==="USD" && <span style={{color:C.blue}}>≈ {fmt((+data.amount||0)*(+data.exchangeRate||18.5))} ZAR</span>}
-        </div>
-      )}
-    </>
-  );
+  // InvFormFields moved outside component — see top-level definition below
 
   return (
     <div>
