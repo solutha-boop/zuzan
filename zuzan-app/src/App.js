@@ -3739,6 +3739,316 @@ function AIAssistant() {
   );
 }
 
+// ── DEVELOPER / API ACCESS ────────────────────────────────────────────────────
+function Developer() {
+  const [keys,     setKeys]     = useState([]);
+  const [usage,    setUsage]    = useState(null);
+  const [showNew,  setShowNew]  = useState(false);
+  const [newKey,   setNewKey]   = useState(null);   // revealed once on creation
+  const [form,     setForm]     = useState({name:"", scopes:["read"]});
+  const [loading,  setLoading]  = useState(true);
+  const [activeDoc,setActiveDoc]= useState("overview");
+  const BASE = "https://zuzan-backend.onrender.com";
+
+  useEffect(()=>{ loadKeys(); },[]);
+
+  const loadKeys = async () => {
+    setLoading(true);
+    try {
+      const [k, u] = await Promise.all([
+        api("/api-keys/").catch(()=>[]),
+        api("/api-keys/usage").catch(()=>null),
+      ]);
+      setKeys(k); setUsage(u);
+    } finally { setLoading(false); }
+  };
+
+  const handleCreate = async () => {
+    try {
+      const res = await api("/api-keys/",{method:"POST",body:JSON.stringify({name:form.name,scopes:form.scopes})});
+      setNewKey(res);
+      setShowNew(false);
+      setForm({name:"",scopes:["read"]});
+      loadKeys();
+    } catch(e) { alert("Failed to create key: " + e.message); }
+  };
+
+  const handleRevoke = async (id, name) => {
+    if (!window.confirm(`Revoke "${name}"? This cannot be undone.`)) return;
+    await api(`/api-keys/${id}`,{method:"DELETE"});
+    loadKeys();
+  };
+
+  const toggleScope = (s) => setForm(f=>({...f,scopes:f.scopes.includes(s)?f.scopes.filter(x=>x!==s):[...f.scopes,s]}));
+
+  const DOCS = {
+    overview: {
+      title:"Overview",
+      content: `# ZuZan API
+
+The ZuZan REST API gives you programmatic access to your financial data.
+
+**Base URL**
+\`\`\`
+${BASE}/v1
+\`\`\`
+
+**Authentication**
+Pass your API key in the request header:
+\`\`\`
+X-API-Key: zuzan_xxxxxxxxxxxxxxxx
+\`\`\`
+
+**Rate Limits**
+- 1,000 requests per key per day
+- Responses are JSON
+
+**Scopes**
+| Scope | Access |
+|---|---|
+| read | Invoices, expenses, summary |
+| write | Create/update records |
+| payroll | Employee and payroll data |
+| reports | Financial reports |`,
+    },
+    invoices: {
+      title:"Invoices",
+      content:`# GET /v1/invoices
+
+List all invoices for your company.
+
+**Request**
+\`\`\`bash
+curl ${BASE}/v1/invoices \\
+  -H "X-API-Key: YOUR_API_KEY"
+\`\`\`
+
+**Response**
+\`\`\`json
+[
+  {
+    "id": 1,
+    "invoice_number": "INV-001",
+    "client_name": "Acme Pty Ltd",
+    "amount": 50000.00,
+    "status": "paid",
+    "issue_date": "2025-04-01",
+    "due_date": "2025-05-01"
+  }
+]
+\`\`\`
+
+**Scopes required:** \`read\``,
+    },
+    expenses: {
+      title:"Expenses",
+      content:`# GET /v1/expenses
+
+List all expenses.
+
+**Request**
+\`\`\`bash
+curl ${BASE}/v1/expenses \\
+  -H "X-API-Key: YOUR_API_KEY"
+\`\`\`
+
+**Response**
+\`\`\`json
+[
+  {
+    "id": 1,
+    "vendor": "Eskom",
+    "description": "Electricity",
+    "amount": 3200.00,
+    "category": "6220 - Electricity and Water",
+    "date": "2025-04-02"
+  }
+]
+\`\`\`
+
+**Scopes required:** \`read\``,
+    },
+    employees: {
+      title:"Employees",
+      content:`# GET /v1/employees
+
+List active employees (requires payroll scope).
+
+**Request**
+\`\`\`bash
+curl ${BASE}/v1/employees \\
+  -H "X-API-Key: YOUR_API_KEY"
+\`\`\`
+
+**Response**
+\`\`\`json
+[
+  {
+    "id": 1,
+    "name": "Sipho Dlamini",
+    "position": "Developer",
+    "department": "Tech",
+    "gross_salary": 45000.00
+  }
+]
+\`\`\`
+
+**Scopes required:** \`payroll\``,
+    },
+    summary: {
+      title:"Summary",
+      content:`# GET /v1/summary
+
+Get a financial summary of your company.
+
+**Request**
+\`\`\`bash
+curl ${BASE}/v1/summary \\
+  -H "X-API-Key: YOUR_API_KEY"
+\`\`\`
+
+**Response**
+\`\`\`json
+{
+  "company": "Acme Pty Ltd",
+  "total_revenue": 156500.00,
+  "total_expenses": 24600.00,
+  "outstanding": 96500.00,
+  "net_profit": 131900.00
+}
+\`\`\`
+
+**Scopes required:** \`read\``,
+    },
+  };
+
+  const codeBlock = (text) => (
+    <pre style={{background:"#1A1209",color:"#C8E6C9",borderRadius:10,padding:"14px 18px",fontSize:12,overflow:"auto",lineHeight:1.7,margin:"10px 0"}}>{text}</pre>
+  );
+
+  const renderDoc = (doc) => doc.content.split("\n").map((line,i)=>{
+    if(line.startsWith("# ")) return <h2 key={i} style={{fontFamily:"serif",fontSize:20,color:C.ink,margin:"0 0 12px"}}>{line.slice(2)}</h2>;
+    if(line.startsWith("## ")) return <h3 key={i} style={{fontFamily:"serif",fontSize:16,color:C.ink,margin:"16px 0 8px"}}>{line.slice(3)}</h3>;
+    if(line.startsWith("**") && line.endsWith("**")) return <div key={i} style={{fontWeight:700,color:C.ink,margin:"12px 0 4px"}}>{line.slice(2,-2)}</div>;
+    if(line.startsWith("```")) return null;
+    if(line.startsWith("|")) return <div key={i} style={{fontFamily:"monospace",fontSize:12,color:C.inkMid,padding:"3px 0",borderBottom:`1px solid ${C.border}20`}}>{line}</div>;
+    if(line.trim()==="") return <div key={i} style={{height:8}}/>;
+    return <div key={i} style={{fontSize:13,color:C.inkMid,lineHeight:1.7}}>{line}</div>;
+  });
+
+  return (
+    <div>
+      <SectionHeader title="Developer API" sub="Integrate ZuZan with your systems"/>
+
+      {/* Usage summary */}
+      {usage && (
+        <div style={{display:"flex",gap:12,marginBottom:24}}>
+          <KPI label="Active Keys" value={usage.active_keys} color={C.blue} icon="🔑"/>
+          <KPI label="Requests Today" value={usage.total_requests_today} sub={`of ${usage.rate_limit_per_key * usage.active_keys} limit`} color={C.green} icon="📡"/>
+          <KPI label="Base URL" value="REST API" sub={BASE} color={C.accent} icon="🌐"/>
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:20}}>
+        {/* Left: Keys + sidebar nav */}
+        <div>
+          {/* API Keys panel */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.ink}}>API Keys</div>
+              <button onClick={()=>setShowNew(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New</button>
+            </div>
+
+            {showNew && (
+              <div style={{background:C.bg,borderRadius:10,padding:14,marginBottom:14}}>
+                <div style={{marginBottom:8}}>
+                  <label style={{fontSize:10,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase"}}>Key Name</label>
+                  <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="My Integration" style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",background:C.surface,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+                <div style={{marginBottom:10}}>
+                  <label style={{fontSize:10,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase"}}>Scopes</label>
+                  {["read","write","payroll","reports"].map(s=>(
+                    <label key={s} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,cursor:"pointer",fontSize:12,color:C.inkMid}}>
+                      <input type="checkbox" checked={form.scopes.includes(s)} onChange={()=>toggleScope(s)}/>
+                      {s}
+                    </label>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={handleCreate} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:6,padding:"7px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Create</button>
+                  <button onClick={()=>setShowNew(false)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"7px",fontSize:11,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Cancel</button>
+                </div>
+              </div>
+            )}
+
+            {newKey && (
+              <div style={{background:"#1A1209",borderRadius:10,padding:14,marginBottom:14}}>
+                <div style={{fontSize:11,color:"#C8E6C9",fontWeight:700,marginBottom:6}}>⚠️ Copy now — shown once only</div>
+                <div style={{fontFamily:"monospace",fontSize:10,color:"#80CBC4",wordBreak:"break-all",marginBottom:8}}>{newKey.key}</div>
+                <button onClick={()=>{navigator.clipboard.writeText(newKey.key); alert("Copied!");}} style={{width:"100%",background:"#2A6B3C",color:"#fff",border:"none",borderRadius:6,padding:"6px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Copy Key</button>
+                <button onClick={()=>setNewKey(null)} style={{width:"100%",background:"transparent",color:"#aaa",border:"none",padding:"4px",fontSize:10,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>Dismiss</button>
+              </div>
+            )}
+
+            {loading ? <div style={{fontSize:12,color:C.inkMid,textAlign:"center",padding:16}}>Loading...</div> :
+              keys.length===0 ? <div style={{fontSize:12,color:C.inkMid,textAlign:"center",padding:12}}>No keys yet</div> :
+              keys.map(k=>(
+                <div key={k.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${C.border}30`}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{k.name}</div>
+                    <div style={{fontSize:10,fontFamily:"monospace",color:C.inkMid}}>{k.key_prefix}...</div>
+                    <div style={{fontSize:10,color:C.inkDim}}>{k.scopes} · {k.requests_today} req today</div>
+                  </div>
+                  <button onClick={()=>handleRevoke(k.id,k.name)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>Revoke</button>
+                </div>
+              ))
+            }
+          </div>
+
+          {/* Doc nav */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:14}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Documentation</div>
+            {Object.entries(DOCS).map(([key,doc])=>(
+              <button key={key} onClick={()=>setActiveDoc(key)} style={{width:"100%",textAlign:"left",padding:"8px 10px",borderRadius:8,border:"none",background:activeDoc===key?C.accentLt:"transparent",color:activeDoc===key?C.accent:C.inkMid,fontSize:12,fontWeight:activeDoc===key?700:400,cursor:"pointer",fontFamily:"inherit",marginBottom:2}}>
+                {doc.title}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: Documentation */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
+          {/* Code block sections */}
+          {activeDoc==="overview" ? (
+            <div>
+              <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 16px"}}>ZuZan API Overview</h2>
+              <p style={{fontSize:13,color:C.inkMid,lineHeight:1.7,marginBottom:16}}>The ZuZan REST API lets you integrate your financial data with other systems — accounting tools, dashboards, ERPs, or custom scripts.</p>
+              <div style={{fontWeight:700,color:C.ink,marginBottom:6,fontSize:13}}>Base URL</div>
+              {codeBlock(BASE + "/v1")}
+              <div style={{fontWeight:700,color:C.ink,marginBottom:6,fontSize:13,marginTop:16}}>Authentication</div>
+              {codeBlock(`curl ${BASE}/v1/summary \\\n  -H "X-API-Key: zuzan_your_api_key_here"`)}
+              <div style={{fontWeight:700,color:C.ink,marginBottom:6,fontSize:13,marginTop:16}}>Available Endpoints</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:8}}>
+                {[["GET /v1/summary","Financial overview",C.green],["GET /v1/invoices","List all invoices",C.blue],["GET /v1/expenses","List all expenses",C.accent],["GET /v1/employees","Employee list (payroll scope)",C.gold]].map(([ep,desc,c])=>(
+                  <div key={ep} style={{background:C.bg,borderRadius:10,padding:"12px 14px"}}>
+                    <div style={{fontFamily:"monospace",fontSize:11,color:c,fontWeight:700,marginBottom:4}}>{ep}</div>
+                    <div style={{fontSize:11,color:C.inkMid}}>{desc}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:C.goldLt,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"12px 16px",marginTop:20,fontSize:12,color:C.inkMid}}>
+                <strong style={{color:C.ink}}>Rate Limits:</strong> 1,000 requests/day per key. Headers <code>X-RateLimit-Remaining</code> and <code>X-RateLimit-Reset</code> are included in every response.
+              </div>
+            </div>
+          ) : (
+            <div>{renderDoc(DOCS[activeDoc])}{activeDoc!=="overview" && codeBlock(DOCS[activeDoc].content.split("```bash\n")[1]?.split("\n```")[0]||"")}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout}) {
   const [tab, setTab] = useState("dashboard");
@@ -3754,6 +4064,7 @@ function ZuZanApp({user, onLogout}) {
     {id:"creditors", label:"Creditors",   icon:"📤"},
     {id:"coa",       label:"Accounts",    icon:"📒"},
     {id:"bankimport",label:"Bank Import", icon:"🏦"},
+    {id:"developer", label:"Developer",   icon:"🔑"},
     {id:"settings",  label:"Settings",    icon:"⚙️"},
   ];
   const screens = {
@@ -3767,6 +4078,7 @@ function ZuZanApp({user, onLogout}) {
     creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
+    developer:  <Developer/>,
     settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={setUser}/>,
   };
   return (
