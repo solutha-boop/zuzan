@@ -697,13 +697,74 @@ function Expenses({live = {}}) {
 
   useEffect(() => { if (liveExpenses && liveExpenses.length > 0) setExpenses(liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, category: e.category || "", id: `EXP-${String(e.id).padStart(3,"0")}`}))); }, [liveExpenses]);
 
-  const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
+  const [showNew,    setShowNew]    = useState(false);
+  const [form,       setForm]       = useState({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
+  const [autoNotice, setAutoNotice] = useState("");
 
   const unposted = expenses.filter(e => !isPosted(e.category));
   const posted   = expenses.filter(e => isPosted(e.category));
   const displayed = view === "unposted" ? unposted : posted;
   const total = displayed.reduce((s,e) => s + e.amount, 0);
+
+  // ── Auto-categorise engine ────────────────────────────────────────
+  // Build vendor→category map from posted expenses
+  const buildMemory = (expList) => {
+    const mem = {};
+    expList.filter(e => isPosted(e.category)).forEach(e => {
+      const key = e.vendor.trim().toLowerCase();
+      mem[key] = e.category; // last known category wins
+      // also index first word of description
+      if (e.desc) {
+        const descKey = e.desc.trim().toLowerCase().split(" ").slice(0,3).join(" ");
+        if (!mem[descKey]) mem[descKey] = e.category;
+      }
+    });
+    return mem;
+  };
+
+  const findSuggestion = (exp, memory) => {
+    const vendor = exp.vendor.trim().toLowerCase();
+    if (memory[vendor]) return memory[vendor]; // exact vendor match
+    // partial vendor match
+    const partialKey = Object.keys(memory).find(k => vendor.includes(k) || k.includes(vendor));
+    if (partialKey) return memory[partialKey];
+    // description match
+    if (exp.desc) {
+      const descKey = exp.desc.trim().toLowerCase().split(" ").slice(0,3).join(" ");
+      if (memory[descKey]) return memory[descKey];
+    }
+    return null;
+  };
+
+  // Run auto-categorise whenever expenses change
+  useEffect(() => {
+    const memory = buildMemory(expenses);
+    if (Object.keys(memory).length === 0) return;
+    const toPost = [];
+    const suggestions = {};
+    expenses.filter(e => !isPosted(e.category)).forEach(e => {
+      const suggestion = findSuggestion(e, memory);
+      if (suggestion) {
+        suggestions[e.id] = suggestion;
+        toPost.push({...e, category: suggestion});
+      }
+    });
+    if (toPost.length === 0) return;
+    // Auto-post exact matches and pre-fill suggestions
+    setPendingCats(prev => ({...prev, ...suggestions}));
+    // Auto-post all matched
+    setExpenses(prev => prev.map(e => {
+      const match = toPost.find(t => t.id === e.id);
+      return match ? {...e, category: match.category} : e;
+    }));
+    setAutoNotice(`Auto-categorised ${toPost.length} expense${toPost.length>1?"s":""} based on past history.`);
+    setTimeout(() => setAutoNotice(""), 5000);
+    // Save to backend
+    toPost.forEach(e => {
+      api(`/expenses/${e.id}`, { method:"PATCH", body: JSON.stringify({category: e.category}) }).catch(()=>{});
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expenses.length, posted.length]);
 
   const handleAmendExp = async () => {
     setExpenses(prev => prev.map(e => e.id === editExp.id ? {...editExp} : e));
@@ -845,6 +906,13 @@ function Expenses({live = {}}) {
               <button onClick={() => setEditExp(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Auto-categorise notice */}
+      {autoNotice && (
+        <div style={{background:C.greenLt,border:`1px solid ${C.green}40`,borderRadius:10,padding:"10px 16px",marginBottom:14,fontSize:13,color:C.green,display:"flex",alignItems:"center",gap:8}}>
+          <span>✨</span> {autoNotice}
         </div>
       )}
 
