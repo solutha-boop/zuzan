@@ -188,35 +188,43 @@ def _check_admin(x_admin_secret: str = Header(None)):
 
 @app.get("/admin/api/clients", tags=["Admin"])
 async def admin_clients(db: Session = Depends(get_db_session), _=Depends(_check_admin)):
-    companies = db.query(_Company).order_by(_Company.created_at.desc()).all()
-    result = []
-    for c in companies:
-        owner     = db.query(_User).filter(_User.company_id == c.id, _User.role == "owner").first()
-        inv_count = db.query(_func.count(_Invoice.id)).filter(_Invoice.company_id == c.id).scalar() or 0
-        exp_count = db.query(_func.count(_Expense.id)).filter(_Expense.company_id == c.id).scalar() or 0
-        emp_count = db.query(_func.count(_Employee.id)).filter(_Employee.company_id == c.id, _Employee.is_active == True).scalar() or 0
-        inv_rev   = db.query(_func.sum(_Invoice.total_amount)).filter(_Invoice.company_id == c.id, _Invoice.status == "paid").scalar() or 0
-        last_inv  = db.query(_func.max(_Invoice.created_at)).filter(_Invoice.company_id == c.id).scalar()
-        last_exp  = db.query(_func.max(_Expense.created_at)).filter(_Expense.company_id == c.id).scalar()
-        last_act  = max(filter(None, [last_inv, last_exp]), default=None)
-        result.append({
-            "id":                c.id,
-            "company":           c.name,
-            "owner_name":        f"{owner.first_name} {owner.last_name}" if owner else "—",
-            "owner_email":       owner.email if owner else "—",
-            "email_verified":    owner.email_verified if owner else False,
-            "plan":              str(c.plan.value) if c.plan else "starter",
-            "billing_cycle":     str(c.billing_cycle.value) if c.billing_cycle else "monthly",
-            "status":            str(c.subscription_status.value) if c.subscription_status else "trial",
-            "trial_ends":        c.trial_ends.strftime("%Y-%m-%d") if c.trial_ends else None,
-            "signed_up":         c.created_at.strftime("%Y-%m-%d") if c.created_at else None,
-            "invoices":          inv_count,
-            "expenses":          exp_count,
-            "employees":         emp_count,
-            "revenue_collected": round(inv_rev, 2),
-            "last_activity":     last_act.strftime("%Y-%m-%d") if last_act else None,
-        })
-    return result
+    try:
+        companies = db.query(_Company).order_by(_Company.created_at.desc()).all()
+        result = []
+        for c in companies:
+            try:
+                owner     = db.query(_User).filter(_User.company_id == c.id, _User.role == "owner").first()
+                inv_count = db.query(_func.count(_Invoice.id)).filter(_Invoice.company_id == c.id).scalar() or 0
+                exp_count = db.query(_func.count(_Expense.id)).filter(_Expense.company_id == c.id).scalar() or 0
+                emp_count = db.query(_func.count(_Employee.id)).filter(_Employee.company_id == c.id, _Employee.is_active == True).scalar() or 0
+                inv_rev   = db.query(_func.sum(_Invoice.total_amount)).filter(_Invoice.company_id == c.id).scalar() or 0
+                last_inv  = db.query(_func.max(_Invoice.created_at)).filter(_Invoice.company_id == c.id).scalar()
+                last_exp  = db.query(_func.max(_Expense.created_at)).filter(_Expense.company_id == c.id).scalar()
+                last_act  = max(filter(None, [last_inv, last_exp]), default=None)
+                result.append({
+                    "id":                c.id,
+                    "company":           c.name or "—",
+                    "owner_name":        f"{owner.first_name} {owner.last_name}" if owner else "—",
+                    "owner_email":       owner.email if owner else "—",
+                    "email_verified":    getattr(owner, "email_verified", False) or False,
+                    "plan":              str(c.plan.value) if c.plan else "starter",
+                    "billing_cycle":     str(c.billing_cycle.value) if c.billing_cycle else "monthly",
+                    "status":            str(c.subscription_status.value) if c.subscription_status else "trial",
+                    "trial_ends":        c.trial_ends.strftime("%Y-%m-%d") if c.trial_ends else None,
+                    "signed_up":         c.created_at.strftime("%Y-%m-%d") if c.created_at else None,
+                    "invoices":          inv_count,
+                    "expenses":          exp_count,
+                    "employees":         emp_count,
+                    "revenue_collected": round(inv_rev, 2),
+                    "last_activity":     last_act.strftime("%Y-%m-%d") if last_act else None,
+                })
+            except Exception as row_err:
+                logger.error(f"Admin: error processing company {c.id}: {row_err}")
+                continue
+        return result
+    except Exception as e:
+        logger.error(f"Admin clients error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/admin", response_class=_HTML, tags=["Admin"])
@@ -305,13 +313,22 @@ function login() {
   load();
 }
 async function load() {
-  const res = await fetch('/admin/api/clients', { headers: {'X-Admin-Secret': secret} });
-  if (res.status === 403) { document.getElementById('loginErr').textContent = 'Incorrect secret.'; return; }
-  const data = await res.json();
-  document.getElementById('loginBox').style.display = 'none';
-  document.getElementById('main').style.display = 'block';
-  renderStats(data);
-  renderTable(data);
+  try {
+    const res = await fetch('/admin/api/clients', { headers: {'X-Admin-Secret': secret} });
+    if (res.status === 403) { document.getElementById('loginErr').textContent = 'Incorrect secret.'; return; }
+    if (!res.ok) {
+      const txt = await res.text();
+      document.getElementById('loginErr').textContent = 'Server error: ' + txt.slice(0, 120);
+      return;
+    }
+    const data = await res.json();
+    document.getElementById('loginBox').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+    renderStats(data);
+    renderTable(data);
+  } catch(e) {
+    document.getElementById('loginErr').textContent = 'Error: ' + e.message;
+  }
 }
 function renderStats(data) {
   const total   = data.length;
