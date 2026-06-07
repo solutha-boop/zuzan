@@ -4536,22 +4536,50 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
   const [tab, setTab] = useState("dashboard");
+  const [expanded, setExpanded] = useState({sales: true, banking: false});
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
   const TABS = [
-    {id:"dashboard", label:"Dashboard",   icon:"🏠"},
-    {id:"invoicing", label:"Invoices",    icon:"🧾"},
-    {id:"quotes",    label:"Quotes",      icon:"📝"},
-    {id:"expenses",  label:"Expenses",    icon:"💳"},
-    {id:"payroll",   label:"Payroll",     icon:"👥"},
-    {id:"reports",   label:"Reports",     icon:"📊"},
-    {id:"debtors",   label:"Debtors",     icon:"📥"},
-    {id:"creditors", label:"Creditors",   icon:"📤"},
-    {id:"coa",       label:"Accounts",    icon:"📒"},
-    {id:"inventory", label:"Inventory",   icon:"📦"},
-    {id:"bankimport",label:"Bank",        icon:"🏦"},
-    {id:"settings",  label:"Settings",    icon:"⚙️"},
+    {id:"dashboard", label:"Dashboard",  icon:"🏠"},
+    {id:"sales",     label:"Sales",      icon:"💼", children:[
+      {id:"invoicing", label:"Invoices", icon:"🧾"},
+      {id:"quotes",    label:"Quotes",   icon:"📝"},
+    ]},
+    {id:"expenses",  label:"Expenses",   icon:"💳"},
+    {id:"payroll",   label:"Payroll",    icon:"👥"},
+    {id:"reports",   label:"Reports",    icon:"📊"},
+    {id:"debtors",   label:"Debtors",    icon:"📥"},
+    {id:"creditors", label:"Creditors",  icon:"📤"},
+    {id:"coa",       label:"Accounts",   icon:"📒"},
+    {id:"inventory", label:"Inventory",  icon:"📦"},
+    {id:"banking",   label:"Banking",    icon:"🏦", children:[
+      {id:"bankimport", label:"Manual Update",    icon:"📄"},
+      {id:"bankfeeds",  label:"Connect to Bank",  icon:"🔗"},
+    ]},
+    {id:"settings",  label:"Settings",   icon:"⚙️"},
   ];
+
+  const toggleGroup = (id) => setExpanded(e => ({...e, [id]: !e[id]}));
+
+  const navBtn = (t, isChild=false) => {
+    const active = tab === t.id;
+    return (
+      <button key={t.id} onClick={()=>setTab(t.id)} style={{
+        width:"100%", display:"flex", alignItems:"center", gap:10,
+        padding: isChild ? "8px 12px 8px 36px" : "10px 12px",
+        borderRadius:10, border:"none", cursor:"pointer", fontFamily:"inherit",
+        fontSize: isChild ? 12 : 13,
+        fontWeight: active ? 700 : 400,
+        marginBottom:2,
+        background: active ? C.accentLt : "transparent",
+        color: active ? C.accent : isChild ? C.inkMid : C.inkMid,
+        textAlign:"left",
+      }}>
+        <span style={{fontSize: isChild ? 14 : 17}}>{t.icon}</span>{t.label}
+        {active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
+      </button>
+    );
+  };
 
   if (isMobile) return <MobileApp user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} live={live}/>;
 
@@ -4567,6 +4595,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     coa:        <ChartOfAccounts/>,
     inventory:  <Inventory/>,
     bankimport: <BankImport live={live} onNavigate={setTab}/>,
+    bankfeeds:  <BankFeeds/>,
     settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
   };
 
@@ -4585,12 +4614,29 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>Trial: 9 days remaining</div>
         </div>
         <nav style={{flex:1,padding:"12px 10px",overflowY:"auto"}}>
-          {TABS.map(t => (
-            <button key={t.id} onClick={()=>setTab(t.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:tab===t.id?700:400,marginBottom:3,background:tab===t.id?C.accentLt:"transparent",color:tab===t.id?C.accent:C.inkMid,textAlign:"left"}}>
-              <span style={{fontSize:17}}>{t.icon}</span>{t.label}
-              {tab===t.id && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
-            </button>
-          ))}
+          {TABS.map(t => {
+            if (!t.children) return navBtn(t);
+            const isOpen = expanded[t.id];
+            const childActive = t.children.some(c => c.id === tab);
+            return (
+              <div key={t.id}>
+                <button onClick={()=>toggleGroup(t.id)} style={{
+                  width:"100%", display:"flex", alignItems:"center", gap:10,
+                  padding:"10px 12px", borderRadius:10, border:"none", cursor:"pointer",
+                  fontFamily:"inherit", fontSize:13, marginBottom:2,
+                  fontWeight: childActive ? 700 : 400,
+                  background: childActive ? C.accentLt : "transparent",
+                  color: childActive ? C.accent : C.inkMid,
+                  textAlign:"left",
+                }}>
+                  <span style={{fontSize:17}}>{t.icon}</span>
+                  {t.label}
+                  <span style={{marginLeft:"auto",fontSize:10,opacity:.5}}>{isOpen ? "▾" : "▸"}</span>
+                </button>
+                {isOpen && t.children.map(c => navBtn(c, true))}
+              </div>
+            );
+          })}
         </nav>
         <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`}}>
           <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{user?.firstName||"User"} {user?.lastName||""}</div>
