@@ -185,7 +185,7 @@ def init_db():
                 conn.execute(text(sql))
                 conn.commit()
             except Exception:
-                pass  # Column already exists
+                conn.rollback()  # Reset connection so next migration can run
 
 def get_db():
     db = SessionLocal()
