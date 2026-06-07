@@ -69,6 +69,7 @@ class User(Base):
     role=Column(String,default="owner"); is_active=Column(Boolean,default=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     reset_token=Column(String,nullable=True); reset_token_expires=Column(DateTime,nullable=True)
+    email_verified=Column(Boolean,default=False); email_verify_token=Column(String,nullable=True)
     company=relationship("Company",back_populates="users")
 
 class Invoice(Base):
@@ -177,6 +178,8 @@ def init_db():
             "ALTER TABLE employees ADD COLUMN branch_code VARCHAR",
             "ALTER TABLE employees ADD COLUMN account_type VARCHAR",
             "ALTER TABLE api_keys ADD COLUMN requests_today INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN email_verify_token VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))

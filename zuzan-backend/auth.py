@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -8,6 +9,7 @@ from datetime import datetime, timedelta
 import secrets
 from typing import Optional
 from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus
+from email_service import send_verification_email, send_welcome_email, send_password_reset_email, send_admin_signup_notification
 
 import os
 SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
@@ -89,7 +91,7 @@ def get_current_user(
 
 
 @router.post("/register")
-async def register(data: RegisterRequest, db: Session = Depends(get_db)):
+async def register(data: RegisterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     # Check email not already registered
     existing = db.query(User).filter(User.email == data.email).first()
     if existing:
@@ -111,6 +113,7 @@ async def register(data: RegisterRequest, db: Session = Depends(get_db)):
     db.flush()
 
     # Create user
+    verify_token = secrets.token_urlsafe(32)
     user = User(
         company_id=company.id,
         first_name=data.first_name,
@@ -119,6 +122,8 @@ async def register(data: RegisterRequest, db: Session = Depends(get_db)):
         phone=data.phone,
         hashed_password=hash_password(data.password),
         role="owner",
+        email_verified=False,
+        email_verify_token=verify_token,
     )
     db.add(user)
     db.flush()
@@ -135,6 +140,24 @@ async def register(data: RegisterRequest, db: Session = Depends(get_db)):
     )
     db.add(payment)
     db.commit()
+
+    # Send emails in background (don't delay the registration response)
+    trial_ends_fmt = company.trial_ends.strftime("%-d %B %Y") if company.trial_ends else "14 days"
+    background_tasks.add_task(
+        send_verification_email, data.first_name, data.email, verify_token
+    )
+    background_tasks.add_task(
+        send_welcome_email,
+        data.first_name, data.email, data.company_name,
+        data.plan, data.billing_cycle, trial_ends_fmt,
+    )
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    if admin_email:
+        background_tasks.add_task(
+            send_admin_signup_notification,
+            admin_email, data.first_name, data.last_name,
+            data.email, data.company_name, data.plan, data.billing_cycle,
+        )
 
     token = create_token({"user_id": user.id, "company_id": company.id})
 
@@ -213,6 +236,41 @@ async def get_me(
         },
     }
 
+@router.get("/verify-email/{token}", response_class=HTMLResponse)
+async def verify_email(token: str, db: Session = Depends(get_db)):
+    from email_service import FRONTEND_URL
+    user = db.query(User).filter(User.email_verify_token == token).first()
+    if not user:
+        html = f"""<html><body style="font-family:Arial;text-align:center;padding:60px;background:#FAF7F2;">
+          <h1 style="color:#C8401A;">ZuZan</h1>
+          <h2 style="color:#c00;">⚠️ Invalid or expired link</h2>
+          <p>This verification link is invalid or has already been used.</p>
+          <a href="{FRONTEND_URL}" style="color:#C8401A;">Return to ZuZan</a>
+        </body></html>"""
+        return HTMLResponse(content=html, status_code=400)
+
+    user.email_verified = True
+    user.email_verify_token = None
+    db.commit()
+
+    html = f"""<html><body style="font-family:Arial;text-align:center;padding:60px;background:#FAF7F2;">
+      <div style="max-width:480px;margin:0 auto;">
+        <h1 style="color:#C8401A;font-size:36px;">ZuZan</h1>
+        <div style="font-size:64px;margin:20px 0;">✅</div>
+        <h2 style="color:#1a1a1a;">Email Verified!</h2>
+        <p style="color:#555;line-height:1.7;">
+          Your email address has been confirmed, {user.first_name}.<br>
+          You're all set to use ZuZan.
+        </p>
+        <a href="{FRONTEND_URL}" style="display:inline-block;margin-top:24px;background:#C8401A;color:#fff;
+           padding:14px 36px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:15px;">
+          Open ZuZan
+        </a>
+      </div>
+    </body></html>"""
+    return HTMLResponse(content=html)
+
+
 class ForgotPasswordRequest(BaseModel):
     email: str
 
@@ -222,19 +280,22 @@ class ResetPasswordRequest(BaseModel):
 
 
 @router.post("/forgot-password")
-async def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+async def forgot_password(data: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == data.email.lower().strip()).first()
     if not user:
-        return {"message": "If that email is registered, a reset code has been generated.", "reset_code": None}
+        return {"message": "If that email is registered, a reset code has been sent."}
 
     token = secrets.token_hex(4).upper()  # 8-char code e.g. A3F9B21C
     user.reset_token = token
     user.reset_token_expires = datetime.utcnow() + timedelta(minutes=30)
     db.commit()
 
+    background_tasks.add_task(
+        send_password_reset_email, user.first_name, user.email, token
+    )
+
     return {
-        "message":    "Reset code generated. In production this will be emailed. For now use the code below.",
-        "reset_code": token,
+        "message":  "A reset code has been sent to your email address.",
         "expires_in": "30 minutes",
     }
 
