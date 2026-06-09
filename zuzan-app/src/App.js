@@ -4189,13 +4189,13 @@ function AIAssistant() {
   return (
     <>
       {/* Floating button */}
-      <button onClick={()=>setOpen(o=>!o)} style={{position:"fixed",bottom:28,right:28,width:56,height:56,borderRadius:"50%",background:C.accent,color:"#fff",border:"none",fontSize:24,cursor:"pointer",boxShadow:"0 4px 20px rgba(200,64,26,0.4)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{position:"fixed",bottom:90,right:20,width:50,height:50,borderRadius:"50%",background:C.accent,color:"#fff",border:"none",fontSize:22,cursor:"pointer",boxShadow:"0 4px 20px rgba(200,64,26,0.4)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center"}}>
         {open?"✕":"🤖"}
       </button>
 
       {/* Chat panel */}
       {open && (
-        <div style={{position:"fixed",bottom:96,right:28,width:360,height:480,background:C.surface,borderRadius:20,boxShadow:"0 8px 40px rgba(0,0,0,0.2)",zIndex:500,display:"flex",flexDirection:"column",overflow:"hidden",border:`1px solid ${C.border}`}}>
+        <div style={{position:"fixed",bottom:152,right:20,width:360,height:460,background:C.surface,borderRadius:20,boxShadow:"0 8px 40px rgba(0,0,0,0.2)",zIndex:500,display:"flex",flexDirection:"column",overflow:"hidden",border:`1px solid ${C.border}`}}>
           <div style={{padding:"14px 18px",background:C.accent,color:"#fff",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div><div style={{fontWeight:700,fontSize:14}}>ZuZan AI Assistant</div><div style={{fontSize:11,opacity:0.8}}>Bookkeeping & SARS help</div></div>
           </div>
