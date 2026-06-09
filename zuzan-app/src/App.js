@@ -3768,6 +3768,384 @@ function Quotes({live={},user={},onNavigate}) {
 // ── MULTI-CURRENCY: update Invoicing form to support USD ──────────────────────
 // (currency selector added inline in Invoicing component below via patch)
 
+// ── CUSTOMERS ─────────────────────────────────────────────────────────────────
+function Customers() {
+  const [list,    setList]   = useState([]);
+  const [showForm,setShowForm]= useState(false);
+  const [editing, setEditing] = useState(null);
+  const [search,  setSearch] = useState("");
+  const empty = {name:"",contact_person:"",email:"",phone:"",address:"",vat_number:"",payment_terms:30,notes:""};
+  const [form, setForm] = useState(empty);
+  const f = k => e => setForm(d=>({...d,[k]:e.target.value}));
+  const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:13,background:C.bg};
+  const lb = t => <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:4}}>{t}</div>;
+
+  const load = async () => {
+    try { const d = await api("/customers/"); setList(d); } catch(e){}
+  };
+  useEffect(()=>{load();},[]);
+
+  const save = async () => {
+    try {
+      if (editing) await api(`/customers/${editing.id}`, {method:"PUT",body:JSON.stringify(form)});
+      else await api("/customers/", {method:"POST",body:JSON.stringify(form)});
+      setShowForm(false); setEditing(null); setForm(empty); load();
+    } catch(e){ alert(e.message); }
+  };
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this customer?")) return;
+    try { await api(`/customers/${id}`,{method:"DELETE"}); load(); } catch(e){}
+  };
+
+  const edit = (c) => { setEditing(c); setForm({name:c.name,contact_person:c.contact_person||"",email:c.email||"",phone:c.phone||"",address:c.address||"",vat_number:c.vat_number||"",payment_terms:c.payment_terms||30,notes:c.notes||""}); setShowForm(true); };
+
+  const filtered = list.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || (c.email||"").toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
+        <div>
+          <h2 style={{fontSize:22,fontWeight:700,color:C.ink}}>Customers</h2>
+          <p style={{fontSize:13,color:C.inkMid,marginTop:2}}>{list.length} customer{list.length!==1?"s":""} on record</p>
+        </div>
+        <button onClick={()=>{setEditing(null);setForm(empty);setShowForm(true);}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontWeight:600,cursor:"pointer",fontSize:13}}>+ Add Customer</button>
+      </div>
+
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search customers..." style={{...is,marginBottom:16,maxWidth:320}}/>
+
+      {showForm && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:24,marginBottom:24}}>
+          <h3 style={{fontWeight:700,marginBottom:16,color:C.ink}}>{editing?"Edit Customer":"New Customer"}</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <div>{lb("Company / Customer Name *")}<input value={form.name} onChange={f("name")} style={is}/></div>
+            <div>{lb("Contact Person")}<input value={form.contact_person} onChange={f("contact_person")} style={is}/></div>
+            <div>{lb("Email")}<input value={form.email} onChange={f("email")} type="email" style={is}/></div>
+            <div>{lb("Phone")}<input value={form.phone} onChange={f("phone")} style={is}/></div>
+            <div>{lb("VAT Number")}<input value={form.vat_number} onChange={f("vat_number")} style={is}/></div>
+            <div>{lb("Payment Terms (days)")}<input value={form.payment_terms} onChange={f("payment_terms")} type="number" style={is}/></div>
+          </div>
+          <div style={{marginBottom:12}}>{lb("Address")}<textarea value={form.address} onChange={f("address")} rows={2} style={{...is,resize:"vertical"}}/></div>
+          <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={f("notes")} rows={2} style={{...is,resize:"vertical"}}/></div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer"}}>Save</button>
+            <button onClick={()=>{setShowForm(false);setEditing(null);}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <div style={{textAlign:"center",padding:"60px 0",color:C.inkDim}}>
+          <div style={{fontSize:40,marginBottom:12}}>👥</div>
+          <div style={{fontSize:15,fontWeight:600}}>No customers yet</div>
+          <div style={{fontSize:13,marginTop:4}}>Add your first customer to get started</div>
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12}}>
+          {filtered.map(c=>(
+            <div key={c.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:18}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                <div style={{fontWeight:700,fontSize:15,color:C.ink}}>{c.name}</div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>edit(c)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:C.inkMid}}>Edit</button>
+                  <button onClick={()=>del(c.id)} style={{background:"none",border:`1px solid ${C.red}20`,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:C.red}}>Delete</button>
+                </div>
+              </div>
+              {c.contact_person && <div style={{fontSize:12,color:C.inkMid,marginBottom:4}}>👤 {c.contact_person}</div>}
+              {c.email && <div style={{fontSize:12,color:C.inkMid,marginBottom:4}}>✉ {c.email}</div>}
+              {c.phone && <div style={{fontSize:12,color:C.inkMid,marginBottom:4}}>📞 {c.phone}</div>}
+              {c.vat_number && <div style={{fontSize:11,color:C.inkDim,marginBottom:4}}>VAT: {c.vat_number}</div>}
+              <div style={{fontSize:11,color:C.inkDim,marginTop:4,paddingTop:8,borderTop:`1px solid ${C.border}`}}>Payment terms: {c.payment_terms} days</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SUPPLIERS ─────────────────────────────────────────────────────────────────
+function Suppliers() {
+  const [list,    setList]   = useState([]);
+  const [showForm,setShowForm]= useState(false);
+  const [editing, setEditing] = useState(null);
+  const [search,  setSearch] = useState("");
+  const empty = {name:"",contact_person:"",email:"",phone:"",address:"",vat_number:"",bank_name:"",account_number:"",branch_code:"",account_type:"Cheque",payment_terms:30,notes:""};
+  const [form, setForm] = useState(empty);
+  const f = k => e => setForm(d=>({...d,[k]:e.target.value}));
+  const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:13,background:C.bg};
+  const lb = t => <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:4}}>{t}</div>;
+
+  const load = async () => { try { setList(await api("/suppliers/")); } catch(e){} };
+  useEffect(()=>{load();},[]);
+
+  const save = async () => {
+    try {
+      if (editing) await api(`/suppliers/${editing.id}`,{method:"PUT",body:JSON.stringify(form)});
+      else await api("/suppliers/",{method:"POST",body:JSON.stringify(form)});
+      setShowForm(false); setEditing(null); setForm(empty); load();
+    } catch(e){ alert(e.message); }
+  };
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this supplier?")) return;
+    try { await api(`/suppliers/${id}`,{method:"DELETE"}); load(); } catch(e){}
+  };
+
+  const edit = (s) => { setEditing(s); setForm({name:s.name,contact_person:s.contact_person||"",email:s.email||"",phone:s.phone||"",address:s.address||"",vat_number:s.vat_number||"",bank_name:s.bank_name||"",account_number:s.account_number||"",branch_code:s.branch_code||"",account_type:s.account_type||"Cheque",payment_terms:s.payment_terms||30,notes:s.notes||""}); setShowForm(true); };
+
+  const filtered = list.filter(s => s.name.toLowerCase().includes(search.toLowerCase()) || (s.email||"").toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
+        <div>
+          <h2 style={{fontSize:22,fontWeight:700,color:C.ink}}>Suppliers</h2>
+          <p style={{fontSize:13,color:C.inkMid,marginTop:2}}>{list.length} supplier{list.length!==1?"s":""} on record</p>
+        </div>
+        <button onClick={()=>{setEditing(null);setForm(empty);setShowForm(true);}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontWeight:600,cursor:"pointer",fontSize:13}}>+ Add Supplier</button>
+      </div>
+
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search suppliers..." style={{...is,marginBottom:16,maxWidth:320}}/>
+
+      {showForm && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:24,marginBottom:24}}>
+          <h3 style={{fontWeight:700,marginBottom:16,color:C.ink}}>{editing?"Edit Supplier":"New Supplier"}</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <div>{lb("Supplier Name *")}<input value={form.name} onChange={f("name")} style={is}/></div>
+            <div>{lb("Contact Person")}<input value={form.contact_person} onChange={f("contact_person")} style={is}/></div>
+            <div>{lb("Email")}<input value={form.email} onChange={f("email")} type="email" style={is}/></div>
+            <div>{lb("Phone")}<input value={form.phone} onChange={f("phone")} style={is}/></div>
+            <div>{lb("VAT Number")}<input value={form.vat_number} onChange={f("vat_number")} style={is}/></div>
+            <div>{lb("Payment Terms (days)")}<input value={form.payment_terms} onChange={f("payment_terms")} type="number" style={is}/></div>
+          </div>
+          <div style={{marginBottom:12}}>{lb("Address")}<textarea value={form.address} onChange={f("address")} rows={2} style={{...is,resize:"vertical"}}/></div>
+          <div style={{fontWeight:600,fontSize:13,color:C.ink,marginBottom:10,paddingTop:8,borderTop:`1px solid ${C.border}`}}>Banking Details</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            <div>{lb("Bank Name")}<input value={form.bank_name} onChange={f("bank_name")} style={is}/></div>
+            <div>{lb("Account Type")}<select value={form.account_type} onChange={f("account_type")} style={is}><option>Cheque</option><option>Savings</option><option>Transmission</option></select></div>
+            <div>{lb("Account Number")}<input value={form.account_number} onChange={f("account_number")} style={is}/></div>
+            <div>{lb("Branch Code")}<input value={form.branch_code} onChange={f("branch_code")} style={is}/></div>
+          </div>
+          <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={f("notes")} rows={2} style={{...is,resize:"vertical"}}/></div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer"}}>Save</button>
+            <button onClick={()=>{setShowForm(false);setEditing(null);}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <div style={{textAlign:"center",padding:"60px 0",color:C.inkDim}}>
+          <div style={{fontSize:40,marginBottom:12}}>🏭</div>
+          <div style={{fontSize:15,fontWeight:600}}>No suppliers yet</div>
+          <div style={{fontSize:13,marginTop:4}}>Add your first supplier to get started</div>
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12}}>
+          {filtered.map(s=>(
+            <div key={s.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:18}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                <div style={{fontWeight:700,fontSize:15,color:C.ink}}>{s.name}</div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>edit(s)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:C.inkMid}}>Edit</button>
+                  <button onClick={()=>del(s.id)} style={{background:"none",border:`1px solid ${C.red}20`,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:C.red}}>Delete</button>
+                </div>
+              </div>
+              {s.contact_person && <div style={{fontSize:12,color:C.inkMid,marginBottom:4}}>👤 {s.contact_person}</div>}
+              {s.email && <div style={{fontSize:12,color:C.inkMid,marginBottom:4}}>✉ {s.email}</div>}
+              {s.phone && <div style={{fontSize:12,color:C.inkMid,marginBottom:4}}>📞 {s.phone}</div>}
+              {s.account_number && <div style={{fontSize:11,color:C.inkDim,marginBottom:4}}>🏦 {s.bank_name} — {s.account_number}</div>}
+              <div style={{fontSize:11,color:C.inkDim,marginTop:4,paddingTop:8,borderTop:`1px solid ${C.border}`}}>Payment terms: {s.payment_terms} days</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── PURCHASE ORDERS ────────────────────────────────────────────────────────────
+const PO_STATUSES = ["draft","sent","received","partial","cancelled"];
+const PO_STATUS_COLORS = {draft:C.goldLt,sent:C.blueLt,received:C.greenLt,partial:C.accentLt,cancelled:C.redLt};
+const PO_STATUS_TEXT   = {draft:C.gold,sent:C.blue,received:C.green,partial:C.accent,cancelled:C.red};
+
+function PurchaseOrders() {
+  const [list,      setList]     = useState([]);
+  const [suppliers, setSuppliers]= useState([]);
+  const [showForm,  setShowForm] = useState(false);
+  const [viewing,   setViewing]  = useState(null);
+  const [statusFilter, setStatusFilter] = useState("all");
+  const emptyForm = {supplier_id:"",supplier_name:"",delivery_date:"",vat_applicable:true,notes:"",items:[{description:"",quantity:1,unit_price:0}]};
+  const [form, setForm] = useState(emptyForm);
+  const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:13,background:C.bg};
+  const lb = t => <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:4}}>{t}</div>;
+
+  const load = async () => {
+    try {
+      const [pos, sups] = await Promise.all([api("/purchase-orders/"), api("/suppliers/")]);
+      setList(pos); setSuppliers(sups);
+    } catch(e){}
+  };
+  useEffect(()=>{load();},[]);
+
+  const subtotal = form.items.reduce((s,i)=>s+(parseFloat(i.quantity)||0)*(parseFloat(i.unit_price)||0),0);
+  const vat      = form.vat_applicable ? subtotal*0.15 : 0;
+  const total    = subtotal + vat;
+
+  const setItem = (idx,key,val) => setForm(d=>({...d,items:d.items.map((it,i)=>i===idx?{...it,[key]:val}:it)}));
+  const addItem = () => setForm(d=>({...d,items:[...d.items,{description:"",quantity:1,unit_price:0}]}));
+  const removeItem = idx => setForm(d=>({...d,items:d.items.filter((_,i)=>i!==idx)}));
+
+  const save = async () => {
+    if (!form.supplier_name && !form.supplier_id) { alert("Please select or enter a supplier"); return; }
+    try {
+      const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null};
+      await api("/purchase-orders/",{method:"POST",body:JSON.stringify(payload)});
+      setShowForm(false); setForm(emptyForm); load();
+    } catch(e){ alert(e.message); }
+  };
+
+  const updateStatus = async (id, status) => {
+    try { await api(`/purchase-orders/${id}`,{method:"PUT",body:JSON.stringify({status})}); load(); } catch(e){}
+  };
+
+  const del = async (id) => {
+    if (!window.confirm("Delete this purchase order?")) return;
+    try { await api(`/purchase-orders/${id}`,{method:"DELETE"}); setViewing(null); load(); } catch(e){}
+  };
+
+  const filtered = list.filter(p => statusFilter==="all" || p.status===statusFilter);
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
+        <div>
+          <h2 style={{fontSize:22,fontWeight:700,color:C.ink}}>Purchase Orders</h2>
+          <p style={{fontSize:13,color:C.inkMid,marginTop:2}}>{list.length} PO{list.length!==1?"s":""} total</p>
+        </div>
+        <button onClick={()=>{setShowForm(true);setViewing(null);setForm(emptyForm);}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontWeight:600,cursor:"pointer",fontSize:13}}>+ New PO</button>
+      </div>
+
+      {/* Status filter */}
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        {["all",...PO_STATUSES].map(s=>(
+          <button key={s} onClick={()=>setStatusFilter(s)} style={{padding:"6px 14px",borderRadius:20,border:`1px solid ${C.border}`,fontSize:12,cursor:"pointer",fontFamily:"inherit",background:statusFilter===s?C.accent:"transparent",color:statusFilter===s?"#fff":C.inkMid,fontWeight:statusFilter===s?600:400,textTransform:"capitalize"}}>{s}</button>
+        ))}
+      </div>
+
+      {/* New PO Form */}
+      {showForm && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:24,marginBottom:24}}>
+          <h3 style={{fontWeight:700,marginBottom:16,color:C.ink}}>New Purchase Order</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            <div>{lb("Supplier")}
+              <select value={form.supplier_id} onChange={e=>{const s=suppliers.find(x=>x.id===parseInt(e.target.value));setForm(d=>({...d,supplier_id:e.target.value,supplier_name:s?s.name:d.supplier_name}));}} style={is}>
+                <option value="">— Select supplier —</option>
+                {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>{lb("Or type supplier name")}<input value={form.supplier_name} onChange={e=>setForm(d=>({...d,supplier_name:e.target.value}))} placeholder="Supplier name" style={is}/></div>
+            <div>{lb("Delivery Date")}<input type="date" value={form.delivery_date} onChange={e=>setForm(d=>({...d,delivery_date:e.target.value}))} style={is}/></div>
+            <div style={{display:"flex",alignItems:"center",gap:8,paddingTop:20}}>
+              <input type="checkbox" checked={form.vat_applicable} onChange={e=>setForm(d=>({...d,vat_applicable:e.target.checked}))} id="po_vat"/>
+              <label htmlFor="po_vat" style={{fontSize:13,color:C.inkMid,cursor:"pointer"}}>Apply VAT @ 15%</label>
+            </div>
+          </div>
+
+          {/* Line items */}
+          <div style={{fontWeight:600,fontSize:13,color:C.ink,marginBottom:10}}>Line Items</div>
+          <div style={{background:C.bg,borderRadius:8,padding:12,marginBottom:12}}>
+            {form.items.map((item,idx)=>(
+              <div key={idx} style={{display:"grid",gridTemplateColumns:"1fr 80px 100px 40px",gap:8,marginBottom:8,alignItems:"center"}}>
+                <input value={item.description} onChange={e=>setItem(idx,"description",e.target.value)} placeholder="Description" style={is}/>
+                <input value={item.quantity} onChange={e=>setItem(idx,"quantity",e.target.value)} type="number" min="0" placeholder="Qty" style={is}/>
+                <input value={item.unit_price} onChange={e=>setItem(idx,"unit_price",e.target.value)} type="number" min="0" placeholder="Unit price" style={is}/>
+                <button onClick={()=>removeItem(idx)} disabled={form.items.length===1} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:C.red,opacity:form.items.length===1?0.3:1}}>×</button>
+              </div>
+            ))}
+            <button onClick={addItem} style={{fontSize:12,color:C.accent,background:"none",border:"none",cursor:"pointer",padding:"4px 0"}}>+ Add line</button>
+          </div>
+
+          {/* Totals */}
+          <div style={{textAlign:"right",marginBottom:16,fontSize:13,color:C.inkMid}}>
+            <div>Subtotal: R{subtotal.toFixed(2)}</div>
+            {form.vat_applicable && <div>VAT (15%): R{vat.toFixed(2)}</div>}
+            <div style={{fontWeight:700,fontSize:16,color:C.ink,marginTop:4}}>Total: R{total.toFixed(2)}</div>
+          </div>
+
+          <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={e=>setForm(d=>({...d,notes:e.target.value}))} rows={2} style={{...is,resize:"vertical"}}/></div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer"}}>Create PO</button>
+            <button onClick={()=>setShowForm(false)} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* PO View modal */}
+      {viewing && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setViewing(null)}>
+          <div style={{background:C.surface,borderRadius:16,padding:28,maxWidth:560,width:"100%",maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:18,color:C.ink}}>{viewing.po_number}</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>{viewing.supplier_name}</div>
+              </div>
+              <span style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:600,background:PO_STATUS_COLORS[viewing.status]||C.goldLt,color:PO_STATUS_TEXT[viewing.status]||C.gold,textTransform:"capitalize"}}>{viewing.status}</span>
+            </div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,marginBottom:16}}>
+              <thead><tr style={{background:C.bg}}><th style={{textAlign:"left",padding:"8px 10px"}}>Description</th><th style={{textAlign:"right",padding:"8px 10px"}}>Qty</th><th style={{textAlign:"right",padding:"8px 10px"}}>Unit Price</th><th style={{textAlign:"right",padding:"8px 10px"}}>Total</th></tr></thead>
+              <tbody>{viewing.items.map((it,i)=><tr key={i}><td style={{padding:"8px 10px"}}>{it.description}</td><td style={{textAlign:"right",padding:"8px 10px"}}>{it.quantity}</td><td style={{textAlign:"right",padding:"8px 10px"}}>R{it.unit_price.toFixed(2)}</td><td style={{textAlign:"right",padding:"8px 10px"}}>R{it.total.toFixed(2)}</td></tr>)}</tbody>
+            </table>
+            <div style={{textAlign:"right",fontSize:13,color:C.inkMid,marginBottom:16}}>
+              <div>Subtotal: R{viewing.subtotal.toFixed(2)}</div>
+              {viewing.vat_amount>0 && <div>VAT: R{viewing.vat_amount.toFixed(2)}</div>}
+              <div style={{fontWeight:700,fontSize:16,color:C.ink,marginTop:4}}>Total: R{viewing.total_amount.toFixed(2)}</div>
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {PO_STATUSES.filter(s=>s!==viewing.status).map(s=>(
+                <button key={s} onClick={()=>{updateStatus(viewing.id,s);setViewing({...viewing,status:s});}} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",textTransform:"capitalize"}}>{s}</button>
+              ))}
+              <button onClick={()=>del(viewing.id)} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.red}30`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",color:C.red}}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <div style={{textAlign:"center",padding:"60px 0",color:C.inkDim}}>
+          <div style={{fontSize:40,marginBottom:12}}>📋</div>
+          <div style={{fontSize:15,fontWeight:600}}>No purchase orders</div>
+          <div style={{fontSize:13,marginTop:4}}>Create your first PO to start tracking procurement</div>
+        </div>
+      ) : (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{background:C.bg}}>
+              <th style={{textAlign:"left",padding:"12px 16px",fontWeight:600,color:C.inkMid}}>PO Number</th>
+              <th style={{textAlign:"left",padding:"12px 16px",fontWeight:600,color:C.inkMid}}>Supplier</th>
+              <th style={{textAlign:"left",padding:"12px 16px",fontWeight:600,color:C.inkMid}}>Date</th>
+              <th style={{textAlign:"left",padding:"12px 16px",fontWeight:600,color:C.inkMid}}>Status</th>
+              <th style={{textAlign:"right",padding:"12px 16px",fontWeight:600,color:C.inkMid}}>Total</th>
+              <th style={{padding:"12px 16px"}}></th>
+            </tr></thead>
+            <tbody>{filtered.map(p=>(
+              <tr key={p.id} style={{borderTop:`1px solid ${C.border}`}}>
+                <td style={{padding:"12px 16px",fontWeight:600,color:C.ink}}>{p.po_number}</td>
+                <td style={{padding:"12px 16px",color:C.inkMid}}>{p.supplier_name||"—"}</td>
+                <td style={{padding:"12px 16px",color:C.inkMid}}>{p.order_date}</td>
+                <td style={{padding:"12px 16px"}}><span style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:600,background:PO_STATUS_COLORS[p.status]||C.goldLt,color:PO_STATUS_TEXT[p.status]||C.gold,textTransform:"capitalize"}}>{p.status}</span></td>
+                <td style={{padding:"12px 16px",textAlign:"right",fontWeight:600,color:C.ink}}>R{p.total_amount.toFixed(2)}</td>
+                <td style={{padding:"12px 16px"}}><button onClick={()=>setViewing(p)} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontWeight:600}}>View</button></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── AI ASSISTANT ──────────────────────────────────────────────────────────────
 const AI_SUGGESTIONS = [
   "How do I categorise a fuel expense?",
@@ -4449,14 +4827,17 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
   ];
 
   const MORE_ITEMS = [
-    {id:"quotes",    label:"Quotes",      icon:"📝"},
-    {id:"reports",   label:"Reports",     icon:"📊"},
-    {id:"inventory", label:"Inventory",   icon:"📦"},
-    {id:"bankimport",label:"Bank",        icon:"🏦"},
-    {id:"debtors",   label:"Debtors",     icon:"📥"},
-    {id:"creditors", label:"Creditors",   icon:"📤"},
-    {id:"coa",       label:"Accounts",    icon:"📒"},
-    {id:"settings",  label:"Settings",    icon:"⚙️"},
+    {id:"quotes",          label:"Quotes",      icon:"📝"},
+    {id:"customers",       label:"Customers",   icon:"👥"},
+    {id:"suppliers",       label:"Suppliers",   icon:"🏭"},
+    {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
+    {id:"reports",         label:"Reports",     icon:"📊"},
+    {id:"inventory",       label:"Inventory",   icon:"📦"},
+    {id:"bankimport",      label:"Bank",        icon:"🏦"},
+    {id:"debtors",         label:"Debtors",     icon:"📥"},
+    {id:"creditors",       label:"Creditors",   icon:"📤"},
+    {id:"coa",             label:"Accounts",    icon:"📒"},
+    {id:"settings",        label:"Settings",    icon:"⚙️"},
   ];
 
   const navigate = (id) => { setTab(id); setMoreOpen(false); };
@@ -4468,8 +4849,11 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
     payroll:    <div style={{padding:"16px 16px 100px"}}><Payroll    live={live} user={user}/></div>,
     quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate}/></div>,
     reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live}/></div>,
-    inventory:  <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
-    bankimport: <div style={{padding:"16px 16px 100px"}}><BankImport live={live} onNavigate={navigate}/></div>,
+    inventory:       <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
+    customers:       <div style={{padding:"16px 16px 100px"}}><Customers/></div>,
+    suppliers:       <div style={{padding:"16px 16px 100px"}}><Suppliers/></div>,
+    purchase_orders: <div style={{padding:"16px 16px 100px"}}><PurchaseOrders/></div>,
+    bankimport:      <div style={{padding:"16px 16px 100px"}}><BankImport live={live} onNavigate={navigate}/></div>,
     debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
     creditors:  <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div>,
     coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
@@ -4536,27 +4920,32 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
   const [tab, setTab] = useState("dashboard");
-  const [expanded, setExpanded] = useState({sales: true, banking: false});
+  const [expanded, setExpanded] = useState({sales: true, procurement: false, banking: false});
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
   const TABS = [
-    {id:"dashboard", label:"Dashboard",  icon:"🏠"},
-    {id:"sales",     label:"Sales",      icon:"💼", children:[
-      {id:"invoicing", label:"Invoices", icon:"🧾"},
-      {id:"quotes",    label:"Quotes",   icon:"📝"},
+    {id:"dashboard",  label:"Dashboard",   icon:"🏠"},
+    {id:"sales",      label:"Sales",       icon:"💼", children:[
+      {id:"invoicing",       label:"Invoices",        icon:"🧾"},
+      {id:"quotes",          label:"Quotes",          icon:"📝"},
+      {id:"customers",       label:"Customers",       icon:"👥"},
     ]},
-    {id:"expenses",  label:"Expenses",   icon:"💳"},
-    {id:"payroll",   label:"Payroll",    icon:"👥"},
-    {id:"reports",   label:"Reports",    icon:"📊"},
-    {id:"debtors",   label:"Debtors",    icon:"📥"},
-    {id:"creditors", label:"Creditors",  icon:"📤"},
-    {id:"coa",       label:"Accounts",   icon:"📒"},
-    {id:"inventory", label:"Inventory",  icon:"📦"},
-    {id:"banking",   label:"Banking",    icon:"🏦", children:[
-      {id:"bankimport", label:"Manual Update",    icon:"📄"},
-      {id:"bankfeeds",  label:"Connect to Bank",  icon:"🔗"},
+    {id:"procurement", label:"Procurement", icon:"🛒", children:[
+      {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
+      {id:"suppliers",       label:"Suppliers",       icon:"🏭"},
     ]},
-    {id:"settings",  label:"Settings",   icon:"⚙️"},
+    {id:"expenses",   label:"Expenses",    icon:"💳"},
+    {id:"payroll",    label:"Payroll",     icon:"👥"},
+    {id:"reports",    label:"Reports",     icon:"📊"},
+    {id:"debtors",    label:"Debtors",     icon:"📥"},
+    {id:"creditors",  label:"Creditors",   icon:"📤"},
+    {id:"coa",        label:"Accounts",    icon:"📒"},
+    {id:"inventory",  label:"Inventory",   icon:"📦"},
+    {id:"banking",    label:"Banking",     icon:"🏦", children:[
+      {id:"bankimport", label:"Manual Update",   icon:"📄"},
+      {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
+    ]},
+    {id:"settings",   label:"Settings",    icon:"⚙️"},
   ];
 
   const toggleGroup = (id) => setExpanded(e => ({...e, [id]: !e[id]}));
@@ -4593,9 +4982,12 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     debtors:    <Debtors    live={live}/>,
     creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
-    inventory:  <Inventory/>,
-    bankimport: <BankImport live={live} onNavigate={setTab}/>,
-    bankfeeds:  <BankFeeds/>,
+    inventory:       <Inventory/>,
+    customers:       <Customers/>,
+    suppliers:       <Suppliers/>,
+    purchase_orders: <PurchaseOrders/>,
+    bankimport:      <BankImport live={live} onNavigate={setTab}/>,
+    bankfeeds:       <BankFeeds/>,
     settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
   };
 
