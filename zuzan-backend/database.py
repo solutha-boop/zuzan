@@ -58,6 +58,9 @@ class Company(Base):
     payments=relationship("Payment",back_populates="company")
     api_keys=relationship("APIKey",back_populates="company")
     inventory=relationship("InventoryItem",back_populates="company")
+    customers=relationship("Customer",back_populates="company")
+    suppliers=relationship("Supplier",back_populates="company")
+    purchase_orders=relationship("PurchaseOrder",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -151,6 +154,58 @@ class APIKey(Base):
     requests_today=Column(Integer,default=0)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="api_keys")
+
+class Customer(Base):
+    __tablename__="customers"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    name=Column(String,nullable=False)
+    contact_person=Column(String); email=Column(String); phone=Column(String)
+    address=Column(Text); vat_number=Column(String)
+    payment_terms=Column(Integer,default=30)  # days
+    notes=Column(Text); is_active=Column(Boolean,default=True)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="customers")
+
+class Supplier(Base):
+    __tablename__="suppliers"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    name=Column(String,nullable=False)
+    contact_person=Column(String); email=Column(String); phone=Column(String)
+    address=Column(Text); vat_number=Column(String)
+    bank_name=Column(String); account_number=Column(String)
+    branch_code=Column(String); account_type=Column(String)
+    payment_terms=Column(Integer,default=30)
+    notes=Column(Text); is_active=Column(Boolean,default=True)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="suppliers")
+    purchase_orders=relationship("PurchaseOrder",back_populates="supplier")
+
+class PurchaseOrder(Base):
+    __tablename__="purchase_orders"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    supplier_id=Column(Integer,ForeignKey("suppliers.id"),nullable=True)
+    po_number=Column(String,nullable=False)
+    supplier_name=Column(String)
+    status=Column(String,default="draft")  # draft, sent, received, partial, cancelled
+    order_date=Column(DateTime,default=datetime.utcnow)
+    delivery_date=Column(DateTime,nullable=True)
+    subtotal=Column(Float,default=0); vat_amount=Column(Float,default=0); total_amount=Column(Float,default=0)
+    notes=Column(Text)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="purchase_orders")
+    supplier=relationship("Supplier",back_populates="purchase_orders")
+    items=relationship("PurchaseOrderItem",back_populates="purchase_order",cascade="all, delete-orphan")
+
+class PurchaseOrderItem(Base):
+    __tablename__="purchase_order_items"
+    id=Column(Integer,primary_key=True,index=True)
+    purchase_order_id=Column(Integer,ForeignKey("purchase_orders.id"))
+    description=Column(String,nullable=False)
+    quantity=Column(Float,default=1); unit_price=Column(Float,default=0); total=Column(Float,default=0)
+    purchase_order=relationship("PurchaseOrder",back_populates="items")
 
 class Payment(Base):
     __tablename__ = "payments"

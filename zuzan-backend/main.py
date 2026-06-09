@@ -40,6 +40,9 @@ from companies import (
 from payroll import payroll_router, reports_router, payments_router
 from api_keys import router as api_keys_router
 from inventory import router as inventory_router
+from customers import router as customers_router
+from suppliers import router as suppliers_router
+from purchase_orders import router as po_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -50,8 +53,11 @@ app.include_router(payroll_router,   prefix="/payroll",   tags=["Payroll"])
 app.include_router(payments_router,  prefix="/payments",  tags=["Payments"])
 app.include_router(reports_router,   prefix="/reports",   tags=["Reports"])
 app.include_router(bank_router,      prefix="/bank",      tags=["Bank Import"])
-app.include_router(api_keys_router,  prefix="/api-keys",  tags=["API Keys"])
-app.include_router(inventory_router, prefix="/inventory", tags=["Inventory"])
+app.include_router(api_keys_router,  prefix="/api-keys",      tags=["API Keys"])
+app.include_router(inventory_router, prefix="/inventory",     tags=["Inventory"])
+app.include_router(customers_router, prefix="/customers",     tags=["Customers"])
+app.include_router(suppliers_router, prefix="/suppliers",     tags=["Suppliers"])
+app.include_router(po_router,        prefix="/purchase-orders", tags=["Purchase Orders"])
 
 
 @app.get("/")
