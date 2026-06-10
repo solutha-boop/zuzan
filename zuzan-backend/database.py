@@ -193,7 +193,7 @@ class PurchaseOrder(Base):
     order_date=Column(DateTime,default=datetime.utcnow)
     delivery_date=Column(DateTime,nullable=True)
     subtotal=Column(Float,default=0); vat_amount=Column(Float,default=0); total_amount=Column(Float,default=0)
-    notes=Column(Text)
+    notes=Column(Text); received_date=Column(DateTime,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="purchase_orders")
     supplier=relationship("Supplier",back_populates="purchase_orders")

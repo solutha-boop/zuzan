@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from database import get_db, PurchaseOrder, PurchaseOrderItem, Supplier
+from database import get_db, PurchaseOrder, PurchaseOrderItem, Supplier, Expense
 from auth import get_current_user, User
 
 router = APIRouter()
@@ -48,6 +48,7 @@ def to_dict(po):
         "delivery_date": po.delivery_date.strftime("%Y-%m-%d") if po.delivery_date else None,
         "subtotal": po.subtotal, "vat_amount": po.vat_amount, "total_amount": po.total_amount,
         "notes": po.notes,
+        "received_date": po.received_date.strftime("%Y-%m-%d") if getattr(po, "received_date", None) else None,
         "items": [{"id": i.id, "description": i.description, "quantity": i.quantity,
                    "unit_price": i.unit_price, "total": i.total} for i in po.items],
         "created_at": po.created_at.isoformat(),
@@ -114,3 +115,64 @@ async def delete_po(po_id: int, current_user: User = Depends(get_current_user), 
     if not po: raise HTTPException(404, "Purchase order not found")
     db.delete(po); db.commit()
     return {"message": "Purchase order deleted"}
+
+
+class ReceivedItem(BaseModel):
+    item_id:           int
+    quantity_received: float
+
+class POReceive(BaseModel):
+    items:            List[ReceivedItem]
+    create_expense:   bool = True   # auto-create expense for payment
+    expense_category: Optional[str] = "6000 - Cost of Sales"
+
+
+@router.post("/{po_id}/receive")
+async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id, PurchaseOrder.company_id == current_user.company_id).first()
+    if not po: raise HTTPException(404, "Purchase order not found")
+    if po.status in ("received", "cancelled"):
+        raise HTTPException(400, f"Cannot receive a PO with status '{po.status}'")
+
+    # Map received quantities to items
+    received_map = {r.item_id: r.quantity_received for r in data.items}
+    received_total = 0.0
+    all_received = True
+
+    for item in po.items:
+        qty_recv = received_map.get(item.id, 0)
+        if qty_recv < item.quantity:
+            all_received = False
+        received_value = round(qty_recv * item.unit_price, 2)
+        received_total += received_value
+
+    # Update PO status
+    po.status = "received" if all_received else "partial"
+    po.received_date = datetime.utcnow()
+
+    expense_id = None
+    if data.create_expense and received_total > 0:
+        vat_applicable = po.vat_amount > 0
+        vat_on_received = round(received_total * 0.15, 2) if vat_applicable else 0
+        expense = Expense(
+            company_id=current_user.company_id,
+            vendor=po.supplier_name or "Supplier",
+            description=f"Goods received — {po.po_number}",
+            amount=received_total,
+            vat_amount=vat_on_received,
+            category=data.expense_category,
+            expense_date=datetime.utcnow(),
+        )
+        db.add(expense)
+        db.flush()
+        expense_id = expense.id
+
+    db.commit()
+    db.refresh(po)
+
+    return {
+        **to_dict(po),
+        "received_total":   round(received_total, 2),
+        "expense_id":       expense_id,
+        "expense_created":  expense_id is not None,
+    }
