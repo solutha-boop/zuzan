@@ -3975,6 +3975,10 @@ function PurchaseOrders() {
   const [suppliers, setSuppliers]= useState([]);
   const [showForm,  setShowForm] = useState(false);
   const [viewing,   setViewing]  = useState(null);
+  const [receiving, setReceiving]= useState(null); // PO being receipted
+  const [recvQtys,  setRecvQtys] = useState({});   // {item_id: qty_received}
+  const [recvCategory, setRecvCategory] = useState("6000 - Cost of Sales");
+  const [recvDone,  setRecvDone] = useState(null);  // result after receiving
   const [statusFilter, setStatusFilter] = useState("all");
   const emptyForm = {supplier_id:"",supplier_name:"",delivery_date:"",vat_applicable:true,notes:"",items:[{description:"",quantity:1,unit_price:0}]};
   const [form, setForm] = useState(emptyForm);
@@ -4083,13 +4087,14 @@ function PurchaseOrders() {
       )}
 
       {/* PO View modal */}
-      {viewing && (
+      {viewing && !receiving && !recvDone && (
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setViewing(null)}>
           <div style={{background:C.surface,borderRadius:16,padding:28,maxWidth:560,width:"100%",maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
               <div>
                 <div style={{fontWeight:700,fontSize:18,color:C.ink}}>{viewing.po_number}</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>{viewing.supplier_name}</div>
+                {viewing.received_date && <div style={{fontSize:11,color:C.green,marginTop:2}}>✓ Received {viewing.received_date}</div>}
               </div>
               <span style={{padding:"4px 12px",borderRadius:20,fontSize:12,fontWeight:600,background:PO_STATUS_COLORS[viewing.status]||C.goldLt,color:PO_STATUS_TEXT[viewing.status]||C.gold,textTransform:"capitalize"}}>{viewing.status}</span>
             </div>
@@ -4102,12 +4107,124 @@ function PurchaseOrders() {
               {viewing.vat_amount>0 && <div>VAT: R{viewing.vat_amount.toFixed(2)}</div>}
               <div style={{fontWeight:700,fontSize:16,color:C.ink,marginTop:4}}>Total: R{viewing.total_amount.toFixed(2)}</div>
             </div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+              {!["received","cancelled"].includes(viewing.status) && (
+                <button onClick={()=>{
+                  const init = {};
+                  viewing.items.forEach(it=>{ init[it.id]=it.quantity; });
+                  setRecvQtys(init); setReceiving(viewing);
+                }} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                  📦 Receive Goods
+                </button>
+              )}
               {PO_STATUSES.filter(s=>s!==viewing.status).map(s=>(
                 <button key={s} onClick={()=>{updateStatus(viewing.id,s);setViewing({...viewing,status:s});}} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",textTransform:"capitalize"}}>{s}</button>
               ))}
               <button onClick={()=>del(viewing.id)} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.red}30`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",color:C.red}}>Delete</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Goods Receipt modal */}
+      {receiving && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:16,padding:28,maxWidth:600,width:"100%",maxHeight:"85vh",overflowY:"auto"}}>
+            <div style={{marginBottom:20}}>
+              <div style={{fontWeight:700,fontSize:18,color:C.ink}}>📦 Receive Goods — {receiving.po_number}</div>
+              <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>{receiving.supplier_name} · Confirm quantities received</div>
+            </div>
+
+            {/* Line items with received qty */}
+            <div style={{background:C.bg,borderRadius:10,padding:14,marginBottom:16}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",gap:8,marginBottom:8}}>
+                <div style={{fontSize:11,fontWeight:600,color:C.inkMid}}>Description</div>
+                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Ordered</div>
+                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Received</div>
+              </div>
+              {receiving.items.map(it=>(
+                <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",gap:8,marginBottom:8,alignItems:"center"}}>
+                  <div style={{fontSize:13,color:C.ink}}>{it.description}</div>
+                  <div style={{fontSize:13,color:C.inkMid,textAlign:"right"}}>{it.quantity}</div>
+                  <input
+                    type="number" min="0" max={it.quantity} step="0.01"
+                    value={recvQtys[it.id]??it.quantity}
+                    onChange={e=>setRecvQtys(q=>({...q,[it.id]:parseFloat(e.target.value)||0}))}
+                    style={{padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontFamily:"inherit",fontSize:13,textAlign:"right",background:C.surface}}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Received total */}
+            {(()=>{
+              const recvTotal = receiving.items.reduce((s,it)=>s+(recvQtys[it.id]??it.quantity)*it.unit_price,0);
+              const vatAmt = receiving.vat_amount>0 ? recvTotal*0.15 : 0;
+              return (
+                <div style={{background:C.greenLt,borderRadius:8,padding:14,marginBottom:16,textAlign:"right",fontSize:13}}>
+                  <div style={{color:C.inkMid}}>Received value: R{recvTotal.toFixed(2)}</div>
+                  {vatAmt>0 && <div style={{color:C.inkMid}}>VAT (15%): R{vatAmt.toFixed(2)}</div>}
+                  <div style={{fontWeight:700,fontSize:16,color:C.green,marginTop:4}}>Amount payable: R{(recvTotal+vatAmt).toFixed(2)}</div>
+                </div>
+              );
+            })()}
+
+            {/* Expense category */}
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:4}}>Expense category (for payment processing)</div>
+              <select value={recvCategory} onChange={e=>setRecvCategory(e.target.value)}
+                style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:13,background:C.bg}}>
+                <option value="5000 - Cost of Sales">5000 - Cost of Sales</option>
+                <option value="6000 - Other Expenses">6000 - Other Expenses</option>
+                <option value="6100 - Office Expenses">6100 - Office Expenses</option>
+                <option value="6200 - Equipment">6200 - Equipment</option>
+                <option value="6300 - Raw Materials">6300 - Raw Materials</option>
+                <option value="6400 - Repairs & Maintenance">6400 - Repairs & Maintenance</option>
+                <option value="6510 - Fuel and Oil">6510 - Fuel and Oil</option>
+              </select>
+            </div>
+
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={async ()=>{
+                try {
+                  const payload = {
+                    items: receiving.items.map(it=>({item_id:it.id, quantity_received: recvQtys[it.id]??it.quantity})),
+                    create_expense: true,
+                    expense_category: recvCategory,
+                  };
+                  const result = await api(`/purchase-orders/${receiving.id}/receive`,{method:"POST",body:JSON.stringify(payload)});
+                  setRecvDone(result); setReceiving(null); load();
+                } catch(e){ alert(e.message); }
+              }} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer"}}>
+                ✓ Confirm Receipt
+              </button>
+              <button onClick={()=>{setReceiving(null);setViewing(null);}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Receipt confirmation / payment summary */}
+      {recvDone && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:16,padding:32,maxWidth:480,width:"100%",textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:12}}>✅</div>
+            <div style={{fontWeight:700,fontSize:20,color:C.ink,marginBottom:8}}>Goods Received</div>
+            <div style={{fontSize:13,color:C.inkMid,marginBottom:20}}>
+              {recvDone.po_number} — {recvDone.supplier_name}<br/>
+              Status updated to <strong style={{textTransform:"capitalize"}}>{recvDone.status}</strong>
+            </div>
+            <div style={{background:C.greenLt,borderRadius:10,padding:16,marginBottom:20}}>
+              <div style={{fontSize:13,color:C.inkMid,marginBottom:4}}>Amount payable to supplier</div>
+              <div style={{fontSize:28,fontWeight:700,color:C.green}}>R{recvDone.received_total?.toFixed(2)}</div>
+              {recvDone.expense_created && (
+                <div style={{fontSize:12,color:C.green,marginTop:8}}>✓ Expense record created for payment processing</div>
+              )}
+            </div>
+            <div style={{fontSize:13,color:C.inkMid,marginBottom:20}}>
+              The expense has been added to your Expenses tab. Categorise and post it to process the supplier payment via your batch payment file.
+            </div>
+            <button onClick={()=>setRecvDone(null)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"12px 32px",fontWeight:600,cursor:"pointer",fontSize:14}}>Done</button>
           </div>
         </div>
       )}
