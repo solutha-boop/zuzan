@@ -61,6 +61,7 @@ class Company(Base):
     customers=relationship("Customer",back_populates="company")
     suppliers=relationship("Supplier",back_populates="company")
     purchase_orders=relationship("PurchaseOrder",back_populates="company")
+    quotes=relationship("Quote",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -206,6 +207,26 @@ class PurchaseOrderItem(Base):
     description=Column(String,nullable=False)
     quantity=Column(Float,default=1); unit_price=Column(Float,default=0); total=Column(Float,default=0)
     purchase_order=relationship("PurchaseOrder",back_populates="items")
+
+class Quote(Base):
+    __tablename__="quotes"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    quote_number=Column(String,nullable=False)
+    client_name=Column(String,nullable=False)
+    client_email=Column(String,nullable=True)
+    description=Column(Text)
+    amount=Column(Float,nullable=False)
+    vat_applicable=Column(Boolean,default=True)
+    vat_amount=Column(Float,default=0)
+    total_amount=Column(Float,nullable=False)
+    currency=Column(String,default="ZAR")
+    exchange_rate=Column(Float,default=1)
+    status=Column(String,default="draft")
+    valid_until=Column(DateTime,nullable=True)
+    notes=Column(Text,nullable=True)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="quotes")
 
 class Payment(Base):
     __tablename__ = "payments"
