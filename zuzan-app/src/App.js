@@ -372,7 +372,7 @@ function Dashboard({live = {}}) {
     <div>
       <div style={{marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div>
-          <h1 style={{fontFamily:"serif",fontSize:28,color:C.ink,margin:"0 0 4px"}}>Good morning</h1>
+          <h1 style={{fontFamily:"serif",fontSize:28,color:C.ink,margin:"0 0 4px"}}>{(()=>{const h=new Date().getHours();return h<12?"Good morning":h<17?"Good afternoon":"Good evening";})()}</h1>
           <p style={{color:C.inkMid,fontSize:13}}>Financial overview - {d ? d.period : new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</p>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:20,background:isLive?C.greenLt:C.goldLt,border:`1px solid ${isLive?C.green:C.gold}`}}>
@@ -3198,7 +3198,7 @@ function Login({onLogin, onRegister}) {
       }
       localStorage.setItem("zuzan_token", data.access_token);
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token});
+        companyName:data.company.name, plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -4862,7 +4862,7 @@ function MobileDashboard({live, user, onNavigate}) {
     <div style={{padding:"0 0 100px"}}>
       {/* Header */}
       <div style={{background:`linear-gradient(135deg,${C.accent},#A03010)`,padding:"28px 20px 32px",marginBottom:-16}}>
-        <div style={{fontSize:13,color:"rgba(255,255,255,0.7)",marginBottom:4}}>Good morning</div>
+        <div style={{fontSize:13,color:"rgba(255,255,255,0.7)",marginBottom:4}}>{(()=>{const h=new Date().getHours();return h<12?"Good morning":h<17?"Good afternoon":"Good evening";})()}</div>
         <div style={{fontFamily:"serif",fontSize:24,color:"#fff",fontWeight:800}}>{user?.companyName||"Your Company"}</div>
         <div style={{fontSize:12,color:"rgba(255,255,255,0.6)",marginTop:2}}>{new Date().toLocaleDateString("en-ZA",{weekday:"long",day:"numeric",month:"long"})}</div>
       </div>
@@ -5113,7 +5113,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user?.companyName||"Your Company"}</div>
           <div style={{fontSize:10,color:C.inkDim}}>{user?.plan?.name||"Professional"} Plan</div>
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
-          <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>Trial: 9 days remaining</div>
+          <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
         </div>
         <nav style={{flex:1,padding:"12px 10px",overflowY:"auto"}}>
           {TABS.map(t => {
@@ -5174,6 +5174,7 @@ export default function App() {
           companyName:  data.company.name,
           plan:         {name: data.company.plan, id: data.company.plan},
           access_token: token,
+          trialEnds:    data.company.trial_ends,
         });
         setScreen("app");
       })
