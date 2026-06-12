@@ -3825,7 +3825,7 @@ function Customers() {
             <div>{lb("Email")}<input value={form.email} onChange={f("email")} type="email" style={is}/></div>
             <div>{lb("Phone")}<input value={form.phone} onChange={f("phone")} style={is}/></div>
             <div>{lb("VAT Number")}<input value={form.vat_number} onChange={f("vat_number")} style={is}/></div>
-            <div>{lb("Payment Terms (days)")}<input value={form.payment_terms} onChange={f("payment_terms")} type="number" style={is}/></div>
+            <div>{lb("Payment Terms")}<select value={form.payment_terms} onChange={f("payment_terms")} style={is}><option value={0}>COD (Cash on Delivery)</option><option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option><option value={60}>60 days</option><option value={90}>90 days</option></select></div>
           </div>
           <div style={{marginBottom:12}}>{lb("Address")}<textarea value={form.address} onChange={f("address")} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={f("notes")} rows={2} style={{...is,resize:"vertical"}}/></div>
@@ -3919,7 +3919,7 @@ function Suppliers() {
             <div>{lb("Email")}<input value={form.email} onChange={f("email")} type="email" style={is}/></div>
             <div>{lb("Phone")}<input value={form.phone} onChange={f("phone")} style={is}/></div>
             <div>{lb("VAT Number")}<input value={form.vat_number} onChange={f("vat_number")} style={is}/></div>
-            <div>{lb("Payment Terms (days)")}<input value={form.payment_terms} onChange={f("payment_terms")} type="number" style={is}/></div>
+            <div>{lb("Payment Terms")}<select value={form.payment_terms} onChange={f("payment_terms")} style={is}><option value={0}>COD (Cash on Delivery)</option><option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option><option value={60}>60 days</option><option value={90}>90 days</option></select></div>
           </div>
           <div style={{marginBottom:12}}>{lb("Address")}<textarea value={form.address} onChange={f("address")} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{fontWeight:600,fontSize:13,color:C.ink,marginBottom:10,paddingTop:8,borderTop:`1px solid ${C.border}`}}>Banking Details</div>
