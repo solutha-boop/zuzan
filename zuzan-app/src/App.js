@@ -3689,6 +3689,7 @@ function Quotes({live={},user={},onNavigate}) {
       })});
       await updateStatus(q._id, "accepted");
       setPreview(null);
+      if(live && live.reload) await live.reload();
       if(onNavigate) onNavigate("invoicing");
     } catch(e){alert("Failed to convert quote: "+(e.message||"Unknown error"));}
     finally{setSaving(false);}
