@@ -3213,7 +3213,7 @@ function Login({onLogin, onRegister}) {
       });
       const data = await res.json();
       setMsg(data.message);
-      if (data.reset_code) { setResetCode(data.reset_code); setView("reset"); }
+      if (res.ok) { setView("reset"); }
     } catch(e) { setError("Could not connect to server."); }
     finally { setLoading(false); }
   };
@@ -3312,14 +3312,7 @@ function Login({onLogin, onRegister}) {
           {view === "reset" && (
             <>
               <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 8px"}}>Set New Password</h2>
-              <p style={{fontSize:13,color:C.inkMid,marginBottom:20}}>Enter the reset code and your new password.</p>
-              {resetCode && (
-                <div style={{background:C.blueLt,border:"1px solid "+C.blue+"30",borderRadius:10,padding:"12px 16px",marginBottom:20}}>
-                  <div style={{fontSize:11,color:C.blue,fontWeight:700,marginBottom:4}}>YOUR RESET CODE</div>
-                  <div style={{fontFamily:"monospace",fontSize:24,fontWeight:800,color:C.blue,letterSpacing:4}}>{resetCode}</div>
-                  <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Valid for 30 minutes. Email delivery coming soon.</div>
-                </div>
-              )}
+              <p style={{fontSize:13,color:C.inkMid,marginBottom:20}}>Check your email for the reset code, then enter it below with your new password.</p>
               <div style={{marginBottom:14}}>
                 <label style={labelStyle}>Reset Code</label>
                 <input placeholder="e.g. A3F9B21C" value={reset.code}
@@ -5218,3 +5211,4 @@ export default function App() {
 
   return <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>;
 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
