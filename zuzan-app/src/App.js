@@ -3640,11 +3640,20 @@ function Quotes({live={},user={},onNavigate}) {
 
   const convertToInvoice = async (q) => {
     try {
-      await api("/invoices/",{method:"POST",body:JSON.stringify({client_name:q.client,description:q.desc,amount:q.amount,due_date:null})});
-      updateStatus(q.id,"accepted");
-      alert(`${q.id} converted to invoice. Go to Invoices tab.`);
+      await api("/invoices/",{method:"POST",body:JSON.stringify({
+        client_name: q.client,
+        description: q.desc || "Converted from quote",
+        amount: q.amount,
+        vat_applicable: false,   // quote amount is already the agreed total
+        due_date: q.validUntil || null,
+        notes: q.notes || `Converted from ${q.id}`,
+      })});
+      updateStatus(q.id, "accepted");
+      setPreview(null);
       if(onNavigate) onNavigate("invoicing");
-    } catch(e) { updateStatus(q.id,"accepted"); if(onNavigate) onNavigate("invoicing"); }
+    } catch(e) {
+      alert("Failed to convert quote: " + (e.message || "Unknown error"));
+    }
   };
 
   const inputStyle = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
