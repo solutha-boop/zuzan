@@ -518,6 +518,7 @@ function Invoicing({live = {}, user = {}}) {
   const [matching,  setMatching]  = useState(null);   // invoice being matched
   const [bankTxns,  setBankTxns]  = useState([]);     // bank transactions for matching
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true});
+  const [saving, setSaving] = useState(false);
 
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
   const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + i.amount, 0);
@@ -544,14 +545,15 @@ function Invoicing({live = {}, user = {}}) {
   };
 
   const handleCreate = async () => {
-    const newInv = { id:`INV-00${invoices.length+1}`, client:form.client, amount:+form.amount, date:new Date().toISOString().slice(0,10), due:form.due, status:"pending", desc:form.desc };
-    setInvoices([newInv,...invoices]);
-    setShowNew(false);
-    setForm({client:"",amount:"",desc:"",due:"",vatApplicable:true});
+    if(!form.client||!form.amount||!form.desc){alert("Client, description and amount are required.");return;}
+    setSaving(true);
     try {
       await api("/invoices/", { method:"POST", body: JSON.stringify({ client_name:form.client, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, due_date:form.due||null }) });
       if (live && live.reload) live.reload();
-    } catch(err) { console.warn("Invoice save failed:", err.message); }
+      setShowNew(false);
+      setForm({client:"",amount:"",desc:"",due:"",vatApplicable:true});
+    } catch(err) { alert("Failed to create invoice. Please try again."); }
+    finally { setSaving(false); }
   };
 
   const handleAmend = async () => {
@@ -580,7 +582,7 @@ function Invoicing({live = {}, user = {}}) {
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Invoice</h3>
           <InvFormFields data={form} onChange={setForm}/>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={handleCreate} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Create Invoice</button>
+            <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Create Invoice"}</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
@@ -740,6 +742,7 @@ function Expenses({live = {}}) {
   const [showNew,    setShowNew]    = useState(false);
   const [form,       setForm]       = useState({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
   const [autoNotice, setAutoNotice] = useState("");
+  const [saving,     setSaving]     = useState(false);
 
   const unposted = expenses.filter(e => !isPosted(e.category));
   const posted   = expenses.filter(e => isPosted(e.category));
@@ -828,19 +831,15 @@ function Expenses({live = {}}) {
   };
 
   const handleAdd = async () => {
-    const newExp = {
-      id:`EXP-00${expenses.length+1}`,
-      vendor:form.vendor, amount:+form.amount,
-      date:new Date().toISOString().slice(0,10),
-      category:form.category, desc:form.desc
-    };
-    setExpenses([newExp,...expenses]);
-    setShowNew(false);
-    setForm({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
+    if(!form.vendor||!form.amount){alert("Vendor and amount are required.");return;}
+    setSaving(true);
     try {
       await api("/expenses/", { method:"POST", body: JSON.stringify({ vendor:form.vendor, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, category:form.category, expense_date:new Date().toISOString().slice(0,10) }) });
       if (live && live.reload) live.reload();
-    } catch(err) { console.warn("Expense save failed:", err.message); }
+      setShowNew(false);
+      setForm({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
+    } catch(err) { alert("Failed to save expense. Please try again."); }
+    finally { setSaving(false); }
   };
 
   return (
@@ -927,7 +926,7 @@ function Expenses({live = {}}) {
             )}
           </div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={handleAdd} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add</button>
+            <button onClick={handleAdd} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Add Expense"}</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
@@ -3624,36 +3623,75 @@ function Quotes({live={},user={},onNavigate}) {
   const [quotes,    setQuotes]    = useState([]);
   const [showNew,   setShowNew]   = useState(false);
   const [preview,   setPreview]   = useState(null);
-  const [form,      setForm]      = useState({client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:""});
+  const [saving,    setSaving]    = useState(false);
+  const emptyForm = {client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:"",vatApplicable:true};
+  const [form, setForm] = useState(emptyForm);
 
-  const totalAccepted = quotes.filter(q=>q.status==="accepted").reduce((s,q)=>s+q.amount,0);
-  const totalPending  = quotes.filter(q=>q.status==="sent").reduce((s,q)=>s+q.amount,0);
+  useEffect(()=>{
+    api("/quotes/").then(data=>setQuotes(data.map(q=>({
+      id: q.quote_number, _id: q.id,
+      client: q.client_name, desc: q.description,
+      amount: q.amount, totalAmount: q.total_amount,
+      vatApplicable: q.vat_applicable, vatAmount: q.vat_amount,
+      date: q.created_at?.slice(0,10),
+      validUntil: q.valid_until, status: q.status,
+      currency: q.currency, rate: q.exchange_rate,
+      notes: q.notes,
+    })))).catch(()=>{});
+  },[]);
+
+  const totalAccepted = quotes.filter(q=>q.status==="accepted").reduce((s,q)=>s+(q.totalAmount||q.amount),0);
+  const totalPending  = quotes.filter(q=>q.status==="sent").reduce((s,q)=>s+(q.totalAmount||q.amount),0);
 
   const handleCreate = async () => {
-    const q = {id:`QTE-${String(quotes.length+1).padStart(3,"0")}`,client:form.client,amount:+form.amount,date:new Date().toISOString().slice(0,10),validUntil:form.validUntil,status:"draft",desc:form.desc,currency:form.currency,rate:+form.rate,notes:form.notes};
-    setQuotes([q,...quotes]);
-    setShowNew(false);
-    setForm({client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:""});
+    if(!form.client||!form.amount||!form.desc){alert("Client, description and amount are required.");return;}
+    setSaving(true);
+    try {
+      const res = await api("/quotes/",{method:"POST",body:JSON.stringify({
+        client_name: form.client, description: form.desc,
+        amount: +form.amount, vat_applicable: form.vatApplicable,
+        currency: form.currency, exchange_rate: +form.rate,
+        valid_until: form.validUntil||null, notes: form.notes||null,
+      })});
+      setQuotes(prev=>[{id:res.quote_number,_id:res.id,client:res.client_name,desc:res.description,amount:res.amount,totalAmount:res.total_amount,vatApplicable:res.vat_applicable,vatAmount:res.vat_amount,date:res.created_at?.slice(0,10),validUntil:res.valid_until,status:res.status,currency:res.currency,rate:res.exchange_rate,notes:res.notes},...prev]);
+      setShowNew(false); setForm(emptyForm);
+    } catch(e){alert("Failed to create quote: "+(e.message||"Unknown error"));}
+    finally{setSaving(false);}
   };
 
-  const updateStatus = (id,status) => setQuotes(prev=>prev.map(q=>q.id===id?{...q,status}:q));
+  const updateStatus = async (_id, status) => {
+    try {
+      await api(`/quotes/${_id}`,{method:"PUT",body:JSON.stringify({status})});
+      setQuotes(prev=>prev.map(q=>q._id===_id?{...q,status}:q));
+      if(preview&&preview._id===_id) setPreview(p=>({...p,status}));
+    } catch(e){alert("Failed to update status.");}
+  };
+
+  const deleteQuote = async (_id) => {
+    if(!window.confirm("Delete this quote?")) return;
+    try {
+      await api(`/quotes/${_id}`,{method:"DELETE"});
+      setQuotes(prev=>prev.filter(q=>q._id!==_id));
+      setPreview(null);
+    } catch(e){alert("Failed to delete quote.");}
+  };
 
   const convertToInvoice = async (q) => {
+    setSaving(true);
     try {
       await api("/invoices/",{method:"POST",body:JSON.stringify({
         client_name: q.client,
         description: q.desc || "Converted from quote",
         amount: q.amount,
-        vat_applicable: false,   // quote amount is already the agreed total
+        vat_applicable: q.vatApplicable,
         due_date: q.validUntil || null,
         notes: q.notes || `Converted from ${q.id}`,
       })});
-      updateStatus(q.id, "accepted");
+      await updateStatus(q._id, "accepted");
       setPreview(null);
       if(onNavigate) onNavigate("invoicing");
-    } catch(e) {
-      alert("Failed to convert quote: " + (e.message || "Unknown error"));
-    }
+    } catch(e){alert("Failed to convert quote: "+(e.message||"Unknown error"));}
+    finally{setSaving(false);}
   };
 
   const inputStyle = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
@@ -3691,7 +3729,7 @@ function Quotes({live={},user={},onNavigate}) {
             </div>
           )}
           <div style={{display:"flex",gap:8}}>
-            <button onClick={handleCreate} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Create Quote</button>
+            <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Create Quote"}</button>
             <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
@@ -3722,7 +3760,7 @@ function Quotes({live={},user={},onNavigate}) {
               <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>This quote is valid for 30 days from the date of issue. Prices exclude VAT unless stated.</div>
             </div>
             <div style={{display:"flex",gap:8,marginTop:20}}>
-              <button onClick={()=>convertToInvoice(preview)} style={{flex:1,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Convert to Invoice</button>
+              <button onClick={()=>convertToInvoice(preview)} disabled={saving} style={{flex:1,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Converting...":"Convert to Invoice"}</button>
               <button onClick={()=>{const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;}</style></head><body>${document.getElementById("quote-print-content").innerHTML}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();};}} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={()=>setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
             </div>
@@ -3751,9 +3789,10 @@ function Quotes({live={},user={},onNavigate}) {
                     <td style={{padding:"13px 14px"}}>
                       <div style={{display:"flex",gap:5}}>
                         <button onClick={()=>setPreview(q)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
-                        {q.status==="draft" && <button onClick={()=>updateStatus(q.id,"sent")} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Send</button>}
+                        {q.status==="draft" && <button onClick={()=>updateStatus(q._id,"sent")} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Send</button>}
                         {q.status==="sent"  && <button onClick={()=>convertToInvoice(q)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Accept</button>}
-                        {q.status==="sent"  && <button onClick={()=>updateStatus(q.id,"declined")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Decline</button>}
+                        {q.status==="sent"  && <button onClick={()=>updateStatus(q._id,"declined")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Decline</button>}
+                        <button onClick={()=>deleteQuote(q._id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
                       </div>
                     </td>
                   </tr>
@@ -3778,6 +3817,7 @@ function Customers() {
   const [search,  setSearch] = useState("");
   const empty = {name:"",contact_person:"",email:"",phone:"",address:"",vat_number:"",payment_terms:30,notes:""};
   const [form, setForm] = useState(empty);
+  const [saving, setSaving] = useState(false);
   const f = k => e => setForm(d=>({...d,[k]:e.target.value}));
   const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:13,background:C.bg};
   const lb = t => <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:4}}>{t}</div>;
@@ -3788,11 +3828,14 @@ function Customers() {
   useEffect(()=>{load();},[]);
 
   const save = async () => {
+    if(!form.name){alert("Customer name is required.");return;}
+    setSaving(true);
     try {
       if (editing) await api(`/customers/${editing.id}`, {method:"PUT",body:JSON.stringify(form)});
       else await api("/customers/", {method:"POST",body:JSON.stringify(form)});
       setShowForm(false); setEditing(null); setForm(empty); load();
     } catch(e){ alert(e.message); }
+    finally { setSaving(false); }
   };
 
   const del = async (id) => {
@@ -3830,7 +3873,7 @@ function Customers() {
           <div style={{marginBottom:12}}>{lb("Address")}<textarea value={form.address} onChange={f("address")} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={f("notes")} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{display:"flex",gap:10}}>
-            <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer"}}>Save</button>
+            <button onClick={save} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer",opacity:saving?0.6:1}}>{saving?"Saving...":"Save"}</button>
             <button onClick={()=>{setShowForm(false);setEditing(null);}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
           </div>
         </div>
@@ -3874,6 +3917,7 @@ function Suppliers() {
   const [search,  setSearch] = useState("");
   const empty = {name:"",contact_person:"",email:"",phone:"",address:"",vat_number:"",bank_name:"",account_number:"",branch_code:"",account_type:"Cheque",payment_terms:30,notes:""};
   const [form, setForm] = useState(empty);
+  const [saving, setSaving] = useState(false);
   const f = k => e => setForm(d=>({...d,[k]:e.target.value}));
   const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:13,background:C.bg};
   const lb = t => <div style={{fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:4}}>{t}</div>;
@@ -3882,11 +3926,14 @@ function Suppliers() {
   useEffect(()=>{load();},[]);
 
   const save = async () => {
+    if(!form.name){alert("Supplier name is required.");return;}
+    setSaving(true);
     try {
       if (editing) await api(`/suppliers/${editing.id}`,{method:"PUT",body:JSON.stringify(form)});
       else await api("/suppliers/",{method:"POST",body:JSON.stringify(form)});
       setShowForm(false); setEditing(null); setForm(empty); load();
     } catch(e){ alert(e.message); }
+    finally { setSaving(false); }
   };
 
   const del = async (id) => {
@@ -3931,7 +3978,7 @@ function Suppliers() {
           </div>
           <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={f("notes")} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{display:"flex",gap:10}}>
-            <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer"}}>Save</button>
+            <button onClick={save} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer",opacity:saving?0.6:1}}>{saving?"Saving...":"Save"}</button>
             <button onClick={()=>{setShowForm(false);setEditing(null);}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
           </div>
         </div>
