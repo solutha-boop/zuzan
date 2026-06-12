@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -10,6 +10,10 @@ import secrets
 from typing import Optional
 from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus
 from email_service import send_verification_email, send_welcome_email, send_password_reset_email, send_admin_signup_notification
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 
 import os
 SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
@@ -91,7 +95,8 @@ def get_current_user(
 
 
 @router.post("/register")
-async def register(data: RegisterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+async def register(request: Request, data: RegisterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     # Check email not already registered
     existing = db.query(User).filter(User.email == data.email).first()
     if existing:
@@ -183,7 +188,8 @@ async def register(data: RegisterRequest, background_tasks: BackgroundTasks, db:
 
 
 @router.post("/login")
-async def login(data: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+async def login(request: Request, data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == data.email).first()
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -280,7 +286,8 @@ class ResetPasswordRequest(BaseModel):
 
 
 @router.post("/forgot-password")
-async def forgot_password(data: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+async def forgot_password(request: Request, data: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == data.email.lower().strip()).first()
     if not user:
         return {"message": "If that email is registered, a reset code has been sent."}

@@ -5,6 +5,10 @@ from typing import Optional
 from database import get_db, Supplier
 from auth import get_current_user, User
 
+def clean(value, max_len=500):
+    if value is None: return value
+    return str(value).strip()[:max_len]
+
 router = APIRouter()
 
 class SupplierCreate(BaseModel):
@@ -52,7 +56,10 @@ async def list_suppliers(current_user: User = Depends(get_current_user), db: Ses
 
 @router.post("/")
 async def create_supplier(data: SupplierCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = Supplier(company_id=current_user.company_id, **data.dict())
+    d = data.dict()
+    for field in ["name","contact_person","email","phone","address","vat_number","bank_name","account_number","branch_code","account_type","notes"]:
+        if d.get(field): d[field] = clean(d[field], 500)
+    s = Supplier(company_id=current_user.company_id, **d)
     db.add(s); db.commit(); db.refresh(s)
     return to_dict(s)
 

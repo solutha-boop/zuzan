@@ -6,6 +6,10 @@ from datetime import datetime
 from database import get_db, Quote
 from auth import get_current_user, User
 
+def clean(value, max_len=500):
+    if value is None: return value
+    return str(value).strip()[:max_len]
+
 router = APIRouter()
 
 VAT_RATE = 0.15
@@ -69,9 +73,9 @@ async def create_quote(data: QuoteCreate, current_user: User = Depends(get_curre
     q = Quote(
         company_id=current_user.company_id,
         quote_number=next_quote_number(db, current_user.company_id),
-        client_name=data.client_name,
-        client_email=data.client_email,
-        description=data.description,
+        client_name=clean(data.client_name, 200),
+        client_email=clean(data.client_email, 200),
+        description=clean(data.description, 1000),
         amount=data.amount,
         vat_applicable=data.vat_applicable,
         vat_amount=vat,
@@ -79,7 +83,7 @@ async def create_quote(data: QuoteCreate, current_user: User = Depends(get_curre
         currency=data.currency,
         exchange_rate=data.exchange_rate,
         valid_until=valid,
-        notes=data.notes,
+        notes=clean(data.notes, 2000),
         status="draft",
     )
     db.add(q); db.commit(); db.refresh(q)

@@ -13,6 +13,11 @@ import logging
 
 logger = logging.getLogger("zuzan.routers")
 
+def clean(value, max_len=500):
+    """Strip whitespace and enforce max length on text inputs."""
+    if value is None: return value
+    return str(value).strip()[:max_len]
+
 
 # ── COMPANIES ─────────────────────────────────────────────────────────────────
 router = APIRouter()
@@ -105,14 +110,14 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     invoice = Invoice(
         company_id=current_user.company_id,
         invoice_number=next_invoice_number(current_user.company_id, db),
-        client_name=data.client_name,
-        client_email=data.client_email,
-        description=data.description,
+        client_name=clean(data.client_name, 200),
+        client_email=clean(data.client_email, 200),
+        description=clean(data.description, 1000),
         amount=data.amount,
         vat_amount=vat_amount,
         total_amount=total_amount,
         due_date=datetime.fromisoformat(data.due_date) if data.due_date else None,
-        notes=data.notes,
+        notes=clean(data.notes, 2000),
         status=InvoiceStatus.sent,
     )
     db.add(invoice)
@@ -177,11 +182,11 @@ async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_c
 
     expense = Expense(
         company_id=current_user.company_id,
-        vendor=data.vendor,
-        description=data.description,
-        amount=exp_total,       # Store VAT-inclusive total
+        vendor=clean(data.vendor, 200),
+        description=clean(data.description, 1000),
+        amount=exp_total,
         vat_amount=exp_vat,
-        category=data.category,
+        category=clean(data.category, 200),
         expense_date=datetime.fromisoformat(data.expense_date) if data.expense_date else datetime.utcnow(),
     )
     db.add(expense)

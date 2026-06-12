@@ -1,11 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("zuzan.api")
 
+limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -17,6 +22,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -130,7 +137,8 @@ class ChatRequest(BM):
     context: str = ""
 
 @app.post("/ai/chat")
-async def ai_chat(data: ChatRequest):
+@limiter.limit("30/minute")
+async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__import__("auth").get_current_user)):
     msg = data.message.lower()
     ctx = data.context.lower()
 
@@ -223,7 +231,7 @@ class ReceiptRequest(BM):
     image: str  # base64
 
 @app.post("/expenses/scan-receipt")
-async def scan_receipt(data: ReceiptRequest):
+async def scan_receipt(data: ReceiptRequest, current_user=Depends(__import__("auth").get_current_user)):
     # Basic OCR using pytesseract if available, else return empty
     try:
         import pytesseract
