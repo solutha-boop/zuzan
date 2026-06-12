@@ -4273,12 +4273,21 @@ const AI_SUGGESTIONS = [
   "How do I record a bad debt?",
   "What is the VAT rate in South Africa?",
 ];
-function AIAssistant() {
+const AI_QUICK_PROMPTS = {
+  invoicing: ["How do I create an invoice?","How do I mark an invoice as paid?","What makes a valid tax invoice?","How do I handle overdue invoices?"],
+  quotes:    ["How do I create a quote?","How do I convert a quote to an invoice?","What should a quote include?","How long should a quote be valid?"],
+  expenses:  ["How do I add an expense?","How do I categorise expenses?","Can I claim input VAT on expenses?","How do I scan a receipt?"],
+  payroll:   ["What is the PAYE rate for R35,000/month?","When is EMP201 due?","How is UIF calculated?","What is SDL?"],
+  default:   ["How do I create an invoice?","What is the VAT rate?","How do I record a bad debt?","When is EMP201 due?"],
+};
+
+function AIAssistant({tab}) {
   const [open,     setOpen]     = useState(false);
-  const [messages, setMessages] = useState([{role:"assistant",text:"Hi! I'm ZuZan AI. Ask me anything about bookkeeping, payroll, or SARS compliance."}]);
+  const [messages, setMessages] = useState([{role:"assistant",text:"Hi! I'm ZuZan AI. Ask me anything about invoicing, quotes, expenses, payroll, or SARS compliance."}]);
   const [input,    setInput]    = useState("");
   const [loading,  setLoading]  = useState(false);
   const bottomRef = useRef(null);
+  const prompts = AI_QUICK_PROMPTS[tab] || AI_QUICK_PROMPTS.default;
 
   useEffect(() => { if(bottomRef.current) bottomRef.current.scrollIntoView({behavior:"smooth"}); }, [messages]);
 
@@ -4289,7 +4298,7 @@ function AIAssistant() {
     setMessages(m=>[...m,{role:"user",text:q}]);
     setLoading(true);
     try {
-      const res = await api("/ai/chat",{method:"POST",body:JSON.stringify({message:q,context:"ZuZan SA bookkeeping app"})});
+      const res = await api("/ai/chat",{method:"POST",body:JSON.stringify({message:q,context:tab||"dashboard"})});
       setMessages(m=>[...m,{role:"assistant",text:res.reply||res.message||"I can help with that. Please check the relevant section of the app."}]);
     } catch(e) {
       // Fallback local answers
@@ -4339,7 +4348,7 @@ function AIAssistant() {
           {/* Suggestions */}
           {messages.length <= 1 && (
             <div style={{padding:"0 12px 8px",display:"flex",flexWrap:"wrap",gap:6}}>
-              {AI_SUGGESTIONS.map(s=>(
+              {prompts.map(s=>(
                 <button key={s} onClick={()=>send(s)} style={{padding:"5px 10px",borderRadius:14,border:`1px solid ${C.border}`,background:C.bg,color:C.inkMid,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>{s}</button>
               ))}
             </div>
@@ -5030,7 +5039,7 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
           );
         })}
       </div>
-      <AIAssistant/>
+      <AIAssistant tab={tab}/>
     </div>
   );
 }
@@ -5158,7 +5167,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
       <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
         {screens[tab]}
       </div>
-      <AIAssistant/>
+      <AIAssistant tab={tab}/>
     </div>
   );
 }
