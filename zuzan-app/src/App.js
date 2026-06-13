@@ -1664,6 +1664,7 @@ function Reports({live = {}}) {
   const [mgmt,     setMgmt]     = useState(null);
   const [provTax,  setProvTax]  = useState(null);
   const [vat201,   setVat201]   = useState(null);
+  const [recon,    setRecon]    = useState(null);
   const [vatPeriod,setVatPeriod]= useState(new Date().toISOString().slice(0,7));
   const [loading,  setLoading]  = useState(false);
 
@@ -1713,7 +1714,8 @@ function Reports({live = {}}) {
     setActiveTab(tab);
     setLoading(true);
     try {
-      if (tab==="bs")   setBsData(await api(`/reports/balance-sheet?${dateParams}`).catch(()=>null));
+      if (tab==="bs")    setBsData(await api(`/reports/balance-sheet`).catch(()=>null));
+      if (tab==="recon") setRecon(await api(`/reports/reconciliation`).catch(()=>null));
       if (tab==="cf")   setCfData(await api(`/reports/cash-flow?${dateParams}`).catch(()=>null));
       if (tab==="emp")  setEmp201(await api(`/reports/emp201?${dateParams}`).catch(()=>null));
       if (tab==="mgmt") setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
@@ -1726,6 +1728,7 @@ function Reports({live = {}}) {
   const RTABS = [
     {id:"pl",   label:"Income Statement"},
     {id:"bs",   label:"Balance Sheet"},
+    {id:"recon",label:"Reconciliation"},
     {id:"cf",   label:"Cash Flow"},
     {id:"mgmt", label:"Management Pack"},
     {id:"emp",  label:"EMP201 / IRP5"},
@@ -1733,32 +1736,134 @@ function Reports({live = {}}) {
     {id:"vat",  label:"VAT201"},
   ];
   const renderBS = () => {
-    const bs = bsData || {date:now.toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"}),assets:{cash_and_equivalents:0,trade_receivables:0,total:0},liabilities:{paye_payable:0,uif_payable:0,sdl_payable:0,total:0},equity:{retained_income:0,total:0},total_liabilities_and_equity:0};
+    const bs = bsData;
+    if (!bs) return <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading balance sheet…</div>;
+    const balanced = bs.balanced;
     return (
       <div>
-        <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
           <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Balance Sheet</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>As at {bs.date}</div></div>
-          <ExcelBtn filename="balance-sheet.csv" data={[{Item:"Cash",Amount:bs.assets.cash_and_equivalents},{Item:"Trade Receivables",Amount:bs.assets.trade_receivables},{Item:"Total Assets",Amount:bs.assets.total},{Item:"PAYE Payable",Amount:bs.liabilities.paye_payable},{Item:"UIF Payable",Amount:bs.liabilities.uif_payable},{Item:"SDL Payable",Amount:bs.liabilities.sdl_payable},{Item:"Total Liabilities",Amount:bs.liabilities.total},{Item:"Retained Income",Amount:bs.equity.retained_income}]}/>
+          <ExcelBtn filename="balance-sheet.csv" data={[
+            {Item:"Cash & Equivalents",Amount:bs.assets.cash_and_equivalents},
+            {Item:"Trade Receivables",Amount:bs.assets.trade_receivables},
+            {Item:"Inventory at Cost",Amount:bs.assets.inventory_at_cost},
+            {Item:"VAT Input Recoverable",Amount:bs.assets.vat_input_recoverable},
+            {Item:"Total Assets",Amount:bs.assets.total},
+            {Item:"Accounts Payable",Amount:bs.liabilities.accounts_payable},
+            {Item:"VAT Payable",Amount:bs.liabilities.vat_payable},
+            {Item:"PAYE Payable",Amount:bs.liabilities.paye_payable},
+            {Item:"UIF Payable",Amount:bs.liabilities.uif_payable},
+            {Item:"SDL Payable",Amount:bs.liabilities.sdl_payable},
+            {Item:"Total Liabilities",Amount:bs.liabilities.total},
+            {Item:"Retained Income",Amount:bs.equity.retained_income},
+            {Item:"Total Equity",Amount:bs.equity.total},
+            {Item:"Total Liabilities & Equity",Amount:bs.total_liabilities_and_equity},
+          ]}/>
+        </div>
+        {/* Balance check banner */}
+        <div style={{background:balanced?C.greenLt:"#FFF3F3",border:`1px solid ${balanced?C.green:C.red}`,borderRadius:10,padding:"10px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>{balanced?"✅":"❌"}</span>
+          <span style={{fontSize:13,fontWeight:600,color:balanced?C.green:C.red}}>
+            {balanced
+              ? "Balance sheet is balanced — Assets = Liabilities + Equity"
+              : `Balance sheet imbalance of R ${Math.abs(bs.imbalance).toLocaleString("en-ZA",{minimumFractionDigits:2})} — check the Reconciliation tab for details`}
+          </span>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
           <div>
             <div style={{fontSize:11,fontWeight:700,color:C.blue,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Assets</div>
             <ReportRow label="Cash and Cash Equivalents"   value={bs.assets.cash_and_equivalents} color={C.blue}/>
             <ReportRow label="Trade Receivables (Debtors)" value={bs.assets.trade_receivables}    color={C.blue}/>
+            <ReportRow label="Inventory at Cost"           value={bs.assets.inventory_at_cost}    color={C.blue}/>
+            {bs.assets.vat_input_recoverable > 0 && <ReportRow label="VAT Input Recoverable" value={bs.assets.vat_input_recoverable} color={C.blue}/>}
             <ReportRow label="Total Assets"                value={bs.assets.total} bold border color={C.blue}/>
           </div>
           <div>
-            <div style={{fontSize:11,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Liabilities and Equity</div>
-            <ReportRow label="PAYE Payable (SARS)" value={bs.liabilities.paye_payable} indent color={C.red}/>
-            <ReportRow label="UIF Payable (SARS)"  value={bs.liabilities.uif_payable}  indent color={C.red}/>
-            <ReportRow label="SDL Payable (SARS)"  value={bs.liabilities.sdl_payable}  indent color={C.red}/>
-            <ReportRow label="Total Liabilities"   value={bs.liabilities.total} bold border color={C.red}/>
+            <div style={{fontSize:11,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Liabilities</div>
+            <ReportRow label="Accounts Payable (Suppliers)" value={bs.liabilities.accounts_payable} indent color={C.red}/>
+            <ReportRow label="VAT Payable (SARS)"           value={bs.liabilities.vat_payable}      indent color={C.red}/>
+            <ReportRow label="PAYE Payable (SARS)"          value={bs.liabilities.paye_payable}     indent color={C.red}/>
+            <ReportRow label="UIF Payable (SARS)"           value={bs.liabilities.uif_payable}      indent color={C.red}/>
+            <ReportRow label="SDL Payable (SARS)"           value={bs.liabilities.sdl_payable}      indent color={C.red}/>
+            <ReportRow label="Total Liabilities"            value={bs.liabilities.total} bold border color={C.red}/>
             <div style={{height:12}}/>
-            <ReportRow label="Retained Income"              value={bs.equity.retained_income} color={C.green}/>
-            <ReportRow label="Total Equity"                 value={bs.equity.total} bold color={C.green}/>
-            <ReportRow label="Total Liabilities and Equity" value={bs.total_liabilities_and_equity} bold border large color={C.ink}/>
+            <div style={{fontSize:11,fontWeight:700,color:C.green,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Equity</div>
+            <ReportRow label="Retained Income" value={bs.equity.retained_income} color={C.green}/>
+            <ReportRow label="Total Equity"    value={bs.equity.total} bold color={C.green}/>
+            <div style={{height:12}}/>
+            <ReportRow label="Total Liabilities and Equity" value={bs.total_liabilities_and_equity} bold border large color={balanced?C.ink:C.red}/>
           </div>
         </div>
+      </div>
+    );
+  };
+
+  const renderReconciliation = () => {
+    if (!recon) return <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading reconciliation…</div>;
+    const { summary, checks } = recon;
+    const statusColor = s => s==="pass"?C.green:s==="warn"?C.gold:C.red;
+    const statusBg    = s => s==="pass"?C.greenLt:s==="warn"?"#FFFBEB":"#FFF3F3";
+    const statusIcon  = s => s==="pass"?"✅":s==="warn"?"⚠️":"❌";
+    return (
+      <div>
+        <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink,marginBottom:4}}>Reconciliation Report</div>
+        <div style={{fontSize:12,color:C.inkMid,marginBottom:20}}>As at {recon.date}</div>
+
+        {/* Summary pills */}
+        <div style={{display:"flex",gap:12,marginBottom:24}}>
+          <div style={{background:C.greenLt,borderRadius:10,padding:"10px 18px",textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:800,color:C.green}}>{summary.passed}</div>
+            <div style={{fontSize:11,color:C.green,fontWeight:600}}>PASSED</div>
+          </div>
+          <div style={{background:"#FFFBEB",borderRadius:10,padding:"10px 18px",textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:800,color:C.gold}}>{summary.warned}</div>
+            <div style={{fontSize:11,color:C.gold,fontWeight:600}}>WARNINGS</div>
+          </div>
+          <div style={{background:"#FFF3F3",borderRadius:10,padding:"10px 18px",textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:800,color:C.red}}>{summary.failed}</div>
+            <div style={{fontSize:11,color:C.red,fontWeight:600}}>FAILED</div>
+          </div>
+          <div style={{background:C.surface,borderRadius:10,padding:"10px 18px",textAlign:"center",border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:22,fontWeight:800,color:C.ink}}>{summary.total}</div>
+            <div style={{fontSize:11,color:C.inkMid,fontWeight:600}}>TOTAL CHECKS</div>
+          </div>
+        </div>
+
+        {/* Per-check cards */}
+        {checks.map((check, i) => (
+          <div key={i} style={{background:statusBg(check.status),border:`1px solid ${statusColor(check.status)}40`,borderLeft:`4px solid ${statusColor(check.status)}`,borderRadius:10,padding:"14px 16px",marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                  <span style={{fontSize:16}}>{statusIcon(check.status)}</span>
+                  <span style={{fontSize:14,fontWeight:700,color:C.ink}}>{check.rule}</span>
+                  <span style={{fontSize:11,fontWeight:700,color:statusColor(check.status),background:`${statusColor(check.status)}20`,padding:"2px 8px",borderRadius:20,textTransform:"uppercase"}}>
+                    {check.status}
+                  </span>
+                </div>
+                <div style={{fontSize:13,color:C.inkMid,lineHeight:1.5}}>{check.detail}</div>
+              </div>
+              {check.amount !== null && check.amount !== undefined &&
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:16,fontWeight:700,color:statusColor(check.status)}}>
+                    R {Math.abs(check.amount).toLocaleString("en-ZA",{minimumFractionDigits:2})}
+                  </div>
+                </div>}
+            </div>
+            {/* Drill-down items */}
+            {check.items && check.items.length > 0 && (
+              <div style={{marginTop:10,borderTop:`1px solid ${statusColor(check.status)}30`,paddingTop:10}}>
+                {check.items.slice(0,5).map((item,j)=>(
+                  <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.inkMid,padding:"3px 0",borderBottom:`1px solid ${C.border}`}}>
+                    <span style={{fontWeight:500}}>{item.id || item.sku || item.name} {item.client?"— "+item.client:""}{item.supplier?"— "+item.supplier:""}</span>
+                    <span>{item.amount!=null?"R "+Number(item.amount).toLocaleString("en-ZA",{minimumFractionDigits:2}):""} {item.days?"("+item.days+" days)":""}{item.qty!=null?" qty: "+item.qty:""}</span>
+                  </div>
+                ))}
+                {check.items.length > 5 && <div style={{fontSize:11,color:C.inkMid,marginTop:6}}>…and {check.items.length-5} more</div>}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     );
   };
@@ -2176,6 +2281,7 @@ function Reports({live = {}}) {
           </div>
         )}
         {activeTab==="bs"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderBS()}</div>}
+        {activeTab==="recon"&& <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderReconciliation()}</div>}
         {activeTab==="cf"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderCF()}</div>}
         {activeTab==="mgmt" && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderMgmt()}</div>}
         {activeTab==="emp"  && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderEmp()}</div>}
