@@ -4465,6 +4465,7 @@ function Quotes({live={},user={},onNavigate}) {
   const [quotes,    setQuotes]    = useState([]);
   const [showNew,   setShowNew]   = useState(false);
   const [preview,   setPreview]   = useState(null);
+  const [editQuote, setEditQuote] = useState(null);
   const [saving,    setSaving]    = useState(false);
   const emptyForm = {client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:"",vatApplicable:true,vatAmount:"0"};
   const [form, setForm] = useState(emptyForm);
@@ -4518,6 +4519,31 @@ function Quotes({live={},user={},onNavigate}) {
       setQuotes(prev=>prev.filter(q=>q._id!==_id));
       setPreview(null);
     } catch(e){alert("Failed to delete quote.");}
+  };
+
+  const handleAmend = async () => {
+    if(!editQuote.client||!editQuote.amount||!editQuote.desc){alert("Client, description and amount are required.");return;}
+    setSaving(true);
+    try {
+      const body = {
+        client_name: editQuote.client, description: editQuote.desc,
+        amount: +editQuote.amount, currency: editQuote.currency,
+        exchange_rate: +editQuote.rate||1,
+        valid_until: editQuote.validUntil||null, notes: editQuote.notes||null,
+        vat_applicable: editQuote.vatApplicable,
+      };
+      if (editQuote.currency !== "ZAR") body.vat_amount_override = +editQuote.vatAmount||0;
+      const res = await api(`/quotes/${editQuote._id}`,{method:"PUT",body:JSON.stringify(body)});
+      setQuotes(prev=>prev.map(q=>q._id===editQuote._id ? {
+        ...q, client:res.client_name, desc:res.description,
+        amount:res.amount, totalAmount:res.total_amount,
+        vatApplicable:res.vat_applicable, vatAmount:res.vat_amount,
+        validUntil:res.valid_until, currency:res.currency,
+        rate:res.exchange_rate, notes:res.notes,
+      } : q));
+      setEditQuote(null);
+    } catch(e){alert("Failed to amend quote: "+(e.message||"Unknown error"));}
+    finally{setSaving(false);}
   };
 
   const convertToInvoice = async (q) => {
@@ -4587,6 +4613,42 @@ function Quotes({live={},user={},onNavigate}) {
         </div>
       )}
 
+      {/* Amend Quote Modal */}
+      {editQuote && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setEditQuote(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:580,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 20px"}}>Amend Quote — {editQuote.id}</h3>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+              <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Client Name</label><input value={editQuote.client||""} onChange={e=>setEditQuote(q=>({...q,client:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>
+              <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Amount (excl. VAT)</label><input type="number" value={editQuote.amount||""} onChange={e=>setEditQuote(q=>({...q,amount:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>
+              <div style={{gridColumn:"1/-1"}}><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Description</label><input value={editQuote.desc||""} onChange={e=>setEditQuote(q=>({...q,desc:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>
+              <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Valid Until</label><input type="date" value={editQuote.validUntil||""} onChange={e=>setEditQuote(q=>({...q,validUntil:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>
+              <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Currency</label>
+                <select value={editQuote.currency||"ZAR"} onChange={e=>setEditQuote(q=>({...q,currency:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}>
+                  <option value="ZAR">ZAR — South African Rand</option>
+                  <option value="USD">USD — US Dollar</option>
+                </select>
+              </div>
+              {editQuote.currency!=="ZAR" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 {editQuote.currency} = R...)</label><input type="number" value={editQuote.rate||"18.5"} onChange={e=>setEditQuote(q=>({...q,rate:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>}
+              {editQuote.currency!=="ZAR" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>VAT Amount ({editQuote.currency}) — 0 if not applicable</label><input type="number" min="0" value={editQuote.vatAmount||"0"} onChange={e=>setEditQuote(q=>({...q,vatAmount:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>}
+              {(!editQuote.currency||editQuote.currency==="ZAR") && (
+                <div style={{gridColumn:"1/-1",display:"flex",alignItems:"center",gap:10}}>
+                  <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+                    <input type="checkbox" checked={editQuote.vatApplicable!==false} onChange={e=>setEditQuote(q=>({...q,vatApplicable:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                    Apply VAT @ 15%
+                  </label>
+                </div>
+              )}
+              <div style={{gridColumn:"1/-1"}}><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Notes (optional)</label><input value={editQuote.notes||""} onChange={e=>setEditQuote(q=>({...q,notes:e.target.value}))} placeholder="Payment terms, delivery details..." style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:8}}>
+              <button onClick={handleAmend} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Save Changes"}</button>
+              <button onClick={()=>setEditQuote(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Quote Preview Modal */}
       {preview && (
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setPreview(null)}>
@@ -4615,6 +4677,7 @@ function Quotes({live={},user={},onNavigate}) {
               <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>This quote is valid for 30 days from the date of issue. Prices exclude VAT unless stated.</div>
             </div>
             <div style={{display:"flex",gap:8,marginTop:20}}>
+              {preview.status!=="accepted" && <button onClick={()=>{setPreview(null);setEditQuote({...preview,rate:preview.rate||"18.5",vatAmount:preview.vatAmount||"0"});}} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>}
               <button onClick={()=>convertToInvoice(preview)} disabled={saving} style={{flex:1,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Converting...":"Convert to Invoice"}</button>
               <button onClick={()=>{const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;}</style></head><body>${document.getElementById("quote-print-content").innerHTML}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();};}} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={()=>setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
@@ -4644,6 +4707,7 @@ function Quotes({live={},user={},onNavigate}) {
                     <td style={{padding:"13px 14px"}}>
                       <div style={{display:"flex",gap:5}}>
                         <button onClick={()=>setPreview(q)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
+                        {q.status!=="accepted" && <button onClick={()=>setEditQuote({...q,rate:q.rate||"18.5",vatAmount:q.vatAmount||"0"})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>}
                         {q.status==="draft" && <button onClick={()=>updateStatus(q._id,"sent")} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Send</button>}
                         {q.status==="sent"  && <button onClick={()=>convertToInvoice(q)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Accept</button>}
                         {q.status==="sent"  && <button onClick={()=>updateStatus(q._id,"declined")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Decline</button>}
