@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus
+from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder
 from auth import get_current_user, User
 import hashlib
 import logging
@@ -316,58 +316,250 @@ async def balance_sheet(
 ):
     cid = current_user.company_id
     now = datetime.utcnow()
+    VAT_RATE = 0.15
 
-    outstanding_invoices = db.query(Invoice).filter(
-        Invoice.company_id == cid,
+    # ── ASSETS ────────────────────────────────────────────────────────────────
+    # Cash estimate: revenue collected − expenses paid − net payroll
+    paid_invoices   = db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()
+    all_expenses    = db.query(Expense).filter(Expense.company_id==cid).all()
+    all_payslips    = db.query(Payslip).join(Employee).filter(Employee.company_id==cid).all()
+
+    revenue_collected   = sum(i.total_amount for i in paid_invoices)
+    expenses_paid_total = sum(e.amount for e in all_expenses)
+    payroll_paid_total  = sum(p.net_pay for p in all_payslips)
+    cash_and_equivalents = round(revenue_collected - expenses_paid_total - payroll_paid_total, 2)
+
+    # Trade receivables: outstanding invoices (sent + overdue)
+    outstanding = db.query(Invoice).filter(
+        Invoice.company_id==cid,
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
     ).all()
-    trade_receivables = round(sum(i.total_amount for i in outstanding_invoices), 2)
+    trade_receivables = round(sum(i.total_amount for i in outstanding), 2)
 
-    all_paid = db.query(Invoice).filter(
-        Invoice.company_id == cid,
-        Invoice.status == InvoiceStatus.paid
+    # Inventory at cost
+    inventory_items  = db.query(InventoryItem).filter(InventoryItem.company_id==cid, InventoryItem.is_active==True).all()
+    inventory_value  = round(sum(i.quantity_on_hand * i.unit_cost for i in inventory_items), 2)
+
+    # VAT input recoverable: 15% already included in vat_amount on expenses
+    vat_input_recoverable = round(sum(e.vat_amount or 0 for e in all_expenses), 2)
+
+    total_assets = round(cash_and_equivalents + trade_receivables + inventory_value + vat_input_recoverable, 2)
+
+    # ── LIABILITIES ───────────────────────────────────────────────────────────
+    # Accounts payable: received POs not yet paid (use total_amount)
+    open_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id==cid,
+        PurchaseOrder.status.in_(["received","partial","sent"])
     ).all()
-    total_revenue_collected = sum(i.total_amount for i in all_paid)
+    accounts_payable = round(sum(po.total_amount or 0 for po in open_pos), 2)
 
-    all_expenses = db.query(Expense).filter(Expense.company_id == cid).all()
-    total_expenses_paid = sum(e.amount for e in all_expenses)
+    # VAT output payable: VAT collected on all invoices (paid + outstanding)
+    all_invoices = db.query(Invoice).filter(Invoice.company_id==cid).all()
+    vat_output_collected  = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
+    # Net VAT payable = output VAT − input VAT (if positive, owe SARS)
+    vat_payable = round(max(0, vat_output_collected - vat_input_recoverable), 2)
+    vat_reclaimable = round(max(0, vat_input_recoverable - vat_output_collected), 2)  # credit if inputs > outputs
 
-    payslips = db.query(Payslip).join(Employee).filter(Employee.company_id == cid).all()
-    total_payroll_paid = sum(p.net_pay for p in payslips)
-
-    cash_and_equivalents = round(total_revenue_collected - total_expenses_paid - total_payroll_paid, 2)
-
-    month_start = datetime(now.year, now.month, 1)
+    # Payroll liabilities: current month unpaid PAYE/UIF/SDL
+    month_start     = datetime(now.year, now.month, 1)
     recent_payslips = db.query(Payslip).join(Employee).filter(
-        Employee.company_id == cid,
+        Employee.company_id==cid,
         Payslip.generated_at >= month_start
     ).all()
     paye_payable = round(sum(p.paye for p in recent_payslips), 2)
     uif_payable  = round(sum(p.uif_employee + p.uif_employer for p in recent_payslips), 2)
     sdl_payable  = round(sum(p.sdl for p in recent_payslips), 2)
+    payroll_liabilities = round(paye_payable + uif_payable + sdl_payable, 2)
 
-    total_assets      = round(cash_and_equivalents + trade_receivables, 2)
-    total_liabilities = round(paye_payable + uif_payable + sdl_payable, 2)
-    equity            = round(total_assets - total_liabilities, 2)
+    total_liabilities = round(accounts_payable + vat_payable + payroll_liabilities, 2)
+
+    # ── EQUITY ────────────────────────────────────────────────────────────────
+    # Retained income = accumulated profit (revenue − expenses − payroll)
+    total_revenue  = round(sum(i.amount for i in paid_invoices), 2)  # excl. VAT
+    total_expenses = round(expenses_paid_total + payroll_paid_total, 2)
+    retained_income = round(total_revenue - total_expenses, 2)
+    total_equity    = retained_income
+
+    # ── BALANCE CHECK ─────────────────────────────────────────────────────────
+    total_liabilities_and_equity = round(total_liabilities + total_equity, 2)
+    imbalance = round(total_assets - total_liabilities_and_equity, 2)
+    balanced  = abs(imbalance) < 1.0   # allow R1 rounding tolerance
 
     return {
-        "date": now.strftime("%d %B %Y"),
+        "date":     now.strftime("%d %B %Y"),
+        "balanced": balanced,
+        "imbalance": imbalance,
         "assets": {
-            "cash_and_equivalents": cash_and_equivalents,
-            "trade_receivables":    trade_receivables,
-            "total":                total_assets,
+            "cash_and_equivalents":  cash_and_equivalents,
+            "trade_receivables":     trade_receivables,
+            "inventory_at_cost":     inventory_value,
+            "vat_input_recoverable": vat_input_recoverable if vat_reclaimable > 0 else 0,
+            "total":                 total_assets,
         },
         "liabilities": {
-            "paye_payable": paye_payable,
-            "uif_payable":  uif_payable,
-            "sdl_payable":  sdl_payable,
-            "total":        total_liabilities,
+            "accounts_payable":  accounts_payable,
+            "vat_payable":       vat_payable,
+            "paye_payable":      paye_payable,
+            "uif_payable":       uif_payable,
+            "sdl_payable":       sdl_payable,
+            "total":             total_liabilities,
         },
         "equity": {
-            "retained_income": equity,
-            "total":           equity,
+            "retained_income": retained_income,
+            "total":           total_equity,
         },
-        "total_liabilities_and_equity": round(total_liabilities + equity, 2),
+        "total_liabilities_and_equity": total_liabilities_and_equity,
+    }
+
+
+@reports_router.get("/reconciliation")
+async def reconciliation(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Run all balance sheet reconciliation checks and return pass/warn/fail per rule."""
+    from datetime import timedelta
+    cid = current_user.company_id
+    now = datetime.utcnow()
+    VAT_RATE = 0.15
+
+    checks = []
+
+    # ── RULE 1: Balance sheet equation ────────────────────────────────────────
+    bs = await balance_sheet(current_user=current_user, db=db)
+    if bs["balanced"]:
+        checks.append({"rule": "Balance Sheet Equation", "status": "pass",
+            "detail": "Assets = Liabilities + Equity ✓",
+            "amount": None})
+    else:
+        checks.append({"rule": "Balance Sheet Equation", "status": "fail",
+            "detail": f"Imbalance of R {abs(bs['imbalance']):,.2f} — Assets do not equal Liabilities + Equity.",
+            "amount": bs["imbalance"]})
+
+    # ── RULE 2: Debtors ageing — invoices outstanding > 90 days ──────────────
+    cutoff_90 = now - timedelta(days=90)
+    overdue_90 = db.query(Invoice).filter(
+        Invoice.company_id==cid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+        Invoice.issue_date <= cutoff_90
+    ).all()
+    amount_90 = round(sum(i.total_amount for i in overdue_90), 2)
+    if not overdue_90:
+        checks.append({"rule": "Debtors Ageing (>90 days)", "status": "pass",
+            "detail": "No invoices outstanding beyond 90 days.", "amount": None,
+            "items": []})
+    else:
+        checks.append({"rule": "Debtors Ageing (>90 days)", "status": "warn",
+            "detail": f"{len(overdue_90)} invoice(s) outstanding beyond 90 days totalling R {amount_90:,.2f}. Consider writing off or following up.",
+            "amount": amount_90,
+            "items": [{"id": i.invoice_number, "client": i.client_name,
+                       "amount": i.total_amount,
+                       "days": (now - i.issue_date).days} for i in overdue_90]})
+
+    # ── RULE 3: VAT control reconciliation ────────────────────────────────────
+    all_invoices = db.query(Invoice).filter(Invoice.company_id==cid).all()
+    all_expenses = db.query(Expense).filter(Expense.company_id==cid).all()
+    vat_output   = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
+    vat_input    = round(sum(e.vat_amount or 0 for e in all_expenses), 2)
+    net_vat      = round(vat_output - vat_input, 2)
+    vat_status   = "pass" if net_vat >= 0 else "warn"
+    vat_detail   = (f"Output VAT R {vat_output:,.2f} − Input VAT R {vat_input:,.2f} = Net payable R {net_vat:,.2f} to SARS."
+                    if net_vat >= 0 else
+                    f"Input VAT R {vat_input:,.2f} exceeds output VAT R {vat_output:,.2f}. You may have a VAT refund of R {abs(net_vat):,.2f} due from SARS.")
+    checks.append({"rule": "VAT Control Account", "status": vat_status,
+        "detail": vat_detail, "amount": net_vat})
+
+    # ── RULE 4: Payroll liabilities — PAYE/UIF/SDL current month ─────────────
+    month_start     = datetime(now.year, now.month, 1)
+    recent_payslips = db.query(Payslip).join(Employee).filter(
+        Employee.company_id==cid, Payslip.generated_at>=month_start
+    ).all()
+    paye = round(sum(p.paye for p in recent_payslips), 2)
+    uif  = round(sum(p.uif_employee + p.uif_employer for p in recent_payslips), 2)
+    sdl  = round(sum(p.sdl for p in recent_payslips), 2)
+    payroll_liab = round(paye + uif + sdl, 2)
+    # EMP201 due by 7th of next month
+    emp201_due = datetime(now.year + (1 if now.month==12 else 0), (now.month % 12) + 1, 7)
+    days_to_emp201 = (emp201_due - now).days
+    if not recent_payslips:
+        checks.append({"rule": "Payroll Liabilities (EMP201)", "status": "pass",
+            "detail": "No payroll run this month.", "amount": None})
+    elif days_to_emp201 < 0:
+        checks.append({"rule": "Payroll Liabilities (EMP201)", "status": "fail",
+            "detail": f"EMP201 payment of R {payroll_liab:,.2f} (PAYE R {paye:,.2f} + UIF R {uif:,.2f} + SDL R {sdl:,.2f}) was due on {emp201_due.strftime('%d %b %Y')} and may be overdue.",
+            "amount": payroll_liab})
+    elif days_to_emp201 <= 7:
+        checks.append({"rule": "Payroll Liabilities (EMP201)", "status": "warn",
+            "detail": f"EMP201 of R {payroll_liab:,.2f} due in {days_to_emp201} day(s) on {emp201_due.strftime('%d %b %Y')}. PAYE R {paye:,.2f} | UIF R {uif:,.2f} | SDL R {sdl:,.2f}.",
+            "amount": payroll_liab})
+    else:
+        checks.append({"rule": "Payroll Liabilities (EMP201)", "status": "pass",
+            "detail": f"EMP201 of R {payroll_liab:,.2f} due {emp201_due.strftime('%d %b %Y')} ({days_to_emp201} days away). PAYE R {paye:,.2f} | UIF R {uif:,.2f} | SDL R {sdl:,.2f}.",
+            "amount": payroll_liab})
+
+    # ── RULE 5: Accounts payable — open POs received but not cleared ──────────
+    open_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id==cid,
+        PurchaseOrder.status.in_(["received","partial"])
+    ).all()
+    ap_total = round(sum(po.total_amount or 0 for po in open_pos), 2)
+    if not open_pos:
+        checks.append({"rule": "Accounts Payable", "status": "pass",
+            "detail": "No received purchase orders awaiting payment.", "amount": None, "items": []})
+    else:
+        checks.append({"rule": "Accounts Payable", "status": "warn",
+            "detail": f"{len(open_pos)} received PO(s) totalling R {ap_total:,.2f} recorded as accounts payable.",
+            "amount": ap_total,
+            "items": [{"id": po.po_number, "supplier": po.supplier_name,
+                       "amount": po.total_amount, "status": po.status} for po in open_pos]})
+
+    # ── RULE 6: Inventory valuation ───────────────────────────────────────────
+    inv_items   = db.query(InventoryItem).filter(InventoryItem.company_id==cid, InventoryItem.is_active==True).all()
+    below_reorder = [i for i in inv_items if i.quantity_on_hand <= i.reorder_level]
+    neg_stock     = [i for i in inv_items if i.quantity_on_hand < 0]
+    if neg_stock:
+        checks.append({"rule": "Inventory Valuation", "status": "fail",
+            "detail": f"{len(neg_stock)} item(s) have negative stock on hand — indicates unrecorded purchases or data entry errors.",
+            "amount": None,
+            "items": [{"sku": i.sku, "name": i.name, "qty": i.quantity_on_hand} for i in neg_stock]})
+    elif below_reorder:
+        checks.append({"rule": "Inventory Valuation", "status": "warn",
+            "detail": f"{len(below_reorder)} item(s) at or below reorder level. Reorder to avoid stock-outs.",
+            "amount": None,
+            "items": [{"sku": i.sku, "name": i.name, "qty": i.quantity_on_hand, "reorder": i.reorder_level} for i in below_reorder]})
+    else:
+        inv_total = round(sum(i.quantity_on_hand * i.unit_cost for i in inv_items), 2)
+        checks.append({"rule": "Inventory Valuation", "status": "pass",
+            "detail": f"All {len(inv_items)} stock item(s) above reorder level. Total inventory at cost: R {inv_total:,.2f}.",
+            "amount": inv_total})
+
+    # ── RULE 7: Unmatched revenue — paid invoices with no expense offset ───────
+    # Simple check: gross margin — warn if expenses are >90% of revenue
+    total_rev = round(sum(i.amount for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()), 2)
+    total_exp = round(sum(e.amount for e in all_expenses), 2)
+    if total_rev > 0:
+        expense_ratio = total_exp / total_rev
+        if expense_ratio > 0.9:
+            checks.append({"rule": "Gross Margin Health", "status": "warn",
+                "detail": f"Expenses are {expense_ratio*100:.0f}% of revenue. Gross margin is only {(1-expense_ratio)*100:.0f}%. Review cost structure.",
+                "amount": round(total_rev - total_exp, 2)})
+        else:
+            checks.append({"rule": "Gross Margin Health", "status": "pass",
+                "detail": f"Gross margin is {(1-expense_ratio)*100:.0f}%. Expenses are {expense_ratio*100:.0f}% of revenue.",
+                "amount": round(total_rev - total_exp, 2)})
+    else:
+        checks.append({"rule": "Gross Margin Health", "status": "pass",
+            "detail": "No revenue recorded yet.", "amount": None})
+
+    passed = sum(1 for c in checks if c["status"]=="pass")
+    warned = sum(1 for c in checks if c["status"]=="warn")
+    failed = sum(1 for c in checks if c["status"]=="fail")
+
+    return {
+        "date":    now.strftime("%d %B %Y"),
+        "summary": {"total": len(checks), "passed": passed, "warned": warned, "failed": failed},
+        "checks":  checks,
+        "balance_sheet": bs,
     }
 
 
