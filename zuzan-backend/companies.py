@@ -70,6 +70,8 @@ class InvoiceCreate(BaseModel):
     vat_applicable:  bool = True     # Apply 15% VAT
     due_date:        Optional[str] = None
     notes:           Optional[str] = None
+    currency:        Optional[str] = "ZAR"
+    exchange_rate:   Optional[float] = 1.0
 
 class InvoiceUpdate(BaseModel):
     status:       Optional[str] = None
@@ -120,6 +122,8 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         due_date=datetime.fromisoformat(data.due_date) if data.due_date else None,
         notes=clean(data.notes, 2000),
         status=InvoiceStatus.sent,
+        currency=data.currency or "ZAR",
+        exchange_rate=data.exchange_rate or 1.0,
     )
     db.add(invoice)
     db.commit()

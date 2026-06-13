@@ -306,11 +306,14 @@ const DEFAULT_COA = [
 ];
 
 const BANK_FORMATS = {
-  fnb:          {name:"FNB",          logo:"🟢",skipRows:4,dateCol:0,descCol:2,amtCol:4},
-  absa:         {name:"ABSA",         logo:"🔴",skipRows:1,dateCol:0,descCol:1,amtCol:3},
-  standardbank: {name:"Standard Bank",logo:"🔵",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  nedbank:      {name:"Nedbank",      logo:"🟩",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  capitec:      {name:"Capitec",      logo:"🟦",skipRows:1,dateCol:0,descCol:2,amtCol:3},
+  fnb:          {name:"FNB",           logo:"🟢",skipRows:4,dateCol:0,descCol:2,amtCol:4},
+  absa:         {name:"ABSA",          logo:"🔴",skipRows:1,dateCol:0,descCol:1,amtCol:3},
+  standardbank: {name:"Standard Bank", logo:"🔵",skipRows:1,dateCol:0,descCol:1,amtCol:2},
+  nedbank:      {name:"Nedbank",       logo:"🟩",skipRows:1,dateCol:0,descCol:1,amtCol:2},
+  capitec:      {name:"Capitec",       logo:"🟦",skipRows:1,dateCol:0,descCol:2,amtCol:3},
+  discovery:    {name:"Discovery Bank",logo:"🟣",skipRows:1,dateCol:0,descCol:1,amtCol:2},
+  investec:     {name:"Investec",      logo:"🔷",skipRows:1,dateCol:0,descCol:1,amtCol:3},
+  tymebank:     {name:"TymeBank",      logo:"🩵",skipRows:1,dateCol:0,descCol:1,amtCol:2},
 };
 
 function autoCategory(desc) {
@@ -1297,7 +1300,7 @@ function BatchPaymentModal({employees, payroll, period, onClose}) {
   }];
 
   const FORMATS = [
-    { label:"Generic EFT (FNB / Nedbank / Capitec / TymeBank)", icon:"🏦", color:C.blue,
+    { label:"Generic EFT (FNB / Nedbank / Capitec / TymeBank / Discovery / Investec)", icon:"🏦", color:C.blue,
       dlSalary: () => downloadCSV(`salary-eft-${periodStr}.csv`,   buildGenericEFT(empRows)),
       dlSars:   () => downloadCSV(`sars-eft-${periodStr}.csv`,     buildGenericEFT(sarsRow)) },
     { label:"ABSA Batch Payment", icon:"🔴", color:"#B11116",
@@ -1544,7 +1547,7 @@ function Payroll({live = {}, user = {}}) {
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Bank Name</label>
               <select value={form.bankName} onChange={e=>setForm(v=>({...v,bankName:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
                 <option value="">-- Select Bank --</option>
-                {["ABSA","Capitec","FNB","Nedbank","Standard Bank","Investec","TymeBank","African Bank"].map(b=><option key={b}>{b}</option>)}
+                {["ABSA","Capitec","Discovery Bank","FNB","Investec","Nedbank","Standard Bank","TymeBank","African Bank"].map(b=><option key={b}>{b}</option>)}
               </select>
             </div>
             {[
@@ -3672,7 +3675,7 @@ function BankImport({live = {}, onNavigate}) {
             <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:8}}>Upload Bank Statement</div>
             <div style={{fontSize:13,color:C.inkMid,marginBottom:20}}>Drag and drop your CSV file here or click to browse</div>
             <button style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Browse Files</button>
-            <div style={{fontSize:11,color:C.inkDim,marginTop:14}}>Supported: CSV from FNB, ABSA, Standard Bank, Nedbank, Capitec</div>
+            <div style={{fontSize:11,color:C.inkDim,marginTop:14}}>Supported: CSV from FNB, ABSA, Standard Bank, Nedbank, Capitec, Discovery Bank, Investec, TymeBank</div>
             <input ref={fileRef} type="file" accept=".csv" style={{display:"none"}} onChange={e => processFile(e.target.files[0])}/>
           </div>
           {error && <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginTop:14,fontSize:13,color:C.red}}>Warning: {error}</div>}
@@ -3685,6 +3688,9 @@ function BankImport({live = {}, onNavigate}) {
                 ["Standard Bank","Online Banking - Accounts - Transaction History - Export CSV"],
                 ["Nedbank","Online Banking - Accounts - Account Activity - Export - CSV"],
                 ["Capitec","Capitec App or Online - Transactions - Export - CSV format"],
+                ["Discovery Bank","Discovery Bank App - Accounts - Statements - Download CSV"],
+                ["Investec","Investec Online - Accounts - Transaction History - Export CSV"],
+                ["TymeBank","TymeBank App - Accounts - Transactions - Export - CSV"],
               ].map(([b,s]) => (
                 <div key={b} style={{background:C.bg,borderRadius:8,padding:"10px 14px"}}>
                   <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:4}}>{b}</div>
@@ -4497,12 +4503,14 @@ function Quotes({live={},user={},onNavigate}) {
     setSaving(true);
     try {
       await api("/invoices/",{method:"POST",body:JSON.stringify({
-        client_name: q.client,
-        description: q.desc || "Converted from quote",
-        amount: q.amount,
+        client_name:   q.client,
+        description:   q.desc || "Converted from quote",
+        amount:        q.amount,
         vat_applicable: q.vatApplicable,
-        due_date: q.validUntil || null,
-        notes: q.notes || `Converted from ${q.id}`,
+        due_date:      q.validUntil || null,
+        notes:         q.notes || `Converted from ${q.id}`,
+        currency:      q.currency || "ZAR",
+        exchange_rate: q.rate ? +q.rate : 1.0,
       })});
       await updateStatus(q._id, "accepted");
       setPreview(null);
