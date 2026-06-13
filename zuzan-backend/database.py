@@ -62,6 +62,7 @@ class Company(Base):
     suppliers=relationship("Supplier",back_populates="company")
     purchase_orders=relationship("PurchaseOrder",back_populates="company")
     quotes=relationship("Quote",back_populates="company")
+    budgets=relationship("Budget",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -228,6 +229,20 @@ class Quote(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="quotes")
 
+class Budget(Base):
+    __tablename__="budgets"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    year=Column(Integer,nullable=False)
+    month=Column(Integer,nullable=False)          # 1-12
+    category=Column(String,nullable=False)        # expense category or "Revenue"
+    department=Column(String,nullable=True)       # optional dept/project tag
+    type=Column(String,default="expense")         # "expense" or "income"
+    amount=Column(Float,nullable=False,default=0)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    updated_at=Column(DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+    company=relationship("Company",back_populates="budgets")
+
 class Payment(Base):
     __tablename__ = "payments"
     id=Column(Integer,primary_key=True,index=True)
@@ -256,6 +271,7 @@ def init_db():
             "ALTER TABLE api_keys ADD COLUMN requests_today INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN email_verify_token VARCHAR",
+            "CREATE TABLE IF NOT EXISTS budgets (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), year INTEGER NOT NULL, month INTEGER NOT NULL, category VARCHAR NOT NULL, department VARCHAR, type VARCHAR DEFAULT 'expense', amount FLOAT DEFAULT 0, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())",
         ]:
             try:
                 conn.execute(text(sql))

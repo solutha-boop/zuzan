@@ -51,6 +51,7 @@ from customers import router as customers_router
 from suppliers import router as suppliers_router
 from purchase_orders import router as po_router
 from quotes import router as quotes_router
+from budgets import router as budgets_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -67,6 +68,7 @@ app.include_router(customers_router, prefix="/customers",     tags=["Customers"]
 app.include_router(suppliers_router, prefix="/suppliers",     tags=["Suppliers"])
 app.include_router(po_router,        prefix="/purchase-orders", tags=["Purchase Orders"])
 app.include_router(quotes_router,    prefix="/quotes",          tags=["Quotes"])
+app.include_router(budgets_router,   prefix="/budgets",         tags=["Budgets"])
 
 
 @app.get("/")
