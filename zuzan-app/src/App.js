@@ -4797,7 +4797,7 @@ function Suppliers() {
           <div style={{marginBottom:12}}>{lb("Address")}<textarea value={form.address} onChange={f("address")} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{fontWeight:600,fontSize:13,color:C.ink,marginBottom:10,paddingTop:8,borderTop:`1px solid ${C.border}`}}>Banking Details</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
-            <div>{lb("Bank Name")}<input value={form.bank_name} onChange={f("bank_name")} style={is}/></div>
+            <div>{lb("Bank Name")}<select value={form.bank_name} onChange={f("bank_name")} style={is}><option value="">-- Select Bank --</option>{["ABSA","Capitec","Discovery Bank","FNB","Investec","Nedbank","Standard Bank","TymeBank","African Bank","Other"].map(b=><option key={b}>{b}</option>)}</select></div>
             <div>{lb("Account Type")}<select value={form.account_type} onChange={f("account_type")} style={is}><option>Cheque</option><option>Savings</option><option>Transmission</option></select></div>
             <div>{lb("Account Number")}<input value={form.account_number} onChange={f("account_number")} style={is}/></div>
             <div>{lb("Branch Code")}<input value={form.branch_code} onChange={f("branch_code")} style={is}/></div>
