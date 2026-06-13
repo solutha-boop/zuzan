@@ -225,7 +225,7 @@ async def dashboard(
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
-        Invoice.created_at >= month_start
+        Invoice.paid_date >= month_start
     ).all()
     total_revenue = sum(i.total_amount for i in paid_invoices)
 
@@ -294,8 +294,8 @@ async def monthly_trend(
             inv.total_amount for inv in db.query(Invoice).filter(
                 Invoice.company_id == cid,
                 Invoice.status == InvoiceStatus.paid,
-                Invoice.created_at >= start,
-                Invoice.created_at < end
+                Invoice.paid_date >= start,
+                Invoice.paid_date < end
             ).all()
         )
         expenses = sum(
