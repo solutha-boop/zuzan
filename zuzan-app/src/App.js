@@ -533,8 +533,7 @@ function Invoicing({live = {}, user = {}}) {
   const [showNew,   setShowNew]   = useState(false);
   const [preview,   setPreview]   = useState(null);   // view modal
   const [editInv,   setEditInv]   = useState(null);   // amend modal
-  const [matching,  setMatching]  = useState(null);   // invoice being matched
-  const [bankTxns,  setBankTxns]  = useState([]);     // bank transactions for matching
+  const [payModal,  setPayModal]  = useState(null);   // {inv, zarAmt, payDate, ref}
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true,currency:"ZAR",exchangeRate:"18.5",vatAmount:"0"});
   const [saving, setSaving] = useState(false);
 
@@ -542,26 +541,26 @@ function Invoicing({live = {}, user = {}}) {
   const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + i.amount, 0);
   const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + i.amount, 0);
 
-  // Load bank transactions for matching
-  const loadBankTxns = async (inv) => {
-    setMatching(inv);
-    try {
-      const data = await api("/expenses/?type=credit").catch(() => null);
-      setBankTxns(data && data.length ? data : MOCK_INVOICES.map((i,idx) => ({
-        id: idx+1, date: i.date, description: `Payment from ${i.client}`, amount: i.amount, type:"credit"
-      })));
-    } catch(e) { setBankTxns([]); }
+  const openPayModal = (inv) => {
+    const zarAmt = inv.currency && inv.currency !== "ZAR"
+      ? ((inv.amount||0) * (inv.exchange_rate||inv.rate||18.5)).toFixed(2)
+      : (inv.amount||"");
+    setPayModal({inv, zarAmt, payDate: new Date().toISOString().slice(0,10), ref:""});
   };
 
-  const handleMatch = async (inv, txn) => {
-    setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid", matchedTxn: txn.id} : i));
-    setMatching(null);
+  const handleRecordPayment = async () => {
+    const {inv, zarAmt, payDate, ref} = payModal;
+    setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid"} : i));
+    setPayModal(null);
     try {
-      const matchBody = {status:"paid"};
-      if (txn && txn.amount) matchBody.paid_amount_zar = txn.amount;
-      await api(`/invoices/${inv.id}`, { method:"PUT", body: JSON.stringify(matchBody) });
+      await api(`/invoices/${inv.id}`, { method:"PUT", body: JSON.stringify({
+        status: "paid",
+        paid_date: payDate || new Date().toISOString().slice(0,10),
+        paid_amount_zar: +zarAmt || null,
+        notes: ref || null,
+      })});
       if (live && live.reload) live.reload();
-    } catch(e) { console.warn("Match failed:", e.message); }
+    } catch(e) { console.warn("Record payment failed:", e.message); }
   };
 
   const handleCreate = async () => {
@@ -676,37 +675,39 @@ function Invoicing({live = {}, user = {}}) {
         </div>
       )}
 
-      {/* Bank Match Modal */}
-      {matching && (
-        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={() => setMatching(null)}>
-          <div style={{background:C.surface,borderRadius:20,padding:32,width:640,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
-            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 6px"}}>Match Invoice — {matching.id}</h3>
-            <p style={{fontSize:13,color:C.inkMid,marginBottom:20}}>Select the bank payment that matches {matching.client} — {fmt(matching.amount)}</p>
-            {bankTxns.length === 0 ? (
-              <div style={{textAlign:"center",padding:32,color:C.inkMid,fontSize:13}}>No bank transactions loaded. Import a bank statement first.</div>
-            ) : (
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {bankTxns.map(txn => {
-                  const diff = Math.abs(txn.amount - matching.amount);
-                  const isClose = diff < matching.amount * 0.05;
-                  return (
-                    <div key={txn.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 16px",borderRadius:12,border:`2px solid ${isClose?C.green:C.border}`,background:isClose?C.greenLt:"transparent",cursor:"pointer"}}
-                      onClick={() => handleMatch(matching, txn)}>
-                      <div>
-                        <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{txn.description}</div>
-                        <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{txn.date}</div>
-                      </div>
-                      <div style={{textAlign:"right"}}>
-                        <div style={{fontSize:14,fontWeight:700,color:C.green}}>{fmt(txn.amount)}</div>
-                        {isClose && <div style={{fontSize:10,color:C.green,fontWeight:600}}>Best match</div>}
-                        {!isClose && <div style={{fontSize:10,color:C.inkDim}}>Diff: {fmt(diff)}</div>}
-                      </div>
-                    </div>
-                  );
-                })}
+      {/* Record Payment Modal */}
+      {payModal && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setPayModal(null)}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:460}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 4px"}}>Record Payment</h3>
+            <p style={{fontSize:13,color:C.inkMid,marginBottom:24}}>{payModal.inv.id} — {payModal.inv.client}</p>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>ZAR Amount Received</label>
+                <input type="number" min="0" step="0.01" value={payModal.zarAmt}
+                  onChange={e=>setPayModal(p=>({...p,zarAmt:e.target.value}))}
+                  style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:15,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                {payModal.inv.currency&&payModal.inv.currency!=="ZAR" && (
+                  <div style={{fontSize:11,color:C.blue,marginTop:4}}>Invoice is {payModal.inv.currency} — enter the ZAR actually received into your bank account</div>
+                )}
               </div>
-            )}
-            <button onClick={() => setMatching(null)} style={{marginTop:20,background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Payment Date</label>
+                <input type="date" value={payModal.payDate}
+                  onChange={e=>setPayModal(p=>({...p,payDate:e.target.value}))}
+                  style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Reference / Notes (optional)</label>
+                <input placeholder="e.g. EFT Ref 12345" value={payModal.ref}
+                  onChange={e=>setPayModal(p=>({...p,ref:e.target.value}))}
+                  style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:24}}>
+              <button onClick={handleRecordPayment} style={{flex:1,background:C.green,color:"#fff",border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ Record Payment</button>
+              <button onClick={()=>setPayModal(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
           </div>
         </div>
       )}
@@ -734,7 +735,7 @@ function Invoicing({live = {}, user = {}}) {
                     <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
                     <button onClick={() => setEditInv({...inv})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
                     {inv.status !== "paid" && (
-                      <button onClick={() => loadBankTxns(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Match</button>
+                      <button onClick={() => openPayModal(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Record Payment</button>
                     )}
                     <button onClick={async()=>{ if(!window.confirm(`Delete ${inv.id}?`))return; setInvoices(p=>p.filter(i=>i.id!==inv.id)); try{await api(`/invoices/${inv.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
                   </div>
