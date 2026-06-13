@@ -164,6 +164,13 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
             data.email, data.company_name, data.plan, data.billing_cycle,
         )
 
+    # Initialise chart of accounts for the new company
+    try:
+        import journal as journal_engine
+        journal_engine.init_accounts(company.id, db)
+    except Exception:
+        pass  # Non-fatal — accounts created on first transaction if missed here
+
     token = create_token({"user_id": user.id, "company_id": company.id})
 
     return {

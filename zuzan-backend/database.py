@@ -17,6 +17,13 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+class AccountType(str, enum.Enum):
+    asset     = "asset"
+    liability = "liability"
+    equity    = "equity"
+    revenue   = "revenue"
+    expense   = "expense"
+
 class PlanType(str, enum.Enum):
     starter="starter" 
     professional="professional"
@@ -63,6 +70,8 @@ class Company(Base):
     purchase_orders=relationship("PurchaseOrder",back_populates="company")
     quotes=relationship("Quote",back_populates="company")
     budgets=relationship("Budget",back_populates="company")
+    accounts=relationship("Account",back_populates="company")
+    journal_entries=relationship("JournalEntry",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -229,6 +238,47 @@ class Quote(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="quotes")
 
+class Account(Base):
+    """Chart of Accounts — one set per company, system accounts auto-created."""
+    __tablename__="accounts"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    code=Column(String,nullable=False)              # e.g. "1100"
+    name=Column(String,nullable=False)              # e.g. "Accounts Receivable"
+    type=Column(Enum(AccountType),nullable=False)
+    is_system=Column(Boolean,default=False)         # system accounts can't be deleted
+    is_active=Column(Boolean,default=True)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="accounts")
+    journal_lines=relationship("JournalLine",back_populates="account")
+
+class JournalEntry(Base):
+    """Header record for a double-entry transaction."""
+    __tablename__="journal_entries"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"))
+    date=Column(DateTime,nullable=False)
+    description=Column(Text)
+    reference=Column(String)        # e.g. "INV-0001", "EXP-0042", "PAY-0003"
+    source=Column(String)           # "invoice","expense","payroll","purchase_order","manual"
+    source_id=Column(Integer,nullable=True)   # FK to the originating record
+    is_reconciled=Column(Boolean,default=False)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="journal_entries")
+    lines=relationship("JournalLine",back_populates="entry",cascade="all, delete-orphan")
+
+class JournalLine(Base):
+    """Single debit or credit line within a journal entry."""
+    __tablename__="journal_lines"
+    id=Column(Integer,primary_key=True,index=True)
+    entry_id=Column(Integer,ForeignKey("journal_entries.id"))
+    account_id=Column(Integer,ForeignKey("accounts.id"))
+    debit=Column(Float,default=0)
+    credit=Column(Float,default=0)
+    description=Column(String,nullable=True)
+    entry=relationship("JournalEntry",back_populates="lines")
+    account=relationship("Account",back_populates="journal_lines")
+
 class Budget(Base):
     __tablename__="budgets"
     id=Column(Integer,primary_key=True,index=True)
@@ -272,6 +322,9 @@ def init_db():
             "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN email_verify_token VARCHAR",
             "CREATE TABLE IF NOT EXISTS budgets (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), year INTEGER NOT NULL, month INTEGER NOT NULL, category VARCHAR NOT NULL, department VARCHAR, type VARCHAR DEFAULT 'expense', amount FLOAT DEFAULT 0, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())",
+            "CREATE TABLE IF NOT EXISTS accounts (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), code VARCHAR NOT NULL, name VARCHAR NOT NULL, type VARCHAR NOT NULL, is_system BOOLEAN DEFAULT FALSE, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())",
+            "CREATE TABLE IF NOT EXISTS journal_entries (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), date TIMESTAMP NOT NULL, description TEXT, reference VARCHAR, source VARCHAR, source_id INTEGER, is_reconciled BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW())",
+            "CREATE TABLE IF NOT EXISTS journal_lines (id SERIAL PRIMARY KEY, entry_id INTEGER REFERENCES journal_entries(id) ON DELETE CASCADE, account_id INTEGER REFERENCES accounts(id), debit FLOAT DEFAULT 0, credit FLOAT DEFAULT 0, description VARCHAR)",
         ]:
             try:
                 conn.execute(text(sql))

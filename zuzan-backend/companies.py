@@ -10,6 +10,7 @@ from datetime import datetime
 from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus
 from auth import get_current_user, User
 import logging
+import journal as journal_engine
 
 logger = logging.getLogger("zuzan.routers")
 
@@ -124,6 +125,12 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     db.commit()
     db.refresh(invoice)
     logger.info(f"Invoice created: {invoice.invoice_number} for {data.client_name}")
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.post_invoice_raised(invoice, db)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Journal post failed for invoice {invoice.invoice_number}: {e}")
     return invoice
 
 
@@ -132,6 +139,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    was_paid = invoice.status == InvoiceStatus.paid
     if data.status:
         invoice.status = InvoiceStatus(data.status)
     if data.paid_date:
@@ -139,6 +147,13 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     if data.notes:
         invoice.notes = data.notes
     db.commit()
+    # Post payment journal entry when invoice first marked as paid
+    if not was_paid and invoice.status == InvoiceStatus.paid:
+        try:
+            journal_engine.post_invoice_paid(invoice, db)
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Journal post failed for invoice payment {invoice.invoice_number}: {e}")
     return invoice
 
 
@@ -192,6 +207,12 @@ async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_c
     db.add(expense)
     db.commit()
     db.refresh(expense)
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.post_expense(expense, db)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Journal post failed for expense {expense.id}: {e}")
     return expense
 
 

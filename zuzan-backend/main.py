@@ -15,9 +15,27 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting ZuZan backend...")
-    from database import init_db
+    from database import init_db, SessionLocal, Company
     init_db()
     logger.info("Database ready")
+    # Backfill journal for any existing companies that have no entries yet
+    try:
+        from journal import backfill_company, init_accounts
+        from database import JournalEntry
+        db = SessionLocal()
+        companies = db.query(Company).all()
+        for co in companies:
+            has_entries = db.query(JournalEntry).filter(JournalEntry.company_id == co.id).count()
+            if has_entries == 0:
+                logger.info(f"Backfilling journal for company {co.id} ({co.name})...")
+                result = backfill_company(co.id, db)
+                logger.info(f"  Backfill done: {result}")
+            else:
+                init_accounts(co.id, db)   # ensure CoA exists even if already backfilled
+        db.close()
+        logger.info("Journal backfill complete")
+    except Exception as e:
+        logger.warning(f"Journal backfill failed (non-fatal): {e}")
     yield
 
 
@@ -52,6 +70,7 @@ from suppliers import router as suppliers_router
 from purchase_orders import router as po_router
 from quotes import router as quotes_router
 from budgets import router as budgets_router
+from journal import router as journal_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -69,6 +88,7 @@ app.include_router(suppliers_router, prefix="/suppliers",     tags=["Suppliers"]
 app.include_router(po_router,        prefix="/purchase-orders", tags=["Purchase Orders"])
 app.include_router(quotes_router,    prefix="/quotes",          tags=["Quotes"])
 app.include_router(budgets_router,   prefix="/budgets",         tags=["Budgets"])
+app.include_router(journal_router,   prefix="/journal",         tags=["Journal"])
 
 
 @app.get("/")

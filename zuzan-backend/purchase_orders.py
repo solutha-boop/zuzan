@@ -5,6 +5,9 @@ from typing import Optional, List
 from datetime import datetime
 from database import get_db, PurchaseOrder, PurchaseOrderItem, Supplier, Expense
 from auth import get_current_user, User
+import logging
+import journal as journal_engine
+logger = logging.getLogger("zuzan.po")
 
 router = APIRouter()
 
@@ -169,6 +172,13 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
 
     db.commit()
     db.refresh(po)
+
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.post_po_received(po, db)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Journal post failed for PO {po.po_number}: {e}")
 
     return {
         **to_dict(po),

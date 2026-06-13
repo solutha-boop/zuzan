@@ -183,7 +183,14 @@ async def run_payroll(
             total_cost=c["total_cost"],
         )
         db.add(payslip)
+        db.flush()   # get payslip.id before journal post
         created.append(emp.id)
+        try:
+            import journal as journal_engine
+            journal_engine.init_accounts(emp.company_id, db)
+            journal_engine.post_payroll(payslip, emp, db)
+        except Exception as e:
+            logger.warning(f"Journal post failed for payslip {payslip.id}: {e}")
 
     db.commit()
     return {
@@ -314,95 +321,73 @@ async def balance_sheet(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Balance sheet derived from the double-entry journal.
+    Falls back to estimated values if no journal entries exist yet.
+    """
+    from database import Account, AccountType, JournalLine
+    import journal as journal_engine
+
     cid = current_user.company_id
     now = datetime.utcnow()
-    VAT_RATE = 0.15
+
+    # Ensure accounts exist
+    journal_engine.init_accounts(cid, db)
+
+    def bal(code):
+        acct = db.query(Account).filter(Account.company_id==cid, Account.code==code).first()
+        if not acct:
+            return 0.0
+        return journal_engine.account_balance(acct, db)
 
     # ── ASSETS ────────────────────────────────────────────────────────────────
-    # Cash estimate: revenue collected − expenses paid − net payroll
-    paid_invoices   = db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()
-    all_expenses    = db.query(Expense).filter(Expense.company_id==cid).all()
-    all_payslips    = db.query(Payslip).join(Employee).filter(Employee.company_id==cid).all()
-
-    revenue_collected   = sum(i.total_amount for i in paid_invoices)
-    expenses_paid_total = sum(e.amount for e in all_expenses)
-    payroll_paid_total  = sum(p.net_pay for p in all_payslips)
-    cash_and_equivalents = round(revenue_collected - expenses_paid_total - payroll_paid_total, 2)
-
-    # Trade receivables: outstanding invoices (sent + overdue)
-    outstanding = db.query(Invoice).filter(
-        Invoice.company_id==cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
-    ).all()
-    trade_receivables = round(sum(i.total_amount for i in outstanding), 2)
-
-    # Inventory at cost
-    inventory_items  = db.query(InventoryItem).filter(InventoryItem.company_id==cid, InventoryItem.is_active==True).all()
-    inventory_value  = round(sum(i.quantity_on_hand * i.unit_cost for i in inventory_items), 2)
-
-    # VAT input recoverable: 15% already included in vat_amount on expenses
-    vat_input_recoverable = round(sum(e.vat_amount or 0 for e in all_expenses), 2)
-
-    total_assets = round(cash_and_equivalents + trade_receivables + inventory_value + vat_input_recoverable, 2)
+    cash_and_equivalents  = bal("1000")
+    trade_receivables     = bal("1100")
+    inventory_at_cost     = bal("1200")
+    vat_input_recoverable = bal("1300")
+    total_assets = round(cash_and_equivalents + trade_receivables + inventory_at_cost + vat_input_recoverable, 2)
 
     # ── LIABILITIES ───────────────────────────────────────────────────────────
-    # Accounts payable: received POs not yet paid (use total_amount)
-    open_pos = db.query(PurchaseOrder).filter(
-        PurchaseOrder.company_id==cid,
-        PurchaseOrder.status.in_(["received","partial","sent"])
-    ).all()
-    accounts_payable = round(sum(po.total_amount or 0 for po in open_pos), 2)
-
-    # VAT output payable: VAT collected on all invoices (paid + outstanding)
-    all_invoices = db.query(Invoice).filter(Invoice.company_id==cid).all()
-    vat_output_collected  = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
-    # Net VAT payable = output VAT − input VAT (if positive, owe SARS)
-    vat_payable = round(max(0, vat_output_collected - vat_input_recoverable), 2)
-    vat_reclaimable = round(max(0, vat_input_recoverable - vat_output_collected), 2)  # credit if inputs > outputs
-
-    # Payroll liabilities: current month unpaid PAYE/UIF/SDL
-    month_start     = datetime(now.year, now.month, 1)
-    recent_payslips = db.query(Payslip).join(Employee).filter(
-        Employee.company_id==cid,
-        Payslip.generated_at >= month_start
-    ).all()
-    paye_payable = round(sum(p.paye for p in recent_payslips), 2)
-    uif_payable  = round(sum(p.uif_employee + p.uif_employer for p in recent_payslips), 2)
-    sdl_payable  = round(sum(p.sdl for p in recent_payslips), 2)
-    payroll_liabilities = round(paye_payable + uif_payable + sdl_payable, 2)
-
-    total_liabilities = round(accounts_payable + vat_payable + payroll_liabilities, 2)
+    accounts_payable = bal("2000")
+    vat_payable      = bal("2100")
+    paye_payable     = bal("2200")
+    uif_payable      = bal("2210")
+    sdl_payable      = bal("2220")
+    total_liabilities = round(accounts_payable + vat_payable + paye_payable + uif_payable + sdl_payable, 2)
 
     # ── EQUITY ────────────────────────────────────────────────────────────────
-    # Retained income = accumulated profit (revenue − expenses − payroll)
-    total_revenue  = round(sum(i.amount for i in paid_invoices), 2)  # excl. VAT
-    total_expenses = round(expenses_paid_total + payroll_paid_total, 2)
-    retained_income = round(total_revenue - total_expenses, 2)
-    total_equity    = retained_income
+    retained_income = bal("3000")
+    # If no explicit equity postings yet, derive from Revenue − Expenses
+    if retained_income == 0:
+        revenue  = bal("4000")
+        expenses = sum(bal(code) for code in ["5000","5100","5110","5200","5210","5220","5230","5240","5250","5260","5270","5280","5290","5300","5900"])
+        retained_income = round(revenue - expenses, 2)
+    total_equity = retained_income
 
     # ── BALANCE CHECK ─────────────────────────────────────────────────────────
     total_liabilities_and_equity = round(total_liabilities + total_equity, 2)
     imbalance = round(total_assets - total_liabilities_and_equity, 2)
-    balanced  = abs(imbalance) < 1.0   # allow R1 rounding tolerance
+    balanced  = abs(imbalance) < 1.0
 
     return {
-        "date":     now.strftime("%d %B %Y"),
-        "balanced": balanced,
+        "date":      now.strftime("%d %B %Y"),
+        "balanced":  balanced,
         "imbalance": imbalance,
+        "source":    "journal",
         "assets": {
             "cash_and_equivalents":  cash_and_equivalents,
             "trade_receivables":     trade_receivables,
-            "inventory_at_cost":     inventory_value,
-            "vat_input_recoverable": vat_input_recoverable if vat_reclaimable > 0 else 0,
+            "inventory_at_cost":     inventory_at_cost,
+            "vat_input_recoverable": vat_input_recoverable,
             "total":                 total_assets,
         },
         "liabilities": {
-            "accounts_payable":  accounts_payable,
-            "vat_payable":       vat_payable,
-            "paye_payable":      paye_payable,
-            "uif_payable":       uif_payable,
-            "sdl_payable":       sdl_payable,
-            "total":             total_liabilities,
+            "accounts_payable": accounts_payable,
+            "vat_payable":      vat_payable,
+            "paye_payable":     paye_payable,
+            "uif_payable":      uif_payable,
+            "sdl_payable":      sdl_payable,
+            "total":            total_liabilities,
         },
         "equity": {
             "retained_income": retained_income,

@@ -1665,6 +1665,9 @@ function Reports({live = {}}) {
   const [provTax,  setProvTax]  = useState(null);
   const [vat201,   setVat201]   = useState(null);
   const [recon,    setRecon]    = useState(null);
+  const [trialBal, setTrialBal] = useState(null);
+  const [journal,  setJournal]  = useState(null);
+  const [jnlExpanded, setJnlExpanded] = useState(new Set());
   const [vatPeriod,setVatPeriod]= useState(new Date().toISOString().slice(0,7));
   const [loading,  setLoading]  = useState(false);
 
@@ -1716,6 +1719,8 @@ function Reports({live = {}}) {
     try {
       if (tab==="bs")    setBsData(await api(`/reports/balance-sheet`).catch(()=>null));
       if (tab==="recon") setRecon(await api(`/reports/reconciliation`).catch(()=>null));
+      if (tab==="tb")    setTrialBal(await api(`/journal/trial-balance`).catch(()=>null));
+      if (tab==="jnl")   setJournal(await api(`/journal/?limit=100`).catch(()=>null));
       if (tab==="cf")   setCfData(await api(`/reports/cash-flow?${dateParams}`).catch(()=>null));
       if (tab==="emp")  setEmp201(await api(`/reports/emp201?${dateParams}`).catch(()=>null));
       if (tab==="mgmt") setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
@@ -1729,6 +1734,8 @@ function Reports({live = {}}) {
     {id:"pl",   label:"Income Statement"},
     {id:"bs",   label:"Balance Sheet"},
     {id:"recon",label:"Reconciliation"},
+    {id:"tb",   label:"Trial Balance"},
+    {id:"jnl",  label:"Journal"},
     {id:"cf",   label:"Cash Flow"},
     {id:"mgmt", label:"Management Pack"},
     {id:"emp",  label:"EMP201 / IRP5"},
@@ -1867,6 +1874,127 @@ function Reports({live = {}}) {
       </div>
     );
   };
+  const renderTrialBalance = () => {
+    if (!trialBal) return <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading trial balance…</div>;
+    const TYPE_COLOR = {asset:C.blue,liability:C.red,equity:C.green,revenue:C.green,expense:"#c17d00"};
+    const TYPE_ORDER = ["asset","liability","equity","revenue","expense"];
+    const grouped = TYPE_ORDER.reduce((acc,t)=>({...acc,[t]:trialBal.accounts.filter(a=>a.type===t)}),[]);
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+          <div>
+            <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Trial Balance</div>
+            <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>All accounts — debits must equal credits</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:11,color:C.inkMid}}>Check</div>
+            <div style={{fontSize:15,fontWeight:700,color:trialBal.balanced?C.green:C.red}}>
+              {trialBal.balanced ? "✅ Balanced" : `❌ Off by R ${Math.abs(trialBal.imbalance).toLocaleString("en-ZA",{minimumFractionDigits:2})}`}
+            </div>
+          </div>
+        </div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead>
+            <tr style={{background:C.surface}}>
+              <th style={{padding:"8px 12px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Code</th>
+              <th style={{padding:"8px 12px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Account Name</th>
+              <th style={{padding:"8px 12px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Debits</th>
+              <th style={{padding:"8px 12px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Credits</th>
+              <th style={{padding:"8px 12px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {TYPE_ORDER.map(type => {
+              const rows = trialBal.accounts.filter(a=>a.type===type);
+              if (!rows.length) return null;
+              return [
+                <tr key={`hdr-${type}`}>
+                  <td colSpan={5} style={{padding:"8px 12px",fontWeight:700,fontSize:11,color:TYPE_COLOR[type]||C.ink,background:`${TYPE_COLOR[type]}15`,textTransform:"uppercase",letterSpacing:0.5,border:`1px solid ${C.border}`}}>
+                    {type.charAt(0).toUpperCase()+type.slice(1)}s
+                  </td>
+                </tr>,
+                ...rows.map(row=>(
+                  <tr key={row.code}>
+                    <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,color:C.inkMid,fontFamily:"monospace",fontSize:12}}>{row.code}</td>
+                    <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,color:C.ink}}>{row.name}</td>
+                    <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,textAlign:"right",color:C.ink}}>{row.total_debits?`R ${row.total_debits.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
+                    <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,textAlign:"right",color:C.ink}}>{row.total_credits?`R ${row.total_credits.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
+                    <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,textAlign:"right",fontWeight:600,color:row.balance>=0?C.ink:C.red}}>R {Math.abs(row.balance).toLocaleString("en-ZA",{minimumFractionDigits:2})}</td>
+                  </tr>
+                )),
+              ];
+            })}
+            <tr style={{background:C.surface,fontWeight:700}}>
+              <td colSpan={2} style={{padding:"10px 12px",border:`1px solid ${C.border}`}}>TOTALS</td>
+              <td style={{padding:"10px 12px",border:`1px solid ${C.border}`,textAlign:"right",color:C.blue}}>R {trialBal.total_debits.toLocaleString("en-ZA",{minimumFractionDigits:2})}</td>
+              <td style={{padding:"10px 12px",border:`1px solid ${C.border}`,textAlign:"right",color:C.red}}>R {trialBal.total_credits.toLocaleString("en-ZA",{minimumFractionDigits:2})}</td>
+              <td style={{padding:"10px 12px",border:`1px solid ${C.border}`,textAlign:"right",color:trialBal.balanced?C.green:C.red}}>{trialBal.balanced?"✅ Balanced":`Off by R ${Math.abs(trialBal.imbalance).toLocaleString("en-ZA",{minimumFractionDigits:2})}`}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderJournal = () => {
+    if (!journal) return <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading journal…</div>;
+    const SOURCE_ICON = {invoice:"🧾",invoice_payment:"💰",expense:"💳",payroll:"👥",purchase_order:"📦",po_payment:"🏭",manual:"✏️"};
+    const toggle = id => setJnlExpanded(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+          <div>
+            <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>General Journal</div>
+            <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Every transaction as debit/credit pairs — click any entry to expand</div>
+          </div>
+          <button onClick={async()=>{setLoading(true);try{await api("/journal/backfill",{method:"POST"});setJournal(await api("/journal/?limit=100"));}catch(e){alert("Backfill failed");}finally{setLoading(false);}}}
+            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>
+            ↻ Re-run backfill
+          </button>
+        </div>
+        {journal.length === 0 && (
+          <div style={{textAlign:"center",padding:"40px 20px",color:C.inkMid}}>
+            <div style={{fontSize:32,marginBottom:12}}>📒</div>
+            <div style={{fontSize:15,fontWeight:600,marginBottom:6}}>No journal entries yet</div>
+            <div style={{fontSize:13}}>Journal entries are created automatically when you add invoices, expenses or process payroll.</div>
+          </div>
+        )}
+        {journal.map(entry => (
+          <div key={entry.id} style={{border:`1px solid ${C.border}`,borderRadius:10,marginBottom:8,overflow:"hidden"}}>
+            <div onClick={()=>toggle(entry.id)} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",cursor:"pointer",background:jnlExpanded.has(entry.id)?C.accentLt:C.surface}}>
+              <span style={{fontSize:18}}>{SOURCE_ICON[entry.source]||"📝"}</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{entry.description}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{entry.date} · {entry.reference} · {entry.source}</div>
+              </div>
+              <div style={{fontSize:11,color:C.inkMid}}>{jnlExpanded.has(entry.id)?"▲":"▼"}</div>
+            </div>
+            {jnlExpanded.has(entry.id) && (
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:"#f8f8f8"}}>
+                    <th style={{padding:"6px 14px",textAlign:"left",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Account</th>
+                    <th style={{padding:"6px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Debit</th>
+                    <th style={{padding:"6px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Credit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {entry.lines.map((line,i)=>(
+                    <tr key={i} style={{borderTop:`1px solid ${C.border}`}}>
+                      <td style={{padding:"6px 14px",color:C.ink}}><span style={{fontFamily:"monospace",color:C.inkMid,marginRight:8}}>{line.account_code}</span>{line.account_name}{line.description?<span style={{color:C.inkMid}}> — {line.description}</span>:""}</td>
+                      <td style={{padding:"6px 14px",textAlign:"right",color:C.blue,fontWeight:line.debit?600:400}}>{line.debit?`R ${line.debit.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
+                      <td style={{padding:"6px 14px",textAlign:"right",color:C.red,fontWeight:line.credit?600:400}}>{line.credit?`R ${line.credit.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderCF = () => {
     const cf = cfData || {period,operating:{cash_receipts_from_customers:0,cash_paid_to_suppliers:0,payroll_net_pay:0,sars_paye_uif_sdl:0,net_cash_from_operations:0},investing:{net_cash_from_investing:0},financing:{net_cash_from_financing:0},net_increase_in_cash:0};
     const op = cf.operating;
@@ -2282,6 +2410,8 @@ function Reports({live = {}}) {
         )}
         {activeTab==="bs"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderBS()}</div>}
         {activeTab==="recon"&& <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderReconciliation()}</div>}
+        {activeTab==="tb"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderTrialBalance()}</div>}
+        {activeTab==="jnl"  && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderJournal()}</div>}
         {activeTab==="cf"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderCF()}</div>}
         {activeTab==="mgmt" && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderMgmt()}</div>}
         {activeTab==="emp"  && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderEmp()}</div>}
