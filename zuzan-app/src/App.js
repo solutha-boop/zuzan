@@ -79,9 +79,9 @@ function useLiveData() {
 }
 
 const PLANS = [
-  { id:"starter",      name:"Starter",      monthly:299,  annual:2990,  usdMonthly:16, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Expense tracking","Bank feed (all SA banks)","Bank reconciliation","Basic P&L report","Email support"] },
-  { id:"professional", name:"Professional", monthly:699,  annual:6990,  usdMonthly:38, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Advanced reports","Cash flow statement","Bank reconciliation","Priority support"] },
-  { id:"business",     name:"Business",     monthly:1299, annual:12990, usdMonthly:70, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Multi-branch bank feeds","Custom report builder","API access","Dedicated account manager"] },
+  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Payroll (PAYE/UIF/SDL)","Bank feed (all SA banks)","Basic P&L report","Email support"] },
+  { id:"professional", name:"Professional", monthly:899,  annual:8990,  usdMonthly:49, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Double-entry general ledger","Trial balance & journal viewer","Balance sheet reconciliation","Advanced reports","Priority support"] },
+  { id:"business",     name:"Business",     monthly:1499, annual:14990, usdMonthly:82, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Budgeting vs actuals","Cash flow forecast","Department budgets","API access","Dedicated account manager"] },
 ];
 
 const MOCK_INVOICES = [

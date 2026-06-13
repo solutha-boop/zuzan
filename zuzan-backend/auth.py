@@ -25,9 +25,9 @@ security = HTTPBearer()
 router = APIRouter()
 
 PLAN_PRICES = {
-    "starter":      {"monthly": 299,  "annual": 2990},
-    "professional": {"monthly": 699,  "annual": 6990},
-    "business":     {"monthly": 1299, "annual": 12990},
+    "starter":      {"monthly": 399,  "annual": 3990},
+    "professional": {"monthly": 899,  "annual": 8990},
+    "business":     {"monthly": 1499, "annual": 14990},
 }
 
 
