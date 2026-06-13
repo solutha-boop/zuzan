@@ -70,13 +70,15 @@ class InvoiceCreate(BaseModel):
     vat_applicable:  bool = True     # Apply 15% VAT
     due_date:        Optional[str] = None
     notes:           Optional[str] = None
-    currency:        Optional[str] = "ZAR"
-    exchange_rate:   Optional[float] = 1.0
+    currency:            Optional[str] = "ZAR"
+    exchange_rate:       Optional[float] = 1.0
+    vat_amount_override: Optional[float] = None  # Manual VAT for non-ZAR invoices
 
 class InvoiceUpdate(BaseModel):
-    status:       Optional[str] = None
-    paid_date:    Optional[str] = None
-    notes:        Optional[str] = None
+    status:          Optional[str] = None
+    paid_date:       Optional[str] = None
+    notes:           Optional[str] = None
+    paid_amount_zar: Optional[float] = None  # ZAR actually received on payment
 
 
 def next_invoice_number(company_id: int, db: Session) -> str:
@@ -107,7 +109,10 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     if monthly_count >= limit:
         raise HTTPException(status_code=403, detail=f"Monthly invoice limit ({limit}) reached. Upgrade your plan.")
 
-    vat_amount   = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
+    if data.currency and data.currency != "ZAR" and data.vat_amount_override is not None:
+        vat_amount = round(data.vat_amount_override, 2)   # User-specified VAT for foreign currency
+    else:
+        vat_amount = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
     total_amount = round(data.amount + vat_amount, 2)
 
     invoice = Invoice(
@@ -150,6 +155,8 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         invoice.paid_date = datetime.fromisoformat(data.paid_date)
     if data.notes:
         invoice.notes = data.notes
+    if data.paid_amount_zar is not None:
+        invoice.paid_amount_zar = data.paid_amount_zar
     db.commit()
     # Post payment journal entry when invoice first marked as paid
     if not was_paid and invoice.status == InvoiceStatus.paid:

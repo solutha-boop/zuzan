@@ -15,15 +15,16 @@ router = APIRouter()
 VAT_RATE = 0.15
 
 class QuoteCreate(BaseModel):
-    client_name:    str
-    client_email:   Optional[str] = None
-    description:    str
-    amount:         float
-    vat_applicable: bool = True
-    currency:       str = "ZAR"
-    exchange_rate:  float = 1
-    valid_until:    Optional[str] = None
-    notes:          Optional[str] = None
+    client_name:         str
+    client_email:        Optional[str] = None
+    description:         str
+    amount:              float
+    vat_applicable:      bool = True
+    currency:            str = "ZAR"
+    exchange_rate:       float = 1
+    valid_until:         Optional[str] = None
+    notes:               Optional[str] = None
+    vat_amount_override: Optional[float] = None  # Manual VAT for non-ZAR quotes
 
 class QuoteUpdate(BaseModel):
     client_name:    Optional[str] = None
@@ -67,7 +68,10 @@ async def list_quotes(current_user: User = Depends(get_current_user), db: Sessio
 
 @router.post("/")
 async def create_quote(data: QuoteCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    vat = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
+    if data.currency != "ZAR" and data.vat_amount_override is not None:
+        vat = round(data.vat_amount_override, 2)   # User-specified VAT for foreign currency
+    else:
+        vat = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
     total = round(data.amount + vat, 2)
     valid = datetime.strptime(data.valid_until, "%Y-%m-%d") if data.valid_until else None
     q = Quote(

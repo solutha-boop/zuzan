@@ -490,19 +490,34 @@ function InvFormFields({data, onChange}) {
           <div>{lb("Exchange Rate (1 USD = R)")}<input type="number" value={data.exchangeRate||"18.5"} onChange={e=>onChange(d=>({...d,exchangeRate:e.target.value}))} style={is}/></div>
         )}
       </div>
-      {/* VAT toggle */}
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-        <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
-          <input type="checkbox" checked={data.vatApplicable !== false} onChange={e=>onChange(d=>({...d,vatApplicable:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
-          Apply VAT @ 15%
-        </label>
-      </div>
+      {/* VAT — auto 15% for ZAR, manual amount for foreign currency */}
+      {(!data.currency || data.currency === "ZAR") ? (
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+          <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+            <input type="checkbox" checked={data.vatApplicable !== false} onChange={e=>onChange(d=>({...d,vatApplicable:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+            Apply VAT @ 15%
+          </label>
+        </div>
+      ) : (
+        <div style={{marginBottom:12}}>
+          <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>VAT Amount ({data.currency}) — enter 0 if not applicable</label>
+          <input type="number" min="0" placeholder="0" value={data.vatAmount||"0"} onChange={e=>onChange(d=>({...d,vatAmount:e.target.value}))} style={{...is,width:"180px"}}/>
+        </div>
+      )}
       {data.amount && (
         <div style={{display:"flex",gap:16,fontSize:12,marginBottom:12,flexWrap:"wrap",background:C.bg,padding:"10px 14px",borderRadius:8}}>
           <span style={{color:C.inkMid}}>Excl. VAT: <strong>{fmtCurrency(+data.amount||0,data.currency||"ZAR")}</strong></span>
-          {data.vatApplicable !== false && <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmtCurrency((+data.amount||0)*0.15,data.currency||"ZAR")}</strong></span>}
-          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmtCurrency((+data.amount||0)*(data.vatApplicable!==false?1.15:1),data.currency||"ZAR")}</strong></span>
-          {data.currency==="USD" && <span style={{color:C.blue}}>≈ {fmt((+data.amount||0)*(data.vatApplicable!==false?1.15:1)*(+data.exchangeRate||18.5))} ZAR</span>}
+          {(!data.currency||data.currency==="ZAR")
+            ? (data.vatApplicable !== false && <span style={{color:C.inkMid}}>VAT (15%): <strong style={{color:C.gold}}>{fmtCurrency((+data.amount||0)*0.15,"ZAR")}</strong></span>)
+            : (+data.vatAmount > 0 && <span style={{color:C.inkMid}}>VAT: <strong style={{color:C.gold}}>{fmtCurrency(+data.vatAmount,data.currency)}</strong></span>)
+          }
+          <span style={{color:C.inkMid}}>Total: <strong style={{color:C.green}}>{fmtCurrency(
+            (!data.currency||data.currency==="ZAR")
+              ? (+data.amount||0)*(data.vatApplicable!==false?1.15:1)
+              : (+data.amount||0)+(+data.vatAmount||0),
+            data.currency||"ZAR"
+          )}</strong></span>
+          {data.currency&&data.currency!=="ZAR" && <span style={{color:C.blue}}>≈ {fmt(((+data.amount||0)+(+data.vatAmount||0))*(+data.exchangeRate||18.5))} ZAR</span>}
         </div>
       )}
     </>
@@ -520,7 +535,7 @@ function Invoicing({live = {}, user = {}}) {
   const [editInv,   setEditInv]   = useState(null);   // amend modal
   const [matching,  setMatching]  = useState(null);   // invoice being matched
   const [bankTxns,  setBankTxns]  = useState([]);     // bank transactions for matching
-  const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true});
+  const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true,currency:"ZAR",exchangeRate:"18.5",vatAmount:"0"});
   const [saving, setSaving] = useState(false);
 
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
@@ -542,7 +557,9 @@ function Invoicing({live = {}, user = {}}) {
     setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid", matchedTxn: txn.id} : i));
     setMatching(null);
     try {
-      await api(`/invoices/${inv.id}`, { method:"PUT", body: JSON.stringify({status:"paid"}) });
+      const matchBody = {status:"paid"};
+      if (txn && txn.amount) matchBody.paid_amount_zar = txn.amount;
+      await api(`/invoices/${inv.id}`, { method:"PUT", body: JSON.stringify(matchBody) });
       if (live && live.reload) live.reload();
     } catch(e) { console.warn("Match failed:", e.message); }
   };
@@ -551,7 +568,9 @@ function Invoicing({live = {}, user = {}}) {
     if(!form.client||!form.amount||!form.desc){alert("Client, description and amount are required.");return;}
     setSaving(true);
     try {
-      await api("/invoices/", { method:"POST", body: JSON.stringify({ client_name:form.client, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, due_date:form.due||null }) });
+      const invBody = { client_name:form.client, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, due_date:form.due||null, currency:form.currency||"ZAR", exchange_rate:+form.exchangeRate||1.0 };
+      if (form.currency && form.currency !== "ZAR") invBody.vat_amount_override = +form.vatAmount||0;
+      await api("/invoices/", { method:"POST", body: JSON.stringify(invBody) });
       if (live && live.reload) live.reload();
       setShowNew(false);
       setForm({client:"",amount:"",desc:"",due:"",vatApplicable:true});
@@ -4447,7 +4466,7 @@ function Quotes({live={},user={},onNavigate}) {
   const [showNew,   setShowNew]   = useState(false);
   const [preview,   setPreview]   = useState(null);
   const [saving,    setSaving]    = useState(false);
-  const emptyForm = {client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:"",vatApplicable:true};
+  const emptyForm = {client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:"",vatApplicable:true,vatAmount:"0"};
   const [form, setForm] = useState(emptyForm);
 
   useEffect(()=>{
@@ -4470,12 +4489,14 @@ function Quotes({live={},user={},onNavigate}) {
     if(!form.client||!form.amount||!form.desc){alert("Client, description and amount are required.");return;}
     setSaving(true);
     try {
-      const res = await api("/quotes/",{method:"POST",body:JSON.stringify({
+      const qBody = {
         client_name: form.client, description: form.desc,
         amount: +form.amount, vat_applicable: form.vatApplicable,
         currency: form.currency, exchange_rate: +form.rate,
         valid_until: form.validUntil||null, notes: form.notes||null,
-      })});
+      };
+      if (form.currency !== "ZAR") qBody.vat_amount_override = +form.vatAmount || 0;
+      const res = await api("/quotes/",{method:"POST",body:JSON.stringify(qBody)});
       setQuotes(prev=>[{id:res.quote_number,_id:res.id,client:res.client_name,desc:res.description,amount:res.amount,totalAmount:res.total_amount,vatApplicable:res.vat_applicable,vatAmount:res.vat_amount,date:res.created_at?.slice(0,10),validUntil:res.valid_until,status:res.status,currency:res.currency,rate:res.exchange_rate,notes:res.notes},...prev]);
       setShowNew(false); setForm(emptyForm);
     } catch(e){alert("Failed to create quote: "+(e.message||"Unknown error"));}
@@ -4502,7 +4523,7 @@ function Quotes({live={},user={},onNavigate}) {
   const convertToInvoice = async (q) => {
     setSaving(true);
     try {
-      await api("/invoices/",{method:"POST",body:JSON.stringify({
+      const ciBody = {
         client_name:   q.client,
         description:   q.desc || "Converted from quote",
         amount:        q.amount,
@@ -4511,7 +4532,9 @@ function Quotes({live={},user={},onNavigate}) {
         notes:         q.notes || `Converted from ${q.id}`,
         currency:      q.currency || "ZAR",
         exchange_rate: q.rate ? +q.rate : 1.0,
-      })});
+      };
+      if (q.currency && q.currency !== "ZAR") ciBody.vat_amount_override = q.vatAmount || 0;
+      await api("/invoices/",{method:"POST",body:JSON.stringify(ciBody)});
       await updateStatus(q._id, "accepted");
       setPreview(null);
       if(live && live.reload) await live.reload();
@@ -4546,12 +4569,15 @@ function Quotes({live={},user={},onNavigate}) {
                 <option value="USD">USD — US Dollar</option>
               </select>
             </div>
-            {form.currency==="USD" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 USD = R...)</label><input type="number" value={form.rate} onChange={e=>setForm(f=>({...f,rate:e.target.value}))} style={inputStyle}/></div>}
+            {form.currency!=="ZAR" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 {form.currency} = R...)</label><input type="number" value={form.rate} onChange={e=>setForm(f=>({...f,rate:e.target.value}))} style={inputStyle}/></div>}
+            {form.currency!=="ZAR" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>VAT Amount ({form.currency}) — 0 if not applicable</label><input type="number" min="0" placeholder="0" value={form.vatAmount} onChange={e=>setForm(f=>({...f,vatAmount:e.target.value}))} style={inputStyle}/></div>}
             <div style={{gridColumn:"1/-1"}}><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Notes (optional)</label><input placeholder="Payment terms, delivery details..." value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} style={inputStyle}/></div>
           </div>
-          {form.amount && form.currency==="USD" && (
+          {form.amount && form.currency!=="ZAR" && (
             <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.blue}}>
-              USD {fmtCurrency(form.amount,"USD")} = {fmt(+form.amount * +form.rate)} at R{form.rate}/USD
+              {form.currency} {fmtCurrency(form.amount,form.currency)}
+              {+form.vatAmount > 0 && <> + VAT {fmtCurrency(form.vatAmount,form.currency)} = {fmtCurrency(+form.amount + +form.vatAmount, form.currency)}</>}
+              {" "}≈ {fmt((+form.amount + (+form.vatAmount||0)) * +form.rate)} ZAR at R{form.rate}/{form.currency}
             </div>
           )}
           <div style={{display:"flex",gap:8}}>
@@ -4576,12 +4602,15 @@ function Quotes({live={},user={},onNavigate}) {
               </div>
               <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
                 <thead><tr style={{background:C.bg}}><th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:C.inkMid}}>Description</th><th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.inkMid}}>Amount</th></tr></thead>
-                <tbody><tr><td style={{padding:"12px",color:C.ink}}>{preview.desc}</td><td style={{padding:"12px",textAlign:"right",fontWeight:600}}>{fmtCurrency(preview.amount,preview.currency)}</td></tr></tbody>
+                <tbody>
+                  <tr><td style={{padding:"12px",color:C.ink}}>{preview.desc}</td><td style={{padding:"12px",textAlign:"right",fontWeight:600}}>{fmtCurrency(preview.amount,preview.currency||"ZAR")}</td></tr>
+                  {preview.vatAmount > 0 && <tr style={{borderTop:`1px solid ${C.border}`}}><td style={{padding:"12px",color:C.inkMid,fontSize:12}}>VAT</td><td style={{padding:"12px",textAlign:"right",color:C.gold,fontWeight:600}}>{fmtCurrency(preview.vatAmount,preview.currency||"ZAR")}</td></tr>}
+                </tbody>
               </table>
-              {preview.currency==="USD" && <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.blue}}>ZAR equivalent: {fmt(preview.amount*(preview.rate||18.5))} at R{preview.rate||18.5}/USD</div>}
+              {preview.currency&&preview.currency!=="ZAR" && <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.blue}}>ZAR equivalent: ≈ {fmt((preview.totalAmount||preview.amount)*(preview.rate||18.5))} at R{preview.rate||18.5}/{preview.currency}</div>}
               {preview.notes && <div style={{background:C.bg,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.inkMid}}><strong>Notes:</strong> {preview.notes}</div>}
               <div style={{borderTop:`2px solid ${C.border}`,paddingTop:16}}>
-                <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0"}}><span style={{fontWeight:800,fontSize:15}}>TOTAL</span><span style={{fontWeight:800,fontSize:18,color:C.accent}}>{fmtCurrency(preview.amount,preview.currency)}</span></div>
+                <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0"}}><span style={{fontWeight:800,fontSize:15}}>TOTAL</span><span style={{fontWeight:800,fontSize:18,color:C.accent}}>{fmtCurrency(preview.totalAmount||preview.amount,preview.currency||"ZAR")}</span></div>
               </div>
               <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>This quote is valid for 30 days from the date of issue. Prices exclude VAT unless stated.</div>
             </div>

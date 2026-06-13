@@ -98,7 +98,7 @@ class Invoice(Base):
     exchange_rate=Column(Float,default=1)
     status=Column(Enum(InvoiceStatus),default=InvoiceStatus.draft)
     issue_date=Column(DateTime,default=datetime.utcnow); due_date=Column(DateTime)
-    paid_date=Column(DateTime,nullable=True); notes=Column(Text)
+    paid_date=Column(DateTime,nullable=True); paid_amount_zar=Column(Float,nullable=True); notes=Column(Text)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="invoices")
 
@@ -329,6 +329,7 @@ def init_db():
             "CREATE TABLE IF NOT EXISTS journal_lines (id SERIAL PRIMARY KEY, entry_id INTEGER REFERENCES journal_entries(id) ON DELETE CASCADE, account_id INTEGER REFERENCES accounts(id), debit FLOAT DEFAULT 0, credit FLOAT DEFAULT 0, description VARCHAR)",
             "ALTER TABLE invoices ADD COLUMN currency VARCHAR DEFAULT 'ZAR'",
             "ALTER TABLE invoices ADD COLUMN exchange_rate FLOAT DEFAULT 1",
+            "ALTER TABLE invoices ADD COLUMN paid_amount_zar FLOAT",
         ]:
             try:
                 conn.execute(text(sql))
