@@ -94,6 +94,8 @@ class Invoice(Base):
     client_email=Column(String); description=Column(Text)
     amount=Column(Float,nullable=False); vat_amount=Column(Float,default=0)
     total_amount=Column(Float,nullable=False)
+    currency=Column(String,default="ZAR")
+    exchange_rate=Column(Float,default=1)
     status=Column(Enum(InvoiceStatus),default=InvoiceStatus.draft)
     issue_date=Column(DateTime,default=datetime.utcnow); due_date=Column(DateTime)
     paid_date=Column(DateTime,nullable=True); notes=Column(Text)
@@ -325,6 +327,8 @@ def init_db():
             "CREATE TABLE IF NOT EXISTS accounts (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), code VARCHAR NOT NULL, name VARCHAR NOT NULL, type VARCHAR NOT NULL, is_system BOOLEAN DEFAULT FALSE, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())",
             "CREATE TABLE IF NOT EXISTS journal_entries (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), date TIMESTAMP NOT NULL, description TEXT, reference VARCHAR, source VARCHAR, source_id INTEGER, is_reconciled BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW())",
             "CREATE TABLE IF NOT EXISTS journal_lines (id SERIAL PRIMARY KEY, entry_id INTEGER REFERENCES journal_entries(id) ON DELETE CASCADE, account_id INTEGER REFERENCES accounts(id), debit FLOAT DEFAULT 0, credit FLOAT DEFAULT 0, description VARCHAR)",
+            "ALTER TABLE invoices ADD COLUMN currency VARCHAR DEFAULT 'ZAR'",
+            "ALTER TABLE invoices ADD COLUMN exchange_rate FLOAT DEFAULT 1",
         ]:
             try:
                 conn.execute(text(sql))
