@@ -2442,6 +2442,9 @@ function Budgeting({live = {}}) {
   const [editCell, setEditCell] = useState(null); // {cat, month, type, dept}
   const [editVal,  setEditVal]  = useState("");
   const [dept,     setDept]     = useState("General");
+  const [csvPreview, setCsvPreview] = useState(null); // parsed rows awaiting confirm
+  const [csvError,   setCsvError]   = useState(null);
+  const csvInputRef = useRef(null);
 
   const load = async () => {
     setLoading(true);
@@ -2482,6 +2485,101 @@ function Budgeting({live = {}}) {
   const fmtR = (n) => `R ${Number(n||0).toLocaleString("en-ZA",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
   const pct  = (actual, budget) => budget > 0 ? Math.min(Math.round((actual/budget)*100), 200) : 0;
   const over = (actual, budget) => budget > 0 && actual > budget;
+
+  // ── CSV IMPORT ──────────────────────────────────────────────────────────────
+  const MONTH_NAMES = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+
+  const downloadTemplate = () => {
+    const header = "category,type,department,jan,feb,mar,apr,may,jun,jul,aug,sep,oct,nov,dec";
+    const rows = [
+      "Revenue,income,,100000,100000,110000,110000,120000,120000,130000,130000,140000,140000,150000,150000",
+      "Salaries,expense,,50000,50000,50000,50000,50000,50000,50000,50000,50000,50000,50000,50000",
+      "Rent,expense,,12000,12000,12000,12000,12000,12000,12000,12000,12000,12000,12000,12000",
+      "Marketing,expense,Sales,5000,5000,6000,6000,7000,7000,8000,8000,9000,9000,10000,10000",
+    ];
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], {type:"text/csv"});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = `zuzan-budget-template-${year}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const parseCsv = (text) => {
+    const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) throw new Error("CSV must have a header row and at least one data row.");
+    const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+    const catIdx  = headers.indexOf("category");
+    const typeIdx = headers.indexOf("type");
+    const deptIdx = headers.indexOf("department");
+    if (catIdx === -1) throw new Error("Missing required column: category");
+
+    // Detect format: monthly columns (jan…dec) or explicit month column
+    const monthCols = MONTH_NAMES.map(m => headers.indexOf(m));
+    const hasMonthCols = monthCols.some(i => i !== -1);
+    const monthIdx  = headers.indexOf("month");
+    const amountIdx = headers.indexOf("amount");
+    const yearIdx   = headers.indexOf("year");
+
+    const entries = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",").map(c => c.trim());
+      if (cols.every(c => !c)) continue; // skip blank rows
+      const category   = cols[catIdx] || "";
+      const type       = typeIdx !== -1 ? (cols[typeIdx]||"expense").toLowerCase() : (category==="Revenue"?"income":"expense");
+      const department = deptIdx !== -1 ? (cols[deptIdx]||null) : null;
+      const rowYear    = yearIdx !== -1 ? parseInt(cols[yearIdx]) : year;
+      if (!category) continue;
+
+      if (hasMonthCols) {
+        // Wide format: one row per category, one column per month
+        MONTH_NAMES.forEach((m, idx) => {
+          const colIdx = monthCols[idx];
+          if (colIdx === -1) return;
+          const amount = parseFloat((cols[colIdx]||"0").replace(/[^0-9.\-]/g,"")) || 0;
+          if (amount !== 0) entries.push({year: rowYear, month: idx+1, category, amount, type, department: department||null});
+        });
+      } else {
+        // Long format: explicit year/month/amount columns
+        if (monthIdx === -1 || amountIdx === -1) throw new Error("Long format requires columns: year, month, category, amount, type");
+        const month  = parseInt(cols[monthIdx]);
+        const amount = parseFloat((cols[amountIdx]||"0").replace(/[^0-9.\-]/g,"")) || 0;
+        if (month >= 1 && month <= 12 && amount !== 0)
+          entries.push({year: rowYear, month, category, amount, type, department: department||null});
+      }
+    }
+    if (!entries.length) throw new Error("No valid budget entries found in CSV.");
+    return entries;
+  };
+
+  const handleCsvFile = (e) => {
+    setCsvError(null); setCsvPreview(null);
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const entries = parseCsv(ev.target.result);
+        setCsvPreview(entries);
+      } catch(err) {
+        setCsvError(err.message);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ""; // allow re-upload of same file
+  };
+
+  const confirmImport = async () => {
+    if (!csvPreview) return;
+    setSaving(true);
+    try {
+      await api("/budgets/bulk", {method:"POST", body: JSON.stringify({entries: csvPreview})});
+      setCsvPreview(null);
+      await load();
+    } catch(e) {
+      setCsvError("Import failed: "+(e.message||""));
+    } finally { setSaving(false); }
+  };
 
   const CellInput = ({cat, m, type, dept: d}) => {
     const key = `${cat}-${m}-${type}`;
@@ -2830,7 +2928,73 @@ function Budgeting({live = {}}) {
           }}>{v.label}</button>
         ))}
         {loading && <span style={{fontSize:12,color:C.inkMid}}>Loading…</span>}
+        <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+          <button onClick={downloadTemplate} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>
+            ⬇ Template
+          </button>
+          <button onClick={()=>csvInputRef.current?.click()} style={{background:C.accent,border:"none",borderRadius:8,padding:"7px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#fff",fontWeight:600}}>
+            📂 Import CSV
+          </button>
+          <input ref={csvInputRef} type="file" accept=".csv,text/csv" style={{display:"none"}} onChange={handleCsvFile}/>
+        </div>
       </div>
+
+      {/* CSV error banner */}
+      {csvError && (
+        <div style={{background:"#fff0ee",border:`1px solid ${C.red}`,borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div>
+            <div style={{fontWeight:700,color:C.red,fontSize:13,marginBottom:4}}>⚠ CSV Import Error</div>
+            <div style={{fontSize:12,color:C.red}}>{csvError}</div>
+          </div>
+          <button onClick={()=>setCsvError(null)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:C.red,padding:0}}>✕</button>
+        </div>
+      )}
+
+      {/* CSV preview modal */}
+      {csvPreview && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:15,color:C.ink}}>📋 Preview — {csvPreview.length} budget entries</div>
+              <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Review before importing. Existing entries for the same category/month will be overwritten.</div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setCsvPreview(null)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Cancel</button>
+              <button onClick={confirmImport} disabled={saving} style={{background:C.green,border:"none",borderRadius:8,padding:"7px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:"#fff",fontWeight:700}}>
+                {saving ? "Importing…" : `✓ Import ${csvPreview.length} entries`}
+              </button>
+            </div>
+          </div>
+          <div style={{maxHeight:260,overflowY:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{background:"#f5f5f5",position:"sticky",top:0}}>
+                  {["Year","Month","Category","Type","Amount","Department"].map(h=>(
+                    <th key={h} style={{padding:"6px 10px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {csvPreview.slice(0,100).map((r,i)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${C.border}40`}}>
+                    <td style={{padding:"5px 10px",color:C.ink}}>{r.year}</td>
+                    <td style={{padding:"5px 10px",color:C.ink}}>
+                      {["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][r.month-1]}
+                    </td>
+                    <td style={{padding:"5px 10px",color:C.ink,fontWeight:500}}>{r.category}</td>
+                    <td style={{padding:"5px 10px",color:r.type==="income"?C.green:C.inkMid}}>{r.type}</td>
+                    <td style={{padding:"5px 10px",color:C.ink,textAlign:"right"}}>R {r.amount.toLocaleString("en-ZA")}</td>
+                    <td style={{padding:"5px 10px",color:C.inkMid}}>{r.department||"—"}</td>
+                  </tr>
+                ))}
+                {csvPreview.length > 100 && (
+                  <tr><td colSpan={6} style={{padding:"8px 10px",color:C.inkMid,fontSize:11,textAlign:"center"}}>…and {csvPreview.length - 100} more rows</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {view==="monthly"     && <MonthlyView/>}
       {view==="annual"      && <AnnualView/>}
