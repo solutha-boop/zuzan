@@ -2187,6 +2187,423 @@ function Reports({live = {}}) {
 }
 
 
+// ── BUDGETING ─────────────────────────────────────────────────────────────────
+function Budgeting({live = {}}) {
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const EXPENSE_CATS = ["Cost of Sales","Utilities","Telecoms","Office","Banking","Insurance","Tax","Equipment","Travel","Salaries","Rent","Marketing","Professional Fees","Other"];
+  const INCOME_CATS  = ["Revenue"];
+  const ALL_CATS     = [...INCOME_CATS, ...EXPENSE_CATS];
+  const DEPTS        = ["General","Sales","Operations","Finance","HR","IT","Marketing","Admin"];
+
+  const [view,    setView]    = useState("monthly");   // monthly | annual | cashflow | departments
+  const [year,    setYear]    = useState(new Date().getFullYear());
+  const [month,   setMonth]   = useState(new Date().getMonth() + 1);
+  const [budgets, setBudgets] = useState([]);
+  const [actuals, setActuals] = useState([]);
+  const [summary, setSummary] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const [editCell, setEditCell] = useState(null); // {cat, month, type, dept}
+  const [editVal,  setEditVal]  = useState("");
+  const [dept,     setDept]     = useState("General");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [b, a, s] = await Promise.all([
+        api(`/budgets/?year=${year}`),
+        api(`/budgets/actuals?year=${year}`),
+        api(`/budgets/summary?year=${year}`),
+      ]);
+      setBudgets(b); setActuals(a); setSummary(s);
+    } catch(e) { console.warn("Budget load error", e); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, [year]);
+
+  const getBudget = (cat, m, type="expense", d=null) => {
+    const b = budgets.find(b => b.category===cat && b.month===m && b.type===type && (d ? b.department===d : true));
+    return b ? b.amount : 0;
+  };
+
+  const getActual = (cat, m, type="expense") => {
+    const a = actuals.find(a => a.category===cat && a.month===m && a.type===type);
+    return a ? a.actual : 0;
+  };
+
+  const saveCell = async (cat, m, type, amount, d=null) => {
+    setSaving(true);
+    try {
+      await api("/budgets/", {method:"POST", body: JSON.stringify({
+        year, month: m, category: cat, amount: parseFloat(amount)||0, type, department: d||null,
+      })});
+      await load();
+    } catch(e) { alert("Save failed: "+(e.message||"")); }
+    finally { setSaving(false); setEditCell(null); }
+  };
+
+  const fmtR = (n) => `R ${Number(n||0).toLocaleString("en-ZA",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+  const pct  = (actual, budget) => budget > 0 ? Math.min(Math.round((actual/budget)*100), 200) : 0;
+  const over = (actual, budget) => budget > 0 && actual > budget;
+
+  const CellInput = ({cat, m, type, dept: d}) => {
+    const key = `${cat}-${m}-${type}`;
+    const cur = getBudget(cat, m, type, d);
+    return editCell === key
+      ? <input autoFocus type="number" value={editVal}
+          onChange={e=>setEditVal(e.target.value)}
+          onBlur={()=>saveCell(cat,m,type,editVal,d)}
+          onKeyDown={e=>{if(e.key==="Enter")saveCell(cat,m,type,editVal,d);if(e.key==="Escape")setEditCell(null);}}
+          style={{width:80,padding:"2px 4px",border:`1px solid ${C.accent}`,borderRadius:4,fontSize:12,textAlign:"right",fontFamily:"inherit"}}/>
+      : <span onClick={()=>{setEditCell(key);setEditVal(cur||"");}}
+          style={{cursor:"text",fontSize:12,color:cur?C.ink:C.inkDim,display:"block",textAlign:"right",minWidth:60,padding:"2px 4px",borderRadius:4,border:`1px dashed ${C.border}`}}>
+          {cur ? fmtR(cur) : "Set…"}
+        </span>;
+  };
+
+  // ── MONTHLY VIEW ────────────────────────────────────────────────────────────
+  const MonthlyView = () => {
+    const totalBudget = ALL_CATS.reduce((s,c)=>s+getBudget(c,month,c==="Revenue"?"income":"expense"),0);
+    const totalActual = actuals.filter(a=>a.month===month).reduce((s,a)=>s+a.actual,0);
+    return (
+      <div>
+        <div style={{display:"flex",gap:8,marginBottom:20,alignItems:"center"}}>
+          <select value={month} onChange={e=>setMonth(+e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,background:C.bg,color:C.ink,fontFamily:"inherit"}}>
+            {MONTHS.map((m,i)=><option key={i} value={i+1}>{m}</option>)}
+          </select>
+          <span style={{fontSize:12,color:C.inkMid}}>vs actual spend</span>
+        </div>
+
+        {/* Summary KPIs */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+          <div style={{background:C.surface,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Total Budgeted</div>
+            <div style={{fontSize:18,fontWeight:700,color:C.ink}}>{fmtR(totalBudget)}</div>
+          </div>
+          <div style={{background:C.surface,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Actual Spend</div>
+            <div style={{fontSize:18,fontWeight:700,color:totalActual>totalBudget?C.red:C.ink}}>{fmtR(totalActual)}</div>
+          </div>
+          <div style={{background:C.surface,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Remaining</div>
+            <div style={{fontSize:18,fontWeight:700,color:totalBudget-totalActual>=0?C.green:C.red}}>{fmtR(totalBudget-totalActual)}</div>
+          </div>
+        </div>
+
+        {/* Per-category rows */}
+        {ALL_CATS.map(cat => {
+          const type   = cat==="Revenue" ? "income" : "expense";
+          const budget = getBudget(cat, month, type);
+          const actual = getActual(cat, month, type);
+          const p      = pct(actual, budget);
+          const isOver = over(actual, budget);
+          if (!budget && !actual) return null;
+          return (
+            <div key={cat} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{cat}</div>
+                <div style={{display:"flex",gap:16,alignItems:"center"}}>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:10,color:C.inkMid}}>Budget</div>
+                    <CellInput cat={cat} m={month} type={type}/>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:10,color:C.inkMid}}>Actual</div>
+                    <div style={{fontSize:12,fontWeight:600,color:isOver?C.red:C.ink}}>{fmtR(actual)}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:10,color:C.inkMid}}>%</div>
+                    <div style={{fontSize:12,fontWeight:700,color:isOver?C.red:C.green}}>{p}%</div>
+                  </div>
+                </div>
+              </div>
+              <div style={{height:6,background:C.border,borderRadius:3}}>
+                <div style={{height:"100%",width:`${Math.min(p,100)}%`,background:isOver?C.red:p>80?C.gold:C.green,borderRadius:3,transition:"width 0.3s"}}/>
+              </div>
+              {isOver && <div style={{fontSize:10,color:C.red,marginTop:4}}>⚠ Over budget by {fmtR(actual-budget)}</div>}
+            </div>
+          );
+        })}
+
+        {/* Prompt to set budgets */}
+        {ALL_CATS.every(cat=>{const type=cat==="Revenue"?"income":"expense";return !getBudget(cat,month,type)&&!getActual(cat,month,type);}) && (
+          <div style={{textAlign:"center",padding:"40px 20px",color:C.inkMid}}>
+            <div style={{fontSize:32,marginBottom:12}}>🎯</div>
+            <div style={{fontSize:15,fontWeight:600,marginBottom:6}}>No budget set for {MONTHS[month-1]}</div>
+            <div style={{fontSize:13}}>Switch to Annual view to plan the full year, or click "Set…" next to any category above after adding some expenses.</div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ── ANNUAL VIEW ─────────────────────────────────────────────────────────────
+  const AnnualView = () => {
+    const [pendingSaves, setPendingSaves] = useState({});
+    const setPending = (cat, m, type, val) => setPendingSaves(p=>({...p,[`${cat}-${m}-${type}`]:val}));
+    const getCellVal = (cat, m, type) => {
+      const key = `${cat}-${m}-${type}`;
+      return pendingSaves[key] !== undefined ? pendingSaves[key] : (getBudget(cat,m,type)||"");
+    };
+    const saveAll = async () => {
+      if (!Object.keys(pendingSaves).length) return;
+      setSaving(true);
+      try {
+        const entries = Object.entries(pendingSaves).map(([key,val])=>{
+          const [cat,...rest] = key.split("-");
+          const type = rest.pop();
+          const m = parseInt(rest.join("-"));
+          return {year, month:m, category:cat, amount:parseFloat(val)||0, type};
+        });
+        await api("/budgets/bulk",{method:"POST",body:JSON.stringify({entries})});
+        setPendingSaves({});
+        await load();
+      } catch(e){alert("Save failed");}
+      finally{setSaving(false);}
+    };
+
+    return (
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontSize:13,color:C.inkMid}}>Click any cell to edit. Save all when done.</div>
+          {Object.keys(pendingSaves).length>0 &&
+            <button onClick={saveAll} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>
+              {saving?"Saving…":`Save ${Object.keys(pendingSaves).length} changes`}
+            </button>}
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:900}}>
+            <thead>
+              <tr style={{background:C.surface}}>
+                <th style={{padding:"8px 12px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1}}>Category</th>
+                {MONTHS.map((m,i)=><th key={i} style={{padding:"8px 8px",textAlign:"center",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,minWidth:80}}>{m}</th>)}
+                <th style={{padding:"8px 8px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* Income section */}
+              <tr><td colSpan={14} style={{background:C.greenLt,padding:"6px 12px",fontSize:11,fontWeight:700,color:C.green,letterSpacing:0.5,textTransform:"uppercase"}}>Income</td></tr>
+              {INCOME_CATS.map(cat=>(
+                <tr key={cat}>
+                  <td style={{padding:"6px 12px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1}}>{cat}</td>
+                  {MONTHS.map((_,i)=>{
+                    const m=i+1; const key=`${cat}-${m}-income`;
+                    const cur=getCellVal(cat,m,"income");
+                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"2px 4px",textAlign:"right"}}>
+                      <input type="number" value={cur} placeholder="0"
+                        onChange={e=>setPending(cat,m,"income",e.target.value)}
+                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:12,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 2px"}}/>
+                    </td>;
+                  })}
+                  <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",fontWeight:600,color:C.green}}>
+                    {fmtR(MONTHS.reduce((s,_,i)=>s+(parseFloat(getCellVal(cat,i+1,"income"))||0),0))}
+                  </td>
+                </tr>
+              ))}
+              {/* Expense section */}
+              <tr><td colSpan={14} style={{background:"#FFF3F3",padding:"6px 12px",fontSize:11,fontWeight:700,color:C.red,letterSpacing:0.5,textTransform:"uppercase"}}>Expenses</td></tr>
+              {EXPENSE_CATS.map(cat=>(
+                <tr key={cat}>
+                  <td style={{padding:"6px 12px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1}}>{cat}</td>
+                  {MONTHS.map((_,i)=>{
+                    const m=i+1; const key=`${cat}-${m}-expense`;
+                    const cur=getCellVal(cat,m,"expense");
+                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"2px 4px",textAlign:"right"}}>
+                      <input type="number" value={cur} placeholder="0"
+                        onChange={e=>setPending(cat,m,"expense",e.target.value)}
+                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:12,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 2px"}}/>
+                    </td>;
+                  })}
+                  <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",fontWeight:600,color:C.red}}>
+                    {fmtR(MONTHS.reduce((s,_,i)=>s+(parseFloat(getCellVal(cat,i+1,"expense"))||0),0))}
+                  </td>
+                </tr>
+              ))}
+              {/* Net row */}
+              <tr style={{background:C.surface,fontWeight:700}}>
+                <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1}}>Net (Income − Expenses)</td>
+                {MONTHS.map((_,i)=>{
+                  const m=i+1;
+                  const inc=(parseFloat(getCellVal("Revenue",m,"income"))||0);
+                  const exp=EXPENSE_CATS.reduce((s,c)=>s+(parseFloat(getCellVal(c,m,"expense"))||0),0);
+                  const net=inc-exp;
+                  return <td key={m} style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:net>=0?C.green:C.red}}>{net?fmtR(net):""}</td>;
+                })}
+                <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:C.ink}}>
+                  {fmtR(MONTHS.reduce((s,_,i)=>{
+                    const m=i+1;
+                    const inc=(parseFloat(getCellVal("Revenue",m,"income"))||0);
+                    const exp=EXPENSE_CATS.reduce((s2,c)=>s2+(parseFloat(getCellVal(c,m,"expense"))||0),0);
+                    return s+(inc-exp);
+                  },0))}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  // ── CASH FLOW VIEW ──────────────────────────────────────────────────────────
+  const CashFlowView = () => {
+    return (
+      <div>
+        <p style={{fontSize:13,color:C.inkMid,marginBottom:16}}>Budgeted vs actual net cash position per month for {year}.</p>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr style={{background:C.surface}}>
+                <th style={{padding:"10px 14px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Month</th>
+                <th style={{padding:"10px 14px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Budgeted Income</th>
+                <th style={{padding:"10px 14px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Budgeted Expense</th>
+                <th style={{padding:"10px 14px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Budgeted Net</th>
+                <th style={{padding:"10px 14px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Actual Income</th>
+                <th style={{padding:"10px 14px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Actual Expense</th>
+                <th style={{padding:"10px 14px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Actual Net</th>
+                <th style={{padding:"10px 14px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Variance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map(row=>{
+                const variance = row.actual_net - row.budgeted_net;
+                const now = new Date(); const isFuture = row.month > now.getMonth()+1 && year >= now.getFullYear();
+                return (
+                  <tr key={row.month} style={{background:isFuture?"#fafafa":"#fff"}}>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,fontWeight:600,color:C.ink}}>{MONTHS[row.month-1]}{isFuture?" (forecast)":""}</td>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,textAlign:"right",color:C.green}}>{row.budgeted_income?fmtR(row.budgeted_income):"—"}</td>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,textAlign:"right",color:C.red}}>{row.budgeted_expense?fmtR(row.budgeted_expense):"—"}</td>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,textAlign:"right",fontWeight:600,color:row.budgeted_net>=0?C.green:C.red}}>{row.budgeted_net?fmtR(row.budgeted_net):"—"}</td>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,textAlign:"right",color:C.green,opacity:isFuture?0.3:1}}>{row.actual_income?fmtR(row.actual_income):"—"}</td>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,textAlign:"right",color:C.red,opacity:isFuture?0.3:1}}>{row.actual_expense?fmtR(row.actual_expense):"—"}</td>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,textAlign:"right",fontWeight:600,color:row.actual_net>=0?C.green:C.red,opacity:isFuture?0.3:1}}>{row.actual_net?fmtR(row.actual_net):"—"}</td>
+                    <td style={{padding:"10px 14px",border:`1px solid ${C.border}`,textAlign:"right",fontWeight:600,color:variance>=0?C.green:C.red,opacity:isFuture?0.3:1}}>{!isFuture&&row.actual_net?`${variance>=0?"+":""}${fmtR(variance)}`:"—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  // ── DEPARTMENTS VIEW ─────────────────────────────────────────────────────────
+  const DepartmentsView = () => {
+    const [pendingSaves, setPendingSaves] = useState({});
+    const setPending = (cat, m, val) => setPendingSaves(p=>({...p,[`${cat}-${m}`]:val}));
+    const getCellVal = (cat, m) => {
+      const key=`${cat}-${m}`;
+      if(pendingSaves[key]!==undefined) return pendingSaves[key];
+      const b=budgets.find(b=>b.category===cat&&b.month===m&&b.department===dept);
+      return b?b.amount:"";
+    };
+    const saveAll = async () => {
+      if(!Object.keys(pendingSaves).length) return;
+      setSaving(true);
+      try {
+        const entries=Object.entries(pendingSaves).map(([key,val])=>{
+          const [cat,m]=key.split("-");
+          return {year,month:parseInt(m),category:cat,amount:parseFloat(val)||0,type:"expense",department:dept};
+        });
+        await api("/budgets/bulk",{method:"POST",body:JSON.stringify({entries})});
+        setPendingSaves({});
+        await load();
+      } catch(e){alert("Save failed");}
+      finally{setSaving(false);}
+    };
+
+    return (
+      <div>
+        <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:16,flexWrap:"wrap"}}>
+          <select value={dept} onChange={e=>setDept(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,background:C.bg,color:C.ink,fontFamily:"inherit"}}>
+            {DEPTS.map(d=><option key={d} value={d}>{d}</option>)}
+          </select>
+          <span style={{fontSize:12,color:C.inkMid}}>department budget for {year}</span>
+          {Object.keys(pendingSaves).length>0 &&
+            <button onClick={saveAll} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>
+              {saving?"Saving…":`Save ${Object.keys(pendingSaves).length} changes`}
+            </button>}
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:900}}>
+            <thead>
+              <tr style={{background:C.surface}}>
+                <th style={{padding:"8px 12px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface}}>Category</th>
+                {MONTHS.map((m,i)=><th key={i} style={{padding:"8px 8px",textAlign:"center",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,minWidth:80}}>{m}</th>)}
+                <th style={{padding:"8px 8px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {EXPENSE_CATS.map(cat=>(
+                <tr key={cat}>
+                  <td style={{padding:"6px 12px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff"}}>{cat}</td>
+                  {MONTHS.map((_,i)=>{
+                    const m=i+1; const cur=getCellVal(cat,m);
+                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"2px 4px",textAlign:"right"}}>
+                      <input type="number" value={cur} placeholder="0"
+                        onChange={e=>setPending(cat,m,e.target.value)}
+                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:12,fontFamily:"inherit",outline:"none",padding:"4px 2px"}}/>
+                    </td>;
+                  })}
+                  <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",fontWeight:600,color:C.red}}>
+                    {fmtR(MONTHS.reduce((s,_,i)=>s+(parseFloat(getCellVal(cat,i+1))||0),0))}
+                  </td>
+                </tr>
+              ))}
+              <tr style={{background:C.surface,fontWeight:700}}>
+                <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface}}>Total — {dept}</td>
+                {MONTHS.map((_,i)=>{
+                  const m=i+1;
+                  const total=EXPENSE_CATS.reduce((s,c)=>s+(parseFloat(getCellVal(c,m))||0),0);
+                  return <td key={m} style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:C.accent,fontWeight:700}}>{total?fmtR(total):""}</td>;
+                })}
+                <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:C.accent,fontWeight:700}}>
+                  {fmtR(EXPENSE_CATS.reduce((s,c)=>s+MONTHS.reduce((s2,_,i)=>s2+(parseFloat(getCellVal(c,i+1))||0),0),0))}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <SectionHeader title="Budgeting" sub="Plan, track and forecast your finances"/>
+
+      {/* Year selector + view tabs */}
+      <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:20,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <button onClick={()=>setYear(y=>y-1)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>◀</button>
+          <span style={{fontSize:15,fontWeight:700,color:C.ink,minWidth:48,textAlign:"center"}}>{year}</span>
+          <button onClick={()=>setYear(y=>y+1)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>▶</button>
+        </div>
+        {[
+          {id:"monthly",     label:"Monthly"},
+          {id:"annual",      label:"Annual Plan"},
+          {id:"cashflow",    label:"Cash Flow"},
+          {id:"departments", label:"Departments"},
+        ].map(v=>(
+          <button key={v.id} onClick={()=>setView(v.id)} style={{
+            padding:"7px 14px",borderRadius:8,border:`1px solid ${view===v.id?C.accent:C.border}`,
+            background:view===v.id?C.accentLt:"transparent",color:view===v.id?C.accent:C.inkMid,
+            fontSize:13,fontWeight:view===v.id?700:400,cursor:"pointer",fontFamily:"inherit",
+          }}>{v.label}</button>
+        ))}
+        {loading && <span style={{fontSize:12,color:C.inkMid}}>Loading…</span>}
+      </div>
+
+      {view==="monthly"     && <MonthlyView/>}
+      {view==="annual"      && <AnnualView/>}
+      {view==="cashflow"    && <CashFlowView/>}
+      {view==="departments" && <DepartmentsView/>}
+    </div>
+  );
+}
+
 // ── DEBTORS ───────────────────────────────────────────────────────────────────
 function Debtors({live = {}}) {
   const [data, setData] = useState(null);
@@ -5004,6 +5421,7 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
 
   const MORE_ITEMS = [
     {id:"quotes",          label:"Quotes",      icon:"📝"},
+    {id:"budgeting",       label:"Budgeting",   icon:"🎯"},
     {id:"customers",       label:"Customers",   icon:"👥"},
     {id:"suppliers",       label:"Suppliers",   icon:"🏭"},
     {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
@@ -5024,6 +5442,7 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
     expenses:   <div style={{padding:"16px 16px 100px"}}><Expenses   live={live}/></div>,
     payroll:    <div style={{padding:"16px 16px 100px"}}><Payroll    live={live} user={user}/></div>,
     quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate}/></div>,
+    budgeting:  <div style={{padding:"16px 16px 100px"}}><Budgeting  live={live}/></div>,
     reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live}/></div>,
     inventory:       <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
     customers:       <div style={{padding:"16px 16px 100px"}}><Customers/></div>,
@@ -5113,6 +5532,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"expenses",   label:"Expenses",    icon:"💳"},
     {id:"payroll",    label:"Payroll",     icon:"👥"},
     {id:"reports",    label:"Reports",     icon:"📊"},
+    {id:"budgeting",  label:"Budgeting",   icon:"🎯"},
     {id:"debtors",    label:"Debtors",     icon:"📥"},
     {id:"creditors",  label:"Creditors",   icon:"📤"},
     {id:"coa",        label:"Accounts",    icon:"📒"},
@@ -5155,6 +5575,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     expenses:   <Expenses   live={live}/>,
     payroll:    <Payroll    live={live} user={user}/>,
     reports:    <Reports    live={live}/>,
+    budgeting:  <Budgeting  live={live}/>,
     debtors:    <Debtors    live={live}/>,
     creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
