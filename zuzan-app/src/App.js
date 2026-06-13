@@ -528,7 +528,7 @@ function InvFormFields({data, onChange}) {
 function Invoicing({live = {}, user = {}}) {
   const liveInvoices = live.invoices;
   const [invoices, setInvoices] = useState(MOCK_INVOICES);
-  useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
+  useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
 
   const [showNew,   setShowNew]   = useState(false);
   const [preview,   setPreview]   = useState(null);   // view modal
@@ -553,7 +553,7 @@ function Invoicing({live = {}, user = {}}) {
     setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid"} : i));
     setPayModal(null);
     try {
-      await api(`/invoices/${inv.id}`, { method:"PUT", body: JSON.stringify({
+      await api(`/invoices/${inv._dbId || inv.id}`, { method:"PUT", body: JSON.stringify({
         status: "paid",
         paid_date: payDate || new Date().toISOString().slice(0,10),
         paid_amount_zar: +zarAmt || null,
@@ -581,7 +581,7 @@ function Invoicing({live = {}, user = {}}) {
     setInvoices(prev => prev.map(i => i.id === editInv.id ? {...editInv} : i));
     setEditInv(null);
     try {
-      await api(`/invoices/${editInv.id}`, { method:"PUT", body: JSON.stringify({ client_name:editInv.client, description:editInv.desc, amount:+editInv.amount, due_date:editInv.due||null, status:editInv.status }) });
+      await api(`/invoices/${editInv._dbId || editInv.id}`, { method:"PUT", body: JSON.stringify({ client_name:editInv.client, description:editInv.desc, amount:+editInv.amount, due_date:editInv.due||null, status:editInv.status }) });
       if (live && live.reload) live.reload();
     } catch(err) { console.warn("Amend failed:", err.message); }
   };
@@ -737,7 +737,7 @@ function Invoicing({live = {}, user = {}}) {
                     {inv.status !== "paid" && (
                       <button onClick={() => openPayModal(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Record Payment</button>
                     )}
-                    <button onClick={async()=>{ if(!window.confirm(`Delete ${inv.id}?`))return; setInvoices(p=>p.filter(i=>i.id!==inv.id)); try{await api(`/invoices/${inv.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
+                    <button onClick={async()=>{ if(!window.confirm(`Delete ${inv.id}?`))return; setInvoices(p=>p.filter(i=>i.id!==inv.id)); try{await api(`/invoices/${inv._dbId || inv.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
                   </div>
                 </td>
               </tr>
