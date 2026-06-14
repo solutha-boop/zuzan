@@ -414,4 +414,5 @@ async def import_bank_statement(
         "expenses_skipped": expenses_skipped,
         "credits_recorded": credits_recorded,
         "total_processed":  len(data.transactions),
-        "message":          f"Imported {expenses_created} ex
+        "message":          f"Imported {expenses_created} expenses and {credits_recorded} credits from {len(data.transactions)} transactions.",
+    }
