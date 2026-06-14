@@ -5029,7 +5029,7 @@ function PurchaseOrders() {
         await api("/purchase-orders/",{method:"POST",body});
       } catch(e) {
         if (e.message !== "Failed to fetch") throw e;
-        // Backend may have been sleeping (Render free tier) — wait and retry once
+        // Backend sleeping (Render free tier) — wait and retry once
         await new Promise(r => setTimeout(r, 10000));
         await api("/purchase-orders/",{method:"POST",body});
       }
@@ -6213,4 +6213,61 @@ export default function App() {
   // Keep Render free-tier backend alive — pings /health every 8 min while logged in
   useEffect(() => {
     if (screen !== "app") return;
-    const id = setInterval(() => fetch(`${BASE_URL}/h
+    const id = setInterval(() => fetch(`${BASE_URL}/health`).catch(() => {}), 8 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [screen]);
+
+  useEffect(() => {
+    const token = localStorage.getItem("zuzan_token");
+    if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
+    fetch("https://zuzan-backend.onrender.com/auth/me", {
+      headers: {"Authorization": "Bearer " + token}
+    })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
+        setUser({
+          firstName:    data.user.first_name,
+          lastName:     data.user.last_name,
+          email:        data.user.email,
+          companyName:  data.company.name,
+          logoUrl:      data.company.logo_url || "",
+          plan:         {name: data.company.plan, id: data.company.plan},
+          access_token: token,
+          trialEnds:    data.company.trial_ends,
+        });
+        setScreen("app");
+      })
+      .catch(() => { localStorage.removeItem("zuzan_token"); setScreen("login"); });
+  }, []);
+
+  const handleLogin = userData => { setUser(userData); setScreen("app"); };
+
+  const handleRegistrationComplete = userData => {
+    const savedToken = localStorage.getItem("zuzan_token");
+    if (!savedToken || savedToken.startsWith("demo_")) {
+      localStorage.setItem("zuzan_token", "demo_" + Date.now());
+    }
+    setUser(userData);
+    setScreen("app");
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("zuzan_token");
+    setUser(null);
+    setScreen("login");
+  };
+
+  if (screen === "loading") return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:12}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+        <div style={{fontSize:13,color:C.inkMid}}>Loading your account...</div>
+      </div>
+    </div>
+  );
+
+  if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
+  if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
+
+  return <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>;
+}
