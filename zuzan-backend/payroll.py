@@ -1204,4 +1204,3 @@ async def subscription_status(
         "payroll_enabled":   company.payroll_enabled,
         "payroll_employees": company.payroll_employees,
     }
-   
