@@ -1086,7 +1086,7 @@ function Expenses({live = {}}) {
 
 
 // ── PAYSLIP MODAL ─────────────────────────────────────────────────────────────
-function PayslipModal({employee, payroll, period, company, onClose}) {
+function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
   const p = payroll;
   const today = new Date().toLocaleDateString("en-ZA", {day:"2-digit", month:"long", year:"numeric"});
 
@@ -1142,8 +1142,10 @@ function PayslipModal({employee, payroll, period, company, onClose}) {
           {/* Header */}
           <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${C.accent}`}}>
             <div>
-              <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div>
-              <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{company || "Your Company Pty Ltd"}</div>
+              {logoUrl
+                ? <img src={logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:4}}/>
+                : <div style={{fontFamily:"serif",fontSize:24,fontWeight:800,color:C.accent}}>{company||"Your Company"}</div>}
+              {logoUrl && <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{company||""}</div>}
             </div>
             <div style={{textAlign:"right"}}>
               <div style={{fontSize:18,fontWeight:800,color:C.ink}}>PAYSLIP</div>
@@ -1647,6 +1649,7 @@ function Payroll({live = {}, user = {}}) {
           payroll={viewPayslip.payroll}
           period={new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
           company={user.companyName || "Your Company"}
+          logoUrl={user.logoUrl || ""}
           onClose={()=>setViewPayslip(null)}
         />
       )}
