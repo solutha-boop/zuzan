@@ -16,7 +16,14 @@ from slowapi.util import get_remote_address
 limiter = Limiter(key_func=get_remote_address)
 
 import os
-from config import PLAN_PRICES
+try:
+    from config import PLAN_PRICES
+except ImportError:
+    PLAN_PRICES = {
+        "starter":      {"monthly": 399,  "annual": 3990},
+        "professional": {"monthly": 899,  "annual": 8990},
+        "business":     {"monthly": 1499, "annual": 14990},
+    }
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
 ALGORITHM = "HS256"

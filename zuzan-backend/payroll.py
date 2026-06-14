@@ -1064,7 +1064,14 @@ PAYFAST_URL          = "https://sandbox.payfast.co.za/eng/process" if PAYFAST_SA
 BACKEND_URL          = _os.environ.get("BACKEND_URL", "https://zuzan-backend.onrender.com")
 FRONTEND_URL         = _os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
 
-from config import PLAN_PRICES  # single source of truth — see config.py
+try:
+    from config import PLAN_PRICES  # single source of truth — see config.py
+except ImportError:
+    PLAN_PRICES = {
+        "starter":      {"monthly": 399,  "annual": 3990},
+        "professional": {"monthly": 899,  "annual": 8990},
+        "business":     {"monthly": 1499, "annual": 14990},
+    }
 
 
 class PaymentInitRequest(BaseModel):
