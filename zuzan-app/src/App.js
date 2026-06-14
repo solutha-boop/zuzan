@@ -5020,24 +5020,53 @@ function PurchaseOrders() {
   const addItem = () => setForm(d=>({...d,items:[...d.items,{description:"",quantity:1,unit_price:0}]}));
   const removeItem = idx => setForm(d=>({...d,items:d.items.filter((_,i)=>i!==idx)}));
 
+  const [saving,  setSaving]  = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+
   const save = async () => {
     if (!form.supplier_name && !form.supplier_id) { alert("Please select or enter a supplier"); return; }
-    try {
-      const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null};
-      const body = JSON.stringify(payload);
+    setSaving(true); setSaveMsg("Saving…");
+    const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null};
+    const body = JSON.stringify(payload);
+    for (let attempt = 1; attempt <= 7; attempt++) {
       try {
         await api("/purchase-orders/",{method:"POST",body});
+        setSaving(false); setSaveMsg("");
+        setShowForm(false); setForm(emptyForm); load();
+        return;
       } catch(e) {
-        if (e.message !== "Failed to fetch") throw e;
-        // Backend sleeping (Render free tier) — wait and retry once
+        if (e.message !== "Failed to fetch" || attempt === 7) {
+          setSaving(false); setSaveMsg("");
+          alert(e.message === "Failed to fetch"
+            ? "Server is still starting up. Please wait a minute and try again."
+            : e.message);
+          return;
+        }
+        setSaveMsg(`Server waking up… (${attempt * 10}s)`);
         await new Promise(r => setTimeout(r, 10000));
-        await api("/purchase-orders/",{method:"POST",body});
       }
-      setShowForm(false); setForm(emptyForm); load();
-    } catch(e){
-      alert(e.message === "Failed to fetch"
-        ? "Server is starting up. Please wait 30–60 seconds and try again."
-        : e.message);
+    }
+  };
+
+  const saveDraft = async () => {
+    if (!form.supplier_name && !form.supplier_id) { alert("Please enter at least a supplier name to save a draft"); return; }
+    setSaving(true); setSaveMsg("Saving draft…");
+    const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null, status:"draft"};
+    for (let attempt = 1; attempt <= 7; attempt++) {
+      try {
+        await api("/purchase-orders/",{method:"POST",body:JSON.stringify(payload)});
+        setSaving(false); setSaveMsg("");
+        setShowForm(false); setForm(emptyForm); load();
+        return;
+      } catch(e) {
+        if (e.message !== "Failed to fetch" || attempt === 7) {
+          setSaving(false); setSaveMsg("");
+          alert(e.message === "Failed to fetch" ? "Server is still starting up. Please wait a minute and try again." : e.message);
+          return;
+        }
+        setSaveMsg(`Server waking up… (${attempt * 10}s)`);
+        await new Promise(r => setTimeout(r, 10000));
+      }
     }
   };
 
@@ -5111,8 +5140,9 @@ function PurchaseOrders() {
 
           <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={e=>setForm(d=>({...d,notes:e.target.value}))} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{display:"flex",gap:10}}>
-            <button onClick={save} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer",opacity:saving?0.7:1}}>{saving ? (saveMsg||"Saving…") : "Create PO"}</button>
-            <button onClick={()=>setShowForm(false)} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
+            <button onClick={save} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer",opacity:saving?0.7:1}}>{saving?(saveMsg||"Saving…"):"Create PO"}</button>
+            <button onClick={saveDraft} disabled={saving} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid,fontWeight:500}}>Save Draft</button>
+            <button onClick={()=>setShowForm(false)} style={{background:"transparent",border:"none",borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkDim}}>Cancel</button>
           </div>
         </div>
       )}
@@ -5336,7 +5366,8 @@ function AIAssistant({tab}) {
     setLoading(true);
     try {
       const res = await api("/ai/chat",{method:"POST",body:JSON.stringify({message:q,context:tab||"dashboard"})});
-      setMessages(m=>[...m,{role:"assistant",text:res.reply||res.message||"I can help with that. Please check the relevant section of the app."}]);
+      const reply = typeof res === "string" ? res : (res.reply||res.response||res.message||res.answer||res.text||JSON.stringify(res));
+      setMessages(m=>[...m,{role:"assistant",text:reply||"I can help with that. Please check the relevant section of the app."}]);
     } catch(e) {
       // Fallback local answers
       const lower = q.toLowerCase();
