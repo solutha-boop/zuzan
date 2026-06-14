@@ -52,6 +52,7 @@ DEFAULT_ACCOUNTS = [
     {"code": "5290", "name": "Marketing",                    "type": AccountType.expense},
     {"code": "5300", "name": "Professional Fees",            "type": AccountType.expense},
     {"code": "5900", "name": "General Expenses",             "type": AccountType.expense},
+    {"code": "5950", "name": "Stock Adjustments",            "type": AccountType.expense},
 ]
 
 # Maps expense categories to account codes
@@ -75,18 +76,24 @@ CATEGORY_TO_CODE = {
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
 def init_accounts(company_id: int, db: Session) -> None:
-    """Create default chart of accounts for a company if none exist yet."""
-    existing = db.query(Account).filter(Account.company_id == company_id).count()
-    if existing > 0:
-        return
+    """
+    Upsert the default chart of accounts for a company.
+    Checks per account code so new accounts added to DEFAULT_ACCOUNTS
+    are created for existing companies on the next transaction.
+    """
+    existing_codes = {
+        row[0] for row in
+        db.query(Account.code).filter(Account.company_id == company_id).all()
+    }
     for acct in DEFAULT_ACCOUNTS:
-        db.add(Account(
-            company_id=company_id,
-            code=acct["code"],
-            name=acct["name"],
-            type=acct["type"],
-            is_system=True,
-        ))
+        if acct["code"] not in existing_codes:
+            db.add(Account(
+                company_id=company_id,
+                code=acct["code"],
+                name=acct["name"],
+                type=acct["type"],
+                is_system=True,
+            ))
     db.commit()
 
 
@@ -185,8 +192,11 @@ def post_invoice_paid(invoice, db: Session) -> JournalEntry:
     bank = get_account(cid, "1000", db)
     ar   = get_account(cid, "1100", db)
 
+    # For foreign-currency invoices use the ZAR amount actually received;
+    # fall back to total_amount if paid_amount_zar was not recorded.
+    zar_received = invoice.paid_amount_zar if invoice.paid_amount_zar else invoice.total_amount
     lines = [
-        _line(entry.id, bank, debit=invoice.total_amount,  description="Cash received"),
+        _line(entry.id, bank, debit=zar_received,          description="Cash received"),
         _line(entry.id, ar,   credit=invoice.total_amount, description=invoice.invoice_number),
     ]
     _assert_balanced(lines)
@@ -312,6 +322,45 @@ def post_po_paid(po, db: Session) -> JournalEntry:
     ]
     _assert_balanced(lines)
     for l in lines: db.add(l)
+    return entry
+
+
+def post_stock_adjustment(item, quantity: float, db: Session, reason: str = None) -> JournalEntry:
+    """
+    Direct stock adjustment:
+      Positive (stock in):  DR Inventory at Cost (1200) / CR Stock Adjustments (5950)
+      Negative (stock out): DR Stock Adjustments (5950)  / CR Inventory at Cost (1200)
+    No entry is posted if unit_cost is zero (no financial impact).
+    """
+    cid = item.company_id
+    amount = round(abs(quantity) * (item.unit_cost or 0), 2)
+    if amount == 0:
+        return None  # Zero-cost item — no ledger entry needed
+
+    entry = _make_entry(
+        cid, datetime.utcnow(),
+        f"Stock adjustment — {item.name} ({'+'  if quantity > 0 else ''}{quantity} {item.unit_of_measure or 'units'})",
+        f"ADJ-{item.id}", "stock_adjustment", item.id, db,
+    )
+
+    inventory = get_account(cid, "1200", db)
+    adj_acct  = get_account(cid, "5950", db)
+    desc = reason or ("Stock in" if quantity > 0 else "Stock write-off")
+
+    if quantity > 0:
+        lines = [
+            _line(entry.id, inventory, debit=amount,  description=desc),
+            _line(entry.id, adj_acct,  credit=amount, description=desc),
+        ]
+    else:
+        lines = [
+            _line(entry.id, adj_acct,  debit=amount,  description=desc),
+            _line(entry.id, inventory, credit=amount, description=desc),
+        ]
+
+    _assert_balanced(lines)
+    for l in lines:
+        db.add(l)
     return entry
 
 

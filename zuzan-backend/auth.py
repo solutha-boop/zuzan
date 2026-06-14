@@ -16,6 +16,8 @@ from slowapi.util import get_remote_address
 limiter = Limiter(key_func=get_remote_address)
 
 import os
+from config import PLAN_PRICES
+
 SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
@@ -23,12 +25,6 @@ TOKEN_EXPIRE_HOURS = 24
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 router = APIRouter()
-
-PLAN_PRICES = {
-    "starter":      {"monthly": 399,  "annual": 3990},
-    "professional": {"monthly": 899,  "annual": 8990},
-    "business":     {"monthly": 1499, "annual": 14990},
-}
 
 
 class RegisterRequest(BaseModel):

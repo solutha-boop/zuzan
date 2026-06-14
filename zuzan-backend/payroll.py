@@ -83,14 +83,21 @@ def calc_paye(annual_income: float, tax_year: str = None) -> float:
     return max(0, tax)
 
 
-def calc_payroll(gross_monthly: float, tax_year: str = None) -> dict:
+def calc_payroll(gross_monthly: float, tax_year: str = None, annual_payroll_total: float = None) -> dict:
+    """
+    annual_payroll_total: sum of ALL employees' gross monthly salary * 12.
+    SDL only applies if annual_payroll_total >= 500_000 (SA law).
+    Pass None to always apply SDL (conservative default for single-employee calculations).
+    """
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
     annual_paye = calc_paye(gross_monthly * 12, tax_year)
     monthly_paye = annual_paye / 12
     uif_base = min(gross_monthly, yr["uif_ceil"])
     uif_employee = uif_base * UIF_RATE
     uif_employer = uif_base * UIF_RATE
-    sdl = gross_monthly * SDL_RATE
+    SDL_THRESHOLD = 500_000  # R500k annual payroll
+    sdl_applicable = annual_payroll_total is None or annual_payroll_total >= SDL_THRESHOLD
+    sdl = gross_monthly * SDL_RATE if sdl_applicable else 0
     net_pay = gross_monthly - monthly_paye - uif_employee
     total_cost = gross_monthly + uif_employer + sdl
     return {
@@ -125,8 +132,10 @@ async def calculate_all(
         "uif_employer": 0, "sdl": 0, "net_pay": 0, "total_cost": 0
     }
 
+    annual_payroll_total = sum(e.gross_salary for e in employees) * 12
+
     for emp in employees:
-        c = calc_payroll(emp.gross_salary)
+        c = calc_payroll(emp.gross_salary, annual_payroll_total=annual_payroll_total)
         c["employee_id"]     = emp.id
         c["employee_name"]   = f"{emp.first_name} {emp.last_name}"
         c["employee_number"] = emp.employee_number
@@ -162,6 +171,7 @@ async def run_payroll(
 
     period = datetime.utcnow().strftime("%Y-%m")
     created = []
+    annual_payroll_total = sum(e.gross_salary for e in employees) * 12
 
     for emp in employees:
         existing = db.query(Payslip).filter(
@@ -170,7 +180,7 @@ async def run_payroll(
         ).first()
         if existing:
             continue
-        c = calc_payroll(emp.gross_salary)
+        c = calc_payroll(emp.gross_salary, annual_payroll_total=annual_payroll_total)
         payslip = Payslip(
             employee_id=emp.id,
             period=period,
@@ -663,7 +673,7 @@ async def management_accounts(
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
-        Invoice.created_at >= month_start
+        Invoice.paid_date >= month_start
     ).all()
     revenue = round(sum(i.total_amount for i in paid_invoices), 2)
 
@@ -710,7 +720,7 @@ async def management_accounts(
         end = datetime(end_y, end_m, 1)
         rev = round(sum(inv.total_amount for inv in db.query(Invoice).filter(
             Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
-            Invoice.created_at >= start, Invoice.created_at < end).all()), 2)
+            Invoice.paid_date >= start, Invoice.paid_date < end).all()), 2)
         exp = round(sum(ex.amount for ex in db.query(Expense).filter(
             Expense.company_id == cid,
             Expense.expense_date >= start, Expense.expense_date < end).all()), 2)
@@ -768,7 +778,7 @@ async def provisional_tax(
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
-        Invoice.created_at >= year_start
+        Invoice.paid_date >= year_start
     ).all()
     ytd_revenue = round(sum(i.total_amount for i in paid_invoices), 2)
 
@@ -1045,17 +1055,16 @@ async def vat201(
 # PAYFAST PAYMENT GATEWAY
 payments_router = APIRouter()
 
-PAYFAST_MERCHANT_ID  = "10000100"
-PAYFAST_MERCHANT_KEY = "46f0cd694581a"
-PAYFAST_PASSPHRASE   = ""
-PAYFAST_SANDBOX      = True
-PAYFAST_URL = "https://sandbox.payfast.co.za/eng/process" if PAYFAST_SANDBOX else "https://www.payfast.co.za/eng/process"
+import os as _os
+PAYFAST_MERCHANT_ID  = _os.environ.get("PAYFAST_MERCHANT_ID",  "10000100")
+PAYFAST_MERCHANT_KEY = _os.environ.get("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
+PAYFAST_PASSPHRASE   = _os.environ.get("PAYFAST_PASSPHRASE",   "")
+PAYFAST_SANDBOX      = _os.environ.get("PAYFAST_SANDBOX", "true").lower() == "true"
+PAYFAST_URL          = "https://sandbox.payfast.co.za/eng/process" if PAYFAST_SANDBOX else "https://www.payfast.co.za/eng/process"
+BACKEND_URL          = _os.environ.get("BACKEND_URL", "https://zuzan-backend.onrender.com")
+FRONTEND_URL         = _os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
 
-PLAN_PRICES = {
-    "starter":      {"monthly": 299,  "annual": 2990},
-    "professional": {"monthly": 699,  "annual": 6990},
-    "business":     {"monthly": 1299, "annual": 12990},
-}
+from config import PLAN_PRICES  # single source of truth — see config.py
 
 
 class PaymentInitRequest(BaseModel):
@@ -1097,9 +1106,9 @@ async def initiate_payment(
     pf_data = {
         "merchant_id":      PAYFAST_MERCHANT_ID,
         "merchant_key":     PAYFAST_MERCHANT_KEY,
-        "return_url":       "http://localhost:3000/payment/success",
-        "cancel_url":       "http://localhost:3000/payment/cancel",
-        "notify_url":       "http://localhost:8001/payments/notify",
+        "return_url":       f"{FRONTEND_URL}/payment/success",
+        "cancel_url":       f"{FRONTEND_URL}/payment/cancel",
+        "notify_url":       f"{BACKEND_URL}/payments/notify",
         "name_first":       current_user.first_name,
         "name_last":        current_user.last_name,
         "email_address":    current_user.email,
@@ -1136,6 +1145,15 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
 
     if not pf_id:
         return JSONResponse(content={"status": "error"}, status_code=400)
+
+    # ── Signature verification ────────────────────────────────────────────────
+    # Build param string from all fields except "signature"
+    sig_data = {k: v for k, v in data.items() if k != "signature"}
+    expected_sig = pf_signature(sig_data, PAYFAST_PASSPHRASE)
+    received_sig = data.get("signature", "")
+    if not PAYFAST_SANDBOX and received_sig != expected_sig:
+        logger.warning(f"PayFast notify: signature mismatch (expected {expected_sig}, got {received_sig})")
+        return JSONResponse(content={"status": "error", "detail": "Invalid signature"}, status_code=400)
 
     payment = db.query(Payment).filter(Payment.id == int(pf_id)).first()
     if not payment:
@@ -1179,3 +1197,4 @@ async def subscription_status(
         "payroll_enabled":   company.payroll_enabled,
         "payroll_employees": company.payroll_employees,
     }
+   

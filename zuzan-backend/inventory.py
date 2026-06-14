@@ -3,9 +3,13 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+import logging
 
 from database import get_db, InventoryItem
 from auth import get_current_user, User
+import journal as journal_engine
+
+logger = logging.getLogger("zuzan.inventory")
 
 router = APIRouter()
 
@@ -76,8 +80,19 @@ async def update_item(item_id: int, data: ItemUpdate, current_user: User = Depen
 async def adjust_stock(item_id: int, data: StockAdjust, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     item = db.query(InventoryItem).filter(InventoryItem.id == item_id, InventoryItem.company_id == current_user.company_id).first()
     if not item: raise HTTPException(status_code=404, detail="Item not found")
-    item.quantity_on_hand = max(0, (item.quantity_on_hand or 0) + data.quantity)
+    actual_qty = round(data.quantity, 4)
+    current_qty = item.quantity_on_hand or 0
+    # Clamp negative adjustments so stock can't go below zero; record actual applied qty for journal
+    applied_qty = actual_qty if actual_qty >= 0 else max(actual_qty, -current_qty)
+    item.quantity_on_hand = round(current_qty + applied_qty, 4)
     db.commit(); db.refresh(item)
+    # Post journal entry for the applied quantity
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.post_stock_adjustment(item, applied_qty, db, reason=data.reason)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Journal post failed for stock adjustment on item {item.id}: {e}")
     return item_to_dict(item)
 
 @router.delete("/{item_id}")

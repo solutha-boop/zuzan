@@ -175,3 +175,32 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
         "expense_id":       expense_id,
         "expense_created":  expense_id is not None,
     }
+
+
+@router.post("/{po_id}/pay")
+async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Mark a purchase order as paid.
+    Posts the journal entry: DR Accounts Payable / CR Bank (clears AP).
+    Must be called after /receive — goods must already be received.
+    """
+    po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id, PurchaseOrder.company_id == current_user.company_id).first()
+    if not po:
+        raise HTTPException(404, "Purchase order not found")
+    if po.status == "paid":
+        raise HTTPException(400, "Purchase order has already been paid")
+    if po.status not in ("received", "partial"):
+        raise HTTPException(400, f"PO must be received before marking as paid. Current status: '{po.status}'")
+
+    po.status = "paid"
+    db.commit()
+    db.refresh(po)
+
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.post_po_paid(po, db)
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Journal post failed for PO payment {po.po_number}: {e}")
+
+    return {**to_dict(po), "journal": "DR Accounts Payable / CR Bank posted"}
