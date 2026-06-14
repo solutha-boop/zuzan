@@ -5111,7 +5111,7 @@ function PurchaseOrders() {
 
           <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={e=>setForm(d=>({...d,notes:e.target.value}))} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{display:"flex",gap:10}}>
-            <button onClick={save} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer"}}>Create PO</button>
+            <button onClick={save} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer",opacity:saving?0.7:1}}>{saving ? (saveMsg||"Saving…") : "Create PO"}</button>
             <button onClick={()=>setShowForm(false)} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid}}>Cancel</button>
           </div>
         </div>
@@ -5139,7 +5139,7 @@ function PurchaseOrders() {
               <div style={{fontWeight:700,fontSize:16,color:C.ink,marginTop:4}}>Total: R{viewing.total_amount.toFixed(2)}</div>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              {!["received","cancelled"].includes(viewing.status) && (
+              {!["received","partial","paid","cancelled"].includes(viewing.status) && (
                 <button onClick={()=>{
                   const init = {};
                   viewing.items.forEach(it=>{ init[it.id]=it.quantity; });
@@ -5148,9 +5148,19 @@ function PurchaseOrders() {
                   📦 Receive Goods
                 </button>
               )}
-              {PO_STATUSES.filter(s=>s!==viewing.status).map(s=>(
-                <button key={s} onClick={()=>{updateStatus(viewing.id,s);setViewing({...viewing,status:s});}} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",textTransform:"capitalize"}}>{s}</button>
-              ))}
+              {["received","partial"].includes(viewing.status) && (
+                <button onClick={async()=>{
+                  try {
+                    const res = await api(`/purchase-orders/${viewing.id}/pay`,{method:"POST"});
+                    setViewing(res); load();
+                  } catch(e){ alert(e.message); }
+                }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+                  💳 Mark as Paid
+                </button>
+              )}
+              {viewing.status==="draft" && (
+                <button onClick={()=>{updateStatus(viewing.id,"cancelled");setViewing({...viewing,status:"cancelled"});}} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",color:C.inkMid}}>Cancel PO</button>
+              )}
               <button onClick={()=>del(viewing.id)} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.red}30`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",color:C.red}}>Delete</button>
             </div>
           </div>
@@ -5248,12 +5258,10 @@ function PurchaseOrders() {
             <div style={{background:C.greenLt,borderRadius:10,padding:16,marginBottom:20}}>
               <div style={{fontSize:13,color:C.inkMid,marginBottom:4}}>Amount payable to supplier</div>
               <div style={{fontSize:28,fontWeight:700,color:C.green}}>R{recvDone.received_total?.toFixed(2)}</div>
-              {recvDone.expense_created && (
-                <div style={{fontSize:12,color:C.green,marginTop:8}}>✓ Expense record created for payment processing</div>
-              )}
+              <div style={{fontSize:12,color:C.green,marginTop:8}}>✓ Inventory & accounts payable updated in ledger</div>
             </div>
             <div style={{fontSize:13,color:C.inkMid,marginBottom:20}}>
-              The expense has been added to your Expenses tab. Categorise and post it to process the supplier payment via your batch payment file.
+              Journal entries posted: DR Inventory / CR Accounts Payable. Click <strong>Mark as Paid</strong> on the PO when you process payment to clear the liability.
             </div>
             <button onClick={()=>setRecvDone(null)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"12px 32px",fontWeight:600,cursor:"pointer",fontSize:14}}>Done</button>
           </div>
