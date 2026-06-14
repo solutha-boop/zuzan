@@ -457,4 +457,11 @@ function renderTable(data) {
     <td style="text-align:center">${d.invoices}</td>
     <td style="text-align:center">${d.expenses}</td>
     <td style="text-align:center">${d.employees}</td>
-    <td>R${(d.revenue_collected||0).toLocaleString('
+    <td>R${(d.revenue_collected||0).toLocaleString('en-ZA',{minimumFractionDigits:2})}</td>
+    <td style="color:#888">${d.last_activity||'No activity yet'}</td>
+  </tr>`).join('');
+}
+</script>
+</body>
+</html>"""
+    return _HTML(content=html)
