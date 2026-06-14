@@ -83,8 +83,19 @@ class InvoiceUpdate(BaseModel):
 
 
 def next_invoice_number(company_id: int, db: Session) -> str:
-    count = db.query(Invoice).filter(Invoice.company_id == company_id).count()
-    return f"INV-{str(count + 1).zfill(4)}"
+    from sqlalchemy import func as _func
+    last = db.query(_func.max(Invoice.id)).filter(Invoice.company_id == company_id).scalar() or 0
+    # Use MAX(id) + 1 so deletions don't cause collisions
+    existing_numbers = {
+        row[0] for row in
+        db.query(Invoice.invoice_number).filter(Invoice.company_id == company_id).all()
+    }
+    n = last + 1
+    candidate = f"INV-{str(n).zfill(4)}"
+    while candidate in existing_numbers:
+        n += 1
+        candidate = f"INV-{str(n).zfill(4)}"
+    return candidate
 
 
 @invoices_router.get("/")

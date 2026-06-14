@@ -39,8 +39,18 @@ class QuoteUpdate(BaseModel):
     notes:          Optional[str] = None
 
 def next_quote_number(db, company_id):
-    count = db.query(Quote).filter(Quote.company_id == company_id).count()
-    return f"QTE-{str(count + 1).zfill(4)}"
+    from sqlalchemy import func as _func
+    last = db.query(_func.max(Quote.id)).filter(Quote.company_id == company_id).scalar() or 0
+    existing_numbers = {
+        row[0] for row in
+        db.query(Quote.quote_number).filter(Quote.company_id == company_id).all()
+    }
+    n = last + 1
+    candidate = f"QTE-{str(n).zfill(4)}"
+    while candidate in existing_numbers:
+        n += 1
+        candidate = f"QTE-{str(n).zfill(4)}"
+    return candidate
 
 def to_dict(q):
     return {

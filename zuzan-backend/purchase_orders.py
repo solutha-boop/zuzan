@@ -153,22 +153,11 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
     po.status = "received" if all_received else "partial"
     po.received_date = datetime.utcnow()
 
+    # NOTE: We use the double-entry journal (post_po_received) as the single
+    # source of truth — DR Inventory / CR Accounts Payable.
+    # Creating a separate Expense record would double-count the cost, so we
+    # ignore data.create_expense here; the journal entry IS the cost record.
     expense_id = None
-    if data.create_expense and received_total > 0:
-        vat_applicable = po.vat_amount > 0
-        vat_on_received = round(received_total * 0.15, 2) if vat_applicable else 0
-        expense = Expense(
-            company_id=current_user.company_id,
-            vendor=po.supplier_name or "Supplier",
-            description=f"Goods received — {po.po_number}",
-            amount=received_total,
-            vat_amount=vat_on_received,
-            category=data.expense_category,
-            expense_date=datetime.utcnow(),
-        )
-        db.add(expense)
-        db.flush()
-        expense_id = expense.id
 
     db.commit()
     db.refresh(po)

@@ -329,7 +329,7 @@ async def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_d
     if len(data.new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
 
-    user.hashed_password = pwd_context.hash(data.new_password)
+    user.hashed_password = hash_password(data.new_password)
     user.reset_token = None
     user.reset_token_expires = None
     db.commit()
