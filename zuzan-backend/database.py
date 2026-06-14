@@ -337,4 +337,12 @@ def init_db():
                 conn.execute(text(sql))
                 conn.commit()
             except Exception:
-                conn.rollback()  # Reset connection so next 
+                conn.rollback()  # Reset connection so next statement starts fresh
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
