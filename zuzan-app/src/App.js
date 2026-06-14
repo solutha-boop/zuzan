@@ -4986,7 +4986,7 @@ function PurchaseOrders() {
     try {
       const [pos, sups] = await Promise.all([api("/purchase-orders/"), api("/suppliers/")]);
       setList(pos); setSuppliers(sups);
-    } catch(e){}
+    } catch(e){ console.warn("PO load error:", e.message); }
   };
   useEffect(()=>{load();},[]);
 
@@ -5025,7 +5025,7 @@ function PurchaseOrders() {
           <h2 style={{fontSize:22,fontWeight:700,color:C.ink}}>Purchase Orders</h2>
           <p style={{fontSize:13,color:C.inkMid,marginTop:2}}>{list.length} PO{list.length!==1?"s":""} total</p>
         </div>
-        <button onClick={()=>{setShowForm(true);setViewing(null);setForm(emptyForm);}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontWeight:600,cursor:"pointer",fontSize:13}}>+ New PO</button>
+        <button onClick={async()=>{setShowForm(true);setViewing(null);setForm(emptyForm);try{const sups=await api("/suppliers/");setSuppliers(sups);}catch(e){}}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontWeight:600,cursor:"pointer",fontSize:13}}>+ New PO</button>
       </div>
 
       {/* Status filter */}
