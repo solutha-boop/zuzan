@@ -469,13 +469,22 @@ function Dashboard({live = {}}) {
 }
 
 // Defined outside Invoicing so it never remounts on parent re-render (fixes cursor-jump bug)
-function InvFormFields({data, onChange}) {
+function InvFormFields({data, onChange, customers=[]}) {
   const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
   const lb = (txt) => <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{txt}</label>;
   return (
     <>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-        <div>{lb("Client Name")}<input placeholder="Acme Pty Ltd" value={data.client||""} onChange={e=>onChange(d=>({...d,client:e.target.value}))} style={is}/></div>
+        <div>
+          {lb("Client")}
+          {customers.length>0 && (
+            <select value="" onChange={e=>{if(e.target.value) onChange(d=>({...d,client:e.target.value}));}} style={{...is,marginBottom:6}}>
+              <option value="">— Select from customers —</option>
+              {customers.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
+          )}
+          <input placeholder="Or type client name" value={data.client||""} onChange={e=>onChange(d=>({...d,client:e.target.value}))} style={is}/>
+        </div>
         <div>{lb("Amount (excl. VAT)")}<input type="number" placeholder="50000" value={data.amount||""} onChange={e=>onChange(d=>({...d,amount:e.target.value}))} style={is}/></div>
         <div>{lb("Description")}<input placeholder="Services rendered" value={data.desc||""} onChange={e=>onChange(d=>({...d,desc:e.target.value}))} style={is}/></div>
         <div>{lb("Due Date")}<input type="date" value={data.due||""} onChange={e=>onChange(d=>({...d,due:e.target.value}))} style={is}/></div>
@@ -536,6 +545,8 @@ function Invoicing({live = {}, user = {}}) {
   const [payModal,  setPayModal]  = useState(null);   // {inv, zarAmt, payDate, ref}
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true,currency:"ZAR",exchangeRate:"18.5",vatAmount:"0"});
   const [saving, setSaving] = useState(false);
+  const [customers, setCustomers] = useState([]);
+  useEffect(()=>{ api("/customers/").then(setCustomers).catch(()=>{}); },[]);
 
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
   const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + i.amount, 0);
@@ -601,7 +612,7 @@ function Invoicing({live = {}, user = {}}) {
       {showNew && (
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Invoice</h3>
-          <InvFormFields data={form} onChange={setForm}/>
+          <InvFormFields data={form} onChange={setForm} customers={customers}/>
           <div style={{display:"flex",gap:8}}>
             <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Create Invoice"}</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
@@ -658,7 +669,7 @@ function Invoicing({live = {}, user = {}}) {
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={() => setEditInv(null)}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:580,maxHeight:"90vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
             <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 20px"}}>Amend Invoice — {editInv.id}</h3>
-            <InvFormFields data={editInv} onChange={setEditInv}/>
+            <InvFormFields data={editInv} onChange={setEditInv} customers={customers}/>
             <div style={{marginBottom:16}}>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Status</label>
               <select value={editInv.status} onChange={e=>setEditInv({...editInv,status:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
@@ -4498,8 +4509,10 @@ function Quotes({live={},user={},onNavigate}) {
   const [saving,    setSaving]    = useState(false);
   const emptyForm = {client:"",amount:"",desc:"",validUntil:"",currency:"ZAR",rate:"18.5",notes:"",vatApplicable:true,vatAmount:"0"};
   const [form, setForm] = useState(emptyForm);
+  const [customers, setCustomers] = useState([]);
 
   useEffect(()=>{
+    api("/customers/").then(setCustomers).catch(()=>{});
     api("/quotes/").then(data=>setQuotes(data.map(q=>({
       id: q.quote_number, _id: q.id,
       client: q.client_name, desc: q.description,
@@ -4613,7 +4626,16 @@ function Quotes({live={},user={},onNavigate}) {
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
           <h3 style={{fontFamily:"serif",margin:"0 0 16px",color:C.ink}}>New Quote</h3>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-            <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Client Name</label><input placeholder="Acme Pty Ltd" value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} style={inputStyle}/></div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Client</label>
+              {customers.length>0 && (
+                <select value="" onChange={e=>{if(e.target.value) setForm(f=>({...f,client:e.target.value}));}} style={{...inputStyle,marginBottom:6}}>
+                  <option value="">— Select from customers —</option>
+                  {customers.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+                </select>
+              )}
+              <input placeholder="Or type client name" value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} style={inputStyle}/>
+            </div>
             <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Amount</label><input type="number" placeholder="50000" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} style={inputStyle}/></div>
             <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Description</label><input placeholder="Services rendered" value={form.desc} onChange={e=>setForm(f=>({...f,desc:e.target.value}))} style={inputStyle}/></div>
             <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Valid Until</label><input type="date" value={form.validUntil} onChange={e=>setForm(f=>({...f,validUntil:e.target.value}))} style={inputStyle}/></div>
