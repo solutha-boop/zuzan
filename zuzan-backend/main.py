@@ -47,8 +47,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin",
+                   "X-Requested-With", "X-API-Key", "X-Admin-Secret"],
+    max_age=86400,
 )
 
 @app.get("/health")
@@ -455,11 +457,4 @@ function renderTable(data) {
     <td style="text-align:center">${d.invoices}</td>
     <td style="text-align:center">${d.expenses}</td>
     <td style="text-align:center">${d.employees}</td>
-    <td>R${(d.revenue_collected||0).toLocaleString('en-ZA',{minimumFractionDigits:2})}</td>
-    <td style="color:#888">${d.last_activity||'No activity yet'}</td>
-  </tr>`).join('');
-}
-</script>
-</body>
-</html>"""
-    return _HTML(content=html)
+    <td>R${(d.revenue_collected||0).toLocaleString('
