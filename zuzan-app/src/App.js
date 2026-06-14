@@ -615,7 +615,7 @@ function Invoicing({live = {}, user = {}}) {
           <div style={{background:"#fff",borderRadius:20,padding:40,width:560,maxHeight:"80vh",overflow:"auto"}} onClick={e => e.stopPropagation()}>
             <div id="invoice-preview-content">
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:32}}>
-              <div><div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div><div style={{fontSize:11,color:C.inkMid}}>{user.companyName || "Your Company"}</div></div>
+              <div>{user.logoUrl?<img src={user.logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:4}}/>:<div style={{fontFamily:"serif",fontSize:24,fontWeight:800,color:C.accent}}>{user.companyName||"Your Company"}</div>}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,color:C.ink}}>{user.companyName||""}</div>}</div>
               <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:C.ink}}>TAX INVOICE</div><div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div></div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
@@ -3867,6 +3867,7 @@ function AppSettings({user, onLogout, onUserUpdate}) {
     bankingDetails:    user?.bankingDetails    || "",
     payfastMerchantId: user?.payfastMerchantId || "",
     payfastMerchantKey:user?.payfastMerchantKey|| "",
+    logoUrl:           user?.logoUrl           || "",
   });
   const [saved, setSaved] = useState(false);
 
@@ -3880,6 +3881,7 @@ function AppSettings({user, onLogout, onUserUpdate}) {
         bank_name:       form.bankName,
         bank_account:    form.bankAccount,
         branch_code:     form.branchCode,
+        logo_url:        form.logoUrl || null,
       })});
     } catch(e) { console.warn("Settings save failed:", e.message); }
     // Update local user context
@@ -3895,6 +3897,7 @@ function AppSettings({user, onLogout, onUserUpdate}) {
       bankingDetails:    `${form.bankName} - Acc: ${form.bankAccount} - Branch: ${form.branchCode}`,
       payfastMerchantId: form.payfastMerchantId,
       payfastMerchantKey:form.payfastMerchantKey,
+      logoUrl:           form.logoUrl,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -3930,6 +3933,28 @@ function AppSettings({user, onLogout, onUserUpdate}) {
         <div style={{display:"flex",gap:8}}>
           <button style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
           <button style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
+        </div>
+      </div>
+
+      {/* Company Logo */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Logo</div>
+        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:12}}>
+          {form.logoUrl
+            ? <img src={form.logoUrl} alt="Logo" style={{height:64,maxWidth:200,objectFit:"contain",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff",padding:4}}/>
+            : <div style={{width:120,height:64,borderRadius:8,border:`2px dashed ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:C.inkMid}}>No logo</div>
+          }
+          <div>
+            <input type="file" accept="image/*" id="logo-upload" style={{display:"none"}} onChange={e=>{
+              const file=e.target.files[0]; if(!file)return;
+              if(file.size>500000){alert("Logo must be under 500KB. Please resize and try again.");return;}
+              const reader=new FileReader();
+              reader.onload=ev=>setForm(v=>({...v,logoUrl:ev.target.result}));
+              reader.readAsDataURL(file);
+            }}/>
+            <label htmlFor="logo-upload" style={{display:"inline-block",padding:"8px 16px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer"}}>Upload Logo</label>
+            {form.logoUrl && <button onClick={()=>setForm(v=>({...v,logoUrl:""}))} style={{marginLeft:8,padding:"8px 14px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>}
+            <div style={{fontSize:11,color:C.inkMid,marginTop:6}}>PNG, JPG or SVG · Max 500KB · Shown on invoices & quotes</div>
+          </div>
         </div>
       </div>
 
@@ -4040,7 +4065,7 @@ function Login({onLogin, onRegister}) {
       }
       localStorage.setItem("zuzan_token", data.access_token);
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -4656,7 +4681,7 @@ function Quotes({live={},user={},onNavigate}) {
           <div style={{background:"#fff",borderRadius:20,padding:40,width:580,maxHeight:"85vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
             <div id="quote-print-content">
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${C.accent}`}}>
-                <div><div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.accent}}>ZuZan</div><div style={{fontSize:11,color:C.inkMid}}>{user.companyName||"Your Company"}</div></div>
+                <div>{user.logoUrl?<img src={user.logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:4}}/>:<div style={{fontFamily:"serif",fontSize:24,fontWeight:800,color:C.accent}}>{user.companyName||"Your Company"}</div>}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,color:C.ink}}>{user.companyName||""}</div>}</div>
                 <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:C.ink}}>QUOTE / ESTIMATE</div><div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div><div style={{fontSize:12,color:C.inkMid}}>Valid until: {preview.validUntil?fmtDate(preview.validUntil):"30 days"}</div></div>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
@@ -6161,6 +6186,7 @@ export default function App() {
           lastName:     data.user.last_name,
           email:        data.user.email,
           companyName:  data.company.name,
+          logoUrl:      data.company.logo_url || "",
           plan:         {name: data.company.plan, id: data.company.plan},
           access_token: token,
           trialEnds:    data.company.trial_ends,

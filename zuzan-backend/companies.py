@@ -34,6 +34,7 @@ class CompanyUpdate(BaseModel):
     bank_name:    Optional[str] = None
     bank_account: Optional[str] = None
     bank_branch:  Optional[str] = None
+    logo_url:     Optional[str] = None
 
 
 @router.get("/me")
@@ -402,18 +403,4 @@ async def import_bank_statement(
         "expenses_skipped": expenses_skipped,
         "credits_recorded": credits_recorded,
         "total_processed":  len(data.transactions),
-        "message":          f"Imported {expenses_created} expenses from {data.bank.upper()} statement.",
-    }
-
-
-@bank_router.get("/import/history")
-async def import_history(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get recently imported bank transactions."""
-    recent = db.query(Expense).filter(
-        Expense.company_id  == current_user.company_id,
-        Expense.description.like("Imported from%")
-    ).order_by(Expense.created_at.desc()).limit(100).all()
-    return recent
+        "message":          f"Imported {expenses_created} ex

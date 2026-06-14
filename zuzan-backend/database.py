@@ -52,6 +52,7 @@ class Company(Base):
     reg_number=Column(String); vat_number=Column(String); industry=Column(String)
     address=Column(Text); phone=Column(String); email=Column(String)
     bank_name=Column(String); bank_account=Column(String); bank_branch=Column(String)
+    logo_url=Column(Text,nullable=True)
     plan=Column(Enum(PlanType),default=PlanType.starter)
     billing_cycle=Column(Enum(BillingCycle),default=BillingCycle.monthly)
     subscription_status=Column(Enum(SubscriptionStatus),default=SubscriptionStatus.trial)
@@ -330,16 +331,10 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN currency VARCHAR DEFAULT 'ZAR'",
             "ALTER TABLE invoices ADD COLUMN exchange_rate FLOAT DEFAULT 1",
             "ALTER TABLE invoices ADD COLUMN paid_amount_zar FLOAT",
+            "ALTER TABLE companies ADD COLUMN logo_url TEXT",
         ]:
             try:
                 conn.execute(text(sql))
                 conn.commit()
             except Exception:
-                conn.rollback()  # Reset connection so next migration can run
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+                conn.rollback()  # Reset connection so next 

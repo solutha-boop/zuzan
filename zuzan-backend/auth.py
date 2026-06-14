@@ -186,6 +186,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
         "company": {
             "id":                  company.id,
             "name":                company.name,
+            "logo_url":            company.logo_url,
             "plan":                str(company.plan.value),
             "subscription_status": str(company.subscription_status.value),
             "trial_ends":          company.trial_ends.isoformat(),
@@ -217,6 +218,7 @@ async def login(request: Request, data: LoginRequest, db: Session = Depends(get_
         "company": {
             "id":                  company.id,
             "name":                company.name,
+            "logo_url":            company.logo_url,
             "plan":                str(company.plan.value),
             "subscription_status": str(company.subscription_status.value),
             "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
@@ -242,6 +244,7 @@ async def get_me(
         "company": {
             "id":                  company.id,
             "name":                company.name,
+            "logo_url":            company.logo_url,
             "plan":                str(company.plan.value),
             "subscription_status": str(company.subscription_status.value),
             "payroll_enabled":     company.payroll_enabled,
