@@ -5023,61 +5023,58 @@ function PurchaseOrders() {
 
   const [saving,  setSaving]  = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [editingPO, setEditingPO] = useState(null); // PO being amended (null = creating new)
 
-  const save = async () => {
-    if (!form.supplier_name && !form.supplier_id) { alert("Please select or enter a supplier"); return; }
-    setSaving(true);
-    // Step 1: ping /health until backend is confirmed awake
+  const pingAndSubmit = async (payload, isEdit) => {
     for (let i = 0; i < 18; i++) {
       try {
         setSaveMsg(i === 0 ? "Connecting…" : `Starting up… (${i * 10}s)`);
         const h = await fetch(`${BASE_URL}/health`);
         if (h.ok) break;
       } catch(e) {
-        if (i === 17) {
-          setSaving(false); setSaveMsg("");
-          alert("Server is not responding after 3 minutes. Please try again later.");
-          return;
-        }
-        await new Promise(r => setTimeout(r, 10000));
-        continue;
+        if (i === 17) { setSaving(false); setSaveMsg(""); alert("Server is not responding. Please try again later."); return; }
+        await new Promise(r => setTimeout(r, 10000)); continue;
       }
       break;
     }
-    // Step 2: backend is awake — submit
     setSaveMsg("Saving…");
     try {
-      const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null};
-      await api("/purchase-orders/",{method:"POST",body:JSON.stringify(payload)});
+      if (isEdit) {
+        await api(`/purchase-orders/${editingPO.id}`, {method:"PUT", body:JSON.stringify(payload)});
+      } else {
+        await api("/purchase-orders/", {method:"POST", body:JSON.stringify(payload)});
+      }
       setSaving(false); setSaveMsg("");
-      setShowForm(false); setForm(emptyForm); load();
-    } catch(e) {
-      setSaving(false); setSaveMsg("");
-      alert(e.message);
-    }
+      setShowForm(false); setForm(emptyForm); setEditingPO(null); load();
+    } catch(e) { setSaving(false); setSaveMsg(""); alert(e.message); }
+  };
+
+  const save = async () => {
+    if (!form.supplier_name && !form.supplier_id) { alert("Please select or enter a supplier"); return; }
+    setSaving(true);
+    const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null};
+    await pingAndSubmit(payload, !!editingPO);
   };
 
   const saveDraft = async () => {
     if (!form.supplier_name && !form.supplier_id) { alert("Please enter at least a supplier name to save a draft"); return; }
     setSaving(true);
-    for (let i = 0; i < 18; i++) {
-      try {
-        setSaveMsg(i === 0 ? "Connecting…" : `Starting up… (${i * 10}s)`);
-        const h = await fetch(`${BASE_URL}/health`);
-        if (h.ok) break;
-      } catch(e) {
-        if (i === 17) { setSaving(false); setSaveMsg(""); alert("Server not responding."); return; }
-        await new Promise(r => setTimeout(r, 10000)); continue;
-      }
-      break;
-    }
-    setSaveMsg("Saving draft…");
-    try {
-      const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null, status:"draft"};
-      await api("/purchase-orders/",{method:"POST",body:JSON.stringify(payload)});
-      setSaving(false); setSaveMsg("");
-      setShowForm(false); setForm(emptyForm); load();
-    } catch(e) { setSaving(false); setSaveMsg(""); alert(e.message); }
+    const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null, status:"draft"};
+    await pingAndSubmit(payload, !!editingPO);
+  };
+
+  const startEdit = (po) => {
+    setForm({
+      supplier_id: po.supplier_id || "",
+      supplier_name: po.supplier_name || "",
+      delivery_date: po.delivery_date || "",
+      vat_applicable: po.vat_amount > 0,
+      notes: po.notes || "",
+      items: po.items.map(i => ({description: i.description, quantity: i.quantity, unit_price: i.unit_price})),
+    });
+    setEditingPO(po);
+    setViewing(null);
+    setShowForm(true);
   };
 
   const updateStatus = async (id, status) => {
@@ -5098,7 +5095,7 @@ function PurchaseOrders() {
           <h2 style={{fontSize:22,fontWeight:700,color:C.ink}}>Purchase Orders</h2>
           <p style={{fontSize:13,color:C.inkMid,marginTop:2}}>{list.length} PO{list.length!==1?"s":""} total</p>
         </div>
-        <button onClick={async()=>{setShowForm(true);setViewing(null);setForm(emptyForm);try{const sups=await api("/suppliers/");setSuppliers(sups);}catch(e){}}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontWeight:600,cursor:"pointer",fontSize:13}}>+ New PO</button>
+        <button onClick={async()=>{setShowForm(true);setViewing(null);setEditingPO(null);setForm(emptyForm);try{const sups=await api("/suppliers/");setSuppliers(sups);}catch(e){}}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontWeight:600,cursor:"pointer",fontSize:13}}>+ New PO</button>
       </div>
 
       {/* Status filter */}
@@ -5111,7 +5108,7 @@ function PurchaseOrders() {
       {/* New PO Form */}
       {showForm && (
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:24,marginBottom:24}}>
-          <h3 style={{fontWeight:700,marginBottom:16,color:C.ink}}>New Purchase Order</h3>
+          <h3 style={{fontWeight:700,marginBottom:16,color:C.ink}}>{editingPO ? `Edit ${editingPO.po_number}` : "New Purchase Order"}</h3>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
             <div>{lb("Supplier")}
               <select value={form.supplier_id} onChange={e=>{const s=suppliers.find(x=>x.id===parseInt(e.target.value));setForm(d=>({...d,supplier_id:e.target.value,supplier_name:s?s.name:d.supplier_name}));}} style={is}>
@@ -5150,9 +5147,9 @@ function PurchaseOrders() {
 
           <div style={{marginBottom:16}}>{lb("Notes")}<textarea value={form.notes} onChange={e=>setForm(d=>({...d,notes:e.target.value}))} rows={2} style={{...is,resize:"vertical"}}/></div>
           <div style={{display:"flex",gap:10}}>
-            <button onClick={save} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer",opacity:saving?0.7:1}}>{saving?(saveMsg||"Saving…"):"Create PO"}</button>
-            <button onClick={saveDraft} disabled={saving} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid,fontWeight:500}}>Save Draft</button>
-            <button onClick={()=>setShowForm(false)} style={{background:"transparent",border:"none",borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkDim}}>Cancel</button>
+            <button onClick={save} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 24px",fontWeight:600,cursor:"pointer",opacity:saving?0.7:1}}>{saving?(saveMsg||"Saving…"):editingPO?"Save Changes":"Create PO"}</button>
+            <button onClick={saveDraft} disabled={saving} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkMid,fontWeight:500}}>{editingPO?"Save as Draft":"Save Draft"}</button>
+            <button onClick={()=>{setShowForm(false);setEditingPO(null);setForm(emptyForm);}} style={{background:"transparent",border:"none",borderRadius:8,padding:"10px 24px",cursor:"pointer",color:C.inkDim}}>Cancel</button>
           </div>
         </div>
       )}
@@ -5197,6 +5194,9 @@ function PurchaseOrders() {
                 }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
                   💳 Mark as Paid
                 </button>
+              )}
+              {["draft","sent"].includes(viewing.status) && (
+                <button onClick={()=>startEdit(viewing)} style={{background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}}>✏️ Edit PO</button>
               )}
               {viewing.status==="draft" && (
                 <button onClick={()=>{updateStatus(viewing.id,"cancelled");setViewing({...viewing,status:"cancelled"});}} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",color:C.inkMid}}>Cancel PO</button>
