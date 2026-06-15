@@ -53,6 +53,18 @@ app.add_middleware(
     max_age=86400,
 )
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-API-Key, X-Admin-Secret",
+    "Access-Control-Max-Age": "86400",
+}
+
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    """Explicit CORS preflight handler — belt-and-suspenders for Render free tier."""
+    return JSONResponse(content="OK", headers=CORS_HEADERS)
+
 @app.get("/health")
 async def health(): return {"status": "ok"}
 
