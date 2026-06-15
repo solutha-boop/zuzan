@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -43,25 +42,13 @@ app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin",
-                   "X-Requested-With", "X-API-Key", "X-Admin-Secret"],
-    max_age=86400,
-)
-
-# This @app.middleware runs BEFORE CORSMiddleware (Starlette LIFO: last added = outermost).
-# It guarantees OPTIONS preflight is always answered with correct CORS headers,
-# and all responses include Access-Control-Allow-Origin.
-from starlette.responses import Response as StarletteResponse
+from starlette.responses import Response as _Resp
 
 @app.middleware("http")
-async def cors_override(request: Request, call_next):
+async def cors_middleware(request: Request, call_next):
+    """Single, authoritative CORS handler — no CORSMiddleware interference."""
     if request.method == "OPTIONS":
-        return StarletteResponse(
+        return _Resp(
             content=b"",
             status_code=200,
             headers={
@@ -69,7 +56,6 @@ async def cors_override(request: Request, call_next):
                 "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
                 "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-API-Key, X-Admin-Secret",
                 "Access-Control-Max-Age": "86400",
-                "Content-Length": "0",
             },
         )
     response = await call_next(request)
