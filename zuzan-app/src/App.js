@@ -557,9 +557,10 @@ function Invoicing({live = {}, user = {}}) {
   const [customers, setCustomers] = useState([]);
   useEffect(()=>{ api("/customers/").then(setCustomers).catch(()=>{}); },[]);
 
-  const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
-  const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + i.amount, 0);
-  const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + i.amount, 0);
+  const toZar = i => (i.amount||0) * (i.currency && i.currency !== "ZAR" ? (i.exchange_rate||1) : 1);
+  const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
+  const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + toZar(i), 0);
+  const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + toZar(i), 0);
 
   const openPayModal = (inv) => {
     const zarAmt = inv.currency && inv.currency !== "ZAR"
@@ -1417,6 +1418,38 @@ function Payroll({live = {}, user = {}}) {
   const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
   const [taxYear, setTaxYear] = useState(CURRENT_TAX_YEAR);
 
+  // ── Payroll PIN gate ──────────────────────────────────────────────────────
+  const [pinOk,     setPinOk]     = useState(false);
+  const [pinInput,  setPinInput]  = useState("");
+  const [pinSet,    setPinSet]    = useState(null);  // null=loading, true/false
+  const [pinError,  setPinError]  = useState("");
+  const [pinBusy,   setPinBusy]   = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem("zuzan_token");
+    if (!token || token.startsWith("demo_")) { setPinSet(false); return; }
+    fetch("https://zuzan-backend.onrender.com/companies/payroll-pin-status", {
+      headers: {"Authorization": "Bearer " + token}
+    }).then(r => r.json()).then(d => setPinSet(d.pin_set)).catch(() => setPinSet(false));
+  }, []);
+
+  const handlePinVerify = async () => {
+    if (!pinInput) { setPinError("Enter your PIN."); return; }
+    setPinBusy(true); setPinError("");
+    try {
+      const token = localStorage.getItem("zuzan_token");
+      const res = await fetch("https://zuzan-backend.onrender.com/companies/verify-payroll-pin", {
+        method: "POST", headers: {"Content-Type":"application/json","Authorization":"Bearer "+token},
+        body: JSON.stringify({pin: pinInput})
+      });
+      const d = await res.json();
+      if (d.valid) { setPinOk(true); }
+      else { setPinError("Incorrect PIN. Try again."); setPinInput(""); }
+    } catch { setPinError("Could not verify PIN. Please try again."); }
+    setPinBusy(false);
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   useEffect(() => { if (liveEmployees && liveEmployees.length > 0) setEmployees(liveEmployees.map(e => ({...e, name: `${e.first_name} ${e.last_name}`, salary: e.gross_salary, dept: e.department || "General"}))); }, [liveEmployees]);
   const [showNew, setShowNew] = useState(false);
   const [payrollRun, setPayrollRun] = useState(false);
@@ -1475,6 +1508,41 @@ function Payroll({live = {}, user = {}}) {
       console.warn("Employee save failed:", err.message);
     }
   };
+  // Show PIN gate if not yet verified
+  if (!pinOk) {
+    return (
+      <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:340,padding:40}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:40,width:"100%",maxWidth:380,textAlign:"center",boxShadow:"0 4px 24px #0000000a"}}>
+          <div style={{fontSize:36,marginBottom:12}}>🔒</div>
+          <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 8px"}}>Payroll is Protected</h2>
+          {pinSet === null && <p style={{color:C.inkMid,fontSize:13}}>Checking security settings...</p>}
+          {pinSet === false && (
+            <div>
+              <p style={{color:C.inkMid,fontSize:13,marginBottom:20}}>No payroll PIN is set. You can set one in <strong>Settings → Payroll PIN</strong> to restrict access.</p>
+              <button onClick={()=>setPinOk(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%"}}>Continue to Payroll</button>
+            </div>
+          )}
+          {pinSet === true && (
+            <div>
+              <p style={{color:C.inkMid,fontSize:13,marginBottom:20}}>Enter your payroll PIN to access salary data.</p>
+              <input
+                type="password" inputMode="numeric" maxLength={8} placeholder="Enter PIN"
+                value={pinInput} onChange={e=>setPinInput(e.target.value.replace(/\D/g,""))}
+                onKeyDown={e=>e.key==="Enter"&&handlePinVerify()}
+                style={{width:"100%",padding:"12px",border:`1px solid ${pinError?C.red:C.border}`,borderRadius:10,fontSize:20,textAlign:"center",letterSpacing:8,fontFamily:"inherit",outline:"none",boxSizing:"border-box",marginBottom:8}}
+                autoFocus
+              />
+              {pinError && <div style={{color:C.red,fontSize:12,marginBottom:8}}>{pinError}</div>}
+              <button onClick={handlePinVerify} disabled={pinBusy} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",opacity:pinBusy?0.6:1}}>
+                {pinBusy ? "Verifying..." : "Unlock Payroll"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -3896,6 +3964,20 @@ function AppSettings({user, onLogout, onUserUpdate}) {
     logoUrl:           user?.logoUrl           || "",
   });
   const [saved, setSaved] = useState(false);
+  const [pinForm, setPinForm] = useState({newPin:"", confirmPin:""});
+  const [pinMsg,  setPinMsg]  = useState("");
+  const [pinSaving, setPinSaving] = useState(false);
+
+  const handleSetPin = async () => {
+    if (!pinForm.newPin || pinForm.newPin.length < 4) { setPinMsg("PIN must be at least 4 digits."); return; }
+    if (pinForm.newPin !== pinForm.confirmPin) { setPinMsg("PINs do not match."); return; }
+    setPinSaving(true); setPinMsg("");
+    try {
+      await api("/companies/payroll-pin", {method:"PUT", body: JSON.stringify({pin: pinForm.newPin})});
+      setPinMsg("✓ Payroll PIN updated successfully."); setPinForm({newPin:"", confirmPin:""});
+    } catch(e) { setPinMsg("Failed to save PIN. " + (e.message||"")); }
+    setPinSaving(false);
+  };
 
   const handleSave = async () => {
     try {
@@ -4017,6 +4099,30 @@ function AppSettings({user, onLogout, onUserUpdate}) {
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <button onClick={handleSave} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
           {saved && <span style={{fontSize:12,color:C.green,fontWeight:600}}>✓ Saved</span>}
+        </div>
+      </div>
+
+      {/* Payroll PIN Security */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>🔒 Payroll PIN</div>
+        <p style={{fontSize:12,color:C.inkMid,marginTop:0,marginBottom:16}}>Set a PIN to restrict access to salary and payroll data. Anyone opening Payroll must enter this PIN first.</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+          <div>
+            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>New PIN (4–8 digits)</label>
+            <input type="password" inputMode="numeric" maxLength={8} placeholder="••••" value={pinForm.newPin}
+              onChange={e=>setPinForm(f=>({...f,newPin:e.target.value.replace(/\D/g,"")}))}
+              style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box",letterSpacing:4}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Confirm PIN</label>
+            <input type="password" inputMode="numeric" maxLength={8} placeholder="••••" value={pinForm.confirmPin}
+              onChange={e=>setPinForm(f=>({...f,confirmPin:e.target.value.replace(/\D/g,"")}))}
+              style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box",letterSpacing:4}}/>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button onClick={handleSetPin} disabled={pinSaving} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:pinSaving?0.6:1}}>{pinSaving?"Saving...":"Set PIN"}</button>
+          {pinMsg && <span style={{fontSize:12,color:pinMsg.startsWith("✓")?C.green:C.red,fontWeight:600}}>{pinMsg}</span>}
         </div>
       </div>
 

@@ -10,8 +10,11 @@ from datetime import datetime
 from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus
 from auth import get_current_user, User
 from crypto import encrypt_field, decrypt_field
+from passlib.context import CryptContext
 import logging
 import journal as journal_engine
+
+_pin_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 logger = logging.getLogger("zuzan.routers")
 
@@ -73,6 +76,35 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(get_c
             setattr(company, field, value)
     db.commit()
     return _company_dict(company)
+
+
+class PayrollPinSet(BaseModel):
+    pin: str  # 4–8 digit PIN
+
+class PayrollPinVerify(BaseModel):
+    pin: str
+
+@router.put("/payroll-pin")
+async def set_payroll_pin(data: PayrollPinSet, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not data.pin.isdigit() or not (4 <= len(data.pin) <= 8):
+        raise HTTPException(status_code=400, detail="PIN must be 4–8 digits.")
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company.payroll_pin_hash = _pin_ctx.hash(data.pin)
+    db.commit()
+    return {"status": "ok", "message": "Payroll PIN updated."}
+
+@router.post("/verify-payroll-pin")
+async def verify_payroll_pin(data: PayrollPinVerify, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company.payroll_pin_hash:
+        return {"valid": True, "pin_set": False}  # No PIN configured — allow access
+    valid = _pin_ctx.verify(data.pin, company.payroll_pin_hash)
+    return {"valid": valid, "pin_set": True}
+
+@router.get("/payroll-pin-status")
+async def payroll_pin_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    return {"pin_set": bool(company.payroll_pin_hash)}
 
 
 # Keep router as companies_router

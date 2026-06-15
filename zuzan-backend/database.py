@@ -53,6 +53,7 @@ class Company(Base):
     address=Column(Text); phone=Column(String); email=Column(String)
     bank_name=Column(String); bank_account=Column(String); bank_branch=Column(String)
     logo_url=Column(Text,nullable=True)
+    payroll_pin_hash=Column(String,nullable=True)
     plan=Column(Enum(PlanType),default=PlanType.starter)
     billing_cycle=Column(Enum(BillingCycle),default=BillingCycle.monthly)
     subscription_status=Column(Enum(SubscriptionStatus),default=SubscriptionStatus.trial)
@@ -333,6 +334,7 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN paid_amount_zar FLOAT",
             "ALTER TABLE companies ADD COLUMN logo_url TEXT",
             "ALTER TABLE purchase_orders ADD COLUMN received_date TIMESTAMP",
+            "ALTER TABLE companies ADD COLUMN payroll_pin_hash VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))
