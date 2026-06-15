@@ -748,8 +748,9 @@ function Invoicing({live = {}, user = {}}) {
                 <td style={{padding:"13px 16px",fontWeight:500}}>{inv.client}</td>
                 <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{inv.desc}</td>
                 <td style={{padding:"13px 16px",fontWeight:700}}>
-                  {fmt((inv.amount||0)*(inv.exchange_rate||1))}
-                  {inv.currency && inv.currency!=="ZAR" && <div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(inv.amount,inv.currency)}</div>}
+                  {inv.currency && inv.currency!=="ZAR"
+                    ? <>{fmt((inv.amount||0)*(inv.exchange_rate||1))}<div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(inv.amount,inv.currency)}</div></>
+                    : fmt(inv.amount||0)}
                 </td>
                 <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
                 <td style={{padding:"13px 16px",color:inv.status==="overdue"?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
@@ -4899,8 +4900,9 @@ function Quotes({live={},user={},onNavigate}) {
                     <td style={{padding:"13px 14px",fontWeight:500}}>{q.client}</td>
                     <td style={{padding:"13px 14px",color:C.inkMid,fontSize:12}}>{q.desc}</td>
                     <td style={{padding:"13px 14px",fontWeight:700}}>
-                      {fmt((q.totalAmount||q.amount||0)*(q.rate||1))}
-                      {q.currency && q.currency!=="ZAR" && <div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(q.totalAmount||q.amount,q.currency)}</div>}
+                      {q.currency && q.currency!=="ZAR"
+                        ? <>{fmt((q.totalAmount||q.amount||0)*(q.rate||1))}<div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(q.totalAmount||q.amount,q.currency)}</div></>
+                        : fmt(q.totalAmount||q.amount||0)}
                     </td>
                     <td style={{padding:"13px 14px"}}><Badge label={q.currency||"ZAR"} color={C.blue} bg={C.blueLt}/></td>
                     <td style={{padding:"13px 14px",color:C.inkMid}}>{q.validUntil?fmtDate(q.validUntil):"—"}</td>
