@@ -494,10 +494,18 @@ function InvFormFields({data, onChange, customers=[]}) {
           <select value={data.currency||"ZAR"} onChange={e=>onChange(d=>({...d,currency:e.target.value}))} style={is}>
             <option value="ZAR">ZAR — South African Rand</option>
             <option value="USD">USD — US Dollar</option>
+            <option value="EUR">EUR — Euro</option>
+            <option value="GBP">GBP — British Pound</option>
+            <option value="BWP">BWP — Botswana Pula</option>
+            <option value="ZMW">ZMW — Zambian Kwacha</option>
+            <option value="MZN">MZN — Mozambican Metical</option>
+            <option value="NAD">NAD — Namibian Dollar</option>
+            <option value="KES">KES — Kenyan Shilling</option>
+            <option value="CNY">CNY — Chinese Yuan</option>
           </select>
         </div>
-        {data.currency==="USD" && (
-          <div>{lb("Exchange Rate (1 USD = R)")}<input type="number" value={data.exchangeRate||"18.5"} onChange={e=>onChange(d=>({...d,exchangeRate:e.target.value}))} style={is}/></div>
+        {data.currency && data.currency!=="ZAR" && (
+          <div>{lb(`Exchange Rate (1 ${data.currency} = R)`)}<input type="number" value={data.exchangeRate||"18.5"} onChange={e=>onChange(d=>({...d,exchangeRate:e.target.value}))} style={is}/></div>
         )}
       </div>
       {/* VAT — auto 15% for ZAR, manual amount for foreign currency */}
@@ -4494,7 +4502,18 @@ function Registration({onComplete, onLogin}) {
 }
 
 // ── CURRENCY HELPERS ─────────────────────────────────────────────────────────
-const CURRENCIES = {ZAR:{symbol:"R",code:"ZAR"},USD:{symbol:"$",code:"USD"}};
+const CURRENCIES = {
+  ZAR:{symbol:"R",  code:"ZAR"},
+  USD:{symbol:"$",  code:"USD"},
+  EUR:{symbol:"€",  code:"EUR"},
+  GBP:{symbol:"£",  code:"GBP"},
+  BWP:{symbol:"P",  code:"BWP"},
+  ZMW:{symbol:"K",  code:"ZMW"},
+  MZN:{symbol:"MT", code:"MZN"},
+  NAD:{symbol:"N$", code:"NAD"},
+  KES:{symbol:"KSh",code:"KES"},
+  CNY:{symbol:"¥",  code:"CNY"},
+};
 function fmtCurrency(amount, currency="ZAR") {
   const c = CURRENCIES[currency] || CURRENCIES.ZAR;
   return `${c.symbol}${Number(amount).toLocaleString("en-ZA",{minimumFractionDigits:2})}`;
@@ -4645,6 +4664,14 @@ function Quotes({live={},user={},onNavigate}) {
               <select value={form.currency} onChange={e=>setForm(f=>({...f,currency:e.target.value}))} style={inputStyle}>
                 <option value="ZAR">ZAR — South African Rand</option>
                 <option value="USD">USD — US Dollar</option>
+                <option value="EUR">EUR — Euro</option>
+                <option value="GBP">GBP — British Pound</option>
+                <option value="BWP">BWP — Botswana Pula</option>
+                <option value="ZMW">ZMW — Zambian Kwacha</option>
+                <option value="MZN">MZN — Mozambican Metical</option>
+                <option value="NAD">NAD — Namibian Dollar</option>
+                <option value="KES">KES — Kenyan Shilling</option>
+                <option value="CNY">CNY — Chinese Yuan</option>
               </select>
             </div>
             {form.currency!=="ZAR" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 {form.currency} = R...)</label><input type="number" value={form.rate} onChange={e=>setForm(f=>({...f,rate:e.target.value}))} style={inputStyle}/></div>}
@@ -4679,6 +4706,14 @@ function Quotes({live={},user={},onNavigate}) {
                 <select value={editQuote.currency||"ZAR"} onChange={e=>setEditQuote(q=>({...q,currency:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}>
                   <option value="ZAR">ZAR — South African Rand</option>
                   <option value="USD">USD — US Dollar</option>
+                  <option value="EUR">EUR — Euro</option>
+                  <option value="GBP">GBP — British Pound</option>
+                  <option value="BWP">BWP — Botswana Pula</option>
+                  <option value="ZMW">ZMW — Zambian Kwacha</option>
+                  <option value="MZN">MZN — Mozambican Metical</option>
+                  <option value="NAD">NAD — Namibian Dollar</option>
+                  <option value="KES">KES — Kenyan Shilling</option>
+                  <option value="CNY">CNY — Chinese Yuan</option>
                 </select>
               </div>
               {editQuote.currency!=="ZAR" && <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Exchange Rate (1 {editQuote.currency} = R...)</label><input type="number" value={editQuote.rate||"18.5"} onChange={e=>setEditQuote(q=>({...q,rate:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/></div>}
