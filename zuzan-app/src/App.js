@@ -3967,6 +3967,29 @@ function AppSettings({user, onLogout, onUserUpdate}) {
     logoUrl:           user?.logoUrl           || "",
   });
   const [saved, setSaved] = useState(false);
+  const [showUpgrade,  setShowUpgrade]  = useState(false);
+  const [showBilling,  setShowBilling]  = useState(false);
+  const [upgradeBilling, setUpgradeBilling] = useState("monthly");
+  const [upgrading,    setUpgrading]    = useState(false);
+  const [upgradeMsg,   setUpgradeMsg]   = useState("");
+
+  const handleUpgrade = async (planId) => {
+    setUpgrading(true); setUpgradeMsg("");
+    try {
+      await api("/companies/me", {method:"PUT", body: JSON.stringify({plan: planId})});
+      setUpgradeMsg("✓ Plan updated successfully.");
+      setTimeout(() => { setShowUpgrade(false); setUpgradeMsg(""); }, 1500);
+    } catch(e) { setUpgradeMsg("Failed to update plan. " + (e.message||"")); }
+    setUpgrading(false);
+  };
+
+  const handleCancelSub = async () => {
+    if (!window.confirm("Are you sure you want to cancel your subscription? Your account will revert to the free tier at the end of your billing period.")) return;
+    try {
+      await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: "cancelled"})});
+      alert("Your subscription has been cancelled. You will retain access until the end of your current billing period.");
+    } catch(e) { alert("Could not cancel subscription. Please email support@zuzan.co.za."); }
+  };
   const [pinForm, setPinForm] = useState({newPin:"", confirmPin:""});
   const [pinMsg,  setPinMsg]  = useState("");
   const [pinSaving, setPinSaving] = useState(false);
@@ -4042,8 +4065,8 @@ function AppSettings({user, onLogout, onUserUpdate}) {
           <Badge label="Trial Active" color={C.gold} bg={C.goldLt}/>
         </div>
         <div style={{display:"flex",gap:8}}>
-          <button style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
-          <button style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
+          <button onClick={()=>setShowUpgrade(true)} style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
+          <button onClick={()=>setShowBilling(true)} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
         </div>
       </div>
 
@@ -4134,9 +4157,86 @@ function AppSettings({user, onLogout, onUserUpdate}) {
         <div style={{fontSize:12,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Danger Zone</div>
         <div style={{display:"flex",gap:8}}>
           <button onClick={onLogout} style={{padding:"9px 18px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
-          <button style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
+          <button onClick={handleCancelSub} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
         </div>
       </div>
+      {/* ── Upgrade Plan Modal ── */}
+      {showUpgrade && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:520,boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+              <div style={{fontSize:18,fontWeight:800,color:C.ink}}>Choose a Plan</div>
+              <button onClick={()=>{setShowUpgrade(false);setUpgradeMsg("");}} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:C.inkMid}}>✕</button>
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:24}}>
+              {["monthly","annual"].map(t=>(
+                <button key={t} onClick={()=>setUpgradeBilling(t)} style={{flex:1,padding:"7px 0",borderRadius:8,border:`1px solid ${C.border}`,background:upgradeBilling===t?C.accent:"transparent",color:upgradeBilling===t?"#fff":C.inkMid,fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                  {t==="monthly"?"Monthly":"Annual (2 months free)"}
+                </button>
+              ))}
+            </div>
+            {PLANS.map(p=>{
+              const price = upgradeBilling==="annual" ? Math.round(p.annual/12) : p.monthly;
+              const isCurrent = (user?.plan?.id||"professional")===p.id;
+              return (
+                <div key={p.id} style={{border:`2px solid ${isCurrent?C.accent:C.border}`,borderRadius:12,padding:16,marginBottom:12,background:isCurrent?C.accentLt:"transparent"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{p.icon} {p.name}</div>
+                      <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>{p.features[0]} · {p.features[1]}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:18,fontWeight:800,color:p.color||C.accent}}>R{price.toLocaleString()}<span style={{fontSize:11,fontWeight:400,color:C.inkMid}}>/mo</span></div>
+                      {upgradeBilling==="annual"&&<div style={{fontSize:10,color:C.inkMid}}>billed R{(p.annual).toLocaleString()}/yr</div>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={()=>handleUpgrade(p.id)}
+                    disabled={upgrading||isCurrent}
+                    style={{marginTop:12,width:"100%",padding:"9px 0",borderRadius:8,border:"none",background:isCurrent?C.border:C.accent,color:isCurrent?C.inkMid:"#fff",fontWeight:700,fontSize:12,cursor:isCurrent?"default":"pointer",fontFamily:"inherit",opacity:upgrading?0.6:1}}
+                  >{isCurrent?"Current Plan":upgrading?"Updating…":"Select Plan"}</button>
+                </div>
+              );
+            })}
+            {upgradeMsg && <div style={{marginTop:12,fontSize:13,color:upgradeMsg.startsWith("✓")?C.green:C.red,fontWeight:600,textAlign:"center"}}>{upgradeMsg}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ── Manage Billing Modal ── */}
+      {showBilling && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:440,boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+              <div style={{fontSize:18,fontWeight:800,color:C.ink}}>Billing</div>
+              <button onClick={()=>setShowBilling(false)} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:C.inkMid}}>✕</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
+              <div style={{background:C.bg,borderRadius:10,padding:14}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Current Plan</div>
+                <div style={{fontSize:15,fontWeight:800,color:C.ink}}>{user?.plan?.name||"Professional"}</div>
+              </div>
+              <div style={{background:C.bg,borderRadius:10,padding:14}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Status</div>
+                <div style={{fontSize:15,fontWeight:800,color:C.gold}}>Trial Active</div>
+              </div>
+              <div style={{background:C.bg,borderRadius:10,padding:14}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Billing Cycle</div>
+                <div style={{fontSize:15,fontWeight:800,color:C.ink}}>Monthly</div>
+              </div>
+              <div style={{background:C.bg,borderRadius:10,padding:14}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Trial Ends</div>
+                <div style={{fontSize:15,fontWeight:800,color:C.ink}}>9 days</div>
+              </div>
+            </div>
+            <div style={{background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10,padding:14,marginBottom:20,fontSize:12,color:C.ink,lineHeight:1.6}}>
+              Payments are processed securely via <strong>PayFast</strong>. For billing queries, invoice copies, or to update your payment method, email <strong>billing@zuzan.co.za</strong>.
+            </div>
+            <button onClick={()=>setShowBilling(false)} style={{width:"100%",padding:"10px 0",borderRadius:8,border:"none",background:C.accent,color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Close</button>
+          </div>
+        </div>
+      )}
+
       </>}
     </div>
   );
