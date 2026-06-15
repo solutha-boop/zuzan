@@ -746,7 +746,10 @@ function Invoicing({live = {}, user = {}}) {
                 <td style={{padding:"13px 16px",fontWeight:700,color:C.accent}}>{inv.id}</td>
                 <td style={{padding:"13px 16px",fontWeight:500}}>{inv.client}</td>
                 <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{inv.desc}</td>
-                <td style={{padding:"13px 16px",fontWeight:700}}>{fmtCurrency(inv.amount, inv.currency||"ZAR")}</td>
+                <td style={{padding:"13px 16px",fontWeight:700}}>
+                  {fmt((inv.amount||0)*(inv.exchange_rate||1))}
+                  {inv.currency && inv.currency!=="ZAR" && <div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(inv.amount,inv.currency)}</div>}
+                </td>
                 <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
                 <td style={{padding:"13px 16px",color:inv.status==="overdue"?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
                 <td style={{padding:"13px 16px"}}><StatusBadge status={inv.status}/></td>
@@ -4764,7 +4767,7 @@ function Quotes({live={},user={},onNavigate}) {
               <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>This quote is valid for 30 days from the date of issue. Prices exclude VAT unless stated.</div>
             </div>
             <div style={{display:"flex",gap:8,marginTop:20}}>
-              {preview.status!=="accepted" && <button onClick={()=>{setPreview(null);setEditQuote({...preview,rate:preview.rate||"18.5",vatAmount:preview.vatAmount||"0"});}} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>}
+              <button onClick={()=>{setPreview(null);setEditQuote({...preview,rate:preview.rate||"18.5",vatAmount:preview.vatAmount||"0"});}} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={()=>convertToInvoice(preview)} disabled={saving} style={{flex:1,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Converting...":"Convert to Invoice"}</button>
               <button onClick={()=>{const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;}</style></head><body>${document.getElementById("quote-print-content").innerHTML}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();};}} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={()=>setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
@@ -4787,14 +4790,17 @@ function Quotes({live={},user={},onNavigate}) {
                     <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{q.id}</td>
                     <td style={{padding:"13px 14px",fontWeight:500}}>{q.client}</td>
                     <td style={{padding:"13px 14px",color:C.inkMid,fontSize:12}}>{q.desc}</td>
-                    <td style={{padding:"13px 14px",fontWeight:700}}>{fmtCurrency(q.amount,q.currency)}</td>
-                    <td style={{padding:"13px 14px"}}><Badge label={q.currency} color={C.blue} bg={C.blueLt}/></td>
+                    <td style={{padding:"13px 14px",fontWeight:700}}>
+                      {fmt((q.totalAmount||q.amount||0)*(q.rate||1))}
+                      {q.currency && q.currency!=="ZAR" && <div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(q.totalAmount||q.amount,q.currency)}</div>}
+                    </td>
+                    <td style={{padding:"13px 14px"}}><Badge label={q.currency||"ZAR"} color={C.blue} bg={C.blueLt}/></td>
                     <td style={{padding:"13px 14px",color:C.inkMid}}>{q.validUntil?fmtDate(q.validUntil):"—"}</td>
                     <td style={{padding:"13px 14px"}}><Badge label={label} color={color} bg={bg}/></td>
                     <td style={{padding:"13px 14px"}}>
                       <div style={{display:"flex",gap:5}}>
                         <button onClick={()=>setPreview(q)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
-                        {q.status!=="accepted" && <button onClick={()=>setEditQuote({...q,rate:q.rate||"18.5",vatAmount:q.vatAmount||"0"})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>}
+                        <button onClick={()=>setEditQuote({...q,rate:q.rate||"18.5",vatAmount:q.vatAmount||"0"})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
                         {q.status==="draft" && <button onClick={()=>updateStatus(q._id,"sent")} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Send</button>}
                         {q.status==="sent"  && <button onClick={()=>convertToInvoice(q)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Accept</button>}
                         {q.status==="sent"  && <button onClick={()=>updateStatus(q._id,"declined")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Decline</button>}
