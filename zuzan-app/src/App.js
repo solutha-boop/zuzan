@@ -6314,10 +6314,13 @@ export default function App() {
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
     if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     fetch("https://zuzan-backend.onrender.com/auth/me", {
-      headers: {"Authorization": "Bearer " + token}
+      headers: {"Authorization": "Bearer " + token},
+      signal: controller.signal
     })
-      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(r => { clearTimeout(timeout); return r.ok ? r.json() : Promise.reject(); })
       .then(data => {
         setUser({
           firstName:    data.user.first_name,
@@ -6331,7 +6334,7 @@ export default function App() {
         });
         setScreen("app");
       })
-      .catch(() => { localStorage.removeItem("zuzan_token"); setScreen("login"); });
+      .catch(() => { clearTimeout(timeout); localStorage.removeItem("zuzan_token"); setScreen("login"); });
   }, []);
 
   const handleLogin = userData => { setUser(userData); setScreen("app"); };
