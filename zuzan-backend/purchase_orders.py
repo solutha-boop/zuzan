@@ -7,6 +7,7 @@ from database import get_db, PurchaseOrder, PurchaseOrderItem, Supplier, Expense
 from auth import get_current_user, User
 import logging
 import journal as journal_engine
+import email_service
 logger = logging.getLogger("zuzan.po")
 
 router = APIRouter()
@@ -126,6 +127,52 @@ async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get
             ))
     db.commit(); db.refresh(po)
     return to_dict(po)
+
+@router.post("/{po_id}/send")
+async def send_po(po_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Email the PO to the supplier and mark it as sent."""
+    po = (
+        db.query(PurchaseOrder)
+        .options(joinedload(PurchaseOrder.items))
+        .filter(PurchaseOrder.id == po_id, PurchaseOrder.company_id == current_user.company_id)
+        .first()
+    )
+    if not po:
+        raise HTTPException(404, "Purchase order not found")
+    if po.status in ("received", "partial", "paid", "cancelled"):
+        raise HTTPException(400, f"Cannot send a PO with status '{po.status}'")
+
+    # Resolve supplier email
+    supplier_email = None
+    if po.supplier_id:
+        s = db.query(Supplier).filter(Supplier.id == po.supplier_id).first()
+        if s:
+            supplier_email = s.email
+    if not supplier_email:
+        raise HTTPException(400, "Supplier has no email address on file. Add an email to the supplier first.")
+
+    po_dict = to_dict(po)
+    company_name = current_user.company_name if hasattr(current_user, "company_name") else "Your supplier"
+
+    # Resolve company name from Company table
+    from database import Company
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company_display = company.name if company else "Your customer"
+
+    sent = email_service.send_po_email(
+        supplier_email=supplier_email,
+        supplier_name=po.supplier_name or supplier_email,
+        po=po_dict,
+        company_name=company_display,
+    )
+    if not sent:
+        raise HTTPException(500, "Email could not be sent. Check RESEND_API_KEY is configured.")
+
+    po.status = "sent"
+    db.commit()
+    db.refresh(po)
+    return {**to_dict(po), "emailed_to": supplier_email}
+
 
 @router.delete("/{po_id}")
 async def delete_po(po_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

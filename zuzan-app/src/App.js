@@ -5198,6 +5198,16 @@ function PurchaseOrders() {
               {["draft","sent"].includes(viewing.status) && (
                 <button onClick={()=>startEdit(viewing)} style={{background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}}>✏️ Edit PO</button>
               )}
+              {["draft","sent"].includes(viewing.status) && (
+                <button onClick={async()=>{
+                  if(!window.confirm(`Send ${viewing.po_number} to ${viewing.supplier_name} by email?`)) return;
+                  try {
+                    const res = await api(`/purchase-orders/${viewing.id}/send`,{method:"POST"});
+                    alert(`✅ PO emailed to ${res.emailed_to}`);
+                    setViewing(res); load();
+                  } catch(e){ alert(e.message); }
+                }} style={{background:C.blueLt,color:C.blue,border:`1px solid ${C.blue}40`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}}>📧 Send to Supplier</button>
+              )}
               {viewing.status==="draft" && (
                 <button onClick={()=>{updateStatus(viewing.id,"cancelled");setViewing({...viewing,status:"cancelled"});}} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",color:C.inkMid}}>Cancel PO</button>
               )}

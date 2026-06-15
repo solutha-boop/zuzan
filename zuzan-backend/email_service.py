@@ -242,3 +242,46 @@ def send_password_reset_email(first_name: str, email: str, reset_code: str):
       </p>
     """
     send_email(email, "Your ZuZan password reset code", _wrap(body, email))
+
+
+# ── 5. Purchase Order to supplier ─────────────────────────────────────────────
+def send_po_email(supplier_email: str, supplier_name: str, po: dict, company_name: str):
+    """Send a formatted PO to a supplier."""
+    items_rows = "".join(
+        f"""<tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #E8E0D5;">{it['description']}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E8E0D5;text-align:right;">{it['quantity']}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E8E0D5;text-align:right;">R{it['unit_price']:.2f}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #E8E0D5;text-align:right;font-weight:600;">R{it['total']:.2f}</td>
+        </tr>"""
+        for it in po.get("items", [])
+    )
+    delivery = f"<p style='color:#555;margin:0 0 8px;'><strong>Delivery date:</strong> {po['delivery_date']}</p>" if po.get("delivery_date") else ""
+    notes = f"<p style='color:#555;margin:16px 0 0;'><strong>Notes:</strong> {po['notes']}</p>" if po.get("notes") else ""
+    vat_row = f"<tr><td colspan='3' style='padding:6px 12px;text-align:right;color:#555;'>VAT (15%):</td><td style='padding:6px 12px;text-align:right;color:#555;'>R{po['vat_amount']:.2f}</td></tr>" if po.get("vat_amount", 0) > 0 else ""
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 4px;">Purchase Order — {po['po_number']}</h2>
+      <p style="color:#888;margin:0 0 20px;font-size:13px;">From <strong>{company_name}</strong></p>
+      <p style="color:#555;margin:0 0 8px;">Dear <strong>{supplier_name}</strong>,</p>
+      <p style="color:#555;margin:0 0 20px;">Please find our purchase order below. Kindly confirm receipt and expected delivery.</p>
+      {delivery}
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">
+        <thead>
+          <tr style="background:#f0ece6;">
+            <th style="padding:10px 12px;text-align:left;font-weight:600;color:#1a1a1a;">Description</th>
+            <th style="padding:10px 12px;text-align:right;font-weight:600;color:#1a1a1a;">Qty</th>
+            <th style="padding:10px 12px;text-align:right;font-weight:600;color:#1a1a1a;">Unit Price</th>
+            <th style="padding:10px 12px;text-align:right;font-weight:600;color:#1a1a1a;">Total</th>
+          </tr>
+        </thead>
+        <tbody>{items_rows}</tbody>
+        <tfoot>
+          <tr><td colspan='3' style='padding:8px 12px;text-align:right;color:#555;'>Subtotal:</td><td style='padding:8px 12px;text-align:right;color:#555;'>R{po['subtotal']:.2f}</td></tr>
+          {vat_row}
+          <tr style="background:#f0ece6;"><td colspan='3' style='padding:10px 12px;text-align:right;font-weight:700;color:#1a1a1a;'>Total:</td><td style='padding:10px 12px;text-align:right;font-weight:700;color:#1a1a1a;'>R{po['total_amount']:.2f}</td></tr>
+        </tfoot>
+      </table>
+      {notes}
+      <p style="color:#888;font-size:12px;margin:24px 0 0;">Please reply to this email to confirm or raise any queries.</p>
+    """
+    send_email(supplier_email, f"Purchase Order {po['po_number']} from {company_name}", _wrap(body, supplier_email))
