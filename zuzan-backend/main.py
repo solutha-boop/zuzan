@@ -206,10 +206,13 @@ async def api_list_employees(auth=Depends(require_api_key)):
 @app.get("/v1/summary", tags=["Public API"])
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
+    from payroll import _to_zar
+    paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status=="paid").all()
+    out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status!="paid").all()
     from sqlalchemy import func
-    total_revenue  = db.query(func.sum(Invoice.total_amount)).filter(Invoice.company_id==company.id, Invoice.status=="paid").scalar() or 0
+    total_revenue  = sum(_to_zar(i) for i in paid_invs)
     total_expenses = db.query(func.sum(Expense.amount)).filter(Expense.company_id==company.id).scalar() or 0
-    outstanding    = db.query(func.sum(Invoice.total_amount)).filter(Invoice.company_id==company.id, Invoice.status!="paid").scalar() or 0
+    outstanding    = sum(_to_zar(i) for i in out_invs)
     return {"company":company.name,"total_revenue":round(total_revenue,2),"total_expenses":round(total_expenses,2),"outstanding":round(outstanding,2),"net_profit":round(total_revenue-total_expenses,2)}
 
 

@@ -557,7 +557,7 @@ function Invoicing({live = {}, user = {}}) {
   const [customers, setCustomers] = useState([]);
   useEffect(()=>{ api("/customers/").then(setCustomers).catch(()=>{}); },[]);
 
-  const toZar = i => (i.amount||0) * (i.currency && i.currency !== "ZAR" ? (i.exchange_rate||1) : 1);
+  const toZar = i => (i.currency && i.currency !== "ZAR") ? (i.amount||0) * (i.exchange_rate||1) : (i.amount||0);
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
   const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + toZar(i), 0);
   const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + toZar(i), 0);
@@ -1518,8 +1518,10 @@ function Payroll({live = {}, user = {}}) {
           {pinSet === null && <p style={{color:C.inkMid,fontSize:13}}>Checking security settings...</p>}
           {pinSet === false && (
             <div>
-              <p style={{color:C.inkMid,fontSize:13,marginBottom:20}}>No payroll PIN is set. You can set one in <strong>Settings → Payroll PIN</strong> to restrict access.</p>
-              <button onClick={()=>setPinOk(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%"}}>Continue to Payroll</button>
+              <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginBottom:16}}>
+                <p style={{color:C.red,fontSize:13,margin:0,fontWeight:600}}>No Payroll PIN is set.</p>
+                <p style={{color:C.inkMid,fontSize:12,margin:"6px 0 0"}}>A PIN must be configured before payroll data can be accessed. Go to <strong>Settings → Payroll PIN</strong> to set one.</p>
+              </div>
             </div>
           )}
           {pinSet === true && (

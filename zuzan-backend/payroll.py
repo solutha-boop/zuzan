@@ -13,6 +13,15 @@ from auth import get_current_user, User
 import hashlib
 import logging
 
+def _to_zar(inv) -> float:
+    """Convert an invoice's total to ZAR, applying exchange_rate for foreign currencies.
+    For paid invoices, uses paid_amount_zar (actual cash received) when available."""
+    if inv.currency and inv.currency != "ZAR":
+        if getattr(inv, "paid_amount_zar", None):
+            return inv.paid_amount_zar
+        return (inv.total_amount or 0) * (inv.exchange_rate or 1.0)
+    return inv.total_amount or 0
+
 logger = logging.getLogger("zuzan.payroll")
 
 # SA TAX TABLES — Multi-year for audit history
@@ -237,13 +246,13 @@ async def dashboard(
         Invoice.status == InvoiceStatus.paid,
         Invoice.paid_date >= month_start
     ).all()
-    total_revenue = sum(i.total_amount for i in paid_invoices)
+    total_revenue = sum(_to_zar(i) for i in paid_invoices)
 
     outstanding_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
     ).all()
-    total_outstanding = sum(i.total_amount for i in outstanding_invoices)
+    total_outstanding = sum(_to_zar(i) for i in outstanding_invoices)
 
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
@@ -675,7 +684,7 @@ async def management_accounts(
         Invoice.status == InvoiceStatus.paid,
         Invoice.paid_date >= month_start
     ).all()
-    revenue = round(sum(i.total_amount for i in paid_invoices), 2)
+    revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
 
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
@@ -705,7 +714,7 @@ async def management_accounts(
         Invoice.company_id == cid,
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
     ).all()
-    total_outstanding = round(sum(i.total_amount for i in outstanding), 2)
+    total_outstanding = round(sum(_to_zar(i) for i in outstanding), 2)
     overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue)
 
     trend = []
@@ -718,7 +727,7 @@ async def management_accounts(
         start = datetime(y, m, 1)
         end_m, end_y = (m + 1, y) if m < 12 else (1, y + 1)
         end = datetime(end_y, end_m, 1)
-        rev = round(sum(inv.total_amount for inv in db.query(Invoice).filter(
+        rev = round(sum(_to_zar(inv) for inv in db.query(Invoice).filter(
             Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
             Invoice.paid_date >= start, Invoice.paid_date < end).all()), 2)
         exp = round(sum(ex.amount for ex in db.query(Expense).filter(
