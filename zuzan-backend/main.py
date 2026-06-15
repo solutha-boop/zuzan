@@ -53,17 +53,28 @@ app.add_middleware(
     max_age=86400,
 )
 
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-API-Key, X-Admin-Secret",
-    "Access-Control-Max-Age": "86400",
-}
+# This @app.middleware runs BEFORE CORSMiddleware (Starlette LIFO: last added = outermost).
+# It guarantees OPTIONS preflight is always answered with correct CORS headers,
+# and all responses include Access-Control-Allow-Origin.
+from starlette.responses import Response as StarletteResponse
 
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    """Explicit CORS preflight handler — belt-and-suspenders for Render free tier."""
-    return JSONResponse(content="OK", headers=CORS_HEADERS)
+@app.middleware("http")
+async def cors_override(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return StarletteResponse(
+            content=b"",
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-API-Key, X-Admin-Secret",
+                "Access-Control-Max-Age": "86400",
+                "Content-Length": "0",
+            },
+        )
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
