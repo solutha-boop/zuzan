@@ -42,25 +42,38 @@ app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+from starlette.types import ASGIApp, Receive, Scope, Send as _Send
 from starlette.responses import Response as _Resp
+from starlette.datastructures import MutableHeaders
 
-@app.middleware("http")
-async def cors_middleware(request: Request, call_next):
-    """Single, authoritative CORS handler — no CORSMiddleware interference."""
-    if request.method == "OPTIONS":
-        return _Resp(
-            content=b"",
-            status_code=200,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
-                "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-API-Key, X-Admin-Secret",
-                "Access-Control-Max-Age": "86400",
-            },
-        )
-    response = await call_next(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    return response
+_CORS_HEADERS = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
+    "access-control-allow-headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-API-Key, X-Admin-Secret",
+    "access-control-max-age": "86400",
+}
+
+class _CORSMiddleware:
+    """Raw ASGI CORS middleware — avoids BaseHTTPMiddleware header-stripping bug."""
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: _Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if scope.get("method") == "OPTIONS":
+            response = _Resp(content=b"", status_code=200, headers=_CORS_HEADERS)
+            await response(scope, receive, send)
+            return
+        async def _send_with_cors(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.append("access-control-allow-origin", "*")
+            await send(message)
+        await self.app(scope, receive, _send_with_cors)
+
+app.add_middleware(_CORSMiddleware)
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
