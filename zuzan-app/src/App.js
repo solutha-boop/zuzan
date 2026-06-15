@@ -5026,49 +5026,58 @@ function PurchaseOrders() {
 
   const save = async () => {
     if (!form.supplier_name && !form.supplier_id) { alert("Please select or enter a supplier"); return; }
-    setSaving(true); setSaveMsg("Saving…");
-    const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null};
-    const body = JSON.stringify(payload);
-    for (let attempt = 1; attempt <= 7; attempt++) {
+    setSaving(true);
+    // Step 1: ping /health until backend is confirmed awake
+    for (let i = 0; i < 18; i++) {
       try {
-        await api("/purchase-orders/",{method:"POST",body});
-        setSaving(false); setSaveMsg("");
-        setShowForm(false); setForm(emptyForm); load();
-        return;
+        setSaveMsg(i === 0 ? "Connecting…" : `Starting up… (${i * 10}s)`);
+        const h = await fetch(`${BASE_URL}/health`);
+        if (h.ok) break;
       } catch(e) {
-        if (e.message !== "Failed to fetch" || attempt === 7) {
+        if (i === 17) {
           setSaving(false); setSaveMsg("");
-          alert(e.message === "Failed to fetch"
-            ? "Server is still starting up. Please wait a minute and try again."
-            : e.message);
+          alert("Server is not responding after 3 minutes. Please try again later.");
           return;
         }
-        setSaveMsg(`Server waking up… (${attempt * 10}s)`);
         await new Promise(r => setTimeout(r, 10000));
+        continue;
       }
+      break;
+    }
+    // Step 2: backend is awake — submit
+    setSaveMsg("Saving…");
+    try {
+      const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null};
+      await api("/purchase-orders/",{method:"POST",body:JSON.stringify(payload)});
+      setSaving(false); setSaveMsg("");
+      setShowForm(false); setForm(emptyForm); load();
+    } catch(e) {
+      setSaving(false); setSaveMsg("");
+      alert(e.message);
     }
   };
 
   const saveDraft = async () => {
     if (!form.supplier_name && !form.supplier_id) { alert("Please enter at least a supplier name to save a draft"); return; }
-    setSaving(true); setSaveMsg("Saving draft…");
-    const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null, status:"draft"};
-    for (let attempt = 1; attempt <= 7; attempt++) {
+    setSaving(true);
+    for (let i = 0; i < 18; i++) {
       try {
-        await api("/purchase-orders/",{method:"POST",body:JSON.stringify(payload)});
-        setSaving(false); setSaveMsg("");
-        setShowForm(false); setForm(emptyForm); load();
-        return;
+        setSaveMsg(i === 0 ? "Connecting…" : `Starting up… (${i * 10}s)`);
+        const h = await fetch(`${BASE_URL}/health`);
+        if (h.ok) break;
       } catch(e) {
-        if (e.message !== "Failed to fetch" || attempt === 7) {
-          setSaving(false); setSaveMsg("");
-          alert(e.message === "Failed to fetch" ? "Server is still starting up. Please wait a minute and try again." : e.message);
-          return;
-        }
-        setSaveMsg(`Server waking up… (${attempt * 10}s)`);
-        await new Promise(r => setTimeout(r, 10000));
+        if (i === 17) { setSaving(false); setSaveMsg(""); alert("Server not responding."); return; }
+        await new Promise(r => setTimeout(r, 10000)); continue;
       }
+      break;
     }
+    setSaveMsg("Saving draft…");
+    try {
+      const payload = {...form, supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null, status:"draft"};
+      await api("/purchase-orders/",{method:"POST",body:JSON.stringify(payload)});
+      setSaving(false); setSaveMsg("");
+      setShowForm(false); setForm(emptyForm); load();
+    } catch(e) { setSaving(false); setSaveMsg(""); alert(e.message); }
   };
 
   const updateStatus = async (id, status) => {
