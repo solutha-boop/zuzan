@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -59,33 +59,48 @@ def to_dict(po):
 
 @router.get("/")
 async def list_pos(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    items = db.query(PurchaseOrder).filter(PurchaseOrder.company_id == current_user.company_id).order_by(PurchaseOrder.created_at.desc()).all()
-    return [to_dict(p) for p in items]
+    try:
+        pos = (
+            db.query(PurchaseOrder)
+            .options(joinedload(PurchaseOrder.items))
+            .filter(PurchaseOrder.company_id == current_user.company_id)
+            .order_by(PurchaseOrder.created_at.desc())
+            .all()
+        )
+        return [to_dict(p) for p in pos]
+    except Exception as e:
+        logger.error(f"list_pos error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/")
 async def create_po(data: POCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    supplier_name = data.supplier_name
-    if data.supplier_id and not supplier_name:
-        s = db.query(Supplier).filter(Supplier.id == data.supplier_id).first()
-        if s: supplier_name = s.name
-    subtotal, vat, total = calc_totals(data.items, data.vat_applicable)
-    delivery = datetime.strptime(data.delivery_date, "%Y-%m-%d") if data.delivery_date else None
-    po = PurchaseOrder(
-        company_id=current_user.company_id,
-        po_number=next_po_number(db, current_user.company_id),
-        supplier_id=data.supplier_id, supplier_name=supplier_name,
-        delivery_date=delivery, subtotal=subtotal, vat_amount=vat, total_amount=total,
-        notes=data.notes,
-    )
-    db.add(po); db.flush()
-    for item in data.items:
-        db.add(PurchaseOrderItem(
-            purchase_order_id=po.id, description=item.description,
-            quantity=item.quantity, unit_price=item.unit_price,
-            total=round(item.quantity * item.unit_price, 2),
-        ))
-    db.commit(); db.refresh(po)
-    return to_dict(po)
+    try:
+        supplier_name = data.supplier_name
+        if data.supplier_id and not supplier_name:
+            s = db.query(Supplier).filter(Supplier.id == data.supplier_id).first()
+            if s: supplier_name = s.name
+        subtotal, vat, total = calc_totals(data.items, data.vat_applicable)
+        delivery = datetime.strptime(data.delivery_date, "%Y-%m-%d") if data.delivery_date else None
+        po = PurchaseOrder(
+            company_id=current_user.company_id,
+            po_number=next_po_number(db, current_user.company_id),
+            supplier_id=data.supplier_id, supplier_name=supplier_name,
+            delivery_date=delivery, subtotal=subtotal, vat_amount=vat, total_amount=total,
+            notes=data.notes,
+        )
+        db.add(po); db.flush()
+        for item in data.items:
+            db.add(PurchaseOrderItem(
+                purchase_order_id=po.id, description=item.description,
+                quantity=item.quantity, unit_price=item.unit_price,
+                total=round(item.quantity * item.unit_price, 2),
+            ))
+        db.commit(); db.refresh(po)
+        return to_dict(po)
+    except Exception as e:
+        logger.error(f"create_po error: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/{po_id}")
 async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
