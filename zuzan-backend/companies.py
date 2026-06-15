@@ -9,6 +9,7 @@ from typing import Optional, List
 from datetime import datetime
 from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus
 from auth import get_current_user, User
+from crypto import encrypt_field, decrypt_field
 import logging
 import journal as journal_engine
 
@@ -37,21 +38,41 @@ class CompanyUpdate(BaseModel):
     logo_url:     Optional[str] = None
 
 
+def _company_dict(c: Company) -> dict:
+    """Return company as dict with bank fields decrypted."""
+    return {
+        "id": c.id, "name": c.name, "reg_number": c.reg_number,
+        "vat_number": c.vat_number, "industry": c.industry,
+        "address": c.address, "phone": c.phone, "email": c.email,
+        "bank_name":    decrypt_field(c.bank_name),
+        "bank_account": decrypt_field(c.bank_account),
+        "bank_branch":  decrypt_field(c.bank_branch),
+        "logo_url": c.logo_url, "plan": c.plan, "billing_cycle": c.billing_cycle,
+        "subscription_status": c.subscription_status,
+        "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
+        "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    }
+
+
 @router.get("/me")
 async def get_company(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
-    return company
+    return _company_dict(company)
 
 
 @router.put("/me")
 async def update_company(data: CompanyUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     for field, value in data.dict(exclude_none=True).items():
-        setattr(company, field, value)
+        if field in ("bank_name", "bank_account", "bank_branch"):
+            setattr(company, field, encrypt_field(value))
+        else:
+            setattr(company, field, value)
     db.commit()
-    return company
+    return _company_dict(company)
 
 
 # Keep router as companies_router
@@ -296,12 +317,34 @@ class EmployeeUpdate(BaseModel):
     is_active:        Optional[bool] = None
 
 
+def _employee_dict(e: Employee) -> dict:
+    """Return employee as dict with bank fields decrypted."""
+    return {
+        "id": e.id, "company_id": e.company_id,
+        "employee_number": e.employee_number,
+        "first_name": e.first_name, "last_name": e.last_name,
+        "id_number": e.id_number, "tax_number": e.tax_number,
+        "date_of_birth": e.date_of_birth.isoformat() if e.date_of_birth else None,
+        "appointment_date": e.appointment_date.isoformat() if e.appointment_date else None,
+        "address": e.address, "position": e.position, "department": e.department,
+        "gross_salary": e.gross_salary,
+        "bank_name":      decrypt_field(e.bank_name),
+        "bank_account":   decrypt_field(e.bank_account),
+        "account_number": decrypt_field(e.account_number),
+        "branch_code":    decrypt_field(e.branch_code),
+        "account_type": e.account_type,
+        "start_date": e.start_date.isoformat() if e.start_date else None,
+        "is_active": e.is_active,
+    }
+
+
 @employees_router.get("/")
 async def list_employees(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(Employee).filter(
+    emps = db.query(Employee).filter(
         Employee.company_id == current_user.company_id,
         Employee.is_active == True
     ).all()
+    return [_employee_dict(e) for e in emps]
 
 
 @employees_router.post("/")
@@ -325,18 +368,20 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(get
         position=data.position,
         department=data.department,
         gross_salary=data.gross_salary,
-        bank_name=data.bank_name,
-        bank_account=data.bank_account,
-        account_number=data.account_number,
-        branch_code=data.branch_code,
+        bank_name=encrypt_field(data.bank_name),
+        bank_account=encrypt_field(data.bank_account),
+        account_number=encrypt_field(data.account_number),
+        branch_code=encrypt_field(data.branch_code),
         account_type=data.account_type,
         start_date=datetime.fromisoformat(data.start_date) if data.start_date else datetime.utcnow(),
     )
     db.add(emp)
     db.commit()
     db.refresh(emp)
-    return emp
+    return _employee_dict(emp)
 
+
+_EMPLOYEE_BANK_FIELDS = {"bank_name", "bank_account", "account_number", "branch_code"}
 
 @employees_router.put("/{employee_id}")
 async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -344,9 +389,9 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
     for field, value in data.dict(exclude_none=True).items():
-        setattr(emp, field, value)
+        setattr(emp, field, encrypt_field(value) if field in _EMPLOYEE_BANK_FIELDS else value)
     db.commit()
-    return emp
+    return _employee_dict(emp)
 
 
 # ── BANK STATEMENT IMPORT ─────────────────────────────────────────────────────

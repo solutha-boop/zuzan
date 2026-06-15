@@ -35,6 +35,43 @@ async def lifespan(app: FastAPI):
         logger.info("Journal backfill complete")
     except Exception as e:
         logger.warning(f"Journal backfill failed (non-fatal): {e}")
+    # Encrypt any existing plain-text bank fields
+    try:
+        from crypto import encrypt_field, _is_fernet_token, encryption_enabled
+        from database import Employee, Supplier
+        if encryption_enabled():
+            db = SessionLocal()
+            migrated = 0
+            # Company bank fields
+            for co in db.query(Company).all():
+                changed = False
+                for attr in ("bank_name", "bank_account", "bank_branch"):
+                    val = getattr(co, attr)
+                    if val and not _is_fernet_token(val):
+                        setattr(co, attr, encrypt_field(val)); changed = True
+                if changed: migrated += 1
+            # Employee bank fields
+            for emp in db.query(Employee).all():
+                changed = False
+                for attr in ("bank_name", "bank_account", "account_number", "branch_code"):
+                    val = getattr(emp, attr)
+                    if val and not _is_fernet_token(val):
+                        setattr(emp, attr, encrypt_field(val)); changed = True
+                if changed: migrated += 1
+            # Supplier bank fields
+            for sup in db.query(Supplier).all():
+                changed = False
+                for attr in ("bank_name", "account_number", "branch_code"):
+                    val = getattr(sup, attr)
+                    if val and not _is_fernet_token(val):
+                        setattr(sup, attr, encrypt_field(val)); changed = True
+                if changed: migrated += 1
+            db.commit(); db.close()
+            logger.info(f"Bank field encryption migration complete — {migrated} records encrypted")
+        else:
+            logger.warning("Skipping bank field migration — FIELD_ENCRYPTION_KEY not set")
+    except Exception as e:
+        logger.warning(f"Bank field encryption migration failed (non-fatal): {e}")
     yield
 
 
