@@ -332,6 +332,7 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN exchange_rate FLOAT DEFAULT 1",
             "ALTER TABLE invoices ADD COLUMN paid_amount_zar FLOAT",
             "ALTER TABLE companies ADD COLUMN logo_url TEXT",
+            "ALTER TABLE purchase_orders ADD COLUMN received_date TIMESTAMP",
         ]:
             try:
                 conn.execute(text(sql))
