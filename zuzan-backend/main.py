@@ -189,7 +189,7 @@ async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__im
     ctx = data.context.lower()
 
     # ── INVOICING ─────────────────────────────────────────────────────────────
-    if any(x in msg for x in ["create invoice","new invoice","add invoice","how do i invoice"]):
+    if ("invoice" in msg and any(x in msg for x in ["create","new","add","make","how","generate"])) or "how do i invoice" in msg:
         return {"reply":"To create an invoice: go to Sales → Invoices, click '+ New Invoice', fill in the client name, description and amount. ZuZan automatically calculates 15% VAT and assigns an invoice number. You can then send it directly to the client."}
     if "overdue" in msg and "invoice" in msg:
         return {"reply":"Overdue invoices appear in red on the Invoices tab. ZuZan marks an invoice as overdue once the due date passes without payment. Follow up with the client and record payment once received by clicking 'Mark as Paid'."}
@@ -207,7 +207,7 @@ async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__im
         return {"reply":"A proforma invoice is a preliminary bill sent before goods/services are delivered. In ZuZan, use the Quotes tab to create a proforma — it has the same format but is clearly marked as a quote/estimate, not a tax invoice."}
 
     # ── QUOTES ────────────────────────────────────────────────────────────────
-    if any(x in msg for x in ["create quote","new quote","add quote","how do i quote"]):
+    if ("quote" in msg or "estimate" in msg) and any(x in msg for x in ["create","new","add","make","how","generate"]):
         return {"reply":"To create a quote: go to Sales → Quotes, click '+ New Quote', fill in the client name, description, amount and validity date. Once the client accepts it, click 'Convert to Invoice' to automatically create an invoice from the quote."}
     if "convert" in msg and ("quote" in msg or "estimate" in msg):
         return {"reply":"To convert a quote to an invoice: open the quote, click 'Accept' to mark it as accepted, then click 'Convert to Invoice'. ZuZan creates a new invoice with all the quote details pre-filled and takes you straight to the Invoices tab."}
@@ -219,7 +219,7 @@ async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__im
         return {"reply":"Track quote status in the Quotes tab: Draft (not yet sent), Sent (awaiting client response), Accepted (client agreed), or Declined. Update the status as you hear back from clients to keep your pipeline accurate."}
 
     # ── EXPENSES ──────────────────────────────────────────────────────────────
-    if any(x in msg for x in ["add expense","create expense","new expense","record expense","how do i add"]):
+    if "expense" in msg and any(x in msg for x in ["add","create","new","record","how","make"]) or "how do i add" in msg:
         return {"reply":"To add an expense: go to Expenses, click '+ Add Expense', fill in the vendor, amount, category, and date. You can also scan a receipt using the camera icon to auto-fill the details. ZuZan calculates input VAT automatically if VAT applies."}
     if "categor" in msg and "expense" in msg:
         return {"reply":"Common SA expense categories in ZuZan:\n• 6000 - Cost of Sales\n• 6100 - Salaries & Wages\n• 6200 - Rent\n• 6300 - Telephone & Internet\n• 6400 - Office Supplies\n• 6500 - Marketing\n• 6510 - Fuel & Oil\n• 6600 - Insurance\n• 6700 - Professional Fees\n• 7100 - Depreciation\nChoose the one that best matches the nature of the expense."}
