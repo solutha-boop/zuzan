@@ -182,93 +182,68 @@ class ChatRequest(BM):
     message: str
     context: str = ""
 
+ZUZAN_SYSTEM_PROMPT = """You are ZuZan AI, the built-in assistant for ZuZan — a South African bookkeeping and payroll platform for SMEs. You help users navigate the app and understand SA tax/accounting rules.
+
+ZuZan's modules and how they work:
+- Sales → Invoices: Create invoices (+ New Invoice), mark as paid, send to clients by email. INV-XXXX numbering. 15% VAT calculated automatically. Multi-currency (ZAR/USD) supported.
+- Sales → Quotes: Create quotes (+ New Quote), set validity date, update status (Draft/Sent/Accepted/Declined), convert accepted quotes to invoices.
+- Expenses: Add expenses (+ Add Expense), scan receipts with camera, categorise to chart-of-accounts codes (6000-7300). Input VAT tracked automatically.
+- Procurement → Purchase Orders: Create POs (+ New PO), send to suppliers by email (📧 Send to Supplier), receive goods (📦 Receive Goods), mark as paid. Statuses: Draft/Sent/Received/Partial/Paid/Cancelled. Edit POs in draft/sent status.
+- Procurement → Suppliers: Manage supplier details including email addresses.
+- Customers: Manage customer records.
+- Payroll: Run monthly payroll, calculate PAYE/UIF/SDL automatically, download EMP201. SDL only applies if annual payroll > R500k.
+- Reports: P&L, Balance Sheet, Trial Balance, VAT201, Reconciliation, Journal Viewer. Filter by date range and financial year.
+- Budgeting: Set monthly budgets per account, track actuals vs budget.
+- Accounts: Chart of accounts, journal entries, double-entry bookkeeping.
+- Settings: Company details, banking info, VAT number, financial year.
+- Dashboard: Revenue, expenses, outstanding invoices, cash position.
+
+SA tax rules you know:
+- VAT: Standard rate 15%. VAT201 due monthly or bi-monthly. Late = 10% penalty + interest. Zero-rated: basic foods, exports.
+- PAYE: Withheld monthly. EMP201 due 7th of following month. 2025/2026 primary rebate R17,235.
+- UIF: 1% employee + 1% employer, capped at R177.12/month each (R17,712 monthly gross ceiling).
+- SDL: 1% of gross payroll if annual payroll exceeds R500,000.
+- Provisional tax (IRP6): Twice yearly — 31 August and 28 February.
+- Dividends tax: 20%, withheld by company.
+- Entertainment expenses: 50% deductible, input VAT not claimable.
+- Bad debts: Deductible when irrecoverable — account 7300.
+- Wear & tear: Computers 3 years, vehicles 5 years.
+
+Response style:
+- Be concise and practical. Give step-by-step instructions when explaining how to do something in the app.
+- Use ZAR (R) for amounts. Reference the correct tab/button names exactly as they appear in ZuZan.
+- If a question is outside bookkeeping/tax/ZuZan scope, politely redirect to the relevant tab or suggest consulting an accountant for complex matters.
+- Keep responses under 120 words unless a detailed explanation is genuinely needed.
+- Never make up features that don't exist in ZuZan."""
+
+_ANTHROPIC_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
+
 @app.post("/ai/chat")
 @limiter.limit("30/minute")
 async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__import__("auth").get_current_user)):
-    msg = data.message.lower()
-    ctx = data.context.lower()
+    if not _ANTHROPIC_KEY:
+        return {"reply": "AI assistant is not configured. Please contact your administrator to set up the ANTHROPIC_API_KEY."}
 
-    # ── INVOICING ─────────────────────────────────────────────────────────────
-    if ("invoice" in msg and any(x in msg for x in ["create","new","add","make","how","generate"])) or "how do i invoice" in msg:
-        return {"reply":"To create an invoice: go to Sales → Invoices, click '+ New Invoice', fill in the client name, description and amount. ZuZan automatically calculates 15% VAT and assigns an invoice number. You can then send it directly to the client."}
-    if "overdue" in msg and "invoice" in msg:
-        return {"reply":"Overdue invoices appear in red on the Invoices tab. ZuZan marks an invoice as overdue once the due date passes without payment. Follow up with the client and record payment once received by clicking 'Mark as Paid'."}
-    if ("mark" in msg or "record" in msg) and "paid" in msg:
-        return {"reply":"To mark an invoice as paid: open the invoice, click 'Mark as Paid'. ZuZan records the payment date and updates the invoice status. This also updates your revenue figures in the dashboard and reports."}
-    if "send" in msg and "invoice" in msg:
-        return {"reply":"To send an invoice: open the invoice and click 'Send Invoice'. ZuZan emails a PDF to the client's email address. Make sure the client email is filled in when creating the invoice."}
-    if "payment term" in msg or "payment terms" in msg:
-        return {"reply":"Payment terms define how many days a client has to pay. Common SA terms are 30 days (net 30) or 7 days for smaller jobs. Set payment terms when creating the invoice — the due date is calculated automatically."}
-    if ("invoice" in msg and "vat" in msg) or ("tax invoice" in msg):
-        return {"reply":"A valid SA tax invoice must include: your VAT registration number, the buyer's VAT number (if VAT-registered), a unique invoice number, date, description of goods/services, amount excl. VAT, VAT amount at 15%, and total incl. VAT. ZuZan generates compliant invoices automatically."}
-    if "invoice number" in msg:
-        return {"reply":"ZuZan automatically assigns sequential invoice numbers (INV-0001, INV-0002, etc.) when you create an invoice. These cannot be changed as SARS requires sequential numbering for audit purposes."}
-    if "proforma" in msg:
-        return {"reply":"A proforma invoice is a preliminary bill sent before goods/services are delivered. In ZuZan, use the Quotes tab to create a proforma — it has the same format but is clearly marked as a quote/estimate, not a tax invoice."}
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
 
-    # ── QUOTES ────────────────────────────────────────────────────────────────
-    if ("quote" in msg or "estimate" in msg) and any(x in msg for x in ["create","new","add","make","how","generate"]):
-        return {"reply":"To create a quote: go to Sales → Quotes, click '+ New Quote', fill in the client name, description, amount and validity date. Once the client accepts it, click 'Convert to Invoice' to automatically create an invoice from the quote."}
-    if "convert" in msg and ("quote" in msg or "estimate" in msg):
-        return {"reply":"To convert a quote to an invoice: open the quote, click 'Accept' to mark it as accepted, then click 'Convert to Invoice'. ZuZan creates a new invoice with all the quote details pre-filled and takes you straight to the Invoices tab."}
-    if ("quote" in msg or "estimate" in msg) and "valid" in msg:
-        return {"reply":"A quote should include a validity date — the date after which the quoted price is no longer guaranteed. Common practice in SA is 30 days. Set this when creating the quote using the 'Valid Until' field."}
-    if ("quote" in msg and "invoice" in msg) or ("difference" in msg and "quote" in msg):
-        return {"reply":"A quote is a non-binding price offer to a client. An invoice is a demand for payment after goods/services have been delivered. In ZuZan, quotes can be converted to invoices once accepted, keeping all the details intact."}
-    if "quote" in msg and ("follow" in msg or "status" in msg):
-        return {"reply":"Track quote status in the Quotes tab: Draft (not yet sent), Sent (awaiting client response), Accepted (client agreed), or Declined. Update the status as you hear back from clients to keep your pipeline accurate."}
+        user_msg = data.message
+        if data.context:
+            user_msg = f"[User is currently on the {data.context} section of ZuZan]\n\n{data.message}"
 
-    # ── EXPENSES ──────────────────────────────────────────────────────────────
-    if "expense" in msg and any(x in msg for x in ["add","create","new","record","how","make"]) or "how do i add" in msg:
-        return {"reply":"To add an expense: go to Expenses, click '+ Add Expense', fill in the vendor, amount, category, and date. You can also scan a receipt using the camera icon to auto-fill the details. ZuZan calculates input VAT automatically if VAT applies."}
-    if "categor" in msg and "expense" in msg:
-        return {"reply":"Common SA expense categories in ZuZan:\n• 6000 - Cost of Sales\n• 6100 - Salaries & Wages\n• 6200 - Rent\n• 6300 - Telephone & Internet\n• 6400 - Office Supplies\n• 6500 - Marketing\n• 6510 - Fuel & Oil\n• 6600 - Insurance\n• 6700 - Professional Fees\n• 7100 - Depreciation\nChoose the one that best matches the nature of the expense."}
-    if "scan" in msg and ("receipt" in msg or "expense" in msg):
-        return {"reply":"To scan a receipt: click '+ Add Expense', then tap the camera/scan icon. ZuZan will extract the vendor name, amount and date from the receipt image automatically. Review the extracted details before saving."}
-    if "input vat" in msg or ("vat" in msg and "expense" in msg and "claim" in msg):
-        return {"reply":"Input VAT is the 15% VAT you paid on business expenses — you can claim this back if you are VAT-registered. ZuZan tracks input VAT on expenses automatically. Your VAT201 net payment = output VAT (on sales) minus input VAT (on expenses)."}
-    if "rent" in msg and "expense" in msg:
-        return {"reply":"Record rent as an expense to account 6200 - Rent. If your landlord is VAT-registered, the invoice will include 15% VAT which you can claim as input VAT. Make sure you have a valid tax invoice from the landlord."}
-    if "entertain" in msg or "client lunch" in msg or "client dinner" in msg:
-        return {"reply":"Entertainment expenses (client lunches, dinners) are partially deductible for tax purposes. Only 50% of the cost is deductible under SARS rules. Categorise to 6500 - Marketing or create a dedicated Entertainment category. Input VAT on entertainment is generally not claimable."}
-    if "salary" in msg and "expense" in msg:
-        return {"reply":"Salaries are automatically recorded as expenses when you run payroll in the Payroll tab. They are categorised to 6100 - Salaries & Wages. Do not manually add salary expenses — use the Payroll module to avoid double-counting."}
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=300,
+            system=ZUZAN_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        reply = response.content[0].text.strip()
+        return {"reply": reply}
 
-    # ── PAYROLL ───────────────────────────────────────────────────────────────
-    if "paye" in msg and any(x in msg for x in ["35000","35 000"]):
-        return {"reply":"For R35,000/month gross (R420,000 annual): PAYE ≈ R4,673/month after the R17,235 primary rebate (2025/2026 tables). Check the Payroll tab for exact figures."}
-    if "emp201" in msg or "emp 201" in msg:
-        return {"reply":"EMP201 is due by the 7th of each month following the payroll period. It covers PAYE, UIF and SDL. You can download the EMP201 file from the Payroll tab after running payroll."}
-    if "uif" in msg:
-        return {"reply":"UIF is 1% employee + 1% employer contribution, capped at R17,712/month gross. Both portions are calculated automatically in ZuZan's Payroll tab. Total max UIF per employee is R354.24/month."}
-    if "sdl" in msg:
-        return {"reply":"SDL (Skills Development Levy) is 1% of gross payroll, payable if your annual payroll exceeds R500,000. It is an employer cost — not deducted from the employee. Due by the 7th of each month with PAYE."}
-
-    # ── GENERAL ACCOUNTING ────────────────────────────────────────────────────
-    if "vat" in msg and "rate" in msg:
-        return {"reply":"The standard VAT rate in South Africa is 15%. Basic foods, exports and certain supplies are zero-rated. VAT201 is submitted monthly or bi-monthly. Late submission incurs a 10% penalty plus interest."}
-    if "fuel" in msg or "petrol" in msg or "diesel" in msg:
-        return {"reply":"Fuel expenses should be categorised to account 6510 - Fuel and Oil under Expenses. Only the business-use portion is deductible. Keep a logbook if the vehicle is used for both business and private travel."}
-    if "bad debt" in msg:
-        return {"reply":"Record a bad debt write-off by creating an expense to account 7300 - Bad Debts Written Off. This reduces debtors and is tax-deductible in the year the debt becomes irrecoverable."}
-    if "depreciation" in msg:
-        return {"reply":"SARS wear-and-tear allowances: computers 3 years, vehicles 5 years, machinery varies. Record depreciation monthly to account 7100 - Depreciation. ZuZan tracks this in the Expenses section."}
-    if "provisional tax" in msg or "irp6" in msg:
-        return {"reply":"Provisional tax (IRP6) is paid twice a year: first payment by 31 August, second by 28 February. Based on estimated taxable income. Check Reports for your estimated figures."}
-    if "dividend" in msg:
-        return {"reply":"Dividends paid to shareholders go to account 3300 - Dividends Paid under Equity. Dividends tax is 20% — withheld before payment and paid to SARS by the company."}
-
-    # ── CONTEXTUAL FALLBACK ───────────────────────────────────────────────────
-    context_hints = {
-        "invoicing": "You're on the Invoices tab. I can help you create invoices, mark payments, handle overdue accounts, or explain VAT requirements.",
-        "quotes":    "You're on the Quotes tab. I can help you create quotes, convert them to invoices, or explain quoting best practices.",
-        "expenses":  "You're on the Expenses tab. I can help you categorise expenses, scan receipts, or explain input VAT claims.",
-        "payroll":   "You're on the Payroll tab. I can help with PAYE calculations, UIF, SDL, or EMP201 submissions.",
-    }
-    for key, hint in context_hints.items():
-        if key in ctx:
-            return {"reply":f"I'm not sure about that specific question. {hint} What would you like to know?"}
-    return {"reply":f"Good question. For specific SARS guidance, refer to sars.gov.za or consult your accountant. ZuZan handles the calculations automatically — check the relevant tab for details."}
+    except Exception as e:
+        logger.error(f"AI chat error: {e}")
+        return {"reply": "Sorry, I couldn't process that right now. Please try again in a moment."}
 
 
 # ── RECEIPT SCAN ──────────────────────────────────────────────────────────────
