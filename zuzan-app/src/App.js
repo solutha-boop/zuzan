@@ -3358,6 +3358,7 @@ function Creditors({live = {}}) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
+  const [bucketFilter, setBucketFilter] = useState("all");
 
   useEffect(() => {
     api("/reports/creditors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
@@ -3370,22 +3371,31 @@ function Creditors({live = {}}) {
   }, [live.expenses]); // eslint-disable-line
 
   const BUCKETS = [
-    {key:"current", label:"0 – 30 Days",  color:C.green},
-    {key:"31_60",   label:"31 – 60 Days", color:C.gold},
-    {key:"61_90",   label:"61 – 90 Days", color:C.accent},
-    {key:"over_90", label:"90+ Days",     color:C.red},
+    {key:"not_due",  label:"Not Yet Due",   color:C.blue},
+    {key:"current",  label:"0 – 30 Days",   color:C.green},
+    {key:"31_60",    label:"31 – 60 Days",  color:C.gold},
+    {key:"61_90",    label:"61 – 90 Days",  color:C.accent},
+    {key:"over_90",  label:"90+ Days",      color:C.red},
   ];
 
   const mockVendors = [
-    {vendor:"Eskom",        total:3200,  invoices:[{id:"EXP-001",description:"Electricity",category:"Utilities",amount:3200,date:"2025-05-02",days_old:28,bucket:"current"}]},
-    {vendor:"Telkom",       total:1850,  invoices:[{id:"EXP-002",description:"Fibre + phone",category:"Telecoms",amount:1850,date:"2025-04-05",days_old:55,bucket:"31_60"}]},
-    {vendor:"Discovery",    total:4200,  invoices:[{id:"EXP-005",description:"Business insurance",category:"Insurance",amount:4200,date:"2025-04-12",days_old:48,bucket:"31_60"}]},
+    {vendor:"Eskom",     total:3200, invoices:[{id:"PO-001",description:"Electricity",amount:3200,received_date:"2026-05-20",due_date:"2026-06-19",days_overdue:0, bucket:"not_due"}]},
+    {vendor:"Telkom",    total:1850, invoices:[{id:"PO-002",description:"Fibre + phone",amount:1850,received_date:"2026-04-15",due_date:"2026-05-15",days_overdue:32,bucket:"31_60"}]},
+    {vendor:"Discovery", total:4200, invoices:[{id:"PO-003",description:"Business insurance",amount:4200,received_date:"2026-04-22",due_date:"2026-05-22",days_overdue:25,bucket:"current"}]},
   ];
-  const mockTotals = {current:3200,"31_60":6050,"61_90":0,over_90:0,grand:9250};
+  const mockTotals = {not_due:3200,current:4200,"31_60":1850,"61_90":0,over_90:0,grand:9250};
 
-  const vendors = data ? data.vendors : mockVendors;
-  const totals  = data ? data.totals  : mockTotals;
-  const asAt    = data ? data.as_at   : new Date().toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"});
+  const allVendors = data ? data.vendors : mockVendors;
+  const totals     = data ? data.totals  : mockTotals;
+  const asAt       = data ? data.as_at   : new Date().toLocaleDateString("en-ZA",{day:"2-digit",month:"long",year:"numeric"});
+
+  // Filter vendors by selected bucket — only show vendors that have items in that bucket
+  const vendors = bucketFilter === "all"
+    ? allVendors
+    : allVendors
+        .map(v => ({...v, invoices: v.invoices.filter(i => i.bucket === bucketFilter)}))
+        .filter(v => v.invoices.length > 0)
+        .map(v => ({...v, total: v.invoices.reduce((s,i) => s+i.amount, 0)}));
 
   return (
     <div>
@@ -3399,27 +3409,51 @@ function Creditors({live = {}}) {
       {loading && <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading creditors...</div>}
       {!loading && (
         <div>
+          {/* Summary cards — click to filter table */}
           <div style={{display:"flex",gap:12,marginBottom:24,flexWrap:"wrap"}}>
-            {BUCKETS.map(b=>(
-              <div key={b.key} style={{flex:1,minWidth:140,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:16}}>
-                <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>{b.label}</div>
-                <div style={{fontSize:20,fontWeight:800,color:b.color,marginBottom:4}}>{fmt(totals[b.key])}</div>
-              </div>
-            ))}
-            <div style={{flex:1,minWidth:140,background:C.ink,borderRadius:14,padding:16}}>
-              <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Total Creditors</div>
-              <div style={{fontSize:20,fontWeight:800,color:"#fff",marginBottom:4}}>{fmt(totals.grand)}</div>
+            {BUCKETS.map(b=>{
+              const active = bucketFilter === b.key;
+              return (
+                <div key={b.key} onClick={()=>setBucketFilter(active?"all":b.key)}
+                  style={{flex:1,minWidth:130,background:active?b.color:C.surface,border:`2px solid ${active?b.color:C.border}`,borderRadius:14,padding:16,cursor:"pointer",transition:"all 0.15s"}}
+                  onMouseEnter={e=>{if(!active)e.currentTarget.style.borderColor=b.color;}}
+                  onMouseLeave={e=>{if(!active)e.currentTarget.style.borderColor=C.border;}}>
+                  <div style={{fontSize:10,color:active?"rgba(255,255,255,0.75)":C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>{b.label}</div>
+                  <div style={{fontSize:20,fontWeight:800,color:active?"#fff":b.color,marginBottom:4}}>{fmt(totals[b.key]||0)}</div>
+                  {active && <div style={{fontSize:10,color:"rgba(255,255,255,0.75)",marginTop:2}}>▼ Filtering</div>}
+                </div>
+              );
+            })}
+            <div onClick={()=>setBucketFilter("all")}
+              style={{flex:1,minWidth:130,background:bucketFilter==="all"?C.ink:C.surface,border:`2px solid ${bucketFilter==="all"?C.ink:C.border}`,borderRadius:14,padding:16,cursor:"pointer",transition:"all 0.15s"}}>
+              <div style={{fontSize:10,color:bucketFilter==="all"?"rgba(255,255,255,0.5)":C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Total Creditors</div>
+              <div style={{fontSize:20,fontWeight:800,color:bucketFilter==="all"?"#fff":C.ink,marginBottom:4}}>{fmt(totals.grand||0)}</div>
+              {bucketFilter==="all" && <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",marginTop:2}}>All shown</div>}
             </div>
           </div>
+
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
-            <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:C.ink}}>Creditor Ledger by Vendor</div>
-            {vendors.map((v,vi)=>(
+            <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:C.ink,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span>Creditor Ledger by Vendor</span>
+              {bucketFilter !== "all" && (
+                <span style={{fontSize:12,fontWeight:400,color:C.inkMid}}>
+                  Showing: <strong style={{color:BUCKETS.find(b=>b.key===bucketFilter)?.color}}>{BUCKETS.find(b=>b.key===bucketFilter)?.label}</strong>
+                  {" "}<button onClick={()=>setBucketFilter("all")} style={{marginLeft:8,fontSize:11,color:C.accent,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit"}}>✕ Clear</button>
+                </span>
+              )}
+            </div>
+            {vendors.length === 0 ? (
+              <div style={{textAlign:"center",padding:"40px 0",color:C.inkDim}}>
+                <div style={{fontSize:32,marginBottom:8}}>✅</div>
+                <div style={{fontSize:14,fontWeight:600}}>No creditors in this bucket</div>
+              </div>
+            ) : vendors.map((v,vi)=>(
               <div key={vi}>
                 <div onClick={()=>setExpanded(expanded===vi?null:vi)}
                   style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 20px",borderBottom:`1px solid ${C.border}20`,cursor:"pointer",background:expanded===vi?C.accentLt:"transparent"}}>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
                     <span style={{fontSize:14,fontWeight:700,color:C.ink}}>{v.vendor}</span>
-                    <Badge label={v.invoices.length+" transaction"+(v.invoices.length!==1?"s":"")} color={C.blue} bg={C.blueLt}/>
+                    <Badge label={v.invoices.length+" PO"+(v.invoices.length!==1?"s":"")} color={C.blue} bg={C.blueLt}/>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:16}}>
                     <span style={{fontWeight:700,color:C.red}}>{fmt(v.total)}</span>
@@ -3430,21 +3464,25 @@ function Creditors({live = {}}) {
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,background:C.bg}}>
                     <thead>
                       <tr style={{borderBottom:`1px solid ${C.border}`}}>
-                        {["Ref","Description","Category","Date","Age","Amount"].map(h=>(
+                        {["PO Ref","Description","Received","Due Date","Overdue","Amount"].map(h=>(
                           <th key={h} style={{padding:"9px 20px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {v.invoices.map((exp,i)=>{
-                        const bc = BUCKETS.find(b=>b.key===exp.bucket)||BUCKETS[0];
+                        const bc = BUCKETS.find(b=>b.key===exp.bucket)||BUCKETS[1];
                         return (
                           <tr key={i} style={{borderBottom:`1px solid ${C.border}20`}}>
                             <td style={{padding:"10px 20px",color:C.inkMid,fontSize:11}}>{exp.id}</td>
                             <td style={{padding:"10px 20px"}}>{exp.description}</td>
-                            <td style={{padding:"10px 20px"}}><Badge label={exp.category} color={C.blue} bg={C.blueLt}/></td>
-                            <td style={{padding:"10px 20px",color:C.inkMid}}>{exp.date?new Date(exp.date).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"}):"—"}</td>
-                            <td style={{padding:"10px 20px"}}><Badge label={exp.days_old+" days"} color={bc.color} bg={bc.color+"15"}/></td>
+                            <td style={{padding:"10px 20px",color:C.inkMid}}>{exp.received_date?new Date(exp.received_date).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"}):"—"}</td>
+                            <td style={{padding:"10px 20px",color:C.inkMid}}>{exp.due_date?new Date(exp.due_date).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"}):"—"}</td>
+                            <td style={{padding:"10px 20px"}}>
+                              <Badge
+                                label={exp.bucket==="not_due" ? "Not due" : `${exp.days_overdue} days`}
+                                color={bc.color} bg={bc.color+"15"}/>
+                            </td>
                             <td style={{padding:"10px 20px",fontWeight:700,color:C.red}}>{fmt(exp.amount)}</td>
                           </tr>
                         );
@@ -3461,8 +3499,8 @@ function Creditors({live = {}}) {
               </div>
             ))}
             <div style={{display:"flex",justifyContent:"space-between",padding:"14px 20px",borderTop:`2px solid ${C.border}`,fontWeight:800,fontSize:14}}>
-              <span>TOTAL CREDITORS</span>
-              <span style={{color:C.red}}>{fmt(totals.grand)}</span>
+              <span>{bucketFilter==="all"?"TOTAL CREDITORS":`TOTAL — ${BUCKETS.find(b=>b.key===bucketFilter)?.label||""}`}</span>
+              <span style={{color:C.red}}>{fmt(bucketFilter==="all"?totals.grand||0:vendors.reduce((s,v)=>s+v.total,0))}</span>
             </div>
           </div>
         </div>
