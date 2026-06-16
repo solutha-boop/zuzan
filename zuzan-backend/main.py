@@ -394,6 +394,116 @@ async def admin_clients(db: Session = Depends(get_db_session), _=Depends(_check_
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/api/subscriptions", tags=["Admin"])
+async def admin_subscriptions(db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    from database import SubscriptionPayment as _SubPay
+    try:
+        rows = db.query(_SubPay).order_by(_SubPay.payment_date.desc()).limit(500).all()
+        return [{
+            "id":                   r.id,
+            "company_id":           r.company_id,
+            "company_name":         r.company_name,
+            "owner_email":          r.owner_email or "—",
+            "plan":                 r.plan,
+            "billing_cycle":        r.billing_cycle,
+            "amount":               r.amount,
+            "payfast_payment_id":   r.payfast_payment_id or "—",
+            "status":               r.status,
+            "payment_date":         r.payment_date.strftime("%Y-%m-%d") if r.payment_date else None,
+            "period_start":         r.period_start.strftime("%Y-%m-%d") if r.period_start else None,
+            "period_end":           r.period_end.strftime("%Y-%m-%d") if r.period_end else None,
+            "notes":                r.notes or "",
+        } for r in rows]
+    except Exception as e:
+        logger.error(f"Admin subscriptions error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/api/subscriptions", tags=["Admin"])
+async def admin_add_subscription(request: Request, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    """Manually record a subscription payment (for payments before webhook was live)."""
+    from database import SubscriptionPayment as _SubPay
+    body = await request.json()
+    try:
+        sp = _SubPay(
+            company_id   = body.get("company_id"),
+            company_name = body["company_name"],
+            owner_email  = body.get("owner_email"),
+            plan         = body["plan"],
+            billing_cycle= body.get("billing_cycle", "monthly"),
+            amount       = float(body["amount"]),
+            payfast_payment_id = body.get("payfast_payment_id"),
+            status       = body.get("status", "success"),
+            payment_date = datetime.fromisoformat(body["payment_date"]) if body.get("payment_date") else datetime.utcnow(),
+            notes        = body.get("notes"),
+        )
+        db.add(sp); db.commit(); db.refresh(sp)
+        return {"id": sp.id, "status": "created"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/admin/api/mrr", tags=["Admin"])
+async def admin_mrr(db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    """Return MRR, ARR, total collected, and monthly breakdown for the revenue chart."""
+    from database import SubscriptionPayment as _SubPay
+    from sqlalchemy import extract
+    try:
+        now = datetime.utcnow()
+        all_rows = db.query(_SubPay).filter(_SubPay.status == "success").all()
+        total_collected = sum(r.amount for r in all_rows)
+
+        # MRR: sum of monthly-equivalent amounts for currently active subscriptions
+        # (monthly plans count full amount, annual plans divide by 12)
+        active_companies = db.query(_Company).filter(
+            _Company.subscription_status == "active"
+        ).all()
+        mrr = 0
+        for c in active_companies:
+            plan_str  = str(c.plan.value) if c.plan else "starter"
+            cycle_str = str(c.billing_cycle.value) if c.billing_cycle else "monthly"
+            prices = {"starter": 399, "professional": 899, "business": 1499}
+            monthly_price = prices.get(plan_str, 399)
+            if cycle_str == "annual":
+                monthly_price = round(monthly_price * 10 / 12)  # 2-month discount
+            mrr += monthly_price
+
+        arr = mrr * 12
+
+        # Monthly breakdown for the last 12 months
+        monthly = []
+        for i in range(11, -1, -1):
+            m_date = datetime(now.year, now.month, 1)
+            from dateutil.relativedelta import relativedelta as _rd
+            m_date = m_date - _rd(months=i)
+            month_rows = [r for r in all_rows
+                          if r.payment_date and r.payment_date.year == m_date.year
+                          and r.payment_date.month == m_date.month]
+            monthly.append({
+                "month": m_date.strftime("%b %Y"),
+                "revenue": round(sum(r.amount for r in month_rows), 2),
+                "count":   len(month_rows),
+            })
+
+        # Plan breakdown
+        plan_breakdown = {}
+        for r in all_rows:
+            plan_breakdown[r.plan] = plan_breakdown.get(r.plan, 0) + r.amount
+
+        return {
+            "mrr":             round(mrr, 2),
+            "arr":             round(arr, 2),
+            "total_collected": round(total_collected, 2),
+            "active_subscribers": len(active_companies),
+            "monthly_breakdown":  monthly,
+            "plan_breakdown":     plan_breakdown,
+        }
+    except Exception as e:
+        logger.error(f"Admin MRR error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/admin", response_class=_HTML, tags=["Admin"])
 async def admin_dashboard():
     html = """<!DOCTYPE html>
@@ -434,9 +544,27 @@ tr:hover td{background:#fdf9f7}
 .badge.business{background:#fce4ec;color:#880e4f}
 .verified{color:#28a745}
 .unverified{color:#dc3545}
-.refresh{background:#C8401A;color:#fff;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;margin-left:auto}
+.refresh{background:#C8401A;color:#fff;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px}
 .refresh:hover{background:#a33316}
 .err{color:#c00;font-size:13px;margin-top:8px;text-align:center}
+.tabs{display:flex;gap:0;border-bottom:2px solid #e8e2db;margin-bottom:20px}
+.tab{padding:10px 22px;cursor:pointer;font-size:13px;font-weight:600;color:#888;border-bottom:3px solid transparent;margin-bottom:-2px;background:none;border-top:none;border-left:none;border-right:none}
+.tab.active{color:#C8401A;border-bottom-color:#C8401A}
+.mrr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:24px}
+.mrr-card{background:#fff;border-radius:10px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);text-align:center}
+.mrr-card .val{font-size:24px;font-weight:bold;color:#C8401A}
+.mrr-card .lbl{font-size:12px;color:#888;margin-top:4px}
+.bar-wrap{display:flex;align-items:flex-end;gap:6px;height:100px;margin:16px 0 4px}
+.bar{background:#C8401A;border-radius:4px 4px 0 0;min-width:20px;flex:1;transition:height .3s;position:relative;cursor:default}
+.bar:hover::after{content:attr(data-tip);position:absolute;bottom:105%;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:4px 8px;border-radius:4px;font-size:11px;white-space:nowrap}
+.bar-labels{display:flex;gap:6px}
+.bar-label{flex:1;text-align:center;font-size:10px;color:#aaa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.add-form{background:#fff8f5;border:1px solid #f0d0c0;border-radius:10px;padding:18px;margin-bottom:20px;display:none}
+.add-form h4{color:#C8401A;margin-bottom:12px;font-size:14px}
+.add-form .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px}
+.add-form input,.add-form select{width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px}
+.add-form button{background:#C8401A;color:#fff;border:none;padding:9px 20px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:bold}
+.add-form button.sec{background:#fff;color:#C8401A;border:1px solid #C8401A;margin-left:8px}
 </style>
 </head>
 <body>
@@ -453,6 +581,13 @@ tr:hover td{background:#fdf9f7}
 </div>
 
 <div id="main">
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('clients')">Clients</button>
+    <button class="tab" onclick="showTab('revenue')">Subscription Revenue</button>
+  </div>
+
+  <!-- ── CLIENTS TAB ── -->
+  <div id="tab-clients">
   <div class="stats" id="statsRow"></div>
   <div class="card">
     <div class="card-header">
@@ -473,36 +608,92 @@ tr:hover td{background:#fdf9f7}
       </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
+    <div class="err" id="mainErr" style="margin-top:10px"></div>
   </div>
-</div>
+  </div><!-- end tab-clients -->
+
+  <!-- ── REVENUE TAB ── -->
+  <div id="tab-revenue" style="display:none">
+    <div class="mrr-grid" id="mrrStats"></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3>Monthly Subscription Revenue (Last 12 Months)</h3>
+        <button class="refresh" style="margin-left:auto" onclick="loadRevenue()">↻ Refresh</button>
+      </div>
+      <div class="bar-wrap" id="revenueChart"></div>
+      <div class="bar-labels" id="revenueLabels"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <h3>Payment History</h3>
+        <button onclick="toggleAddForm()" style="margin-left:auto;background:#C8401A;color:#fff;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:bold">+ Add Manual Entry</button>
+      </div>
+      <div class="add-form" id="addForm">
+        <h4>Record Manual Payment</h4>
+        <div class="grid">
+          <input id="f_company" placeholder="Company name *"/>
+          <input id="f_email" placeholder="Owner email"/>
+          <input id="f_amount" type="number" placeholder="Amount (ZAR) *"/>
+          <select id="f_plan"><option value="starter">Starter</option><option value="professional">Professional</option><option value="business">Business</option></select>
+          <select id="f_cycle"><option value="monthly">Monthly</option><option value="annual">Annual</option></select>
+          <input id="f_date" type="date"/>
+          <input id="f_pfid" placeholder="PayFast payment ID (optional)"/>
+          <input id="f_notes" placeholder="Notes (optional)"/>
+        </div>
+        <button onclick="submitManual()">Save Payment</button>
+        <button class="sec" onclick="toggleAddForm()">Cancel</button>
+        <span id="addMsg" style="font-size:12px;margin-left:12px"></span>
+      </div>
+      <table>
+        <thead><tr>
+          <th>#</th><th>Date</th><th>Company</th><th>Email</th>
+          <th>Plan</th><th>Cycle</th><th>Amount</th>
+          <th>PayFast Ref</th><th>Status</th><th>Period</th><th>Notes</th>
+        </tr></thead>
+        <tbody id="revTbody"></tbody>
+      </table>
+    </div>
+  </div><!-- end tab-revenue -->
+</div><!-- end main -->
 
 <script>
 let secret = '';
+let currentTab = 'clients';
+
+function showTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-clients').style.display = tab === 'clients' ? '' : 'none';
+  document.getElementById('tab-revenue').style.display = tab === 'revenue' ? '' : 'none';
+  if (tab === 'revenue') loadRevenue();
+}
+
 function login() {
   secret = document.getElementById('secretInput').value.trim();
   if (!secret) return;
   load();
 }
+
 function setError(msg) {
   const loggedIn = document.getElementById('main').style.display === 'block';
   if (loggedIn) {
-    document.getElementById('mainErr').textContent = msg;
+    const el = document.getElementById('mainErr');
+    if (el) el.textContent = msg;
   } else {
     document.getElementById('loginErr').textContent = msg;
   }
 }
+
 async function load() {
   const btn = document.getElementById('refreshBtn');
   if (btn) { btn.disabled = true; btn.textContent = '↻ Loading…'; }
-  document.getElementById('mainErr') && (document.getElementById('mainErr').textContent = '');
+  const errEl = document.getElementById('mainErr');
+  if (errEl) errEl.textContent = '';
   try {
     const res = await fetch('/admin/api/clients', { headers: {'X-Admin-Secret': secret} });
     if (res.status === 403) { setError('Incorrect secret.'); return; }
-    if (!res.ok) {
-      const txt = await res.text();
-      setError('Server error: ' + txt.slice(0, 120));
-      return;
-    }
+    if (!res.ok) { setError('Server error: ' + (await res.text()).slice(0,120)); return; }
     const data = await res.json();
     document.getElementById('loginBox').style.display = 'none';
     document.getElementById('main').style.display = 'block';
@@ -511,23 +702,22 @@ async function load() {
     const now = new Date();
     document.getElementById('lastUpdated').textContent =
       'Updated ' + now.toLocaleTimeString('en-ZA', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  } catch(e) {
-    setError('Error: ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '↻ Refresh'; }
-  }
+  } catch(e) { setError('Error: ' + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '↻ Refresh'; } }
 }
+
 function renderStats(data) {
-  const total   = data.length;
-  const trial   = data.filter(d => d.status==='trial').length;
-  const active  = data.filter(d => d.status==='active').length;
+  const total = data.length;
+  const trial = data.filter(d => d.status==='trial').length;
+  const active = data.filter(d => d.status==='active').length;
   const revenue = data.reduce((s,d) => s+(d.revenue_collected||0), 0);
   document.getElementById('statsRow').innerHTML = `
     <div class="stat"><div class="val">${total}</div><div class="lbl">Total Clients</div></div>
     <div class="stat"><div class="val">${active}</div><div class="lbl">Active (Paid)</div></div>
     <div class="stat"><div class="val">${trial}</div><div class="lbl">On Trial</div></div>
-    <div class="stat"><div class="val">R${revenue.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div class="lbl">Revenue Collected</div></div>`;
+    <div class="stat"><div class="val">R${revenue.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div class="lbl">Client Revenue (Invoiced)</div></div>`;
 }
+
 function renderTable(data) {
   const tbody = document.getElementById('tbody');
   if (!data.length) { tbody.innerHTML='<tr><td colspan="14" style="text-align:center;color:#888;padding:40px">No clients yet</td></tr>'; return; }
@@ -537,18 +727,102 @@ function renderTable(data) {
     <td>${d.owner_name}</td>
     <td><a href="mailto:${d.owner_email}" style="color:#C8401A">${d.owner_email}</a></td>
     <td style="text-align:center">${d.email_verified
-      ? '<span class="verified" title="Verified">✓ Yes</span>'
-      : '<span class="unverified" title="Not verified">✗ No</span>'}</td>
+      ? '<span class="verified">✓ Yes</span>'
+      : '<span class="unverified">✗ No</span>'}</td>
     <td><span class="badge ${d.plan}">${d.plan}</span></td>
     <td><span class="badge ${d.status}">${d.status}</span></td>
-    <td>${d.signed_up||'—'}</td>
-    <td>${d.trial_ends||'—'}</td>
+    <td>${d.signed_up||'—'}</td><td>${d.trial_ends||'—'}</td>
     <td style="text-align:center">${d.invoices}</td>
     <td style="text-align:center">${d.expenses}</td>
     <td style="text-align:center">${d.employees}</td>
     <td>R${(d.revenue_collected||0).toLocaleString('en-ZA',{minimumFractionDigits:2})}</td>
     <td style="color:#888">${d.last_activity||'No activity yet'}</td>
   </tr>`).join('');
+}
+
+async function loadRevenue() {
+  try {
+    const [mrrRes, subRes] = await Promise.all([
+      fetch('/admin/api/mrr',           { headers: {'X-Admin-Secret': secret} }),
+      fetch('/admin/api/subscriptions', { headers: {'X-Admin-Secret': secret} }),
+    ]);
+    const mrr  = await mrrRes.json();
+    const subs = await subRes.json();
+    renderMrrStats(mrr);
+    renderRevenueChart(mrr.monthly_breakdown||[]);
+    renderSubTable(subs);
+  } catch(e) { alert('Failed to load revenue data: ' + e.message); }
+}
+
+function renderMrrStats(mrr) {
+  const fmt = v => 'R' + (v||0).toLocaleString('en-ZA',{minimumFractionDigits:2});
+  document.getElementById('mrrStats').innerHTML = `
+    <div class="mrr-card"><div class="val">${fmt(mrr.mrr)}</div><div class="lbl">MRR</div></div>
+    <div class="mrr-card"><div class="val">${fmt(mrr.arr)}</div><div class="lbl">ARR</div></div>
+    <div class="mrr-card"><div class="val">${fmt(mrr.total_collected)}</div><div class="lbl">Total Collected</div></div>
+    <div class="mrr-card"><div class="val">${mrr.active_subscribers||0}</div><div class="lbl">Active Subscribers</div></div>`;
+}
+
+function renderRevenueChart(monthly) {
+  const maxVal = Math.max(...monthly.map(m => m.revenue), 1);
+  document.getElementById('revenueChart').innerHTML = monthly.map(m => {
+    const h = Math.round((m.revenue / maxVal) * 90) + 10;
+    const tip = m.month + ': R' + (m.revenue||0).toLocaleString('en-ZA',{minimumFractionDigits:2}) + ' (' + m.count + ' payments)';
+    return '<div class="bar" style="height:' + h + 'px" data-tip="' + tip + '"></div>';
+  }).join('');
+  document.getElementById('revenueLabels').innerHTML = monthly.map(m =>
+    '<div class="bar-label">' + m.month.split(' ')[0] + '</div>'
+  ).join('');
+}
+
+function renderSubTable(subs) {
+  const tbody = document.getElementById('revTbody');
+  if (!subs.length) { tbody.innerHTML='<tr><td colspan="11" style="text-align:center;color:#888;padding:40px">No subscription payments recorded yet.</td></tr>'; return; }
+  const fmt = v => 'R' + (v||0).toLocaleString('en-ZA',{minimumFractionDigits:2});
+  tbody.innerHTML = subs.map((s,i) => `<tr>
+    <td style="color:#888">${i+1}</td>
+    <td>${s.payment_date||'—'}</td>
+    <td><strong>${s.company_name}</strong></td>
+    <td><a href="mailto:${s.owner_email}" style="color:#C8401A">${s.owner_email}</a></td>
+    <td><span class="badge ${s.plan}">${s.plan}</span></td>
+    <td>${s.billing_cycle}</td>
+    <td style="font-weight:bold;color:#C8401A">${fmt(s.amount)}</td>
+    <td style="color:#888;font-size:11px">${s.payfast_payment_id}</td>
+    <td><span class="badge ${s.status==='success'?'active':s.status==='refunded'?'cancelled':'expired'}">${s.status}</span></td>
+    <td style="font-size:11px;color:#888">${s.period_start||''}${s.period_end?' → '+s.period_end:''}</td>
+    <td style="color:#888">${s.notes||''}</td>
+  </tr>`).join('');
+}
+
+function toggleAddForm() {
+  const f = document.getElementById('addForm');
+  f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+
+async function submitManual() {
+  const company_name = document.getElementById('f_company').value.trim();
+  const amount = document.getElementById('f_amount').value;
+  const plan = document.getElementById('f_plan').value;
+  if (!company_name || !amount) { document.getElementById('addMsg').textContent = 'Company name and amount are required.'; return; }
+  const body = {
+    company_name,
+    owner_email:       document.getElementById('f_email').value.trim()||null,
+    amount:            parseFloat(amount),
+    plan,
+    billing_cycle:     document.getElementById('f_cycle').value,
+    payment_date:      document.getElementById('f_date').value||null,
+    payfast_payment_id:document.getElementById('f_pfid').value.trim()||null,
+    notes:             document.getElementById('f_notes').value.trim()||null,
+  };
+  try {
+    const res = await fetch('/admin/api/subscriptions', {
+      method:'POST', headers:{'X-Admin-Secret':secret,'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    document.getElementById('addMsg').textContent = '✓ Saved';
+    setTimeout(() => { toggleAddForm(); loadRevenue(); }, 800);
+  } catch(e) { document.getElementById('addMsg').textContent = 'Error: ' + e.message; }
 }
 </script>
 </body>

@@ -1247,10 +1247,34 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
         payment.payfast_id = data.get("pf_payment_id")
         company = db.query(Company).filter(Company.id == int(data.get("custom_str1", 0))).first()
         if company:
-            from database import SubscriptionStatus, PlanType, BillingCycle
+            from database import SubscriptionStatus, PlanType, BillingCycle, SubscriptionPayment
             company.subscription_status = SubscriptionStatus.active
-            company.plan          = PlanType(data.get("custom_str2", "starter"))
-            company.billing_cycle = BillingCycle(data.get("custom_str3", "monthly"))
+            plan_val      = data.get("custom_str2", "starter")
+            cycle_val     = data.get("custom_str3", "monthly")
+            company.plan          = PlanType(plan_val)
+            company.billing_cycle = BillingCycle(cycle_val)
+
+            # ── Log to ZuZan's own revenue ledger ──────────────────────────
+            amount_paid = float(data.get("amount_gross", payment.amount or 0))
+            now = datetime.utcnow()
+            from dateutil.relativedelta import relativedelta
+            period_end = now + (relativedelta(years=1) if cycle_val == "annual" else relativedelta(months=1))
+            owner = company.users[0] if company.users else None
+            sub_pay = SubscriptionPayment(
+                company_id          = company.id,
+                company_name        = company.name,
+                owner_email         = owner.email if owner else None,
+                plan                = plan_val,
+                billing_cycle       = cycle_val,
+                amount              = amount_paid,
+                payfast_payment_id  = data.get("pf_payment_id"),
+                internal_payment_id = payment.id,
+                status              = "success",
+                payment_date        = now,
+                period_start        = now,
+                period_end          = period_end,
+            )
+            db.add(sub_pay)
     else:
         payment.status = "failed"
 

@@ -307,6 +307,26 @@ class Payment(Base):
     payment_method=Column(String); created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="payments")
 
+class SubscriptionPayment(Base):
+    """ZuZan's own revenue ledger — one row per subscription fee collected."""
+    __tablename__ = "subscription_payments"
+    id              = Column(Integer, primary_key=True, index=True)
+    company_id      = Column(Integer, ForeignKey("companies.id"), nullable=True)
+    company_name    = Column(String, nullable=False)          # denormalized for easy reporting
+    owner_email     = Column(String, nullable=True)
+    plan            = Column(String, nullable=False)          # starter / professional / business
+    billing_cycle   = Column(String, default="monthly")       # monthly / annual
+    amount          = Column(Float, nullable=False)           # ZAR amount collected
+    payfast_payment_id = Column(String, nullable=True)        # pf_payment_id from PayFast
+    internal_payment_id = Column(Integer, nullable=True)      # FK to payments.id
+    status          = Column(String, default="success")       # success / failed / refunded
+    payment_date    = Column(DateTime, default=datetime.utcnow)
+    period_start    = Column(DateTime, nullable=True)
+    period_end      = Column(DateTime, nullable=True)
+    notes           = Column(Text, nullable=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    company         = relationship("Company", foreign_keys=[company_id])
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     from sqlalchemy import text
@@ -335,6 +355,23 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN logo_url TEXT",
             "ALTER TABLE purchase_orders ADD COLUMN received_date TIMESTAMP",
             "ALTER TABLE companies ADD COLUMN payroll_pin_hash VARCHAR",
+            """CREATE TABLE IF NOT EXISTS subscription_payments (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                company_name VARCHAR NOT NULL,
+                owner_email VARCHAR,
+                plan VARCHAR NOT NULL,
+                billing_cycle VARCHAR DEFAULT 'monthly',
+                amount FLOAT NOT NULL,
+                payfast_payment_id VARCHAR,
+                internal_payment_id INTEGER,
+                status VARCHAR DEFAULT 'success',
+                payment_date TIMESTAMP DEFAULT NOW(),
+                period_start TIMESTAMP,
+                period_end TIMESTAMP,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
         ]:
             try:
                 conn.execute(text(sql))
