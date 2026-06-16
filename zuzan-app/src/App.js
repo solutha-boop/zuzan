@@ -2828,8 +2828,22 @@ function Budgeting({live = {}}) {
 
   // ── MONTHLY VIEW ────────────────────────────────────────────────────────────
   const MonthlyView = () => {
+    const [catFilter, setCatFilter] = useState("all"); // all | over | on_track | no_budget
     const totalBudget = ALL_CATS.reduce((s,c)=>s+getBudget(c,month,c==="Revenue"?"income":"expense"),0);
     const totalActual = actuals.filter(a=>a.month===month).reduce((s,a)=>s+a.actual,0);
+    const remaining   = totalBudget - totalActual;
+    const overBudgetCount = ALL_CATS.filter(c=>{
+      const t=c==="Revenue"?"income":"expense";
+      return over(getActual(c,month,t), getBudget(c,month,t));
+    }).length;
+
+    const FILTERS = [
+      {id:"all",       label:"All",          color:C.ink},
+      {id:"over",      label:`Over Budget (${overBudgetCount})`, color:C.red},
+      {id:"on_track",  label:"On Track",     color:C.green},
+      {id:"no_budget", label:"No Budget Set",color:C.gold},
+    ];
+
     return (
       <div>
         <div style={{display:"flex",gap:8,marginBottom:20,alignItems:"center"}}>
@@ -2839,20 +2853,33 @@ function Budgeting({live = {}}) {
           <span style={{fontSize:12,color:C.inkMid}}>vs actual spend</span>
         </div>
 
-        {/* Summary KPIs */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
-          <div style={{background:C.surface,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.border}`}}>
-            <div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Total Budgeted</div>
-            <div style={{fontSize:18,fontWeight:700,color:C.ink}}>{fmtR(totalBudget)}</div>
-          </div>
-          <div style={{background:C.surface,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.border}`}}>
-            <div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Actual Spend</div>
-            <div style={{fontSize:18,fontWeight:700,color:totalActual>totalBudget?C.red:C.ink}}>{fmtR(totalActual)}</div>
-          </div>
-          <div style={{background:C.surface,borderRadius:12,padding:"14px 16px",border:`1px solid ${C.border}`}}>
-            <div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Remaining</div>
-            <div style={{fontSize:18,fontWeight:700,color:totalBudget-totalActual>=0?C.green:C.red}}>{fmtR(totalBudget-totalActual)}</div>
-          </div>
+        {/* Summary KPIs — clickable to filter categories below */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+          {[
+            {id:"all",      label:"Total Budgeted", value:fmtR(totalBudget), color:C.ink,   active:catFilter==="all"},
+            {id:"over",     label:"Actual Spend",   value:fmtR(totalActual), color:totalActual>totalBudget?C.red:C.ink, active:catFilter==="over"},
+            {id:"on_track", label:"Remaining",      value:fmtR(Math.abs(remaining)), color:remaining>=0?C.green:C.red, active:catFilter==="on_track"},
+          ].map(card=>(
+            <div key={card.id} onClick={()=>setCatFilter(f=>f===card.id?"all":card.id)}
+              style={{background:card.active?card.color:C.surface,borderRadius:12,padding:"14px 16px",border:`2px solid ${card.active?card.color:C.border}`,cursor:"pointer",transition:"all 0.15s"}}
+              onMouseEnter={e=>{if(!card.active)e.currentTarget.style.borderColor=card.color;}}
+              onMouseLeave={e=>{if(!card.active)e.currentTarget.style.borderColor=C.border;}}>
+              <div style={{fontSize:10,color:card.active?"rgba(255,255,255,0.7)":C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>{card.label}</div>
+              <div style={{fontSize:18,fontWeight:700,color:card.active?"#fff":card.color}}>{card.value}</div>
+              {card.id==="on_track" && <div style={{fontSize:10,color:card.active?"rgba(255,255,255,0.6)":C.inkMid,marginTop:2}}>{remaining<0?"Over budget":"Under budget"}</div>}
+              {card.active && <div style={{fontSize:10,color:"rgba(255,255,255,0.6)",marginTop:2}}>▼ Filtering</div>}
+            </div>
+          ))}
+        </div>
+
+        {/* Filter pills */}
+        <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+          {FILTERS.map(f=>(
+            <button key={f.id} onClick={()=>setCatFilter(f.id)}
+              style={{padding:"5px 14px",borderRadius:20,border:`1px solid ${catFilter===f.id?f.color:C.border}`,background:catFilter===f.id?f.color+"18":"transparent",color:catFilter===f.id?f.color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:catFilter===f.id?600:400}}>
+              {f.label}
+            </button>
+          ))}
         </div>
 
         {/* Per-category rows */}
@@ -2862,9 +2889,18 @@ function Budgeting({live = {}}) {
           const actual = getActual(cat, month, type);
           const p      = pct(actual, budget);
           const isOver = over(actual, budget);
-          if (!budget && !actual) return null;
+          // Always skip empty rows (no budget AND no actual)
+          if (!budget && !actual) {
+            if (catFilter !== "no_budget") return null;
+            // In no_budget mode, show categories with no budget but don't skip all
+          }
+          // Apply filter
+          if (catFilter === "over"      && !isOver)            return null;
+          if (catFilter === "on_track"  && (isOver || !budget)) return null;
+          if (catFilter === "no_budget" && budget)              return null;
+          if (catFilter === "no_budget" && !budget && !actual)  return null; // genuinely empty, skip
           return (
-            <div key={cat} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:10}}>
+            <div key={cat} style={{background:C.surface,border:`1px solid ${isOver&&catFilter!=="on_track"?C.red+"60":C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                 <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{cat}</div>
                 <div style={{display:"flex",gap:16,alignItems:"center"}}>
@@ -2891,7 +2927,7 @@ function Budgeting({live = {}}) {
         })}
 
         {/* Prompt to set budgets */}
-        {ALL_CATS.every(cat=>{const type=cat==="Revenue"?"income":"expense";return !getBudget(cat,month,type)&&!getActual(cat,month,type);}) && (
+        {ALL_CATS.every(cat=>{const type=cat==="Revenue"?"income":"expense";return !getBudget(cat,month,type)&&!getActual(cat,month,type);}) && catFilter==="all" && (
           <div style={{textAlign:"center",padding:"40px 20px",color:C.inkMid}}>
             <div style={{fontSize:32,marginBottom:12}}>🎯</div>
             <div style={{fontSize:15,fontWeight:600,marginBottom:6}}>No budget set for {MONTHS[month-1]}</div>
@@ -5862,7 +5898,8 @@ function Inventory() {
   const [adjItem,  setAdjItem] = useState(null);
   const [adjQty,   setAdjQty]  = useState("");
   const [adjReason,setAdjReason]=useState("");
-  const [search,   setSearch]  = useState("");
+  const [search,      setSearch]     = useState("");
+  const [stockFilter, setStockFilter]= useState("all"); // all | low | ok
   const [loading,  setLoading] = useState(true);
   const [form, setForm] = useState({name:"",sku:"",category:"",description:"",unit_cost:"",unit_price:"",quantity_on_hand:"",reorder_level:"5",unit_of_measure:"Unit"});
 
@@ -5908,7 +5945,13 @@ function Inventory() {
     load();
   };
 
-  const filtered = items.filter(i=>(i.name||"").toLowerCase().includes(search.toLowerCase())||(i.sku||"").toLowerCase().includes(search.toLowerCase())||(i.category||"").toLowerCase().includes(search.toLowerCase()));
+  const filtered = items
+    .filter(i=>(i.name||"").toLowerCase().includes(search.toLowerCase())||(i.sku||"").toLowerCase().includes(search.toLowerCase())||(i.category||"").toLowerCase().includes(search.toLowerCase()))
+    .filter(i => {
+      if (stockFilter === "low") return i.quantity_on_hand <= i.reorder_level;
+      if (stockFilter === "ok")  return i.quantity_on_hand >  i.reorder_level;
+      return true;
+    });
   const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
   const lb = (t) => <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{t}</label>;
 
@@ -5916,13 +5959,31 @@ function Inventory() {
     <div>
       <SectionHeader title="Inventory" sub="Track stock levels, costs and reorder alerts" action="+ Add Item" onAction={()=>setShowNew(true)}/>
 
-      {/* Summary KPIs */}
-      <div style={{display:"flex",gap:12,marginBottom:24}}>
-        <KPI label="Total Items"      value={summary?.total_items||items.length}        color={C.blue}   icon="📦"/>
-        <KPI label="Stock Value (Cost)" value={fmt(summary?.total_cost_value||0)}       color={C.ink}    icon="💰"/>
-        <KPI label="Retail Value"     value={fmt(summary?.total_retail_value||0)}       color={C.green}  icon="🏷️"/>
-        <KPI label="Low Stock Alerts" value={summary?.low_stock_count||0}               color={C.red}    icon="⚠️"/>
+      {/* Summary KPIs — clickable to filter table */}
+      <div style={{display:"flex",gap:12,marginBottom:24,flexWrap:"wrap"}}>
+        <KPI label="Total Items"        value={summary?.total_items||items.length}  color={C.blue}  icon="📦"
+          sub={stockFilter==="all"?"All items":"Tap to show all"}
+          onClick={()=>setStockFilter("all")}/>
+        <KPI label="Stock Value (Cost)" value={fmt(summary?.total_cost_value||0)}   color={C.ink}   icon="💰"
+          sub="Total cost of stock on hand"/>
+        <KPI label="Retail Value"       value={fmt(summary?.total_retail_value||0)} color={C.green} icon="🏷️"
+          sub="Total selling value of stock"/>
+        <KPI label="OK Stock"           value={items.filter(i=>i.quantity_on_hand>i.reorder_level).length} color={C.green} icon="✅"
+          sub={stockFilter==="ok"?"Filtering ▼":"Tap to filter"}
+          onClick={()=>setStockFilter(f=>f==="ok"?"all":"ok")}/>
+        <KPI label="Low Stock Alerts"   value={summary?.low_stock_count||items.filter(i=>i.quantity_on_hand<=i.reorder_level).length} color={C.red} icon="⚠️"
+          sub={stockFilter==="low"?"Filtering ▼":"Tap to filter"}
+          onClick={()=>setStockFilter(f=>f==="low"?"all":"low")}/>
       </div>
+      {/* Active filter indicator */}
+      {stockFilter !== "all" && (
+        <div style={{background:stockFilter==="low"?C.redLt:C.greenLt,border:`1px solid ${stockFilter==="low"?C.red:C.green}30`,borderRadius:8,padding:"8px 14px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12}}>
+          <span style={{color:stockFilter==="low"?C.red:C.green,fontWeight:600}}>
+            {stockFilter==="low"?"⚠️ Showing low-stock items only":"✅ Showing in-stock items only"}
+          </span>
+          <button onClick={()=>setStockFilter("all")} style={{background:"none",border:"none",cursor:"pointer",color:C.inkMid,fontSize:12,fontFamily:"inherit"}}>✕ Clear filter</button>
+        </div>
+      )}
 
       {/* Low stock banner */}
       {summary?.low_stock_items?.length > 0 && (
