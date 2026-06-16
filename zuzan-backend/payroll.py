@@ -239,12 +239,11 @@ async def dashboard(
 ):
     cid = current_user.company_id
     now = datetime.utcnow()
-    month_start = datetime(now.year, now.month, 1)
 
+    # All-time paid invoices — matches the Invoices tab "Paid" KPI exactly
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
-        Invoice.paid_date >= month_start
     ).all()
     total_revenue = sum(_to_zar(i) for i in paid_invoices)
 
@@ -254,19 +253,18 @@ async def dashboard(
     ).all()
     total_outstanding = sum(_to_zar(i) for i in outstanding_invoices)
 
+    # All-time expenses — matches the Expenses tab total exactly
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
-        Expense.expense_date >= month_start
     ).all()
     total_expenses = sum(e.amount for e in expenses)
 
-    # Include PO COGS: received purchase orders (received/partial) received this month
+    # Include PO COGS: all received purchase orders
     po_cogs = sum(
         po.total_amount or 0
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
-            PurchaseOrder.received_date >= month_start,
         ).all()
     )
     total_expenses = total_expenses + po_cogs
