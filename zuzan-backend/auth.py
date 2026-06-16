@@ -149,15 +149,9 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
     db.add(payment)
     db.commit()
 
-    # Send emails in background (don't delay the registration response)
-    trial_ends_fmt = company.trial_ends.strftime("%-d %B %Y") if company.trial_ends else "14 days"
+    # Send verification email only — welcome email fires after they click the link
     background_tasks.add_task(
         send_verification_email, data.first_name, data.email, verify_token
-    )
-    background_tasks.add_task(
-        send_welcome_email,
-        data.first_name, data.email, data.company_name,
-        data.plan, data.billing_cycle, trial_ends_fmt,
     )
     admin_email = os.environ.get("ADMIN_EMAIL", "")
     if admin_email:
@@ -256,7 +250,7 @@ async def get_me(
     }
 
 @router.get("/verify-email/{token}", response_class=HTMLResponse)
-async def verify_email(token: str, db: Session = Depends(get_db)):
+async def verify_email(token: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     from email_service import FRONTEND_URL
     user = db.query(User).filter(User.email_verify_token == token).first()
     if not user:
@@ -272,6 +266,16 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
     user.email_verify_token = None
     db.commit()
 
+    # Send welcome email now that the address is confirmed
+    company = db.query(Company).filter(Company.id == user.company_id).first()
+    if company:
+        trial_ends_fmt = company.trial_ends.strftime("%-d %B %Y") if company.trial_ends else "14 days"
+        background_tasks.add_task(
+            send_welcome_email,
+            user.first_name, user.email, company.name,
+            str(company.plan.value), str(company.billing_cycle.value), trial_ends_fmt,
+        )
+
     html = f"""<html><body style="font-family:Arial;text-align:center;padding:60px;background:#FAF7F2;">
       <div style="max-width:480px;margin:0 auto;">
         <h1 style="color:#C8401A;font-size:36px;">ZuZan</h1>
@@ -279,7 +283,7 @@ async def verify_email(token: str, db: Session = Depends(get_db)):
         <h2 style="color:#1a1a1a;">Email Verified!</h2>
         <p style="color:#555;line-height:1.7;">
           Your email address has been confirmed, {user.first_name}.<br>
-          You're all set to use ZuZan.
+          Check your inbox — your welcome email is on its way.
         </p>
         <a href="{FRONTEND_URL}" style="display:inline-block;margin-top:24px;background:#C8401A;color:#fff;
            padding:14px 36px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:15px;">

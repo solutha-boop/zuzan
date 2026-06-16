@@ -11,10 +11,11 @@ import httpx
 logger = logging.getLogger("zuzan.email")
 
 RESEND_API_KEY  = os.environ.get("RESEND_API_KEY", "")
-FROM_EMAIL      = os.environ.get("FROM_EMAIL",      "ZuZan <noreply@solutha.co.za>")
-FRONTEND_URL    = os.environ.get("FRONTEND_URL",    "https://zuzan-app.onrender.com")
-BACKEND_URL     = os.environ.get("BACKEND_URL",     "https://zuzan-backend.onrender.com")
-SUPPORT_EMAIL   = os.environ.get("SUPPORT_EMAIL",   "support@solutha.co.za")
+FROM_EMAIL         = os.environ.get("FROM_EMAIL",         "ZuZan <Zuzan@solutha.co.za>")
+FROM_SUPPORT_EMAIL = os.environ.get("FROM_SUPPORT_EMAIL", "ZuZan <support@solutha.co.za>")
+FRONTEND_URL       = os.environ.get("FRONTEND_URL",       "https://zuzan-app.onrender.com")
+BACKEND_URL        = os.environ.get("BACKEND_URL",        "https://zuzan-backend.onrender.com")
+SUPPORT_EMAIL      = os.environ.get("SUPPORT_EMAIL",      "support@solutha.co.za")
 
 PLAN_DETAILS = {
     "starter": {
@@ -98,10 +99,11 @@ def _btn(text: str, url: str) -> str:
 
 
 # ── Core send ──────────────────────────────────────────────────────────────────
-def send_email(to: str, subject: str, html: str) -> bool:
+def send_email(to: str, subject: str, html: str, from_email: str = None) -> bool:
     if not RESEND_API_KEY:
         logger.warning(f"[EMAIL skipped — no RESEND_API_KEY] To: {to} | {subject}")
         return False
+    sender = from_email or FROM_EMAIL
     try:
         resp = httpx.post(
             "https://api.resend.com/emails",
@@ -109,11 +111,11 @@ def send_email(to: str, subject: str, html: str) -> bool:
                 "Authorization": f"Bearer {RESEND_API_KEY}",
                 "Content-Type": "application/json",
             },
-            json={"from": FROM_EMAIL, "to": [to], "subject": subject, "html": html},
+            json={"from": sender, "to": [to], "subject": subject, "html": html},
             timeout=10,
         )
         if resp.status_code in (200, 201):
-            logger.info(f"Email sent → {to} | {subject}")
+            logger.info(f"Email sent → {to} | {subject} | from: {sender}")
             return True
         logger.error(f"Resend {resp.status_code}: {resp.text}")
         return False
@@ -196,6 +198,7 @@ def send_welcome_email(
         email,
         f"Welcome to ZuZan — Your {info['name']} plan is active",
         _wrap(body, email),
+        from_email=FROM_SUPPORT_EMAIL,
     )
 
 
