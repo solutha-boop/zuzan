@@ -161,14 +161,17 @@ const StatusBadge = ({status}) => {
   return <Badge label={l} color={c} bg={bg}/>;
 };
 
-const KPI = ({label,value,sub,color=C.ink,icon}) => (
-  <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 18px",flex:1}}>
+const KPI = ({label,value,sub,color=C.ink,icon,onClick}) => (
+  <div onClick={onClick} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 18px",flex:1,cursor:onClick?"pointer":"default",transition:"box-shadow 0.15s",boxShadow:"none"}}
+    onMouseEnter={e=>{if(onClick)e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.10)";}}
+    onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}>
     <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
       <span style={{fontSize:10,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",fontWeight:600}}>{label}</span>
       <span style={{fontSize:16}}>{icon}</span>
     </div>
     <div style={{fontSize:22,fontWeight:800,color,fontFamily:"'Playfair Display',serif",marginBottom:3}}>{value}</div>
     {sub && <div style={{fontSize:11,color:C.inkDim}}>{sub}</div>}
+    {onClick && <div style={{fontSize:10,color:C.inkMid,marginTop:4,opacity:0.6}}>Tap to view breakdown ›</div>}
   </div>
 );
 
@@ -365,6 +368,80 @@ function Dashboard({live = {}}) {
   const d = live.dashboard;
   const revenueData = live.trend || REVENUE_DATA;
   const isLive = live.connected;
+  const [drill, setDrill] = React.useState(null); // {type, title, rows, cols, total, color}
+  const [drillLoading, setDrillLoading] = React.useState(false);
+
+  const toZarD = i => (i.currency && i.currency !== "ZAR") ? (i.paid_amount_zar || (i.amount||0)*(i.exchange_rate||1)) : (i.amount||i.total_amount||0);
+
+  const openDrill = async (type) => {
+    setDrillLoading(true);
+    setDrill({type, rows:[], cols:[], title:"", total:0, color:C.ink});
+    try {
+      if (type === "revenue") {
+        const invs = await api("/invoices");
+        const now = new Date(); const ms = new Date(now.getFullYear(), now.getMonth(), 1);
+        const rows = invs.filter(i => i.status==="paid" && i.paid_date && new Date(i.paid_date) >= ms)
+          .sort((a,b) => new Date(b.paid_date)-new Date(a.paid_date));
+        setDrill({type, title:"Revenue — Paid This Month", color:C.green,
+          total: rows.reduce((s,i)=>s+toZarD(i),0),
+          cols:["Invoice","Client","Currency","Amount (ZAR)","Paid Date"],
+          rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client, i.currency||"ZAR",
+            fmt(toZarD(i)), i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
+      } else if (type === "expenses") {
+        const exps = await api("/expenses");
+        const now = new Date(); const ms = new Date(now.getFullYear(), now.getMonth(), 1);
+        const rows = exps.filter(e => new Date(e.date||e.created_at) >= ms)
+          .sort((a,b) => new Date(b.date||b.created_at)-new Date(a.date||a.created_at));
+        setDrill({type, title:"Expenses — This Month", color:C.red,
+          total: rows.reduce((s,e)=>s+(e.amount||0),0),
+          cols:["Description","Category","Amount","Date"],
+          rows: rows.map(e=>[e.description||"—", e.category||"—", fmt(e.amount||0),
+            new Date(e.date||e.created_at).toLocaleDateString("en-ZA")])});
+      } else if (type === "outstanding") {
+        const invs = await api("/invoices");
+        const rows = invs.filter(i => ["pending","sent","overdue"].includes(i.status))
+          .sort((a,b) => new Date(a.due_date||0)-new Date(b.due_date||0));
+        const today = new Date();
+        setDrill({type, title:"Outstanding — Pending & Overdue", color:C.gold,
+          total: rows.reduce((s,i)=>s+toZarD(i),0),
+          cols:["Invoice","Client","Amount (ZAR)","Due Date","Days Overdue"],
+          rows: rows.map(i=>{
+            const due = i.due_date ? new Date(i.due_date) : null;
+            const overdue = due ? Math.max(0, Math.floor((today-due)/(1000*60*60*24))) : 0;
+            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)),
+              due ? due.toLocaleDateString("en-ZA") : "—",
+              overdue > 0 ? `${overdue}d` : "Current"];
+          })});
+      } else if (type === "payroll") {
+        const emps = await api("/employees");
+        const rows = emps.filter(e=>e.is_active!==false);
+        setDrill({type, title:"Payroll — Active Employees", color:C.blue,
+          total: rows.reduce((s,e)=>s+calcPayroll(e.gross_salary).totalCost,0),
+          cols:["Employee","Position","Gross Salary","Net Pay","Employer Cost"],
+          rows: rows.map(e=>{
+            const p = calcPayroll(e.gross_salary);
+            return [e.name, e.position||"—", fmt(e.gross_salary), fmt(p.netPay), fmt(p.totalCost)];
+          })});
+      } else if (type === "profit") {
+        const invs = await api("/invoices");
+        const exps = await api("/expenses");
+        const now = new Date(); const ms = new Date(now.getFullYear(), now.getMonth(), 1);
+        const paidInvs = invs.filter(i=>i.status==="paid"&&i.paid_date&&new Date(i.paid_date)>=ms);
+        const monthExp = exps.filter(e=>new Date(e.date||e.created_at)>=ms);
+        const rev = paidInvs.reduce((s,i)=>s+toZarD(i),0);
+        const exp = monthExp.reduce((s,e)=>s+(e.amount||0),0);
+        setDrill({type, title:"Net Profit Breakdown — This Month", color:C.accent,
+          total: rev-exp,
+          cols:["Category","Amount"],
+          rows:[
+            ["Revenue (paid invoices)", fmt(rev)],
+            ["Expenses", `- ${fmt(exp)}`],
+            ["Net Profit", fmt(rev-exp)],
+          ]});
+      }
+    } catch(e) { setDrill(null); }
+    setDrillLoading(false);
+  };
 
   // Use live data if available, otherwise fall back to mock
   const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
@@ -385,12 +462,45 @@ function Dashboard({live = {}}) {
         </div>
       </div>
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label="Revenue" value={fmt(totalRevenue)} sub="This month" color={C.green} icon="💰"/>
-        <KPI label="Expenses" value={fmt(totalExpenses)} sub="This month" color={C.red} icon="📤"/>
-        <KPI label="Net Profit" value={fmt(profit)} sub="After expenses" color={C.accent} icon="📊"/>
-        <KPI label="Outstanding" value={fmt(outstanding)} sub="Pending invoices" color={C.gold} icon="⏳"/>
-        <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${MOCK_EMPLOYEES.length} employees`} color={C.blue} icon="👥"/>
+        <KPI label="Revenue" value={fmt(totalRevenue)} sub="This month" color={C.green} icon="💰" onClick={()=>openDrill("revenue")}/>
+        <KPI label="Expenses" value={fmt(totalExpenses)} sub="This month" color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
+        <KPI label="Net Profit" value={fmt(profit)} sub="After expenses" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
+        <KPI label="Outstanding" value={fmt(outstanding)} sub="Pending invoices" color={C.gold} icon="⏳" onClick={()=>openDrill("outstanding")}/>
+        <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${d?.employee_count||""}  employees`} color={C.blue} icon="👥" onClick={()=>openDrill("payroll")}/>
       </div>
+
+      {/* ── KPI Drill-down Modal ── */}
+      {(drill || drillLoading) && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"flex-end",justifyContent:"center"}}
+          onClick={e=>{if(e.target===e.currentTarget){setDrill(null);setDrillLoading(false);}}}>
+          <div style={{background:C.surface,borderRadius:"20px 20px 0 0",width:"100%",maxWidth:780,maxHeight:"75vh",display:"flex",flexDirection:"column",boxShadow:"0 -8px 40px rgba(0,0,0,0.18)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 24px 12px",borderBottom:`1px solid ${C.border}`}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:800,color:C.ink}}>{drill?.title||"Loading…"}</div>
+                {drill?.total !== undefined && <div style={{fontSize:12,color:drill.color,fontWeight:700,marginTop:2}}>Total: {fmt(drill.total)}</div>}
+              </div>
+              <button onClick={()=>{setDrill(null);setDrillLoading(false);}} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:C.inkMid}}>✕</button>
+            </div>
+            <div style={{overflowY:"auto",padding:"0 24px 24px"}}>
+              {drillLoading ? (
+                <div style={{textAlign:"center",padding:40,color:C.inkMid,fontSize:13}}>Loading…</div>
+              ) : drill?.rows?.length === 0 ? (
+                <div style={{textAlign:"center",padding:40,color:C.inkMid,fontSize:13}}>No records found for this period.</div>
+              ) : (
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,marginTop:12}}>
+                  <thead><tr>{drill?.cols?.map(c=><th key={c} style={{textAlign:"left",padding:"8px 10px",color:C.inkMid,fontWeight:600,fontSize:11,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{c}</th>)}</tr></thead>
+                  <tbody>{drill?.rows?.map((row,ri)=>(
+                    <tr key={ri} style={{borderBottom:`1px solid ${C.border}`}}>
+                      {row.map((cell,ci)=><td key={ci} style={{padding:"10px 10px",color:ci===0?C.ink:C.inkMid,fontWeight:ci===0?600:400}}>{cell}</td>)}
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16,marginBottom:20}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20}}>
           <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Revenue vs Expenses - Last 6 months</div>
