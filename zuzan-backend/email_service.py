@@ -11,48 +11,54 @@ import httpx
 logger = logging.getLogger("zuzan.email")
 
 RESEND_API_KEY  = os.environ.get("RESEND_API_KEY", "")
-FROM_EMAIL      = os.environ.get("FROM_EMAIL",      "ZuZan <noreply@zuzan.co.za>")
+FROM_EMAIL      = os.environ.get("FROM_EMAIL",      "ZuZan <noreply@solutha.co.za>")
 FRONTEND_URL    = os.environ.get("FRONTEND_URL",    "https://zuzan-app.onrender.com")
 BACKEND_URL     = os.environ.get("BACKEND_URL",     "https://zuzan-backend.onrender.com")
-SUPPORT_EMAIL   = os.environ.get("SUPPORT_EMAIL",   "support@zuzan.co.za")
+SUPPORT_EMAIL   = os.environ.get("SUPPORT_EMAIL",   "support@solutha.co.za")
 
 PLAN_DETAILS = {
     "starter": {
         "name": "Starter",
-        "price_monthly": 299,
-        "price_annual":  2990,
+        "price_monthly": 399,
+        "price_annual":  3990,
         "features": [
+            "2 users",
+            "20 invoices/month",
             "Invoicing & Quotes",
-            "Expense Management",
-            "Basic Reports",
-            "AI Bookkeeping Assistant",
-            "Up to 2 users",
+            "Expense Tracking",
+            "Payroll (PAYE/UIF/SDL)",
+            "Basic P&L Report",
+            "Email Support",
         ],
     },
     "professional": {
         "name": "Professional",
-        "price_monthly": 699,
-        "price_annual":  6990,
+        "price_monthly": 899,
+        "price_annual":  8990,
         "features": [
+            "5 users",
+            "50 invoices/month",
             "Everything in Starter",
-            "Payroll (PAYE / UIF / SDL)",
-            "EMP201 & IRP5 Reports",
-            "Bank Feed Integration",
-            "Inventory Management",
-            "Up to 5 users",
+            "Double-entry General Ledger",
+            "Trial Balance & Journal Viewer",
+            "Balance Sheet Reconciliation",
+            "Advanced Reports",
+            "Priority Support",
         ],
     },
     "business": {
         "name": "Business",
-        "price_monthly": 1299,
-        "price_annual":  12990,
+        "price_monthly": 1499,
+        "price_annual":  14990,
         "features": [
+            "20 users",
+            "Unlimited Invoices",
             "Everything in Professional",
-            "Multi-currency Support",
+            "Budgeting vs Actuals",
+            "Cash Flow Forecast",
+            "Department Budgets",
             "API Access",
-            "Receipt Scanning (OCR)",
-            "Unlimited Users",
-            "Priority Support",
+            "Dedicated Account Manager",
         ],
     },
 }

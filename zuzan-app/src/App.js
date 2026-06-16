@@ -4098,7 +4098,7 @@ function AppSettings({user, onLogout, onUserUpdate}) {
     try {
       await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: "cancelled"})});
       alert("Your subscription has been cancelled. You will retain access until the end of your current billing period.");
-    } catch(e) { alert("Could not cancel subscription. Please email support@zuzan.co.za."); }
+    } catch(e) { alert("Could not cancel subscription. Please email support@solutha.co.za."); }
   };
   const [pinForm, setPinForm] = useState({newPin:"", confirmPin:""});
   const [pinMsg,  setPinMsg]  = useState("");
@@ -4340,7 +4340,7 @@ function AppSettings({user, onLogout, onUserUpdate}) {
               </div>
             </div>
             <div style={{background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10,padding:14,marginBottom:20,fontSize:12,color:C.ink,lineHeight:1.6}}>
-              Payments are processed securely via <strong>PayFast</strong>. For billing queries, invoice copies, or to update your payment method, email <strong>billing@zuzan.co.za</strong>.
+              Payments are processed securely via <strong>PayFast</strong>. For billing queries, invoice copies, or to update your payment method, email <strong>billing@solutha.co.za</strong>.
             </div>
             <button onClick={()=>setShowBilling(false)} style={{width:"100%",padding:"10px 0",borderRadius:8,border:"none",background:C.accent,color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Close</button>
           </div>
