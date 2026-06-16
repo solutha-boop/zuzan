@@ -5561,10 +5561,11 @@ function PurchaseOrders() {
               )}
               {["draft","sent"].includes(viewing.status) && (
                 <button onClick={async()=>{
-                  if(!window.confirm(`Send ${viewing.po_number} to ${viewing.supplier_name} by email?`)) return;
+                  if(!window.confirm(`Mark ${viewing.po_number} as sent and email ${viewing.supplier_name}?`)) return;
                   try {
                     const res = await api(`/purchase-orders/${viewing.id}/send`,{method:"POST"});
-                    alert(`✅ PO emailed to ${res.emailed_to}`);
+                    if (res.email_sent) alert(`✅ PO emailed to ${res.emailed_to}`);
+                    else alert(`✅ ${viewing.po_number} marked as Sent. No email sent — supplier has no email address on file.`);
                     setViewing(res); load();
                   } catch(e){ alert(e.message); }
                 }} style={{background:C.blueLt,color:C.blue,border:`1px solid ${C.blue}40`,borderRadius:6,padding:"6px 14px",fontSize:12,cursor:"pointer",fontWeight:600}}>📧 Send to Supplier</button>
