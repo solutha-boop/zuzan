@@ -368,8 +368,8 @@ function Dashboard({live = {}}) {
   const d = live.dashboard;
   const revenueData = live.trend || REVENUE_DATA;
   const isLive = live.connected;
-  const [drill, setDrill] = React.useState(null); // {type, title, rows, cols, total, color}
-  const [drillLoading, setDrillLoading] = React.useState(false);
+  const [drill, setDrill] = useState(null); // {type, title, rows, cols, total, color}
+  const [drillLoading, setDrillLoading] = useState(false);
 
   const toZarD = i => (i.currency && i.currency !== "ZAR") ? (i.paid_amount_zar || (i.amount||0)*(i.exchange_rate||1)) : (i.amount||i.total_amount||0);
 
