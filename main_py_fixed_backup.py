@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -35,43 +36,6 @@ async def lifespan(app: FastAPI):
         logger.info("Journal backfill complete")
     except Exception as e:
         logger.warning(f"Journal backfill failed (non-fatal): {e}")
-    # Encrypt any existing plain-text bank fields
-    try:
-        from crypto import encrypt_field, _is_fernet_token, encryption_enabled
-        from database import Employee, Supplier
-        if encryption_enabled():
-            db = SessionLocal()
-            migrated = 0
-            # Company bank fields
-            for co in db.query(Company).all():
-                changed = False
-                for attr in ("bank_name", "bank_account", "bank_branch"):
-                    val = getattr(co, attr)
-                    if val and not _is_fernet_token(val):
-                        setattr(co, attr, encrypt_field(val)); changed = True
-                if changed: migrated += 1
-            # Employee bank fields
-            for emp in db.query(Employee).all():
-                changed = False
-                for attr in ("bank_name", "bank_account", "account_number", "branch_code"):
-                    val = getattr(emp, attr)
-                    if val and not _is_fernet_token(val):
-                        setattr(emp, attr, encrypt_field(val)); changed = True
-                if changed: migrated += 1
-            # Supplier bank fields
-            for sup in db.query(Supplier).all():
-                changed = False
-                for attr in ("bank_name", "account_number", "branch_code"):
-                    val = getattr(sup, attr)
-                    if val and not _is_fernet_token(val):
-                        setattr(sup, attr, encrypt_field(val)); changed = True
-                if changed: migrated += 1
-            db.commit(); db.close()
-            logger.info(f"Bank field encryption migration complete — {migrated} records encrypted")
-        else:
-            logger.warning("Skipping bank field migration — FIELD_ENCRYPTION_KEY not set")
-    except Exception as e:
-        logger.warning(f"Bank field encryption migration failed (non-fatal): {e}")
     yield
 
 
@@ -79,38 +43,15 @@ app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-from starlette.types import ASGIApp, Receive, Scope, Send as _Send
-from starlette.responses import Response as _Resp
-from starlette.datastructures import MutableHeaders
-
-_CORS_HEADERS = {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
-    "access-control-allow-headers": "Authorization, Content-Type, Accept, Origin, X-Requested-With, X-API-Key, X-Admin-Secret",
-    "access-control-max-age": "86400",
-}
-
-class _CORSMiddleware:
-    """Raw ASGI CORS middleware — avoids BaseHTTPMiddleware header-stripping bug."""
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: _Send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        if scope.get("method") == "OPTIONS":
-            response = _Resp(content=b"", status_code=200, headers=_CORS_HEADERS)
-            await response(scope, receive, send)
-            return
-        async def _send_with_cors(message):
-            if message["type"] == "http.response.start":
-                headers = MutableHeaders(scope=message)
-                headers.append("access-control-allow-origin", "*")
-            await send(message)
-        await self.app(scope, receive, _send_with_cors)
-
-app.add_middleware(_CORSMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin",
+                   "X-Requested-With", "X-API-Key", "X-Admin-Secret"],
+    max_age=86400,
+)
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -206,13 +147,10 @@ async def api_list_employees(auth=Depends(require_api_key)):
 @app.get("/v1/summary", tags=["Public API"])
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
-    from payroll import _to_zar
-    paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status=="paid").all()
-    out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_(["sent","overdue"])).all()
     from sqlalchemy import func
-    total_revenue  = sum(_to_zar(i) for i in paid_invs)
+    total_revenue  = db.query(func.sum(Invoice.total_amount)).filter(Invoice.company_id==company.id, Invoice.status=="paid").scalar() or 0
     total_expenses = db.query(func.sum(Expense.amount)).filter(Expense.company_id==company.id).scalar() or 0
-    outstanding    = sum(_to_zar(i) for i in out_invs)
+    outstanding    = db.query(func.sum(Invoice.total_amount)).filter(Invoice.company_id==company.id, Invoice.status!="paid").scalar() or 0
     return {"company":company.name,"total_revenue":round(total_revenue,2),"total_expenses":round(total_expenses,2),"outstanding":round(outstanding,2),"net_profit":round(total_revenue-total_expenses,2)}
 
 
@@ -222,100 +160,93 @@ class ChatRequest(BM):
     message: str
     context: str = ""
 
-ZUZAN_SYSTEM_PROMPT = """You are ZuZan AI, the built-in assistant for ZuZan — a South African bookkeeping and payroll platform for SMEs. You help users navigate the app and understand SA tax/accounting rules.
-
-ZuZan's modules and how they work:
-- Sales → Invoices: Create invoices (+ New Invoice), mark as paid, send to clients by email. INV-XXXX numbering. 15% VAT calculated automatically. Multi-currency (ZAR/USD) supported.
-- Sales → Quotes: Create quotes (+ New Quote), set validity date, update status (Draft/Sent/Accepted/Declined), convert accepted quotes to invoices.
-- Expenses: Add expenses (+ Add Expense), scan receipts with camera, categorise to chart-of-accounts codes (6000-7300). Input VAT tracked automatically.
-- Procurement → Purchase Orders: Create POs (+ New PO), send to suppliers by email (📧 Send to Supplier), receive goods (📦 Receive Goods), mark as paid. Statuses: Draft/Sent/Received/Partial/Paid/Cancelled. Edit POs in draft/sent status.
-- Procurement → Suppliers: Manage supplier details including email addresses.
-- Customers: Manage customer records.
-- Payroll: Run monthly payroll, calculate PAYE/UIF/SDL automatically, download EMP201. SDL only applies if annual payroll > R500k.
-- Reports: P&L, Balance Sheet, Trial Balance, VAT201, Reconciliation, Journal Viewer. Filter by date range and financial year.
-- Budgeting: Set monthly budgets per account, track actuals vs budget.
-- Accounts: Chart of accounts, journal entries, double-entry bookkeeping.
-- Settings: Company details, banking info, VAT number, financial year.
-- Dashboard: Revenue, expenses, outstanding invoices, cash position.
-
-SA tax rules you know:
-- VAT: Standard rate 15%. VAT201 due monthly or bi-monthly. Late = 10% penalty + interest. Zero-rated: basic foods, exports.
-- PAYE: Withheld monthly. EMP201 due 7th of following month. 2025/2026 primary rebate R17,235.
-- UIF: 1% employee + 1% employer, capped at R177.12/month each (R17,712 monthly gross ceiling).
-- SDL: 1% of gross payroll if annual payroll exceeds R500,000.
-- Provisional tax (IRP6): Twice yearly — 31 August and 28 February.
-- Dividends tax: 20%, withheld by company.
-- Entertainment expenses: 50% deductible, input VAT not claimable.
-- Bad debts: Deductible when irrecoverable — account 7300.
-- Wear & tear: Computers 3 years, vehicles 5 years.
-
-Response style:
-- Be concise and practical. Give step-by-step instructions when explaining how to do something in the app.
-- Use ZAR (R) for amounts. Reference the correct tab/button names exactly as they appear in ZuZan.
-- If a question is outside bookkeeping/tax/ZuZan scope, politely redirect to the relevant tab or suggest consulting an accountant for complex matters.
-- Keep responses under 120 words unless a detailed explanation is genuinely needed.
-- Never make up features that don't exist in ZuZan."""
-
-_ANTHROPIC_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
-
 @app.post("/ai/chat")
 @limiter.limit("30/minute")
 async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__import__("auth").get_current_user)):
-    if not _ANTHROPIC_KEY:
-        return {"reply": "AI assistant is not configured. Please contact your administrator to set up the ANTHROPIC_API_KEY."}
+    msg = data.message.lower()
+    ctx = data.context.lower()
 
-    try:
-        import anthropic as _anthropic
-        client = _anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
-
-        user_msg = data.message
-        if data.context:
-            user_msg = f"[User is currently on the {data.context} section of ZuZan]\n\n{data.message}"
-
-        response = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=300,
-            system=ZUZAN_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        reply = response.content[0].text.strip()
-        return {"reply": reply}
-
-    except Exception as e:
-        logger.error(f"AI chat error: {e}")
-        return _keyword_fallback(data.message.lower(), data.context.lower())
-
-
-def _keyword_fallback(msg: str, ctx: str) -> dict:
-    if ("invoice" in msg and any(x in msg for x in ["create","new","add","make","how","generate"])):
+    # ── INVOICING ─────────────────────────────────────────────────────────────
+    if any(x in msg for x in ["create invoice","new invoice","add invoice","how do i invoice"]):
         return {"reply":"To create an invoice: go to Sales → Invoices, click '+ New Invoice', fill in the client name, description and amount. ZuZan automatically calculates 15% VAT and assigns an invoice number. You can then send it directly to the client."}
     if "overdue" in msg and "invoice" in msg:
         return {"reply":"Overdue invoices appear in red on the Invoices tab. ZuZan marks an invoice as overdue once the due date passes without payment. Follow up with the client and record payment once received by clicking 'Mark as Paid'."}
     if ("mark" in msg or "record" in msg) and "paid" in msg:
-        return {"reply":"To mark an invoice as paid: open the invoice, click 'Mark as Paid'. ZuZan records the payment date and updates the invoice status."}
+        return {"reply":"To mark an invoice as paid: open the invoice, click 'Mark as Paid'. ZuZan records the payment date and updates the invoice status. This also updates your revenue figures in the dashboard and reports."}
     if "send" in msg and "invoice" in msg:
-        return {"reply":"To send an invoice: open the invoice and click 'Send Invoice'. ZuZan emails it to the client's email address."}
-    if ("quote" in msg or "estimate" in msg) and any(x in msg for x in ["create","new","add","make","how","find","where"]):
-        return {"reply":"To create a quote: go to Sales → Quotes, click '+ New Quote', fill in the client name, description, amount and validity date. Once accepted, click 'Convert to Invoice'."}
+        return {"reply":"To send an invoice: open the invoice and click 'Send Invoice'. ZuZan emails a PDF to the client's email address. Make sure the client email is filled in when creating the invoice."}
+    if "payment term" in msg or "payment terms" in msg:
+        return {"reply":"Payment terms define how many days a client has to pay. Common SA terms are 30 days (net 30) or 7 days for smaller jobs. Set payment terms when creating the invoice — the due date is calculated automatically."}
+    if ("invoice" in msg and "vat" in msg) or ("tax invoice" in msg):
+        return {"reply":"A valid SA tax invoice must include: your VAT registration number, the buyer's VAT number (if VAT-registered), a unique invoice number, date, description of goods/services, amount excl. VAT, VAT amount at 15%, and total incl. VAT. ZuZan generates compliant invoices automatically."}
+    if "invoice number" in msg:
+        return {"reply":"ZuZan automatically assigns sequential invoice numbers (INV-0001, INV-0002, etc.) when you create an invoice. These cannot be changed as SARS requires sequential numbering for audit purposes."}
+    if "proforma" in msg:
+        return {"reply":"A proforma invoice is a preliminary bill sent before goods/services are delivered. In ZuZan, use the Quotes tab to create a proforma — it has the same format but is clearly marked as a quote/estimate, not a tax invoice."}
+
+    # ── QUOTES ────────────────────────────────────────────────────────────────
+    if any(x in msg for x in ["create quote","new quote","add quote","how do i quote"]):
+        return {"reply":"To create a quote: go to Sales → Quotes, click '+ New Quote', fill in the client name, description, amount and validity date. Once the client accepts it, click 'Convert to Invoice' to automatically create an invoice from the quote."}
     if "convert" in msg and ("quote" in msg or "estimate" in msg):
-        return {"reply":"To convert a quote to an invoice: open the quote, click 'Accept', then click 'Convert to Invoice'. ZuZan creates a new invoice with all details pre-filled."}
-    if "expense" in msg and any(x in msg for x in ["add","create","new","record","how","make"]):
-        return {"reply":"To add an expense: go to Expenses, click '+ Add Expense', fill in the vendor, amount, category, and date. You can also scan a receipt using the camera icon."}
-    if "purchase order" in msg or " po " in msg or msg.startswith("po "):
-        return {"reply":"To create a PO: go to Procurement → Purchase Orders, click '+ New PO'. You can send it to the supplier by email, receive goods, and mark it as paid when done."}
+        return {"reply":"To convert a quote to an invoice: open the quote, click 'Accept' to mark it as accepted, then click 'Convert to Invoice'. ZuZan creates a new invoice with all the quote details pre-filled and takes you straight to the Invoices tab."}
+    if ("quote" in msg or "estimate" in msg) and "valid" in msg:
+        return {"reply":"A quote should include a validity date — the date after which the quoted price is no longer guaranteed. Common practice in SA is 30 days. Set this when creating the quote using the 'Valid Until' field."}
+    if ("quote" in msg and "invoice" in msg) or ("difference" in msg and "quote" in msg):
+        return {"reply":"A quote is a non-binding price offer to a client. An invoice is a demand for payment after goods/services have been delivered. In ZuZan, quotes can be converted to invoices once accepted, keeping all the details intact."}
+    if "quote" in msg and ("follow" in msg or "status" in msg):
+        return {"reply":"Track quote status in the Quotes tab: Draft (not yet sent), Sent (awaiting client response), Accepted (client agreed), or Declined. Update the status as you hear back from clients to keep your pipeline accurate."}
+
+    # ── EXPENSES ──────────────────────────────────────────────────────────────
+    if any(x in msg for x in ["add expense","create expense","new expense","record expense","how do i add"]):
+        return {"reply":"To add an expense: go to Expenses, click '+ Add Expense', fill in the vendor, amount, category, and date. You can also scan a receipt using the camera icon to auto-fill the details. ZuZan calculates input VAT automatically if VAT applies."}
+    if "categor" in msg and "expense" in msg:
+        return {"reply":"Common SA expense categories in ZuZan:\n• 6000 - Cost of Sales\n• 6100 - Salaries & Wages\n• 6200 - Rent\n• 6300 - Telephone & Internet\n• 6400 - Office Supplies\n• 6500 - Marketing\n• 6510 - Fuel & Oil\n• 6600 - Insurance\n• 6700 - Professional Fees\n• 7100 - Depreciation\nChoose the one that best matches the nature of the expense."}
+    if "scan" in msg and ("receipt" in msg or "expense" in msg):
+        return {"reply":"To scan a receipt: click '+ Add Expense', then tap the camera/scan icon. ZuZan will extract the vendor name, amount and date from the receipt image automatically. Review the extracted details before saving."}
+    if "input vat" in msg or ("vat" in msg and "expense" in msg and "claim" in msg):
+        return {"reply":"Input VAT is the 15% VAT you paid on business expenses — you can claim this back if you are VAT-registered. ZuZan tracks input VAT on expenses automatically. Your VAT201 net payment = output VAT (on sales) minus input VAT (on expenses)."}
+    if "rent" in msg and "expense" in msg:
+        return {"reply":"Record rent as an expense to account 6200 - Rent. If your landlord is VAT-registered, the invoice will include 15% VAT which you can claim as input VAT. Make sure you have a valid tax invoice from the landlord."}
+    if "entertain" in msg or "client lunch" in msg or "client dinner" in msg:
+        return {"reply":"Entertainment expenses (client lunches, dinners) are partially deductible for tax purposes. Only 50% of the cost is deductible under SARS rules. Categorise to 6500 - Marketing or create a dedicated Entertainment category. Input VAT on entertainment is generally not claimable."}
+    if "salary" in msg and "expense" in msg:
+        return {"reply":"Salaries are automatically recorded as expenses when you run payroll in the Payroll tab. They are categorised to 6100 - Salaries & Wages. Do not manually add salary expenses — use the Payroll module to avoid double-counting."}
+
+    # ── PAYROLL ───────────────────────────────────────────────────────────────
+    if "paye" in msg and any(x in msg for x in ["35000","35 000"]):
+        return {"reply":"For R35,000/month gross (R420,000 annual): PAYE ≈ R4,673/month after the R17,235 primary rebate (2025/2026 tables). Check the Payroll tab for exact figures."}
+    if "emp201" in msg or "emp 201" in msg:
+        return {"reply":"EMP201 is due by the 7th of each month following the payroll period. It covers PAYE, UIF and SDL. You can download the EMP201 file from the Payroll tab after running payroll."}
     if "uif" in msg:
-        return {"reply":"UIF is 1% employee + 1% employer, capped at R17,712/month gross. Both portions are calculated automatically in ZuZan's Payroll tab."}
-    if "paye" in msg:
-        return {"reply":"PAYE is calculated automatically in the Payroll tab based on SARS tables. EMP201 is due by the 7th of each month."}
+        return {"reply":"UIF is 1% employee + 1% employer contribution, capped at R17,712/month gross. Both portions are calculated automatically in ZuZan's Payroll tab. Total max UIF per employee is R354.24/month."}
     if "sdl" in msg:
-        return {"reply":"SDL is 1% of gross payroll, only if annual payroll exceeds R500,000. It is an employer cost calculated automatically in Payroll."}
-    if "vat" in msg:
-        return {"reply":"South Africa's standard VAT rate is 15%. ZuZan calculates VAT automatically on invoices and expenses. VAT201 reports are in the Reports tab."}
-    if "payroll" in msg:
-        return {"reply":"Go to the Payroll tab to run monthly payroll. ZuZan calculates PAYE, UIF and SDL automatically and lets you download the EMP201."}
-    if "report" in msg or "balance sheet" in msg or "profit" in msg:
-        return {"reply":"Reports are under the Reports tab. You'll find P&L, Balance Sheet, Trial Balance, VAT201, and Reconciliation. Filter by date range or financial year."}
-    return {"reply":"I'm here to help with ZuZan. You can ask me about invoices, quotes, expenses, purchase orders, payroll, VAT, or any SARS compliance questions."}
+        return {"reply":"SDL (Skills Development Levy) is 1% of gross payroll, payable if your annual payroll exceeds R500,000. It is an employer cost — not deducted from the employee. Due by the 7th of each month with PAYE."}
+
+    # ── GENERAL ACCOUNTING ────────────────────────────────────────────────────
+    if "vat" in msg and "rate" in msg:
+        return {"reply":"The standard VAT rate in South Africa is 15%. Basic foods, exports and certain supplies are zero-rated. VAT201 is submitted monthly or bi-monthly. Late submission incurs a 10% penalty plus interest."}
+    if "fuel" in msg or "petrol" in msg or "diesel" in msg:
+        return {"reply":"Fuel expenses should be categorised to account 6510 - Fuel and Oil under Expenses. Only the business-use portion is deductible. Keep a logbook if the vehicle is used for both business and private travel."}
+    if "bad debt" in msg:
+        return {"reply":"Record a bad debt write-off by creating an expense to account 7300 - Bad Debts Written Off. This reduces debtors and is tax-deductible in the year the debt becomes irrecoverable."}
+    if "depreciation" in msg:
+        return {"reply":"SARS wear-and-tear allowances: computers 3 years, vehicles 5 years, machinery varies. Record depreciation monthly to account 7100 - Depreciation. ZuZan tracks this in the Expenses section."}
+    if "provisional tax" in msg or "irp6" in msg:
+        return {"reply":"Provisional tax (IRP6) is paid twice a year: first payment by 31 August, second by 28 February. Based on estimated taxable income. Check Reports for your estimated figures."}
+    if "dividend" in msg:
+        return {"reply":"Dividends paid to shareholders go to account 3300 - Dividends Paid under Equity. Dividends tax is 20% — withheld before payment and paid to SARS by the company."}
+
+    # ── CONTEXTUAL FALLBACK ───────────────────────────────────────────────────
+    context_hints = {
+        "invoicing": "You're on the Invoices tab. I can help you create invoices, mark payments, handle overdue accounts, or explain VAT requirements.",
+        "quotes":    "You're on the Quotes tab. I can help you create quotes, convert them to invoices, or explain quoting best practices.",
+        "expenses":  "You're on the Expenses tab. I can help you categorise expenses, scan receipts, or explain input VAT claims.",
+        "payroll":   "You're on the Payroll tab. I can help with PAYE calculations, UIF, SDL, or EMP201 submissions.",
+    }
+    for key, hint in context_hints.items():
+        if key in ctx:
+            return {"reply":f"I'm not sure about that specific question. {hint} What would you like to know?"}
+    return {"reply":f"Good question. For specific SARS guidance, refer to sars.gov.za or consult your accountant. ZuZan handles the calculations automatically — check the relevant tab for details."}
 
 
 # ── RECEIPT SCAN ──────────────────────────────────────────────────────────────
@@ -457,12 +388,8 @@ tr:hover td{background:#fdf9f7}
   <div class="card">
     <div class="card-header">
       <h3>Registered Clients</h3>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
-        <span id="lastUpdated" style="font-size:11px;color:#aaa"></span>
-        <button class="refresh" id="refreshBtn" onclick="load()">↻ Refresh</button>
-      </div>
+      <button class="refresh" onclick="load()">↻ Refresh</button>
     </div>
-    <div class="err" id="mainErr" style="margin-bottom:10px"></div>
     <table>
       <thead><tr>
         <th>#</th><th>Company</th><th>Owner</th><th>Email</th>
@@ -483,24 +410,13 @@ function login() {
   if (!secret) return;
   load();
 }
-function setError(msg) {
-  const loggedIn = document.getElementById('main').style.display === 'block';
-  if (loggedIn) {
-    document.getElementById('mainErr').textContent = msg;
-  } else {
-    document.getElementById('loginErr').textContent = msg;
-  }
-}
 async function load() {
-  const btn = document.getElementById('refreshBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '↻ Loading…'; }
-  document.getElementById('mainErr') && (document.getElementById('mainErr').textContent = '');
   try {
     const res = await fetch('/admin/api/clients', { headers: {'X-Admin-Secret': secret} });
-    if (res.status === 403) { setError('Incorrect secret.'); return; }
+    if (res.status === 403) { document.getElementById('loginErr').textContent = 'Incorrect secret.'; return; }
     if (!res.ok) {
       const txt = await res.text();
-      setError('Server error: ' + txt.slice(0, 120));
+      document.getElementById('loginErr').textContent = 'Server error: ' + txt.slice(0, 120);
       return;
     }
     const data = await res.json();
@@ -508,13 +424,8 @@ async function load() {
     document.getElementById('main').style.display = 'block';
     renderStats(data);
     renderTable(data);
-    const now = new Date();
-    document.getElementById('lastUpdated').textContent =
-      'Updated ' + now.toLocaleTimeString('en-ZA', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
   } catch(e) {
-    setError('Error: ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '↻ Refresh'; }
+    document.getElementById('loginErr').textContent = 'Error: ' + e.message;
   }
 }
 function renderStats(data) {
@@ -541,16 +452,4 @@ function renderTable(data) {
       : '<span class="unverified" title="Not verified">✗ No</span>'}</td>
     <td><span class="badge ${d.plan}">${d.plan}</span></td>
     <td><span class="badge ${d.status}">${d.status}</span></td>
-    <td>${d.signed_up||'—'}</td>
-    <td>${d.trial_ends||'—'}</td>
-    <td style="text-align:center">${d.invoices}</td>
-    <td style="text-align:center">${d.expenses}</td>
-    <td style="text-align:center">${d.employees}</td>
-    <td>R${(d.revenue_collected||0).toLocaleString('en-ZA',{minimumFractionDigits:2})}</td>
-    <td style="color:#888">${d.last_activity||'No activity yet'}</td>
-  </tr>`).join('');
-}
-</script>
-</body>
-</html>"""
-    return _HTML(content=html)
+    <td>${d.signed_up

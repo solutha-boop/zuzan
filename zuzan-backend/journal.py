@@ -415,17 +415,29 @@ def backfill_company(company_id: int, db: Session) -> dict:
             except Exception as e:
                 posted["errors"].append(f"Payslip {ps.id}: {e}")
 
-    # Purchase orders received
+    # Purchase orders received (received, partial, and paid — all had goods delivered)
     for po in db.query(PurchaseOrder).filter(
         PurchaseOrder.company_id == company_id,
-        PurchaseOrder.status.in_(["received", "partial"])
+        PurchaseOrder.status.in_(["received", "partial", "paid"])
     ).all():
         if ("purchase_order", po.id) not in existing:
             try:
                 post_po_received(po, db)
                 posted["purchase_orders"] += 1
             except Exception as e:
-                posted["errors"].append(f"PO {po.po_number}: {e}")
+                posted["errors"].append(f"PO {po.po_number} receive: {e}")
+
+    # Purchase orders paid — post the AP clearance entry for fully paid POs
+    for po in db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == company_id,
+        PurchaseOrder.status == "paid"
+    ).all():
+        if ("po_payment", po.id) not in existing:
+            try:
+                post_po_paid(po, db)
+                posted["purchase_orders"] += 1
+            except Exception as e:
+                posted["errors"].append(f"PO {po.po_number} payment: {e}")
 
     db.commit()
     return posted

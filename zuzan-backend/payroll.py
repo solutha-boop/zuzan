@@ -260,6 +260,17 @@ async def dashboard(
     ).all()
     total_expenses = sum(e.amount for e in expenses)
 
+    # Include PO COGS: received purchase orders (received/partial) received this month
+    po_cogs = sum(
+        po.total_amount or 0
+        for po in db.query(PurchaseOrder).filter(
+            PurchaseOrder.company_id == cid,
+            PurchaseOrder.status.in_(["received", "partial", "paid"]),
+            PurchaseOrder.received_date >= month_start,
+        ).all()
+    )
+    total_expenses = total_expenses + po_cogs
+
     employees = db.query(Employee).filter(
         Employee.company_id == cid,
         Employee.is_active == True
@@ -310,7 +321,7 @@ async def monthly_trend(
         end = datetime(end_year, end_month, 1)
 
         revenue = sum(
-            inv.total_amount for inv in db.query(Invoice).filter(
+            _to_zar(inv) for inv in db.query(Invoice).filter(
                 Invoice.company_id == cid,
                 Invoice.status == InvoiceStatus.paid,
                 Invoice.paid_date >= start,
@@ -447,7 +458,7 @@ async def reconciliation(
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
         Invoice.issue_date <= cutoff_90
     ).all()
-    amount_90 = round(sum(i.total_amount for i in overdue_90), 2)
+    amount_90 = round(sum(_to_zar(i) for i in overdue_90), 2)
     if not overdue_90:
         checks.append({"rule": "Debtors Ageing (>90 days)", "status": "pass",
             "detail": "No invoices outstanding beyond 90 days.", "amount": None,
@@ -539,7 +550,7 @@ async def reconciliation(
 
     # ── RULE 7: Unmatched revenue — paid invoices with no expense offset ───────
     # Simple check: gross margin — warn if expenses are >90% of revenue
-    total_rev = round(sum(i.amount for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()), 2)
+    total_rev = round(sum(_to_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()), 2)
     total_exp = round(sum(e.amount for e in all_expenses), 2)
     if total_rev > 0:
         expense_ratio = total_exp / total_rev
@@ -581,7 +592,7 @@ async def cash_flow(
         Invoice.status == InvoiceStatus.paid,
         Invoice.paid_date >= month_start
     ).all()
-    cash_receipts = round(sum(i.total_amount for i in paid_this_month), 2)
+    cash_receipts = round(sum(_to_zar(i) for i in paid_this_month), 2)
 
     expenses_this_month = db.query(Expense).filter(
         Expense.company_id == cid,
@@ -697,6 +708,19 @@ async def management_accounts(
         key = e.category or "Other"
         expense_by_cat[key] = round(expense_by_cat.get(key, 0) + e.amount, 2)
 
+    # Include PO COGS: received purchase orders this month
+    po_cogs_items = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+        PurchaseOrder.received_date >= month_start,
+    ).all()
+    po_cogs = round(sum(po.total_amount or 0 for po in po_cogs_items), 2)
+    if po_cogs:
+        total_expenses = round(total_expenses + po_cogs, 2)
+        expense_by_cat["Cost of Sales (POs)"] = round(
+            expense_by_cat.get("Cost of Sales (POs)", 0) + po_cogs, 2
+        )
+
     active_employees = db.query(Employee).filter(
         Employee.company_id == cid,
         Employee.is_active == True
@@ -789,7 +813,7 @@ async def provisional_tax(
         Invoice.status == InvoiceStatus.paid,
         Invoice.paid_date >= year_start
     ).all()
-    ytd_revenue = round(sum(i.total_amount for i in paid_invoices), 2)
+    ytd_revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
 
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
@@ -869,12 +893,12 @@ async def debtors_aging(
     buckets = {"current": [], "31_60": [], "61_90": [], "over_90": [], "not_due": []}
 
     for inv in outstanding:
-        due = inv.due_date or inv.created_at
+        due = inv.due_date or inv.issue_date or inv.created_at
         days_overdue = (now - due).days if due else 0
         entry = {
             "id":             inv.invoice_number,
             "client":         inv.client_name,
-            "amount":         round(inv.total_amount, 2),
+            "amount":         round(_to_zar(inv), 2),
             "due_date":       due.strftime("%Y-%m-%d") if due else None,
             "days_overdue":   max(0, days_overdue),
             "status":         str(inv.status).split(".")[-1],
@@ -913,50 +937,94 @@ async def creditors_aging(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Creditors book with aging — expenses grouped by vendor."""
+    """
+    Creditors book with aging — outstanding purchase orders (received/partial)
+    grouped by supplier, aged from due date (delivery_date + payment_terms days).
+    Fully paid POs are excluded.
+    """
+    from database import Supplier as SupplierModel
+    from crypto import decrypt_field
     cid = current_user.company_id
     now = datetime.utcnow()
 
-    expenses = db.query(Expense).filter(
-        Expense.company_id == cid
-    ).order_by(Expense.expense_date.desc()).all()
+    # Outstanding POs: received but not yet paid
+    open_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial"]),
+    ).order_by(PurchaseOrder.received_date.desc()).all()
 
-    # Group by vendor
-    vendor_map = {}
-    for exp in expenses:
-        v = exp.vendor or "Unknown"
-        if v not in vendor_map:
-            vendor_map[v] = {"vendor": v, "invoices": [], "total": 0}
-        exp_date = exp.expense_date or exp.created_at
-        days_old = (now - exp_date).days if exp_date else 0
+    # Build a supplier lookup for payment terms and bank details
+    supplier_cache: dict = {}
+    def _get_supplier(supplier_id):
+        if supplier_id is None:
+            return None
+        if supplier_id not in supplier_cache:
+            supplier_cache[supplier_id] = db.query(SupplierModel).filter(
+                SupplierModel.id == supplier_id
+            ).first()
+        return supplier_cache[supplier_id]
+
+    vendor_map: dict = {}
+    for po in open_pos:
+        sup = _get_supplier(po.supplier_id)
+        payment_terms = (sup.payment_terms if sup else 30) or 30
+        vendor_name = po.supplier_name or (sup.name if sup else "Unknown")
+
+        # Age from due date: delivery_date + payment_terms days
+        base_date = po.received_date or po.order_date or po.created_at
+        due_date = base_date + __import__("datetime").timedelta(days=payment_terms) if base_date else None
+        days_overdue = (now - due_date).days if due_date else 0
+        bucket = (
+            "not_due" if days_overdue < 0
+            else "current" if days_overdue <= 30
+            else "31_60"   if days_overdue <= 60
+            else "61_90"   if days_overdue <= 90
+            else "over_90"
+        )
+
+        if vendor_name not in vendor_map:
+            vendor_map[vendor_name] = {
+                "vendor":        vendor_name,
+                "supplier_id":   po.supplier_id,
+                "bank_name":     decrypt_field(sup.bank_name)      if sup else None,
+                "account_number":decrypt_field(sup.account_number) if sup else None,
+                "branch_code":   decrypt_field(sup.branch_code)    if sup else None,
+                "account_type":  sup.account_type                  if sup else None,
+                "invoices": [],
+                "total": 0,
+            }
+
         entry = {
-            "id":       f"EXP-{exp.id:03d}",
-            "description": exp.description or "",
-            "category": exp.category or "Other",
-            "amount":   round(exp.amount, 2),
-            "date":     exp_date.strftime("%Y-%m-%d") if exp_date else None,
-            "days_old": days_old,
-            "bucket":   "current" if days_old <= 30 else "31_60" if days_old <= 60 else "61_90" if days_old <= 90 else "over_90",
+            "id":           po.po_number,
+            "description":  po.notes or f"Purchase order {po.po_number}",
+            "status":       po.status,
+            "amount":       round(po.total_amount or 0, 2),
+            "received_date":base_date.strftime("%Y-%m-%d") if base_date else None,
+            "due_date":     due_date.strftime("%Y-%m-%d") if due_date else None,
+            "days_overdue": max(0, days_overdue),
+            "bucket":       bucket,
         }
-        vendor_map[v]["invoices"].append(entry)
-        vendor_map[v]["total"] = round(vendor_map[v]["total"] + exp.amount, 2)
+        vendor_map[vendor_name]["invoices"].append(entry)
+        vendor_map[vendor_name]["total"] = round(
+            vendor_map[vendor_name]["total"] + (po.total_amount or 0), 2
+        )
 
     vendors = sorted(vendor_map.values(), key=lambda x: x["total"], reverse=True)
 
-    # Bucket totals across all vendors
-    all_exp = [e for v in vendors for e in v["invoices"]]
-    def btotal(bucket): return round(sum(e["amount"] for e in all_exp if e["bucket"] == bucket), 2)
+    all_entries = [e for v in vendors for e in v["invoices"]]
+    def btotal(bucket): return round(sum(e["amount"] for e in all_entries if e["bucket"] == bucket), 2)
 
     return {
         "as_at":   now.strftime("%d %B %Y"),
         "vendors": vendors,
         "totals": {
+            "not_due": btotal("not_due"),
             "current": btotal("current"),
             "31_60":   btotal("31_60"),
             "61_90":   btotal("61_90"),
             "over_90": btotal("over_90"),
-            "grand":   round(sum(e["amount"] for e in all_exp), 2),
-        }
+            "grand":   round(sum(e["amount"] for e in all_entries), 2),
+        },
     }
 
 
@@ -1162,8 +1230,7 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     if not pf_id:
         return JSONResponse(content={"status": "error"}, status_code=400)
 
-    # ── Signature verification ────────────────────────────────────────────────
-    # Build param string from all fields except "signature"
+    # Signature verification
     sig_data = {k: v for k, v in data.items() if k != "signature"}
     expected_sig = pf_signature(sig_data, PAYFAST_PASSPHRASE)
     received_sig = data.get("signature", "")
