@@ -25,18 +25,20 @@ class QuoteCreate(BaseModel):
     valid_until:         Optional[str] = None
     notes:               Optional[str] = None
     vat_amount_override: Optional[float] = None  # Manual VAT for non-ZAR quotes
+    status:              str = "draft"            # "draft" or "sent"
 
 class QuoteUpdate(BaseModel):
-    client_name:    Optional[str] = None
-    client_email:   Optional[str] = None
-    description:    Optional[str] = None
-    amount:         Optional[float] = None
-    vat_applicable: Optional[bool] = None
-    currency:       Optional[str] = None
-    exchange_rate:  Optional[float] = None
-    status:         Optional[str] = None
-    valid_until:    Optional[str] = None
-    notes:          Optional[str] = None
+    client_name:         Optional[str] = None
+    client_email:        Optional[str] = None
+    description:         Optional[str] = None
+    amount:              Optional[float] = None
+    vat_applicable:      Optional[bool] = None
+    vat_amount_override: Optional[float] = None  # Manual VAT override for non-ZAR quotes
+    currency:            Optional[str] = None
+    exchange_rate:       Optional[float] = None
+    status:              Optional[str] = None
+    valid_until:         Optional[str] = None
+    notes:               Optional[str] = None
 
 def next_quote_number(db, company_id):
     from sqlalchemy import func as _func
@@ -98,7 +100,7 @@ async def create_quote(data: QuoteCreate, current_user: User = Depends(get_curre
         exchange_rate=data.exchange_rate,
         valid_until=valid,
         notes=clean(data.notes, 2000),
-        status="draft",
+        status=data.status if data.status in ("draft", "sent") else "draft",
     )
     db.add(q); db.commit(); db.refresh(q)
     return to_dict(q)
@@ -116,12 +118,16 @@ async def update_quote(qid: int, data: QuoteUpdate, current_user: User = Depends
     if data.notes        is not None: q.notes         = data.notes
     if data.valid_until  is not None:
         q.valid_until = datetime.strptime(data.valid_until, "%Y-%m-%d")
-    if data.amount is not None or data.vat_applicable is not None:
+    if data.amount is not None or data.vat_applicable is not None or data.vat_amount_override is not None:
         amt = data.amount if data.amount is not None else q.amount
         vat_on = data.vat_applicable if data.vat_applicable is not None else q.vat_applicable
         q.amount = amt
         q.vat_applicable = vat_on
-        q.vat_amount = round(amt * VAT_RATE, 2) if vat_on else 0
+        if data.vat_amount_override is not None:
+            # Non-ZAR quotes: use the caller-supplied VAT amount
+            q.vat_amount = round(data.vat_amount_override, 2)
+        else:
+            q.vat_amount = round(amt * VAT_RATE, 2) if vat_on else 0
         q.total_amount = round(amt + q.vat_amount, 2)
     db.commit(); db.refresh(q)
     return to_dict(q)

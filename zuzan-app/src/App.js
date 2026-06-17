@@ -4941,10 +4941,11 @@ function Quotes({live={},user={},onNavigate}) {
     })))).catch(()=>{});
   },[]);
 
-  const totalAccepted = quotes.filter(q=>q.status==="accepted").reduce((s,q)=>s+(q.totalAmount||q.amount),0);
-  const totalPending  = quotes.filter(q=>q.status==="sent").reduce((s,q)=>s+(q.totalAmount||q.amount),0);
+  const toZar = q => (q.totalAmount||q.amount||0) * (q.currency&&q.currency!=="ZAR" ? (q.rate||1) : 1);
+  const totalAccepted = quotes.filter(q=>q.status==="accepted").reduce((s,q)=>s+toZar(q),0);
+  const totalPending  = quotes.filter(q=>q.status==="sent").reduce((s,q)=>s+toZar(q),0);
 
-  const handleCreate = async () => {
+  const handleCreate = async (status="draft") => {
     if(!form.client||!form.amount||!form.desc){alert("Client, description and amount are required.");return;}
     setSaving(true);
     try {
@@ -4953,6 +4954,7 @@ function Quotes({live={},user={},onNavigate}) {
         amount: +form.amount, vat_applicable: form.vatApplicable,
         currency: form.currency, exchange_rate: +form.rate,
         valid_until: form.validUntil||null, notes: form.notes||null,
+        status,
       };
       if (form.currency !== "ZAR") qBody.vat_amount_override = +form.vatAmount || 0;
       const res = await api("/quotes/",{method:"POST",body:JSON.stringify(qBody)});
@@ -5045,12 +5047,12 @@ function Quotes({live={},user={},onNavigate}) {
             <div>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Client</label>
               {customers.length>0 && (
-                <select value="" onChange={e=>{if(e.target.value) setForm(f=>({...f,client:e.target.value}));}} style={{...inputStyle,marginBottom:6}}>
+                <select value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} style={{...inputStyle,marginBottom:6}}>
                   <option value="">— Select from customers —</option>
                   {customers.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
                 </select>
               )}
-              <input placeholder="Or type client name" value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} style={inputStyle}/>
+              <input placeholder="Or type new client name" value={form.client} onChange={e=>setForm(f=>({...f,client:e.target.value}))} style={{...inputStyle,marginTop:customers.length>0?4:0}}/>
             </div>
             <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Amount</label><input type="number" placeholder="50000" value={form.amount} onChange={e=>setForm(f=>({...f,amount:e.target.value}))} style={inputStyle}/></div>
             <div><label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Description</label><input placeholder="Services rendered" value={form.desc} onChange={e=>setForm(f=>({...f,desc:e.target.value}))} style={inputStyle}/></div>
@@ -5081,8 +5083,9 @@ function Quotes({live={},user={},onNavigate}) {
               {" "}≈ {fmt((+form.amount + (+form.vatAmount||0)) * +form.rate)} ZAR at R{form.rate}/{form.currency}
             </div>
           )}
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Create Quote"}</button>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button onClick={()=>handleCreate("draft")} disabled={saving} style={{background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Save as Draft"}</button>
+            <button onClick={()=>handleCreate("sent")} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Send Quote"}</button>
             <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
