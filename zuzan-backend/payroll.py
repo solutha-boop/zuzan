@@ -253,11 +253,11 @@ async def dashboard(
     ).all()
     total_outstanding = sum(_to_zar(i) for i in outstanding_invoices)
 
-    # All-time expenses — matches the Expenses tab total exactly
+    # All-time expenses ex-VAT — P&L should show the net expense, not the VAT-inclusive amount
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
     ).all()
-    total_expenses = sum(e.amount for e in expenses)
+    total_expenses = sum(e.amount - (e.vat_amount or 0) for e in expenses)
 
     # Include PO COGS: all received purchase orders
     po_cogs = sum(
@@ -273,7 +273,14 @@ async def dashboard(
         Employee.company_id == cid,
         Employee.is_active == True
     ).all()
-    total_payroll = sum(calc_payroll(e.gross_salary)["total_cost"] for e in employees)
+    # Use sum of actual payslips (all-time) if any exist; fall back to current-month estimate
+    actual_payslips_total = db.query(func.sum(Payslip.total_cost)).filter(
+        Payslip.employee_id.in_([e.id for e in employees])
+    ).scalar() if employees else None
+    if actual_payslips_total:
+        total_payroll = actual_payslips_total
+    else:
+        total_payroll = sum(calc_payroll(e.gross_salary)["total_cost"] for e in employees)
 
     gross_profit = total_revenue - total_expenses
     net_profit   = gross_profit - total_payroll
@@ -326,13 +333,25 @@ async def monthly_trend(
                 Invoice.paid_date < end
             ).all()
         )
+        # Expenses ex-VAT for P&L
         expenses = sum(
-            exp.amount for exp in db.query(Expense).filter(
+            (exp.amount - (exp.vat_amount or 0)) for exp in db.query(Expense).filter(
                 Expense.company_id == cid,
                 Expense.expense_date >= start,
                 Expense.expense_date < end
             ).all()
         )
+        # Add PO COGS for POs received/partial/paid in this month
+        po_cogs = sum(
+            po.total_amount or 0
+            for po in db.query(PurchaseOrder).filter(
+                PurchaseOrder.company_id == cid,
+                PurchaseOrder.status.in_(["received", "partial", "paid"]),
+                PurchaseOrder.received_date >= start,
+                PurchaseOrder.received_date < end,
+            ).all()
+        )
+        expenses = expenses + po_cogs
 
         months.append({
             "month":    start.strftime("%b"),
@@ -454,7 +473,7 @@ async def reconciliation(
     overdue_90 = db.query(Invoice).filter(
         Invoice.company_id==cid,
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
-        Invoice.issue_date <= cutoff_90
+        Invoice.due_date <= cutoff_90
     ).all()
     amount_90 = round(sum(_to_zar(i) for i in overdue_90), 2)
     if not overdue_90:
@@ -467,7 +486,7 @@ async def reconciliation(
             "amount": amount_90,
             "items": [{"id": i.invoice_number, "client": i.client_name,
                        "amount": i.total_amount,
-                       "days": (now - i.issue_date).days} for i in overdue_90]})
+                       "days": (now - i.due_date).days} for i in overdue_90]})
 
     # ── RULE 3: VAT control reconciliation ────────────────────────────────────
     all_invoices = db.query(Invoice).filter(Invoice.company_id==cid).all()

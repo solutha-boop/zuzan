@@ -194,10 +194,11 @@ def post_invoice_paid(invoice, db: Session) -> JournalEntry:
 
     # For foreign-currency invoices use the ZAR amount actually received;
     # fall back to total_amount if paid_amount_zar was not recorded.
+    # Both sides MUST use the same ZAR value to keep the entry balanced.
     zar_received = invoice.paid_amount_zar if invoice.paid_amount_zar else invoice.total_amount
     lines = [
-        _line(entry.id, bank, debit=zar_received,          description="Cash received"),
-        _line(entry.id, ar,   credit=invoice.total_amount, description=invoice.invoice_number),
+        _line(entry.id, bank, debit=zar_received,  description="Cash received"),
+        _line(entry.id, ar,   credit=zar_received, description=invoice.invoice_number),
     ]
     _assert_balanced(lines)
     for l in lines: db.add(l)

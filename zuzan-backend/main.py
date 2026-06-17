@@ -207,11 +207,22 @@ async def api_list_employees(auth=Depends(require_api_key)):
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
     from payroll import _to_zar
-    paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status=="paid").all()
-    out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_(["sent","overdue"])).all()
-    from sqlalchemy import func
+    from database import InvoiceStatus, PurchaseOrder
+    paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.paid).all()
+    out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
     total_revenue  = sum(_to_zar(i) for i in paid_invs)
-    total_expenses = db.query(func.sum(Expense.amount)).filter(Expense.company_id==company.id).scalar() or 0
+    # Expenses ex-VAT
+    exp_rows = db.query(Expense).filter(Expense.company_id==company.id).all()
+    total_expenses = sum(e.amount - (e.vat_amount or 0) for e in exp_rows)
+    # Add PO COGS (received/partial/paid purchase orders)
+    po_cogs = sum(
+        po.total_amount or 0
+        for po in db.query(PurchaseOrder).filter(
+            PurchaseOrder.company_id==company.id,
+            PurchaseOrder.status.in_(["received", "partial", "paid"]),
+        ).all()
+    )
+    total_expenses = total_expenses + po_cogs
     outstanding    = sum(_to_zar(i) for i in out_invs)
     return {"company":company.name,"total_revenue":round(total_revenue,2),"total_expenses":round(total_expenses,2),"outstanding":round(outstanding,2),"net_profit":round(total_revenue-total_expenses,2)}
 
