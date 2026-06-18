@@ -5,6 +5,7 @@ ZuZan - Payroll Engine, Reports and PayFast Payment Gateway
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -568,7 +569,7 @@ async def reconciliation(
     # ── RULE 7: Unmatched revenue — paid invoices with no expense offset ───────
     # Simple check: gross margin — warn if expenses are >90% of revenue
     total_rev = round(sum(_to_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()), 2)
-    total_exp = round(sum(e.amount for e in all_expenses), 2)
+    total_exp = round(sum(e.amount - (e.vat_amount or 0) for e in all_expenses), 2)
     if total_rev > 0:
         expense_ratio = total_exp / total_rev
         if expense_ratio > 0.9:
@@ -718,12 +719,13 @@ async def management_accounts(
         Expense.company_id == cid,
         Expense.expense_date >= month_start
     ).all()
-    total_expenses = round(sum(e.amount for e in expenses), 2)
+    # Ex-VAT expenses for P&L — consistent with dashboard and monthly-trend endpoints
+    total_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
 
     expense_by_cat: dict = {}
     for e in expenses:
         key = e.category or "Other"
-        expense_by_cat[key] = round(expense_by_cat.get(key, 0) + e.amount, 2)
+        expense_by_cat[key] = round(expense_by_cat.get(key, 0) + (e.amount - (e.vat_amount or 0)), 2)
 
     # Include PO COGS: received purchase orders this month
     po_cogs_items = db.query(PurchaseOrder).filter(
@@ -742,7 +744,16 @@ async def management_accounts(
         Employee.company_id == cid,
         Employee.is_active == True
     ).all()
-    total_payroll_cost = round(sum(calc_payroll(e.gross_salary)["total_cost"] for e in active_employees), 2)
+    # Use actual payslips for this month if payroll has been run; otherwise estimate
+    current_period = now.strftime("%Y-%m")
+    month_payslips_total = db.query(func.sum(Payslip.total_cost)).filter(
+        Payslip.employee_id.in_([e.id for e in active_employees]),
+        Payslip.period == current_period,
+    ).scalar() if active_employees else None
+    if month_payslips_total:
+        total_payroll_cost = round(month_payslips_total, 2)
+    else:
+        total_payroll_cost = round(sum(calc_payroll(e.gross_salary)["total_cost"] for e in active_employees), 2)
 
     gross_profit  = round(revenue - total_expenses, 2)
     ebit          = round(gross_profit - total_payroll_cost, 2)
@@ -771,9 +782,17 @@ async def management_accounts(
         rev = round(sum(_to_zar(inv) for inv in db.query(Invoice).filter(
             Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
             Invoice.paid_date >= start, Invoice.paid_date < end).all()), 2)
-        exp = round(sum(ex.amount for ex in db.query(Expense).filter(
+        exp_rows = db.query(Expense).filter(
             Expense.company_id == cid,
-            Expense.expense_date >= start, Expense.expense_date < end).all()), 2)
+            Expense.expense_date >= start, Expense.expense_date < end).all()
+        exp = round(sum(ex.amount - (ex.vat_amount or 0) for ex in exp_rows), 2)
+        po_c = round(sum(po.total_amount or 0 for po in db.query(PurchaseOrder).filter(
+            PurchaseOrder.company_id == cid,
+            PurchaseOrder.status.in_(["received", "partial", "paid"]),
+            PurchaseOrder.received_date >= start,
+            PurchaseOrder.received_date < end,
+        ).all()), 2)
+        exp = round(exp + po_c, 2)
         trend.append({"month": start.strftime("%b"), "revenue": rev, "expenses": exp, "profit": round(rev - exp, 2)})
 
     return {

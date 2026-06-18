@@ -477,6 +477,13 @@ async def import_bank_statement(
                 expense_date = datetime.fromisoformat(txn.date),
             )
             db.add(expense)
+            db.flush()  # get expense.id before journal post
+            try:
+                import journal as journal_engine
+                journal_engine.init_accounts(current_user.company_id, db)
+                journal_engine.post_expense(expense, db)
+            except Exception as je:
+                logger.warning(f"Journal post failed for bank import expense: {je}")
             expenses_created += 1
 
         elif txn.type == "credit":
