@@ -76,6 +76,7 @@ class Company(Base):
     journal_entries=relationship("JournalEntry",back_populates="company")
     leave_requests=relationship("LeaveRequest",back_populates="company")
     leave_balances=relationship("LeaveBalance",back_populates="company")
+    fixed_assets=relationship("FixedAsset",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -351,6 +352,57 @@ class LeaveBalance(Base):
     employee           = relationship("Employee", back_populates="leave_balance")
     company            = relationship("Company", back_populates="leave_balances")
 
+class FixedAsset(Base):
+    """Fixed asset register — IAS 16 / IFRS for SMEs Section 17."""
+    __tablename__ = "fixed_assets"
+    id                      = Column(Integer, primary_key=True, index=True)
+    company_id              = Column(Integer, ForeignKey("companies.id"))
+    asset_number            = Column(String, nullable=True)       # e.g. FA-001
+    asset_name              = Column(String, nullable=False)
+    category                = Column(String, nullable=False)      # e.g. Vehicles, Equipment
+    description             = Column(Text, nullable=True)
+    location                = Column(String, nullable=True)
+    # Cost model (IAS 16.30)
+    purchase_date           = Column(DateTime, nullable=False)
+    cost                    = Column(Float, nullable=False)       # original cost (ZAR)
+    residual_value          = Column(Float, default=0.0)          # expected scrap/residual
+    useful_life_months      = Column(Integer, nullable=False)     # e.g. 60 = 5 years
+    # Depreciation
+    depreciation_method     = Column(String, default="straight_line")  # straight_line | diminishing_balance
+    depreciation_rate       = Column(Float, nullable=True)        # for DB method, e.g. 0.20 = 20%
+    accumulated_depreciation = Column(Float, default=0.0)
+    last_depreciation_date  = Column(DateTime, nullable=True)
+    # Status
+    status                  = Column(String, default="active")   # active | disposed | written_off
+    # Disposal (IAS 16.67-72)
+    disposal_date           = Column(DateTime, nullable=True)
+    disposal_proceeds       = Column(Float, nullable=True)
+    disposal_gain_loss      = Column(Float, nullable=True)        # positive = gain, negative = loss
+    disposal_notes          = Column(Text, nullable=True)
+    # Audit
+    created_at              = Column(DateTime, default=datetime.utcnow)
+    updated_at              = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    company                 = relationship("Company", back_populates="fixed_assets")
+    depreciation_entries    = relationship("DepreciationEntry", back_populates="asset", cascade="all, delete-orphan")
+
+    @property
+    def carrying_value(self):
+        return max(self.residual_value, self.cost - self.accumulated_depreciation)
+
+
+class DepreciationEntry(Base):
+    """Monthly depreciation journal posted for each fixed asset."""
+    __tablename__ = "depreciation_entries"
+    id             = Column(Integer, primary_key=True, index=True)
+    company_id     = Column(Integer, ForeignKey("companies.id"))
+    asset_id       = Column(Integer, ForeignKey("fixed_assets.id"))
+    period         = Column(String, nullable=False)   # YYYY-MM
+    amount         = Column(Float, nullable=False)    # depreciation charged this period
+    posted_at      = Column(DateTime, default=datetime.utcnow)
+    asset          = relationship("FixedAsset", back_populates="depreciation_entries")
+    company        = relationship("Company", foreign_keys=[company_id])
+
+
 class SubscriptionPayment(Base):
     """ZuZan's own revenue ledger — one row per subscription fee collected."""
     __tablename__ = "subscription_payments"
@@ -427,6 +479,38 @@ def init_db():
                 family_taken_ytd FLOAT DEFAULT 0.0,
                 last_accrual_date TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS fixed_assets (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                asset_number VARCHAR,
+                asset_name VARCHAR NOT NULL,
+                category VARCHAR NOT NULL,
+                description TEXT,
+                location VARCHAR,
+                purchase_date TIMESTAMP NOT NULL,
+                cost FLOAT NOT NULL,
+                residual_value FLOAT DEFAULT 0.0,
+                useful_life_months INTEGER NOT NULL,
+                depreciation_method VARCHAR DEFAULT 'straight_line',
+                depreciation_rate FLOAT,
+                accumulated_depreciation FLOAT DEFAULT 0.0,
+                last_depreciation_date TIMESTAMP,
+                status VARCHAR DEFAULT 'active',
+                disposal_date TIMESTAMP,
+                disposal_proceeds FLOAT,
+                disposal_gain_loss FLOAT,
+                disposal_notes TEXT,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS depreciation_entries (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                asset_id INTEGER REFERENCES fixed_assets(id),
+                period VARCHAR NOT NULL,
+                amount FLOAT NOT NULL,
+                posted_at TIMESTAMP DEFAULT NOW()
             )""",
             """CREATE TABLE IF NOT EXISTS subscription_payments (
                 id SERIAL PRIMARY KEY,

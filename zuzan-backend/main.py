@@ -133,6 +133,7 @@ from quotes import router as quotes_router
 from budgets import router as budgets_router
 from journal import router as journal_router
 from leave import router as leave_router
+from fixed_assets import router as fixed_assets_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -151,7 +152,8 @@ app.include_router(po_router,        prefix="/purchase-orders", tags=["Purchase 
 app.include_router(quotes_router,    prefix="/quotes",          tags=["Quotes"])
 app.include_router(budgets_router,   prefix="/budgets",         tags=["Budgets"])
 app.include_router(journal_router,   prefix="/journal",         tags=["Journal"])
-app.include_router(leave_router,     prefix="/leave",           tags=["Leave"])
+app.include_router(leave_router,        prefix="/leave",           tags=["Leave"])
+app.include_router(fixed_assets_router, prefix="/fixed-assets",    tags=["Fixed Assets"])
 
 
 @app.get("/")

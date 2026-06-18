@@ -222,6 +222,14 @@ async def run_payroll(
     except Exception as e:
         logger.warning(f"Leave accrual failed (non-fatal): {e}")
 
+    # Trigger monthly fixed asset depreciation (idempotent within same month)
+    try:
+        from fixed_assets import _run_depreciation_internal
+        n_assets, depr_total = _run_depreciation_internal(current_user.company_id, db)
+        logger.info(f"Depreciation: {n_assets} asset(s), R{depr_total:.2f} for company {current_user.company_id}")
+    except Exception as e:
+        logger.warning(f"Depreciation run failed (non-fatal): {e}")
+
     return {
         "status":           "processed",
         "period":           period,

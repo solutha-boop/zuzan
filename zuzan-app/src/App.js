@@ -6136,6 +6136,374 @@ function AIAssistant({tab}) {
   );
 }
 
+// ── FIXED ASSETS ─────────────────────────────────────────────────────────────
+const FA_CATS = ["Land & Buildings","Plant & Machinery","Motor Vehicles","Furniture & Fittings","Computer Equipment","Office Equipment","Leasehold Improvements","Other Fixed Assets"];
+const FA_USEFUL_LIVES = {"Land & Buildings":480,"Plant & Machinery":120,"Motor Vehicles":60,"Furniture & Fittings":120,"Computer Equipment":36,"Office Equipment":60,"Leasehold Improvements":120,"Other Fixed Assets":60};
+
+function FixedAssets() {
+  const [assets,   setAssets]   = useState([]);
+  const [schedule, setSchedule] = useState([]);
+  const [cats,     setCats]     = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [section,  setSection]  = useState("register");  // register | schedule | add | dispose
+  const [disposing, setDisposing] = useState(null);      // asset being disposed
+  const [saving,   setSaving]   = useState(false);
+  const [form, setForm] = useState({
+    asset_name:"", category:"Motor Vehicles", description:"", location:"",
+    purchase_date: new Date().toISOString().slice(0,10),
+    cost:"", residual_value:"0", useful_life_months:"60",
+    depreciation_method:"straight_line", depreciation_rate:"0.20",
+    post_journal:true,
+  });
+  const [dispForm, setDispForm] = useState({disposal_date: new Date().toISOString().slice(0,10), disposal_proceeds:"0", disposal_notes:"", is_write_off:false});
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [a, s, c] = await Promise.all([
+        api("/fixed-assets/"),
+        api("/fixed-assets/schedule"),
+        api("/fixed-assets/categories"),
+      ]);
+      setAssets(a); setSchedule(s); setCats(c);
+    } catch(e) { console.warn("Fixed assets load:", e); }
+    setLoading(false);
+  };
+  useEffect(()=>{ load(); },[]);
+
+  // KPI aggregates
+  const activeAssets   = assets.filter(a => a.status === "active");
+  const totalCost      = activeAssets.reduce((s,a) => s + a.cost, 0);
+  const totalAccumDepr = activeAssets.reduce((s,a) => s + a.accumulated_depreciation, 0);
+  const totalNBV       = activeAssets.reduce((s,a) => s + a.carrying_value, 0);
+  const monthlyDepr    = activeAssets.reduce((s,a) => s + (a.monthly_depreciation||0), 0);
+
+  const statusColor = st => st === "active" ? C.green : st === "disposed" ? C.blue : C.red;
+  const statusBg    = st => st === "active" ? C.greenLt : st === "disposed" ? C.blueLt : C.redLt;
+
+  const handleAdd = async () => {
+    if (!form.asset_name || !form.cost || !form.purchase_date) {
+      alert("Asset name, cost and purchase date are required."); return;
+    }
+    if (form.depreciation_method === "diminishing_balance" && !form.depreciation_rate) {
+      alert("Depreciation rate is required for diminishing balance method."); return;
+    }
+    setSaving(true);
+    try {
+      await api("/fixed-assets/", {method:"POST", body: JSON.stringify({
+        asset_name:          form.asset_name,
+        category:            form.category,
+        description:         form.description || null,
+        location:            form.location || null,
+        purchase_date:       form.purchase_date,
+        cost:                +form.cost,
+        residual_value:      +form.residual_value || 0,
+        useful_life_months:  +form.useful_life_months,
+        depreciation_method: form.depreciation_method,
+        depreciation_rate:   form.depreciation_method === "diminishing_balance" ? +form.depreciation_rate : null,
+        post_journal:        form.post_journal,
+      })});
+      setForm({asset_name:"",category:"Motor Vehicles",description:"",location:"",purchase_date:new Date().toISOString().slice(0,10),cost:"",residual_value:"0",useful_life_months:"60",depreciation_method:"straight_line",depreciation_rate:"0.20",post_journal:true});
+      setSection("register");
+      load();
+    } catch(e) { alert("Failed: " + e.message); }
+    setSaving(false);
+  };
+
+  const handleDispose = async () => {
+    if (!disposing) return;
+    setSaving(true);
+    try {
+      const res = await api(`/fixed-assets/${disposing.id}/dispose`, {method:"POST", body: JSON.stringify({
+        disposal_date:     dispForm.disposal_date,
+        disposal_proceeds: dispForm.is_write_off ? 0 : +dispForm.disposal_proceeds,
+        disposal_notes:    dispForm.disposal_notes || null,
+        is_write_off:      dispForm.is_write_off,
+      })});
+      const gl = res.gain_loss;
+      alert(`${res.message}`);
+      setDisposing(null); setSection("register"); load();
+    } catch(e) { alert("Failed: " + e.message); }
+    setSaving(false);
+  };
+
+  const INP = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const LBL = {fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:0.5};
+  const TABS = [{id:"register",label:"Asset Register"},{id:"schedule",label:"Depreciation Schedule"},{id:"add",label:"+ Add Asset"}];
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Fixed Assets</h2>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>IAS 16 — cost model, straight-line &amp; diminishing balance</p>
+        </div>
+      </div>
+
+      {/* KPI cards */}
+      <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+        <KPI label="At Cost"          value={fmt(totalCost)}      color={C.ink}    icon="🏭"/>
+        <KPI label="Accum. Depreciation" value={fmt(totalAccumDepr)} color={C.gold}   icon="📉"/>
+        <KPI label="Net Book Value"   value={fmt(totalNBV)}       color={C.accent} icon="📊"/>
+        <KPI label="Monthly Charge"   value={fmt(monthlyDepr)}    color={C.blue}   icon="📅"/>
+      </div>
+
+      {/* Section tabs */}
+      <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:`1px solid ${C.border}`}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>{setSection(t.id);setDisposing(null);}} style={{background:"none",border:"none",borderBottom:section===t.id?`2px solid ${C.accent}`:"2px solid transparent",padding:"8px 18px",fontSize:13,fontWeight:section===t.id?700:400,color:section===t.id?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit",marginBottom:"-1px"}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── ASSET REGISTER ── */}
+      {section === "register" && !disposing && (
+        <div>
+          {loading ? <div style={{color:C.inkMid,padding:20}}>Loading...</div> : assets.length === 0 ? (
+            <div style={{textAlign:"center",color:C.inkMid,padding:40}}>No assets yet. Click "+ Add Asset" to begin.</div>
+          ) : (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden",marginBottom:16}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                    {["#","Asset","Category","Cost","Accum. Depr","Carrying Value","Method","Monthly Depr","Status",""].map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:"11px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {assets.map(a => (
+                    <tr key={a.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                      <td style={{padding:"12px 14px",color:C.inkMid,fontSize:11}}>{a.asset_number}</td>
+                      <td style={{padding:"12px 14px"}}>
+                        <div style={{fontWeight:600,color:C.ink}}>{a.asset_name}</div>
+                        {a.description && <div style={{fontSize:10,color:C.inkMid}}>{a.description}</div>}
+                        {a.location    && <div style={{fontSize:10,color:C.inkDim}}>📍 {a.location}</div>}
+                      </td>
+                      <td style={{padding:"12px 14px",color:C.inkMid,whiteSpace:"nowrap"}}>{a.category}</td>
+                      <td style={{padding:"12px 14px",fontWeight:600}}>{fmt(a.cost)}</td>
+                      <td style={{padding:"12px 14px",color:C.gold,fontWeight:600}}>{fmt(a.accumulated_depreciation)}</td>
+                      <td style={{padding:"12px 14px",fontWeight:700,color:C.accent}}>{fmt(a.carrying_value)}</td>
+                      <td style={{padding:"12px 14px",fontSize:11,color:C.inkMid,whiteSpace:"nowrap"}}>
+                        {a.depreciation_method === "straight_line" ? `SL / ${a.useful_life_months}m` : `DB ${((a.depreciation_rate||0)*100).toFixed(0)}%`}
+                      </td>
+                      <td style={{padding:"12px 14px",color:C.blue,fontWeight:600}}>{a.status==="active"?fmt(a.monthly_depreciation):"—"}</td>
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{background:statusBg(a.status),color:statusColor(a.status),borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,textTransform:"capitalize"}}>{a.status}</span>
+                      </td>
+                      <td style={{padding:"12px 14px"}}>
+                        {a.status === "active" && (
+                          <button onClick={()=>{setDisposing(a);setDispForm({disposal_date:new Date().toISOString().slice(0,10),disposal_proceeds:"0",disposal_notes:"",is_write_off:false});}} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,whiteSpace:"nowrap"}}>Dispose</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{background:C.bg,borderTop:`2px solid ${C.border}`}}>
+                    <td colSpan={3} style={{padding:"12px 14px",fontWeight:800,color:C.ink}}>TOTALS ({activeAssets.length} active)</td>
+                    <td style={{padding:"12px 14px",fontWeight:800}}>{fmt(totalCost)}</td>
+                    <td style={{padding:"12px 14px",fontWeight:800,color:C.gold}}>{fmt(totalAccumDepr)}</td>
+                    <td style={{padding:"12px 14px",fontWeight:800,color:C.accent}}>{fmt(totalNBV)}</td>
+                    <td colSpan={2} style={{padding:"12px 14px",fontWeight:800,color:C.blue}}>{fmt(monthlyDepr)}/mo</td>
+                    <td colSpan={2}/>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+          <div style={{fontSize:12,color:C.inkMid,padding:"10px 14px",background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10}}>
+            <strong style={{color:C.accent}}>Depreciation note:</strong> Monthly depreciation runs automatically with each payroll run. You can also trigger it manually via Settings or by running payroll.
+          </div>
+        </div>
+      )}
+
+      {/* ── DISPOSAL MODAL ── */}
+      {section === "register" && disposing && (
+        <div style={{background:C.surface,border:`2px solid ${C.red}`,borderRadius:16,padding:28,maxWidth:560}}>
+          <h3 style={{fontFamily:"serif",fontSize:20,margin:"0 0 4px",color:C.ink}}>Dispose / Write-off Asset</h3>
+          <p style={{fontSize:13,color:C.inkMid,marginBottom:20}}>{disposing.asset_number} — {disposing.asset_name}</p>
+
+          <div style={{background:C.bg,borderRadius:10,padding:14,marginBottom:20,fontSize:13}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{color:C.inkMid}}>Cost</span><span style={{fontWeight:600}}>{fmt(disposing.cost)}</span></div>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{color:C.inkMid}}>Accumulated Depreciation</span><span style={{color:C.gold,fontWeight:600}}>{fmt(disposing.accumulated_depreciation)}</span></div>
+            <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${C.border}`,paddingTop:8,marginTop:4}}><span style={{fontWeight:700}}>Carrying Value</span><span style={{fontWeight:800,color:C.accent}}>{fmt(disposing.carrying_value)}</span></div>
+          </div>
+
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"12px",background:C.redLt,borderRadius:10}}>
+            <input type="checkbox" checked={dispForm.is_write_off} onChange={e=>setDispForm(v=>({...v,is_write_off:e.target.checked,disposal_proceeds:"0"}))} style={{width:18,height:18}}/>
+            <span style={{fontSize:14,color:C.ink}}>Write-off (no proceeds — full loss recognised)</span>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <div>
+              <label style={LBL}>Disposal Date</label>
+              <input type="date" value={dispForm.disposal_date} onChange={e=>setDispForm(v=>({...v,disposal_date:e.target.value}))} style={INP}/>
+            </div>
+            {!dispForm.is_write_off && (
+              <div>
+                <label style={LBL}>Proceeds Received (ZAR)</label>
+                <input type="number" value={dispForm.disposal_proceeds} onChange={e=>setDispForm(v=>({...v,disposal_proceeds:e.target.value}))} style={INP}/>
+              </div>
+            )}
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={LBL}>Notes</label>
+            <input placeholder="e.g. Sold to XYZ, vehicle scrapped..." value={dispForm.disposal_notes} onChange={e=>setDispForm(v=>({...v,disposal_notes:e.target.value}))} style={INP}/>
+          </div>
+
+          {/* Preview gain/loss */}
+          {(() => {
+            const proceeds = dispForm.is_write_off ? 0 : (+dispForm.disposal_proceeds||0);
+            const gl = proceeds - disposing.carrying_value;
+            return (
+              <div style={{background: gl >= 0 ? C.greenLt : C.redLt, border:`1px solid ${gl>=0?C.green:C.red}40`, borderRadius:10, padding:"12px 16px", marginBottom:16, fontSize:13}}>
+                <strong>{gl >= 0 ? "Gain on disposal" : "Loss on disposal"}:</strong> {fmt(Math.abs(gl))}
+                {gl < 0 && <span style={{color:C.inkMid,marginLeft:8}}>— will be posted to Loss on Disposal (6800)</span>}
+                {gl > 0 && <span style={{color:C.inkMid,marginLeft:8}}>— will be posted to Gain on Disposal (4900)</span>}
+              </div>
+            );
+          })()}
+
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>setDisposing(null)} style={{flex:1,background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            <button onClick={handleDispose} disabled={saving} style={{flex:1,background:C.red,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>
+              {saving ? "Processing..." : dispForm.is_write_off ? "Write Off Asset" : "Confirm Disposal"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── DEPRECIATION SCHEDULE ── */}
+      {section === "schedule" && (
+        <div>
+          {loading ? <div style={{color:C.inkMid,padding:20}}>Loading...</div> : schedule.length === 0 ? (
+            <div style={{textAlign:"center",color:C.inkMid,padding:40}}>No depreciation entries yet. Depreciation runs monthly with payroll.</div>
+          ) : (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                    {["Period","Asset","Amount","Posted"].map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:"11px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {schedule.map(e=>(
+                    <tr key={e.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                      <td style={{padding:"12px 14px",fontWeight:700,color:C.ink}}>{e.period}</td>
+                      <td style={{padding:"12px 14px",color:C.inkMid}}>{e.asset_name}</td>
+                      <td style={{padding:"12px 14px",fontWeight:600,color:C.gold}}>{fmt(e.amount)}</td>
+                      <td style={{padding:"12px 14px",fontSize:11,color:C.inkDim}}>{e.posted_at ? new Date(e.posted_at).toLocaleDateString("en-ZA") : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{background:C.bg,borderTop:`2px solid ${C.border}`}}>
+                    <td colSpan={2} style={{padding:"12px 14px",fontWeight:800}}>Total Depreciation Posted</td>
+                    <td style={{padding:"12px 14px",fontWeight:800,color:C.gold}}>{fmt(schedule.reduce((s,e)=>s+e.amount,0))}</td>
+                    <td/>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ADD ASSET FORM ── */}
+      {section === "add" && (
+        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:28,maxWidth:680}}>
+          <h3 style={{fontFamily:"serif",fontSize:20,margin:"0 0 20px",color:C.ink}}>Add Fixed Asset</h3>
+
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Asset Details</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            <div>
+              <label style={LBL}>Asset Name</label>
+              <input placeholder="e.g. Delivery Vehicle — Toyota Hilux" value={form.asset_name} onChange={e=>setForm(v=>({...v,asset_name:e.target.value}))} style={INP}/>
+            </div>
+            <div>
+              <label style={LBL}>Category</label>
+              <select value={form.category} onChange={e=>{const ul=FA_USEFUL_LIVES[e.target.value]||60;setForm(v=>({...v,category:e.target.value,useful_life_months:String(ul)}));}} style={INP}>
+                {FA_CATS.map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={LBL}>Description (optional)</label>
+              <input placeholder="Registration number, serial, etc." value={form.description} onChange={e=>setForm(v=>({...v,description:e.target.value}))} style={INP}/>
+            </div>
+            <div>
+              <label style={LBL}>Location (optional)</label>
+              <input placeholder="e.g. Head Office, Johannesburg" value={form.location} onChange={e=>setForm(v=>({...v,location:e.target.value}))} style={INP}/>
+            </div>
+          </div>
+
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Cost &amp; Dates</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
+            <div>
+              <label style={LBL}>Purchase Date</label>
+              <input type="date" value={form.purchase_date} onChange={e=>setForm(v=>({...v,purchase_date:e.target.value}))} style={INP}/>
+            </div>
+            <div>
+              <label style={LBL}>Cost (ZAR)</label>
+              <input type="number" placeholder="0.00" value={form.cost} onChange={e=>setForm(v=>({...v,cost:e.target.value}))} style={INP}/>
+            </div>
+            <div>
+              <label style={LBL}>Residual Value (ZAR)</label>
+              <input type="number" placeholder="0.00" value={form.residual_value} onChange={e=>setForm(v=>({...v,residual_value:e.target.value}))} style={INP}/>
+            </div>
+          </div>
+
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Depreciation</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
+            <div>
+              <label style={LBL}>Method</label>
+              <select value={form.depreciation_method} onChange={e=>setForm(v=>({...v,depreciation_method:e.target.value}))} style={INP}>
+                <option value="straight_line">Straight-Line</option>
+                <option value="diminishing_balance">Diminishing Balance</option>
+              </select>
+            </div>
+            {form.depreciation_method === "straight_line" ? (
+              <div>
+                <label style={LBL}>Useful Life (months)</label>
+                <input type="number" placeholder="60" value={form.useful_life_months} onChange={e=>setForm(v=>({...v,useful_life_months:e.target.value}))} style={INP}/>
+              </div>
+            ) : (
+              <div>
+                <label style={LBL}>Annual Rate (e.g. 0.20 = 20%)</label>
+                <input type="number" step="0.01" placeholder="0.20" value={form.depreciation_rate} onChange={e=>setForm(v=>({...v,depreciation_rate:e.target.value}))} style={INP}/>
+              </div>
+            )}
+            <div style={{alignSelf:"end",paddingBottom:2}}>
+              {form.cost && form.depreciation_method === "straight_line" && (
+                <div style={{background:C.accentLt,borderRadius:8,padding:"10px 12px",fontSize:12}}>
+                  <div style={{color:C.inkMid}}>Monthly charge</div>
+                  <div style={{fontWeight:700,color:C.accent}}>{fmt((+form.cost - (+form.residual_value||0)) / Math.max(1,+form.useful_life_months))}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20,padding:"12px",background:C.accentLt,borderRadius:10}}>
+            <input type="checkbox" checked={form.post_journal} onChange={e=>setForm(v=>({...v,post_journal:e.target.checked}))} style={{width:18,height:18}}/>
+            <span style={{fontSize:14,color:C.ink}}>Post acquisition journal entry (DR Fixed Assets / CR Bank)</span>
+          </div>
+
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>setSection("register")} style={{flex:1,background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            <button onClick={handleAdd} disabled={saving} style={{flex:2,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>
+              {saving ? "Saving..." : "Add to Asset Register"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── INVENTORY ─────────────────────────────────────────────────────────────────
 function Inventory() {
   const [items,    setItems]   = useState([]);
@@ -6758,6 +7126,7 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
     {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
     {id:"reports",         label:"Reports",     icon:"📊"},
     {id:"inventory",       label:"Inventory",   icon:"📦"},
+    {id:"fixed_assets",   label:"Fixed Assets", icon:"🏭"},
     {id:"bankimport",      label:"Bank",        icon:"🏦"},
     {id:"debtors",         label:"Debtors",     icon:"📥"},
     {id:"creditors",       label:"Creditors",   icon:"📤"},
@@ -6776,6 +7145,7 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
     budgeting:  <div style={{padding:"16px 16px 100px"}}><Budgeting  live={live}/></div>,
     reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live}/></div>,
     inventory:       <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
+    fixed_assets:    <div style={{padding:"16px 16px 100px"}}><FixedAssets/></div>,
     customers:       <div style={{padding:"16px 16px 100px"}}><Customers/></div>,
     suppliers:       <div style={{padding:"16px 16px 100px"}}><Suppliers/></div>,
     purchase_orders: <div style={{padding:"16px 16px 100px"}}><PurchaseOrders/></div>,
@@ -6867,7 +7237,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"debtors",    label:"Debtors",     icon:"📥"},
     {id:"creditors",  label:"Creditors",   icon:"📤"},
     {id:"coa",        label:"Accounts",    icon:"📒"},
-    {id:"inventory",  label:"Inventory",   icon:"📦"},
+    {id:"inventory",    label:"Inventory",   icon:"📦"},
+    {id:"fixed_assets", label:"Fixed Assets", icon:"🏭"},
     {id:"banking",    label:"Banking",     icon:"🏦", children:[
       {id:"bankimport", label:"Manual Update",   icon:"📄"},
       {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
@@ -6911,6 +7282,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     creditors:  <Creditors  live={live}/>,
     coa:        <ChartOfAccounts/>,
     inventory:       <Inventory/>,
+    fixed_assets:    <FixedAssets/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
     purchase_orders: <PurchaseOrders/>,

@@ -53,6 +53,12 @@ DEFAULT_ACCOUNTS = [
     {"code": "5300", "name": "Professional Fees",            "type": AccountType.expense},
     {"code": "5900", "name": "General Expenses",             "type": AccountType.expense},
     {"code": "5950", "name": "Stock Adjustments",            "type": AccountType.expense},
+    # Fixed Assets (IAS 16)
+    {"code": "1500", "name": "Fixed Assets at Cost",         "type": AccountType.asset},
+    {"code": "1510", "name": "Accumulated Depreciation",     "type": AccountType.asset},   # contra-asset (credit normal balance)
+    {"code": "5800", "name": "Depreciation Expense",         "type": AccountType.expense},
+    {"code": "4900", "name": "Gain on Disposal of Assets",   "type": AccountType.revenue},
+    {"code": "6800", "name": "Loss on Disposal of Assets",   "type": AccountType.expense},
 ]
 
 # Maps expense categories to account codes
@@ -358,6 +364,111 @@ def post_stock_adjustment(item, quantity: float, db: Session, reason: str = None
             _line(entry.id, adj_acct,  debit=amount,  description=desc),
             _line(entry.id, inventory, credit=amount, description=desc),
         ]
+
+    _assert_balanced(lines)
+    for l in lines:
+        db.add(l)
+    return entry
+
+
+# ── FIXED ASSET POSTING FUNCTIONS (IAS 16) ───────────────────────────────────
+
+def post_asset_acquisition(asset, db: Session) -> JournalEntry:
+    """
+    Record purchase of a fixed asset (cost model, IAS 16.15):
+      DR Fixed Assets at Cost  (1500)   full cost
+      CR Bank / Cash           (1000)   full cost
+    """
+    cid = asset.company_id
+    init_accounts(cid, db)
+    cost = round(asset.cost, 2)
+    entry = _make_entry(
+        cid, asset.purchase_date,
+        f"Asset acquisition — {asset.asset_name}",
+        asset.asset_number or f"FA-{asset.id}", "fixed_asset", asset.id, db,
+    )
+    fa_acct   = get_account(cid, "1500", db)
+    bank_acct = get_account(cid, "1000", db)
+    lines = [
+        _line(entry.id, fa_acct,   debit=cost,  description=asset.asset_name),
+        _line(entry.id, bank_acct, credit=cost, description=asset.asset_name),
+    ]
+    _assert_balanced(lines)
+    for l in lines:
+        db.add(l)
+    return entry
+
+
+def post_depreciation(asset, amount: float, period: str, db: Session) -> JournalEntry:
+    """
+    Monthly depreciation charge (IAS 16.48):
+      DR Depreciation Expense   (5800)   amount
+      CR Accumulated Depreciation (1510) amount
+    """
+    cid = asset.company_id
+    init_accounts(cid, db)
+    amount = round(amount, 2)
+    entry = _make_entry(
+        cid, datetime.utcnow(),
+        f"Depreciation — {asset.asset_name} [{period}]",
+        f"DEP-{asset.id}-{period}", "depreciation", asset.id, db,
+    )
+    depr_exp  = get_account(cid, "5800", db)
+    accum_dep = get_account(cid, "1510", db)
+    # Accumulated depreciation is a contra-asset: credit increases it
+    lines = [
+        _line(entry.id, depr_exp,  debit=amount,  description=f"Depreciation {period}"),
+        _line(entry.id, accum_dep, credit=amount, description=asset.asset_name),
+    ]
+    _assert_balanced(lines)
+    for l in lines:
+        db.add(l)
+    return entry
+
+
+def post_asset_disposal(asset, proceeds: float, db: Session) -> JournalEntry:
+    """
+    Derecognise a fixed asset on disposal or write-off (IAS 16.67-72):
+      DR Accumulated Depreciation  (1510)  accumulated_depreciation
+      DR Bank / Cash               (1000)  proceeds (0 if write-off)
+      DR Loss on Disposal          (6800)  if carrying_value > proceeds
+      CR Fixed Assets at Cost      (1500)  original cost
+      CR Gain on Disposal          (4900)  if proceeds > carrying_value
+    """
+    cid            = asset.company_id
+    init_accounts(cid, db)
+    cost           = round(asset.cost, 2)
+    accum_depr     = round(asset.accumulated_depreciation, 2)
+    carrying_value = round(max(0, cost - accum_depr), 2)
+    proceeds       = round(proceeds or 0, 2)
+    gain_loss      = round(proceeds - carrying_value, 2)  # positive = gain, negative = loss
+
+    entry = _make_entry(
+        cid, datetime.utcnow(),
+        f"Asset disposal — {asset.asset_name}",
+        asset.asset_number or f"FA-{asset.id}", "asset_disposal", asset.id, db,
+    )
+
+    fa_acct   = get_account(cid, "1500", db)
+    accum_acc = get_account(cid, "1510", db)
+    bank_acct = get_account(cid, "1000", db)
+
+    lines = [
+        # Remove accumulated depreciation (debit contra-asset to close it)
+        _line(entry.id, accum_acc, debit=accum_depr, description="Remove accumulated depreciation"),
+        # Remove asset at cost (credit to close the asset account)
+        _line(entry.id, fa_acct,   credit=cost,      description="Remove asset at cost"),
+    ]
+
+    if proceeds > 0:
+        lines.append(_line(entry.id, bank_acct, debit=proceeds, description="Disposal proceeds"))
+
+    if gain_loss > 0:
+        gain_acc = get_account(cid, "4900", db)
+        lines.append(_line(entry.id, gain_acc, credit=gain_loss, description="Gain on disposal"))
+    elif gain_loss < 0:
+        loss_acc = get_account(cid, "6800", db)
+        lines.append(_line(entry.id, loss_acc, debit=abs(gain_loss), description="Loss on disposal"))
 
     _assert_balanced(lines)
     for l in lines:
