@@ -22,10 +22,16 @@ git add zuzan-backend/companies.py
 git add zuzan-backend/suppliers.py
 git add zuzan-backend/database.py
 git add zuzan-backend/payroll.py
+git add zuzan-backend/journal.py
+git add zuzan-backend/quotes.py
+git add zuzan-backend/email_service.py
+git add zuzan-backend/purchase_orders.py
+git add zuzan-backend/auth.py
+git add zuzan-backend/leave.py
 git diff --cached --stat
 
 echo === Committing ===
-git -c user.email="dev@zuzan.co.za" -c user.name="ZuZan Dev" commit -m "fix: admin dashboard refresh button — loading state, visible errors, last-updated timestamp"
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: leave management -- BCEA leave types, balances, accrual, auto-approve 48h"
 
 echo === Pushing ===
 git push origin main

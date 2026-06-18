@@ -132,6 +132,7 @@ from purchase_orders import router as po_router
 from quotes import router as quotes_router
 from budgets import router as budgets_router
 from journal import router as journal_router
+from leave import router as leave_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -150,6 +151,7 @@ app.include_router(po_router,        prefix="/purchase-orders", tags=["Purchase 
 app.include_router(quotes_router,    prefix="/quotes",          tags=["Quotes"])
 app.include_router(budgets_router,   prefix="/budgets",         tags=["Budgets"])
 app.include_router(journal_router,   prefix="/journal",         tags=["Journal"])
+app.include_router(leave_router,     prefix="/leave",           tags=["Leave"])
 
 
 @app.get("/")
@@ -833,9 +835,4 @@ async function submitManual() {
     if (!res.ok) throw new Error(await res.text());
     document.getElementById('addMsg').textContent = '✓ Saved';
     setTimeout(() => { toggleAddForm(); loadRevenue(); }, 800);
-  } catch(e) { document.getElementById('addMsg').textContent = 'Error: ' + e.message; }
-}
-</script>
-</body>
-</html>"""
-    return _HTML(content=html)
+  } catch(e) { document.getEl

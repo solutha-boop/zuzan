@@ -74,6 +74,8 @@ class Company(Base):
     budgets=relationship("Budget",back_populates="company")
     accounts=relationship("Account",back_populates="company")
     journal_entries=relationship("JournalEntry",back_populates="company")
+    leave_requests=relationship("LeaveRequest",back_populates="company")
+    leave_balances=relationship("LeaveBalance",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -130,6 +132,8 @@ class Employee(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="employees")
     payslips=relationship("Payslip",back_populates="employee")
+    leave_requests=relationship("LeaveRequest",back_populates="employee")
+    leave_balance=relationship("LeaveBalance",back_populates="employee",uselist=False)
 
 class InventoryItem(Base):
     __tablename__ = "inventory"
@@ -307,6 +311,46 @@ class Payment(Base):
     payment_method=Column(String); created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="payments")
 
+class LeaveRequest(Base):
+    """One leave application per employee per period."""
+    __tablename__ = "leave_requests"
+    id             = Column(Integer, primary_key=True, index=True)
+    company_id     = Column(Integer, ForeignKey("companies.id"))
+    employee_id    = Column(Integer, ForeignKey("employees.id"))
+    leave_type     = Column(String, nullable=False)   # annual/sick/family/maternity/unpaid
+    start_date     = Column(DateTime, nullable=False)
+    end_date       = Column(DateTime, nullable=False)
+    days_requested = Column(Float, nullable=False)
+    status         = Column(String, default="pending")  # pending/approved/rejected/cancelled
+    reason         = Column(Text, nullable=True)
+    submitted_at   = Column(DateTime, default=datetime.utcnow)
+    reviewed_at    = Column(DateTime, nullable=True)
+    reviewed_by    = Column(String, nullable=True)
+    auto_approved  = Column(Boolean, default=False)
+    employee       = relationship("Employee", back_populates="leave_requests")
+    company        = relationship("Company", back_populates="leave_requests")
+
+class LeaveBalance(Base):
+    """Running leave balance per employee (one row per employee)."""
+    __tablename__ = "leave_balances"
+    id                 = Column(Integer, primary_key=True, index=True)
+    company_id         = Column(Integer, ForeignKey("companies.id"))
+    employee_id        = Column(Integer, ForeignKey("employees.id"), unique=True)
+    # Annual leave — BCEA: 15 working days/year; accrues at 1.25 days/month
+    annual_balance     = Column(Float, default=15.0)
+    annual_accrued_ytd = Column(Float, default=0.0)
+    annual_taken_ytd   = Column(Float, default=0.0)
+    # Sick leave — BCEA: 30 days per 3-year cycle
+    sick_balance       = Column(Float, default=30.0)
+    sick_taken_ytd     = Column(Float, default=0.0)
+    # Family responsibility — BCEA: 3 days/year
+    family_balance     = Column(Float, default=3.0)
+    family_taken_ytd   = Column(Float, default=0.0)
+    last_accrual_date  = Column(DateTime, nullable=True)
+    updated_at         = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    employee           = relationship("Employee", back_populates="leave_balance")
+    company            = relationship("Company", back_populates="leave_balances")
+
 class SubscriptionPayment(Base):
     """ZuZan's own revenue ledger — one row per subscription fee collected."""
     __tablename__ = "subscription_payments"
@@ -345,44 +389,4 @@ def init_db():
             "ALTER TABLE api_keys ADD COLUMN requests_today INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN email_verify_token VARCHAR",
-            "CREATE TABLE IF NOT EXISTS budgets (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), year INTEGER NOT NULL, month INTEGER NOT NULL, category VARCHAR NOT NULL, department VARCHAR, type VARCHAR DEFAULT 'expense', amount FLOAT DEFAULT 0, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())",
-            "CREATE TABLE IF NOT EXISTS accounts (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), code VARCHAR NOT NULL, name VARCHAR NOT NULL, type VARCHAR NOT NULL, is_system BOOLEAN DEFAULT FALSE, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())",
-            "CREATE TABLE IF NOT EXISTS journal_entries (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), date TIMESTAMP NOT NULL, description TEXT, reference VARCHAR, source VARCHAR, source_id INTEGER, is_reconciled BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW())",
-            "CREATE TABLE IF NOT EXISTS journal_lines (id SERIAL PRIMARY KEY, entry_id INTEGER REFERENCES journal_entries(id) ON DELETE CASCADE, account_id INTEGER REFERENCES accounts(id), debit FLOAT DEFAULT 0, credit FLOAT DEFAULT 0, description VARCHAR)",
-            "ALTER TABLE invoices ADD COLUMN currency VARCHAR DEFAULT 'ZAR'",
-            "ALTER TABLE invoices ADD COLUMN exchange_rate FLOAT DEFAULT 1",
-            "ALTER TABLE invoices ADD COLUMN paid_amount_zar FLOAT",
-            "ALTER TABLE companies ADD COLUMN logo_url TEXT",
-            "ALTER TABLE purchase_orders ADD COLUMN received_date TIMESTAMP",
-            "ALTER TABLE companies ADD COLUMN payroll_pin_hash VARCHAR",
-            """CREATE TABLE IF NOT EXISTS subscription_payments (
-                id SERIAL PRIMARY KEY,
-                company_id INTEGER REFERENCES companies(id),
-                company_name VARCHAR NOT NULL,
-                owner_email VARCHAR,
-                plan VARCHAR NOT NULL,
-                billing_cycle VARCHAR DEFAULT 'monthly',
-                amount FLOAT NOT NULL,
-                payfast_payment_id VARCHAR,
-                internal_payment_id INTEGER,
-                status VARCHAR DEFAULT 'success',
-                payment_date TIMESTAMP DEFAULT NOW(),
-                period_start TIMESTAMP,
-                period_end TIMESTAMP,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
-            )""",
-        ]:
-            try:
-                conn.execute(text(sql))
-                conn.commit()
-            except Exception:
-                conn.rollback()  # Reset connection so next statement starts fresh
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+            "CREATE TABLE IF NOT EXISTS budgets (id SERIAL PRIMARY KEY, comp

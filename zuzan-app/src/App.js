@@ -1524,6 +1524,227 @@ function BatchPaymentModal({employees, payroll, period, onClose}) {
 }
 
 // ── PAYROLL ───────────────────────────────────────────────────────────────────
+// ── LEAVE MANAGEMENT ─────────────────────────────────────────────────────────
+function LeaveManagement({employees = []}) {
+  const [balances,  setBalances]  = useState([]);
+  const [requests,  setRequests]  = useState([]);
+  const [loadingBal, setLoadingBal] = useState(false);
+  const [loadingReq, setLoadingReq] = useState(false);
+  const [leaveSection, setLeaveSection] = useState("requests"); // requests | balances | submit
+  const [submitForm, setSubmitForm] = useState({employee_id:"",leave_type:"annual",start_date:"",end_date:"",reason:""});
+  const [submitMsg, setSubmitMsg]   = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const fetchAll = async () => {
+    setLoadingBal(true); setLoadingReq(true);
+    try { const d = await api("/leave/balances"); setBalances(d); } catch(e) { console.warn("leave balances:", e); } finally { setLoadingBal(false); }
+    try { const d = await api("/leave/requests"); setRequests(d); } catch(e) { console.warn("leave requests:", e); } finally { setLoadingReq(false); }
+  };
+
+  useEffect(() => { fetchAll(); }, []);
+
+  const handleReview = async (reqId, status) => {
+    try {
+      await api(`/leave/requests/${reqId}`, {method:"PUT", body:JSON.stringify({status})});
+      fetchAll();
+    } catch(e) { alert("Failed: " + (e.message||"unknown error")); }
+  };
+
+  const handleSubmit = async () => {
+    if (!submitForm.employee_id || !submitForm.start_date || !submitForm.end_date) {
+      setSubmitMsg({type:"error", text:"Employee, start date and end date are required."}); return;
+    }
+    setSubmitting(true); setSubmitMsg(null);
+    try {
+      const res = await api("/leave/requests", {method:"POST", body:JSON.stringify({
+        employee_id: +submitForm.employee_id,
+        leave_type:  submitForm.leave_type,
+        start_date:  submitForm.start_date,
+        end_date:    submitForm.end_date,
+        reason:      submitForm.reason || undefined,
+      })});
+      setSubmitMsg({type:"ok", text: res.message || "Leave request submitted."});
+      setSubmitForm({employee_id:"",leave_type:"annual",start_date:"",end_date:"",reason:""});
+      fetchAll();
+    } catch(e) { setSubmitMsg({type:"error", text: e.message||"Submission failed."}); }
+    setSubmitting(false);
+  };
+
+  const pending  = requests.filter(r => r.status === "pending").length;
+  const approved = requests.filter(r => r.status === "approved").length;
+
+  const statusColor = s => s === "approved" ? C.green : s === "pending" ? C.gold : s === "rejected" ? C.red : C.inkMid;
+  const statusBg    = s => s === "approved" ? C.greenLt : s === "pending" ? C.goldLt : s === "rejected" ? C.redLt : C.bg;
+
+  const tabs = [{id:"requests",label:"Requests"},{id:"balances",label:"Leave Balances"},{id:"submit",label:"Submit Leave"}];
+
+  return (
+    <div>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:"0 0 4px"}}>Leave Management</h2>
+        <p style={{fontSize:12,color:C.inkMid,margin:0}}>BCEA-compliant leave tracking — annual (15 days), sick (30/3yr), family responsibility (3 days)</p>
+      </div>
+
+      {/* KPI cards */}
+      <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+        <KPI label="Pending Requests"  value={pending}  color={C.gold}  icon="⏳"/>
+        <KPI label="Approved (all)"    value={approved} color={C.green} icon="✅"/>
+        <KPI label="Total Employees"   value={balances.length} color={C.accent} icon="👥"/>
+        <KPI label="Auto-approve in"   value="48 hrs"   color={C.blue}  icon="🕐"/>
+      </div>
+
+      {/* Sub-section tabs */}
+      <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:`1px solid ${C.border}`,paddingBottom:0}}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={()=>setLeaveSection(t.id)} style={{background:"none",border:"none",borderBottom: leaveSection===t.id ? `2px solid ${C.accent}` : "2px solid transparent",padding:"8px 18px",fontSize:13,fontWeight:leaveSection===t.id?700:400,color:leaveSection===t.id?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit",marginBottom:"-1px"}}>
+            {t.label}
+          </button>
+        ))}
+        <button onClick={fetchAll} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"6px 14px",fontSize:12,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>↺ Refresh</button>
+      </div>
+
+      {/* ── REQUESTS TAB ── */}
+      {leaveSection === "requests" && (
+        <div>
+          {loadingReq ? <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading...</div> : requests.length === 0 ? (
+            <div style={{color:C.inkMid,fontSize:13,padding:20,textAlign:"center"}}>No leave requests yet.</div>
+          ) : (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                    {["Employee","Type","Dates","Days","Status","Reason","Action"].map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:"11px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {requests.map(r => (
+                    <tr key={r.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                      <td style={{padding:"12px 14px",fontWeight:600,color:C.ink}}>{r.employee_name}</td>
+                      <td style={{padding:"12px 14px",textTransform:"capitalize"}}>{r.leave_type}</td>
+                      <td style={{padding:"12px 14px",color:C.inkMid,whiteSpace:"nowrap"}}>{r.start_date} → {r.end_date}</td>
+                      <td style={{padding:"12px 14px",fontWeight:700}}>{r.days_requested}</td>
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{background:statusBg(r.status),color:statusColor(r.status),borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,textTransform:"capitalize"}}>
+                          {r.auto_approved ? "Auto-approved" : r.status}
+                        </span>
+                      </td>
+                      <td style={{padding:"12px 14px",color:C.inkMid,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.reason||"—"}</td>
+                      <td style={{padding:"12px 14px"}}>
+                        {r.status === "pending" ? (
+                          <div style={{display:"flex",gap:6}}>
+                            <button onClick={()=>handleReview(r.id,"approved")} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>Approve</button>
+                            <button onClick={()=>handleReview(r.id,"rejected")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>Reject</button>
+                          </div>
+                        ) : <span style={{color:C.inkMid,fontSize:11}}>{r.reviewed_by||"—"}</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── BALANCES TAB ── */}
+      {leaveSection === "balances" && (
+        <div>
+          {loadingBal ? <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading...</div> : balances.length === 0 ? (
+            <div style={{color:C.inkMid,fontSize:13,padding:20,textAlign:"center"}}>No active employees found.</div>
+          ) : (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                    {["Employee","Position","Annual Balance","Annual Taken","Sick Balance","Sick Taken","Family Balance","Last Accrual"].map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:"11px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {balances.map(b => (
+                    <tr key={b.employee_id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                      <td style={{padding:"12px 14px",fontWeight:600,color:C.ink}}>{b.employee_name}</td>
+                      <td style={{padding:"12px 14px",color:C.inkMid}}>{b.position||"—"}</td>
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontWeight:700,color:b.annual_balance<3?C.red:C.green}}>{b.annual_balance} days</span>
+                      </td>
+                      <td style={{padding:"12px 14px",color:C.inkMid}}>{b.annual_taken_ytd} days</td>
+                      <td style={{padding:"12px 14px"}}>
+                        <span style={{fontWeight:700,color:b.sick_balance<5?C.gold:C.ink}}>{b.sick_balance} days</span>
+                      </td>
+                      <td style={{padding:"12px 14px",color:C.inkMid}}>{b.sick_taken_ytd} days</td>
+                      <td style={{padding:"12px 14px",fontWeight:600}}>{b.family_balance} days</td>
+                      <td style={{padding:"12px 14px",color:C.inkMid,fontSize:11}}>{b.last_accrual_date||"Never"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div style={{marginTop:12,padding:"12px 16px",background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10,fontSize:12,color:C.inkMid}}>
+            <strong style={{color:C.accent}}>Accrual note:</strong> Annual leave accrues at +1.25 days/month automatically when payroll is run. Maximum carry-over: 30 days.
+          </div>
+        </div>
+      )}
+
+      {/* ── SUBMIT LEAVE TAB ── */}
+      {leaveSection === "submit" && (
+        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:28,maxWidth:560}}>
+          <h3 style={{fontFamily:"serif",fontSize:20,margin:"0 0 20px",color:C.ink}}>Submit Leave Request</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employee</label>
+              <select value={submitForm.employee_id} onChange={e=>setSubmitForm(v=>({...v,employee_id:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="">-- Select Employee --</option>
+                {employees.map(emp=><option key={emp.id||emp.employee_id} value={emp.id||emp.employee_id}>{emp.name||emp.first_name+" "+emp.last_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Leave Type</label>
+              <select value={submitForm.leave_type} onChange={e=>setSubmitForm(v=>({...v,leave_type:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="annual">Annual Leave</option>
+                <option value="sick">Sick Leave</option>
+                <option value="family">Family Responsibility</option>
+                <option value="maternity">Maternity Leave</option>
+                <option value="unpaid">Unpaid Leave</option>
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Start Date</label>
+              <input type="date" value={submitForm.start_date} onChange={e=>setSubmitForm(v=>({...v,start_date:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>End Date</label>
+              <input type="date" value={submitForm.end_date} onChange={e=>setSubmitForm(v=>({...v,end_date:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Reason (optional)</label>
+              <input placeholder="e.g. Scheduled medical appointment" value={submitForm.reason} onChange={e=>setSubmitForm(v=>({...v,reason:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+            </div>
+          </div>
+          {submitMsg && (
+            <div style={{background:submitMsg.type==="ok"?C.greenLt:C.redLt,border:`1px solid ${submitMsg.type==="ok"?C.green:C.red}40`,borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:13,color:submitMsg.type==="ok"?C.green:C.red}}>
+              {submitMsg.text}
+            </div>
+          )}
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={handleSubmit} disabled={submitting} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:submitting?0.6:1}}>
+              {submitting ? "Submitting..." : "Submit Request"}
+            </button>
+            <button onClick={()=>setLeaveSection("requests")} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>View Requests</button>
+          </div>
+          <div style={{marginTop:16,fontSize:11,color:C.inkMid,lineHeight:1.8}}>
+            <strong style={{color:C.ink}}>Approval flow:</strong> Requests go to manager for review. If no action is taken within 48 hours, the request is <em>automatically approved</em> and leave is deducted from the employee's balance.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Payroll({live = {}, user = {}}) {
   const liveEmployees = live.employees;
   const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
@@ -1535,6 +1756,7 @@ function Payroll({live = {}, user = {}}) {
   const [pinSet,    setPinSet]    = useState(null);  // null=loading, true/false
   const [pinError,  setPinError]  = useState("");
   const [pinBusy,   setPinBusy]   = useState(false);
+  const [payrollSection, setPayrollSection] = useState("payroll"); // payroll | leave
 
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
@@ -1656,12 +1878,34 @@ function Payroll({live = {}, user = {}}) {
     );
   }
 
+  // Leave management sub-tab (accessible after PIN gate)
+  if (payrollSection === "leave") {
+    return (
+      <div>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
+          {["payroll","leave"].map(s => (
+            <button key={s} onClick={()=>setPayrollSection(s)} style={{background:"none",border:"none",borderBottom:payrollSection===s?`2px solid ${C.accent}`:"2px solid transparent",padding:"8px 16px",fontSize:14,fontWeight:payrollSection===s?700:400,color:payrollSection===s?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+              {s==="payroll"?"Payroll":"Leave Management"}
+            </button>
+          ))}
+        </div>
+        <LeaveManagement employees={employees} />
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
         <div>
-          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Payroll</h2>
-          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>SARS-compliant PAYE, UIF, SDL, EMP201, IRP5</p>
+          <div style={{display:"flex",gap:4,marginBottom:0}}>
+            {["payroll","leave"].map(s => (
+              <button key={s} onClick={()=>setPayrollSection(s)} style={{background:"none",border:"none",borderBottom:payrollSection===s?`2px solid ${C.accent}`:"2px solid transparent",padding:"4px 14px",fontSize:13,fontWeight:payrollSection===s?700:400,color:payrollSection===s?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                {s==="payroll"?"Payroll":"Leave Management"}
+              </button>
+            ))}
+          </div>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:4}}>SARS-compliant PAYE, UIF, SDL, EMP201, IRP5</p>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -6482,318 +6726,4 @@ function MobileDashboard({live, user, onNavigate}) {
                 </div>
                 <div style={{textAlign:"right"}}>
                   <div style={{fontSize:15,fontWeight:800,color:C.ink}}>{fmt(inv.amount)}</div>
-                  <div style={{marginTop:4,fontSize:10,fontWeight:700,color:statusColor,background:statusBg,padding:"2px 8px",borderRadius:10,textTransform:"uppercase"}}>{inv.status}</div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── MOBILE SHELL ──────────────────────────────────────────────────────────────
-function MobileApp({user, onLogout, onUserUpdate, live}) {
-  const [tab, setTab] = useState("home");
-  const [moreOpen, setMoreOpen] = useState(false);
-
-  const BOTTOM_TABS = [
-    {id:"home",      label:"Home",     icon:"🏠"},
-    {id:"invoicing", label:"Invoices", icon:"🧾"},
-    {id:"expenses",  label:"Expenses", icon:"💳"},
-    {id:"payroll",   label:"Payroll",  icon:"👥"},
-    {id:"more",      label:"More",     icon:"⋯"},
-  ];
-
-  const MORE_ITEMS = [
-    {id:"quotes",          label:"Quotes",      icon:"📝"},
-    {id:"budgeting",       label:"Budgeting",   icon:"🎯"},
-    {id:"customers",       label:"Customers",   icon:"👥"},
-    {id:"suppliers",       label:"Suppliers",   icon:"🏭"},
-    {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
-    {id:"reports",         label:"Reports",     icon:"📊"},
-    {id:"inventory",       label:"Inventory",   icon:"📦"},
-    {id:"bankimport",      label:"Bank",        icon:"🏦"},
-    {id:"debtors",         label:"Debtors",     icon:"📥"},
-    {id:"creditors",       label:"Creditors",   icon:"📤"},
-    {id:"coa",             label:"Accounts",    icon:"📒"},
-    {id:"settings",        label:"Settings",    icon:"⚙️"},
-  ];
-
-  const navigate = (id) => { setTab(id); setMoreOpen(false); };
-
-  const screens = {
-    home:       <MobileDashboard live={live} user={user} onNavigate={navigate}/>,
-    invoicing:  <div style={{padding:"16px 16px 100px"}}><Invoicing  live={live} user={user}/></div>,
-    expenses:   <div style={{padding:"16px 16px 100px"}}><Expenses   live={live}/></div>,
-    payroll:    <div style={{padding:"16px 16px 100px"}}><Payroll    live={live} user={user}/></div>,
-    quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate}/></div>,
-    budgeting:  <div style={{padding:"16px 16px 100px"}}><Budgeting  live={live}/></div>,
-    reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live}/></div>,
-    inventory:       <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
-    customers:       <div style={{padding:"16px 16px 100px"}}><Customers/></div>,
-    suppliers:       <div style={{padding:"16px 16px 100px"}}><Suppliers/></div>,
-    purchase_orders: <div style={{padding:"16px 16px 100px"}}><PurchaseOrders/></div>,
-    bankimport:      <div style={{padding:"16px 16px 100px"}}><BankImport live={live} onNavigate={navigate}/></div>,
-    debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
-    creditors:  <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div>,
-    coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
-    settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/></div>,
-  };
-
-  const activeLabel = [...BOTTOM_TABS,...MORE_ITEMS].find(t=>t.id===tab)?.label || "ZuZan";
-
-  return (
-    <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",minHeight:"100dvh"}}>
-      <style>{`*{box-sizing:border-box;margin:0;padding:0;}button:active{opacity:0.7;}`}</style>
-
-      {/* Top bar */}
-      <div style={{position:"fixed",top:0,left:0,right:0,height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",zIndex:50}}>
-        <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
-        <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{activeLabel}</div>
-        <button onClick={()=>navigate("settings")} style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}}>{user?.firstName?.[0]||"👤"}</button>
-      </div>
-
-      {/* Content */}
-      <div style={{paddingTop:56,minHeight:"100vh",overflowY:"auto"}}>
-        {screens[tab] || screens.home}
-      </div>
-
-      {/* More drawer */}
-      {moreOpen && (
-        <>
-          <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,background:"#00000050",zIndex:60}}/>
-          <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.surface,borderRadius:"24px 24px 0 0",padding:"12px 0 40px",zIndex:70}}>
-            <div style={{width:40,height:4,background:C.border,borderRadius:2,margin:"0 auto 20px"}}/>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:4,padding:"0 16px"}}>
-              {MORE_ITEMS.map(item=>(
-                <button key={item.id} onClick={()=>navigate(item.id)}
-                  style={{background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",padding:"12px 4px",display:"flex",flexDirection:"column",alignItems:"center",gap:6,borderRadius:12,background:tab===item.id?C.accentLt:"transparent"}}>
-                  <span style={{fontSize:26}}>{item.icon}</span>
-                  <span style={{fontSize:10,color:tab===item.id?C.accent:C.inkMid,fontWeight:tab===item.id?700:400}}>{item.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Bottom navigation */}
-      <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",paddingBottom:"env(safe-area-inset-bottom)",zIndex:50}}>
-        {BOTTOM_TABS.map(t=>{
-          const active = t.id==="more" ? moreOpen : tab===t.id;
-          return (
-            <button key={t.id} onClick={()=>{ if(t.id==="more"){setMoreOpen(o=>!o);}else{setTab(t.id);setMoreOpen(false);}}}
-              style={{flex:1,background:"none",border:"none",cursor:"pointer",padding:"10px 4px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:3,fontFamily:"inherit"}}>
-              <span style={{fontSize:22}}>{t.icon}</span>
-              <span style={{fontSize:10,color:active?C.accent:C.inkMid,fontWeight:active?700:400}}>{t.label}</span>
-              {active && t.id!=="more" && <div style={{width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
-            </button>
-          );
-        })}
-      </div>
-      <AIAssistant tab={tab}/>
-    </div>
-  );
-}
-
-// ── MAIN APP ──────────────────────────────────────────────────────────────────
-function ZuZanApp({user, onLogout, onUserUpdate}) {
-  const live = useLiveData();
-  const [tab, setTab] = useState("dashboard");
-  const [expanded, setExpanded] = useState({sales: true, procurement: false, banking: false});
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
-
-  const TABS = [
-    {id:"dashboard",  label:"Dashboard",   icon:"🏠"},
-    {id:"sales",      label:"Sales",       icon:"💼", children:[
-      {id:"invoicing",       label:"Invoices",        icon:"🧾"},
-      {id:"quotes",          label:"Quotes",          icon:"📝"},
-      {id:"customers",       label:"Customers",       icon:"👥"},
-    ]},
-    {id:"procurement", label:"Procurement", icon:"🛒", children:[
-      {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
-      {id:"suppliers",       label:"Suppliers",       icon:"🏭"},
-    ]},
-    {id:"expenses",   label:"Expenses",    icon:"💳"},
-    {id:"payroll",    label:"Payroll",     icon:"👥"},
-    {id:"reports",    label:"Reports",     icon:"📊"},
-    {id:"budgeting",  label:"Budgeting",   icon:"🎯"},
-    {id:"debtors",    label:"Debtors",     icon:"📥"},
-    {id:"creditors",  label:"Creditors",   icon:"📤"},
-    {id:"coa",        label:"Accounts",    icon:"📒"},
-    {id:"inventory",  label:"Inventory",   icon:"📦"},
-    {id:"banking",    label:"Banking",     icon:"🏦", children:[
-      {id:"bankimport", label:"Manual Update",   icon:"📄"},
-      {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
-    ]},
-    {id:"settings",   label:"Settings",    icon:"⚙️"},
-  ];
-
-  const toggleGroup = (id) => setExpanded(e => ({...e, [id]: !e[id]}));
-
-  const navBtn = (t, isChild=false) => {
-    const active = tab === t.id;
-    return (
-      <button key={t.id} onClick={()=>setTab(t.id)} style={{
-        width:"100%", display:"flex", alignItems:"center", gap:10,
-        padding: isChild ? "8px 12px 8px 36px" : "10px 12px",
-        borderRadius:10, border:"none", cursor:"pointer", fontFamily:"inherit",
-        fontSize: isChild ? 12 : 13,
-        fontWeight: active ? 700 : 400,
-        marginBottom:2,
-        background: active ? C.accentLt : "transparent",
-        color: active ? C.accent : isChild ? C.inkMid : C.inkMid,
-        textAlign:"left",
-      }}>
-        <span style={{fontSize: isChild ? 14 : 17}}>{t.icon}</span>{t.label}
-        {active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
-      </button>
-    );
-  };
-
-  if (isMobile) return <MobileApp user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} live={live}/>;
-
-  const screens = {
-    dashboard:  <Dashboard  live={live}/>,
-    invoicing:  <Invoicing  live={live} user={user}/>,
-    quotes:     <Quotes     live={live} user={user} onNavigate={setTab}/>,
-    expenses:   <Expenses   live={live}/>,
-    payroll:    <Payroll    live={live} user={user}/>,
-    reports:    <Reports    live={live}/>,
-    budgeting:  <Budgeting  live={live}/>,
-    debtors:    <Debtors    live={live}/>,
-    creditors:  <Creditors  live={live}/>,
-    coa:        <ChartOfAccounts/>,
-    inventory:       <Inventory/>,
-    customers:       <Customers/>,
-    suppliers:       <Suppliers/>,
-    purchase_orders: <PurchaseOrders/>,
-    bankimport:      <BankImport live={live} onNavigate={setTab}/>,
-    bankfeeds:       <BankFeeds/>,
-    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
-  };
-
-  return (
-    <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",display:"flex"}}>
-      <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-thumb{background:${C.border};}button:hover{opacity:0.9;}`}</style>
-      <div style={{width:230,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",position:"fixed",top:0,left:0,bottom:0,zIndex:10}}>
-        <div style={{padding:"24px 20px 20px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
-          <div style={{fontSize:10,color:C.inkMid,marginTop:3,letterSpacing:0.5}}>SA BOOKKEEPING PLATFORM</div>
-        </div>
-        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user?.companyName||"Your Company"}</div>
-          <div style={{fontSize:10,color:C.inkDim}}>{user?.plan?.name||"Professional"} Plan</div>
-          <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
-          <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
-        </div>
-        <nav style={{flex:1,padding:"12px 10px",overflowY:"auto"}}>
-          {TABS.map(t => {
-            if (!t.children) return navBtn(t);
-            const isOpen = expanded[t.id];
-            const childActive = t.children.some(c => c.id === tab);
-            return (
-              <div key={t.id}>
-                <button onClick={()=>toggleGroup(t.id)} style={{
-                  width:"100%", display:"flex", alignItems:"center", gap:10,
-                  padding:"10px 12px", borderRadius:10, border:"none", cursor:"pointer",
-                  fontFamily:"inherit", fontSize:13, marginBottom:2,
-                  fontWeight: childActive ? 700 : 400,
-                  background: childActive ? C.accentLt : "transparent",
-                  color: childActive ? C.accent : C.inkMid,
-                  textAlign:"left",
-                }}>
-                  <span style={{fontSize:17}}>{t.icon}</span>
-                  {t.label}
-                  <span style={{marginLeft:"auto",fontSize:10,opacity:.5}}>{isOpen ? "▾" : "▸"}</span>
-                </button>
-                {isOpen && t.children.map(c => navBtn(c, true))}
-              </div>
-            );
-          })}
-        </nav>
-        <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{user?.firstName||"User"} {user?.lastName||""}</div>
-          <div style={{fontSize:10,color:C.inkDim,marginBottom:8}}>{user?.email||"user@company.co.za"}</div>
-          <button onClick={onLogout} style={{fontSize:11,color:C.inkDim,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit"}}>Sign out</button>
-        </div>
-      </div>
-      <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
-        {screens[tab]}
-      </div>
-      <AIAssistant tab={tab}/>
-    </div>
-  );
-}
-
-// ── ROOT ──────────────────────────────────────────────────────────────────────
-export default function App() {
-  const [screen, setScreen] = useState("loading");
-  const [user,   setUser]   = useState(null);
-
-  // Keep Render free-tier backend alive — pings /health every 8 min while logged in
-  useEffect(() => {
-    if (screen !== "app") return;
-    const id = setInterval(() => fetch(`${BASE_URL}/health`).catch(() => {}), 8 * 60 * 1000);
-    return () => clearInterval(id);
-  }, [screen]);
-
-  useEffect(() => {
-    const token = localStorage.getItem("zuzan_token");
-    if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    fetch("https://zuzan-backend.onrender.com/auth/me", {
-      headers: {"Authorization": "Bearer " + token},
-      signal: controller.signal
-    })
-      .then(r => { clearTimeout(timeout); return r.ok ? r.json() : Promise.reject(); })
-      .then(data => {
-        setUser({
-          firstName:    data.user.first_name,
-          lastName:     data.user.last_name,
-          email:        data.user.email,
-          companyName:  data.company.name,
-          logoUrl:      data.company.logo_url || "",
-          plan:         {name: data.company.plan, id: data.company.plan},
-          access_token: token,
-          trialEnds:    data.company.trial_ends,
-        });
-        setScreen("app");
-      })
-      .catch(() => { clearTimeout(timeout); localStorage.removeItem("zuzan_token"); setScreen("login"); });
-  }, []);
-
-  const handleLogin = userData => { setUser(userData); setScreen("app"); };
-
-  const handleRegistrationComplete = userData => {
-    const savedToken = localStorage.getItem("zuzan_token");
-    if (!savedToken || savedToken.startsWith("demo_")) {
-      localStorage.setItem("zuzan_token", "demo_" + Date.now());
-    }
-    setUser(userData);
-    setScreen("app");
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem("zuzan_token");
-    setUser(null);
-    setScreen("login");
-  };
-
-  if (screen === "loading") return (
-    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{textAlign:"center"}}>
-        <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:12}}><span style={{color:C.accent}}>Zu</span>Zan</div>
-        <div style={{fontSize:13,color:C.inkMid}}>Loading your account...</div>
-      </div>
-    </div>
-  );
-
-  if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
-  if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
-
-  return <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>;
-}
+                  <div style={{marginTop:4,fontSize:10,fontWeight:700,color:statusColor,background:statusBg,padding:"2px 8px",borde
