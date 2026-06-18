@@ -389,4 +389,73 @@ def init_db():
             "ALTER TABLE api_keys ADD COLUMN requests_today INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN email_verify_token VARCHAR",
-            "CREATE TABLE IF NOT EXISTS budgets (id SERIAL PRIMARY KEY, comp
+            "CREATE TABLE IF NOT EXISTS budgets (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), year INTEGER NOT NULL, month INTEGER NOT NULL, category VARCHAR NOT NULL, department VARCHAR, type VARCHAR DEFAULT 'expense', amount FLOAT DEFAULT 0, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())",
+            "CREATE TABLE IF NOT EXISTS accounts (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), code VARCHAR NOT NULL, name VARCHAR NOT NULL, type VARCHAR NOT NULL, is_system BOOLEAN DEFAULT FALSE, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT NOW())",
+            "CREATE TABLE IF NOT EXISTS journal_entries (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id), date TIMESTAMP NOT NULL, description TEXT, reference VARCHAR, source VARCHAR, source_id INTEGER, is_reconciled BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT NOW())",
+            "CREATE TABLE IF NOT EXISTS journal_lines (id SERIAL PRIMARY KEY, entry_id INTEGER REFERENCES journal_entries(id) ON DELETE CASCADE, account_id INTEGER REFERENCES accounts(id), debit FLOAT DEFAULT 0, credit FLOAT DEFAULT 0, description VARCHAR)",
+            "ALTER TABLE invoices ADD COLUMN currency VARCHAR DEFAULT 'ZAR'",
+            "ALTER TABLE invoices ADD COLUMN exchange_rate FLOAT DEFAULT 1",
+            "ALTER TABLE invoices ADD COLUMN paid_amount_zar FLOAT",
+            "ALTER TABLE companies ADD COLUMN logo_url TEXT",
+            "ALTER TABLE purchase_orders ADD COLUMN received_date TIMESTAMP",
+            "ALTER TABLE companies ADD COLUMN payroll_pin_hash VARCHAR",
+            """CREATE TABLE IF NOT EXISTS leave_requests (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                employee_id INTEGER REFERENCES employees(id),
+                leave_type VARCHAR NOT NULL,
+                start_date TIMESTAMP NOT NULL,
+                end_date TIMESTAMP NOT NULL,
+                days_requested FLOAT NOT NULL,
+                status VARCHAR DEFAULT 'pending',
+                reason TEXT,
+                submitted_at TIMESTAMP DEFAULT NOW(),
+                reviewed_at TIMESTAMP,
+                reviewed_by VARCHAR,
+                auto_approved BOOLEAN DEFAULT FALSE
+            )""",
+            """CREATE TABLE IF NOT EXISTS leave_balances (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                employee_id INTEGER REFERENCES employees(id) UNIQUE,
+                annual_balance FLOAT DEFAULT 15.0,
+                annual_accrued_ytd FLOAT DEFAULT 0.0,
+                annual_taken_ytd FLOAT DEFAULT 0.0,
+                sick_balance FLOAT DEFAULT 30.0,
+                sick_taken_ytd FLOAT DEFAULT 0.0,
+                family_balance FLOAT DEFAULT 3.0,
+                family_taken_ytd FLOAT DEFAULT 0.0,
+                last_accrual_date TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS subscription_payments (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                company_name VARCHAR NOT NULL,
+                owner_email VARCHAR,
+                plan VARCHAR NOT NULL,
+                billing_cycle VARCHAR DEFAULT 'monthly',
+                amount FLOAT NOT NULL,
+                payfast_payment_id VARCHAR,
+                internal_payment_id INTEGER,
+                status VARCHAR DEFAULT 'success',
+                payment_date TIMESTAMP DEFAULT NOW(),
+                period_start TIMESTAMP,
+                period_end TIMESTAMP,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+        ]:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                conn.rollback()  # Reset connection so next statement starts fresh
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

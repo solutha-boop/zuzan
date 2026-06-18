@@ -835,4 +835,9 @@ async function submitManual() {
     if (!res.ok) throw new Error(await res.text());
     document.getElementById('addMsg').textContent = '✓ Saved';
     setTimeout(() => { toggleAddForm(); loadRevenue(); }, 800);
-  } catch(e) { document.getEl
+  } catch(e) { document.getElementById('addMsg').textContent = 'Error: ' + e.message; }
+}
+</script>
+</body>
+</html>"""
+    return _HTML(content=html)

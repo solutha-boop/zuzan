@@ -1312,4 +1312,40 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
                 plan                = plan_val,
                 billing_cycle       = cycle_val,
                 amount              = amount_paid,
-                payfast_payme
+                payfast_payment_id  = data.get("pf_payment_id"),
+                internal_payment_id = payment.id,
+                status              = "success",
+                payment_date        = now,
+                period_start        = now,
+                period_end          = period_end,
+            )
+            db.add(sub_pay)
+    else:
+        payment.status = "failed"
+
+    db.commit()
+    return JSONResponse(content={"status": "ok"})
+
+
+@payments_router.get("/subscription")
+async def subscription_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    company     = db.query(Company).filter(Company.id == current_user.company_id).first()
+    plan_str    = str(company.plan).split(".")[-1]
+    billing_str = str(company.billing_cycle).split(".")[-1]
+    plan_price  = PLAN_PRICES.get(plan_str, {}).get(billing_str, 299)
+    payroll_cost = max(99, company.payroll_employees * 17.50) if company.payroll_enabled else 0
+
+    return {
+        "plan":              company.plan,
+        "billing_cycle":     company.billing_cycle,
+        "status":            company.subscription_status,
+        "trial_ends":        company.trial_ends.isoformat() if company.trial_ends else None,
+        "plan_price":        plan_price,
+        "payroll_cost":      payroll_cost,
+        "total_monthly":     plan_price + payroll_cost,
+        "payroll_enabled":   company.payroll_enabled,
+        "payroll_employees": company.payroll_employees,
+    }
