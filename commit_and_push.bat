@@ -13,6 +13,7 @@ git reset HEAD
 
 echo === Copying fixed files ===
 copy /y App_js_fixed.js zuzan-app\src\App.js
+copy /y App_mobile_js_fixed.js zuzan-app\src\App.mobile.js
 
 echo === Staging ===
 git add zuzan-app/src/App.js
@@ -28,10 +29,12 @@ git add zuzan-backend/email_service.py
 git add zuzan-backend/purchase_orders.py
 git add zuzan-backend/auth.py
 git add zuzan-backend/leave.py
+git add zuzan-app/src/App.mobile.js
+git add App_mobile_js_fixed.js
 git diff --cached --stat
 
 echo === Committing ===
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: leave management -- BCEA leave types, balances, accrual, auto-approve 48h"
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: simplified mobile app -- Invoices, Expenses, Quotes only"
 
 echo === Pushing ===
 git push origin main
