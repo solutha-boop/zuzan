@@ -226,7 +226,12 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
         journal_engine.post_po_received(po, db)
         db.commit()
     except Exception as e:
-        logger.warning(f"Journal post failed for PO {po.po_number}: {e}")
+        logger.error(f"Journal post failed for PO {po.po_number}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"PO received but journal entry failed: {e}. Receipt has been rolled back — please retry.",
+        )
 
     return {
         **to_dict(po),
@@ -260,6 +265,11 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
         journal_engine.post_po_paid(po, db)
         db.commit()
     except Exception as e:
-        logger.warning(f"Journal post failed for PO payment {po.po_number}: {e}")
+        logger.error(f"Journal post failed for PO payment {po.po_number}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"PO payment recorded but journal entry failed: {e}. Payment has been rolled back — please retry.",
+        )
 
     return {**to_dict(po), "journal": "DR Accounts Payable / CR Bank posted"}

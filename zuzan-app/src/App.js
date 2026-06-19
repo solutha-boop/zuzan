@@ -537,7 +537,8 @@ function Dashboard({live = {}}) {
         </div>
       </div>
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:20}}>
-        <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Profit Trend</div>
+        <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:4}}>Gross Profit Trend</div>
+        <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>Revenue minus expenses (excl. payroll)</div>
         <ResponsiveContainer width="100%" height={130}>
           <AreaChart data={REVENUE_DATA}>
             <defs>
@@ -550,7 +551,7 @@ function Dashboard({live = {}}) {
             <XAxis dataKey="month" tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false}/>
             <YAxis tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false} tickFormatter={v => `R${v/1000}k`} width={45}/>
             <Tooltip content={<Tooltip2/>}/>
-            <Area type="monotone" dataKey="profit" name="Profit" stroke={C.green} strokeWidth={2} fill="url(#pg)" dot={false}/>
+            <Area type="monotone" dataKey="gross_profit" name="Gross Profit" stroke={C.green} strokeWidth={2} fill="url(#pg)" dot={false}/>
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -3760,7 +3761,7 @@ function Creditors({live = {}}) {
                             <td style={{padding:"10px 20px",color:C.inkMid}}>{exp.due_date?new Date(exp.due_date).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"}):"—"}</td>
                             <td style={{padding:"10px 20px"}}>
                               <Badge
-                                label={exp.bucket==="not_due" ? "Not due" : `${exp.days_overdue} days`}
+                                label={exp.bucket==="not_due" ? `Due in ${exp.days_until_due} day${exp.days_until_due===1?"":"s"}` : `${exp.days_overdue} days`}
                                 color={bc.color} bg={bc.color+"15"}/>
                             </td>
                             <td style={{padding:"10px 20px",fontWeight:700,color:C.red}}>{fmt(exp.amount)}</td>

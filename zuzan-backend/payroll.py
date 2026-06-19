@@ -210,7 +210,12 @@ async def run_payroll(
             journal_engine.init_accounts(emp.company_id, db)
             journal_engine.post_payroll(payslip, emp, db)
         except Exception as e:
-            logger.warning(f"Journal post failed for payslip {payslip.id}: {e}")
+            logger.error(f"Journal post failed for payslip {payslip.id}: {e}")
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Payroll processed but journal entry failed for {emp.first_name} {emp.last_name}: {e}. Payroll has been rolled back — please retry.",
+            )
 
     db.commit()
 
@@ -372,10 +377,12 @@ async def monthly_trend(
         expenses = expenses + po_cogs
 
         months.append({
-            "month":    start.strftime("%b"),
-            "revenue":  round(revenue, 2),
-            "expenses": round(expenses, 2),
-            "profit":   round(revenue - expenses, 2),
+            "month":        start.strftime("%b"),
+            "revenue":      round(revenue, 2),
+            "expenses":     round(expenses, 2),
+            "gross_profit": round(revenue - expenses, 2),
+            # Legacy alias kept for any existing consumers
+            "profit":       round(revenue - expenses, 2),
         })
 
     return months
@@ -563,7 +570,48 @@ async def reconciliation(
             "items": [{"id": po.po_number, "supplier": po.supplier_name,
                        "amount": po.total_amount, "status": po.status} for po in open_pos]})
 
-    # ── RULE 6: Inventory valuation ───────────────────────────────────────────
+    # ── RULE 6: AR control account — journal 1100 vs outstanding invoices ────
+    from database import Account, JournalLine
+    import journal as journal_engine
+    journal_engine.init_accounts(cid, db)
+    ar_acct = db.query(Account).filter(Account.company_id == cid, Account.code == "1100").first()
+    if ar_acct:
+        ar_journal_bal = journal_engine.account_balance(ar_acct, db)
+        outstanding_invs = db.query(Invoice).filter(
+            Invoice.company_id == cid,
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
+        ).all()
+        ar_raw_total = round(sum(_to_zar(i) for i in outstanding_invs), 2)
+        ar_diff = round(ar_journal_bal - ar_raw_total, 2)
+        if abs(ar_diff) < 1.0:
+            checks.append({"rule": "AR Control Account (1100)", "status": "pass",
+                "detail": f"Journal AR balance R {ar_journal_bal:,.2f} reconciles with outstanding invoices R {ar_raw_total:,.2f} ✓",
+                "amount": ar_journal_bal})
+        else:
+            checks.append({"rule": "AR Control Account (1100)", "status": "fail",
+                "detail": f"AR journal balance R {ar_journal_bal:,.2f} differs from outstanding invoice total R {ar_raw_total:,.2f} by R {ar_diff:,.2f}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
+                "amount": ar_diff})
+
+    # ── RULE 7: AP control account — journal 2000 vs open PO totals ──────────
+    ap_acct = db.query(Account).filter(Account.company_id == cid, Account.code == "2000").first()
+    if ap_acct:
+        ap_journal_bal = journal_engine.account_balance(ap_acct, db)
+        open_po_list = db.query(PurchaseOrder).filter(
+            PurchaseOrder.company_id == cid,
+            PurchaseOrder.status.in_(["received", "partial"])
+        ).all()
+        ap_raw_total = round(sum(po.total_amount or 0 for po in open_po_list), 2)
+        ap_diff = round(ap_journal_bal - ap_raw_total, 2)
+        if abs(ap_diff) < 1.0:
+            checks.append({"rule": "AP Control Account (2000)", "status": "pass",
+                "detail": f"Journal AP balance R {ap_journal_bal:,.2f} reconciles with open PO total R {ap_raw_total:,.2f} ✓",
+                "amount": ap_journal_bal})
+        else:
+            checks.append({"rule": "AP Control Account (2000)", "status": "fail",
+                "detail": f"AP journal balance R {ap_journal_bal:,.2f} differs from open PO total R {ap_raw_total:,.2f} by R {ap_diff:,.2f}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
+                "amount": ap_diff})
+
+    # ── RULE 8: Inventory valuation ───────────────────────────────────────────
     inv_items   = db.query(InventoryItem).filter(InventoryItem.company_id==cid, InventoryItem.is_active==True).all()
     below_reorder = [i for i in inv_items if i.quantity_on_hand <= i.reorder_level]
     neg_stock     = [i for i in inv_items if i.quantity_on_hand < 0]
@@ -810,7 +858,7 @@ async def management_accounts(
             PurchaseOrder.received_date < end,
         ).all()), 2)
         exp = round(exp + po_c, 2)
-        trend.append({"month": start.strftime("%b"), "revenue": rev, "expenses": exp, "profit": round(rev - exp, 2)})
+        trend.append({"month": start.strftime("%b"), "revenue": rev, "expenses": exp, "gross_profit": round(rev - exp, 2), "profit": round(rev - exp, 2)})
 
     return {
         "period":       now.strftime("%B %Y"),
@@ -872,7 +920,19 @@ async def provisional_tax(
         Expense.company_id == cid,
         Expense.expense_date >= year_start
     ).all()
-    ytd_expenses = round(sum(e.amount for e in expenses), 2)
+    # Ex-VAT expenses — consistent with dashboard/management endpoints
+    ytd_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
+
+    # Add PO COGS (received/partial/paid POs) — consistent with dashboard
+    po_cogs_ytd = sum(
+        po.total_amount or 0
+        for po in db.query(PurchaseOrder).filter(
+            PurchaseOrder.company_id == cid,
+            PurchaseOrder.status.in_(["received", "partial", "paid"]),
+            PurchaseOrder.received_date >= year_start,
+        ).all()
+    )
+    ytd_expenses = round(ytd_expenses + po_cogs_ytd, 2)
 
     payslips = db.query(Payslip).join(Employee).filter(
         Employee.company_id == cid,
@@ -1055,6 +1115,7 @@ async def creditors_aging(
             "received_date":base_date.strftime("%Y-%m-%d") if base_date else None,
             "due_date":     due_date.strftime("%Y-%m-%d") if due_date else None,
             "days_overdue": max(0, days_overdue),
+            "days_until_due": max(0, -days_overdue) if days_overdue < 0 else 0,
             "bucket":       bucket,
         }
         vendor_map[vendor_name]["invoices"].append(entry)
