@@ -161,10 +161,10 @@ const StatusBadge = ({status}) => {
   return <Badge label={l} color={c} bg={bg}/>;
 };
 
-const KPI = ({label,value,sub,color=C.ink,icon,onClick}) => (
-  <div onClick={onClick} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 18px",flex:1,cursor:onClick?"pointer":"default",transition:"box-shadow 0.15s",boxShadow:"none"}}
-    onMouseEnter={e=>{if(onClick)e.currentTarget.style.boxShadow="0 4px 16px rgba(0,0,0,0.10)";}}
-    onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}>
+const KPI = ({label,value,sub,color=C.ink,icon,onClick,active=false}) => (
+  <div onClick={onClick} style={{background:C.surface,border:active?`2px solid ${color}`:`1px solid ${C.border}`,borderRadius:14,padding:active?"15px 17px":"16px 18px",flex:1,cursor:onClick?"pointer":"default",transition:"box-shadow 0.15s, border 0.15s",boxShadow:active?"0 0 0 3px "+color+"18":"none"}}
+    onMouseEnter={e=>{if(onClick)e.currentTarget.style.boxShadow=active?"0 0 0 3px "+color+"18":"0 4px 16px rgba(0,0,0,0.10)";}}
+    onMouseLeave={e=>{e.currentTarget.style.boxShadow=active?"0 0 0 3px "+color+"18":"none";}}>
     <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
       <span style={{fontSize:10,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",fontWeight:600}}>{label}</span>
       <span style={{fontSize:16}}>{icon}</span>
@@ -659,10 +659,11 @@ function Invoicing({live = {}, user = {}}) {
   const [invoices, setInvoices] = useState(MOCK_INVOICES);
   useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
 
-  const [showNew,   setShowNew]   = useState(false);
-  const [preview,   setPreview]   = useState(null);   // view modal
-  const [editInv,   setEditInv]   = useState(null);   // amend modal
-  const [payModal,  setPayModal]  = useState(null);   // {inv, zarAmt, payDate, ref}
+  const [showNew,      setShowNew]      = useState(false);
+  const [preview,      setPreview]      = useState(null);   // view modal
+  const [editInv,      setEditInv]      = useState(null);   // amend modal
+  const [payModal,     setPayModal]     = useState(null);   // {inv, zarAmt, payDate, ref}
+  const [filterStatus, setFilterStatus] = useState(null);   // null | "paid" | "pending" | "overdue"
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true,currency:"ZAR",exchangeRate:"18.5",vatAmount:"0"});
   const [saving, setSaving] = useState(false);
   const [customers, setCustomers] = useState([]);
@@ -672,6 +673,8 @@ function Invoicing({live = {}, user = {}}) {
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
   const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + toZar(i), 0);
   const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + toZar(i), 0);
+  const displayedInvoices = filterStatus ? invoices.filter(i => i.status === filterStatus) : invoices;
+  const toggleFilter = (status) => setFilterStatus(prev => prev === status ? null : status);
 
   const openPayModal = (inv) => {
     const zarAmt = inv.currency && inv.currency !== "ZAR"
@@ -723,11 +726,17 @@ function Invoicing({live = {}, user = {}}) {
   return (
     <div>
       <SectionHeader title="Invoicing" sub="Manage your client invoices" action="+ New Invoice" onAction={() => setShowNew(true)}/>
-      <div style={{display:"flex",gap:12,marginBottom:24}}>
-        <KPI label="Paid" value={fmt(totalPaid)} color={C.green} icon="✅"/>
-        <KPI label="Pending" value={fmt(totalPending)} color={C.gold} icon="⏳"/>
-        <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red} icon="⚠️"/>
+      <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
+        <KPI label="Paid"    value={fmt(totalPaid)}    color={C.green} icon="✅" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"}/>
+        <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("pending")} active={filterStatus==="pending"}/>
+        <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
       </div>
+      {filterStatus && (
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"10px 16px",background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10}}>
+          <span style={{fontSize:13,color:C.accent,fontWeight:600,textTransform:"capitalize"}}>Showing: {filterStatus} ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
+          <button onClick={()=>setFilterStatus(null)} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.accent}40`,borderRadius:6,padding:"4px 10px",fontSize:12,color:C.accent,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✕ Show All</button>
+        </div>
+      )}
 
       {/* New Invoice */}
       {showNew && (
@@ -853,7 +862,10 @@ function Invoicing({live = {}, user = {}}) {
             </tr>
           </thead>
           <tbody>
-            {invoices.map((inv) => (
+            {displayedInvoices.length === 0 && (
+              <tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13}}>No {filterStatus} invoices found.</td></tr>
+            )}
+            {displayedInvoices.map((inv) => (
               <tr key={inv.id} style={{borderBottom:`1px solid ${C.border}30`}}>
                 <td style={{padding:"13px 16px",fontWeight:700,color:C.accent}}>{inv.id}</td>
                 <td style={{padding:"13px 16px",fontWeight:500}}>{inv.client}</td>
@@ -1006,9 +1018,17 @@ function Expenses({live = {}}) {
       <SectionHeader title="Expenses" sub="Categorise expenses to post them to the Income Statement" action="+ Add Expense" onAction={() => setShowNew(true)}/>
 
       {/* Summary bar */}
-      <div style={{display:"flex",gap:12,marginBottom:20}}>
-        <KPI label="To Categorise" value={unposted.length} sub={fmt(unposted.reduce((s,e)=>s+e.amount,0))} color={C.gold} icon="⏳"/>
-        <KPI label="Posted to Accounts" value={posted.length} sub={fmt(posted.reduce((s,e)=>s+e.amount,0))} color={C.green} icon="✅"/>
+      <div style={{display:"flex",gap:12,marginBottom:16}}>
+        <KPI label="To Categorise"     value={unposted.length} sub={fmt(unposted.reduce((s,e)=>s+e.amount,0))} color={C.gold}  icon="⏳" onClick={()=>setView("unposted")} active={view==="unposted"}/>
+        <KPI label="Posted to Accounts" value={posted.length}  sub={fmt(posted.reduce((s,e)=>s+e.amount,0))}  color={C.green} icon="✅" onClick={()=>setView("posted")}   active={view==="posted"}/>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"10px 16px",background:view==="unposted"?C.goldLt:C.greenLt,border:`1px solid ${view==="unposted"?C.gold:C.green}30`,borderRadius:10}}>
+        <span style={{fontSize:13,fontWeight:600,color:view==="unposted"?C.gold:C.green}}>
+          {view==="unposted"?"Showing uncategorised expenses":"Showing posted expenses"} — {displayed.length} record{displayed.length!==1?"s":""}, {fmt(total)}
+        </span>
+        <button onClick={()=>setView(view==="unposted"?"posted":"unposted")} style={{marginLeft:"auto",background:"none",border:`1px solid ${view==="unposted"?C.gold:C.green}40`,borderRadius:6,padding:"4px 10px",fontSize:12,color:view==="unposted"?C.gold:C.green,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+          Switch to {view==="unposted"?"Posted":"Uncategorised"}
+        </button>
       </div>
 
       {showNew && (
