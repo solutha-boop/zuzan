@@ -5206,9 +5206,12 @@ function Quotes({live={},user={},onNavigate}) {
     })))).catch(()=>{});
   },[]);
 
+  const [filterStatus, setFilterStatus] = useState(null); // null | "accepted" | "sent" | "draft" | "declined"
   const toZar = q => (q.totalAmount||q.amount||0) * (q.currency&&q.currency!=="ZAR" ? (q.rate||1) : 1);
   const totalAccepted = quotes.filter(q=>q.status==="accepted").reduce((s,q)=>s+toZar(q),0);
   const totalPending  = quotes.filter(q=>q.status==="sent").reduce((s,q)=>s+toZar(q),0);
+  const displayedQuotes = filterStatus ? quotes.filter(q=>q.status===filterStatus) : quotes;
+  const toggleFilter = (status) => setFilterStatus(prev => prev === status ? null : status);
 
   const handleCreate = async (status="draft") => {
     if(!form.client||!form.amount||!form.desc){alert("Client, description and amount are required.");return;}
@@ -5299,11 +5302,17 @@ function Quotes({live={},user={},onNavigate}) {
   return (
     <div>
       <SectionHeader title="Quotes & Estimates" sub="Send quotes and convert to invoices" action="+ New Quote" onAction={()=>setShowNew(true)}/>
-      <div style={{display:"flex",gap:12,marginBottom:24}}>
-        <KPI label="Accepted" value={fmtCurrency(totalAccepted)} color={C.green} icon="✅" sub={`${quotes.filter(q=>q.status==="accepted").length} quotes`}/>
-        <KPI label="Pending" value={fmtCurrency(totalPending)} color={C.gold} icon="⏳" sub={`${quotes.filter(q=>q.status==="sent").length} sent`}/>
-        <KPI label="Total Quotes" value={quotes.length} color={C.blue} icon="📝"/>
+      <div style={{display:"flex",gap:12,marginBottom:filterStatus?8:24}}>
+        <KPI label="Accepted" value={fmtCurrency(totalAccepted)} color={C.green} icon="✅" sub={`${quotes.filter(q=>q.status==="accepted").length} quotes`} onClick={()=>toggleFilter("accepted")} active={filterStatus==="accepted"}/>
+        <KPI label="Pending" value={fmtCurrency(totalPending)} color={C.gold} icon="⏳" sub={`${quotes.filter(q=>q.status==="sent").length} sent`} onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
+        <KPI label="Total Quotes" value={quotes.length} color={C.blue} icon="📝" onClick={()=>setFilterStatus(null)} active={filterStatus===null}/>
       </div>
+      {filterStatus && (
+        <div style={{background:filterStatus==="accepted"?C.greenLt:C.goldLt,border:`1px solid ${filterStatus==="accepted"?C.green:C.gold}30`,borderRadius:10,padding:"10px 16px",marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:13}}>
+          <span style={{color:C.ink,fontWeight:500}}>Showing: <strong style={{textTransform:"capitalize"}}>{filterStatus==="sent"?"pending":filterStatus}</strong> ({displayedQuotes.length} quotes)</span>
+          <button onClick={()=>setFilterStatus(null)} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 10px",fontSize:12,cursor:"pointer",color:C.inkMid,fontFamily:"inherit"}}>✕ Show All</button>
+        </div>
+      )}
 
       {showNew && (
         <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginBottom:20}}>
@@ -5441,10 +5450,11 @@ function Quotes({live={},user={},onNavigate}) {
         {quotes.length===0 ? (
           <div style={{padding:48,textAlign:"center",color:C.inkMid,fontSize:13}}>No quotes yet. Create your first quote above.</div>
         ) : (
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:700}}>
             <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Quote #","Client","Description","Amount","Currency","Valid Until","Status","Actions"].map(h=><th key={h} style={{textAlign:"left",padding:"12px 14px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
             <tbody>
-              {quotes.map(q=>{
+              {displayedQuotes.length===0 && <tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13}}>No {filterStatus==="sent"?"pending":filterStatus||""} quotes.</td></tr>}
+              {displayedQuotes.map(q=>{
                 const [label,color,bg] = QUOTE_STATUSES[q.status]||QUOTE_STATUSES.draft;
                 return (
                   <tr key={q.id} style={{borderBottom:`1px solid ${C.border}30`}}>
