@@ -392,12 +392,12 @@ function Dashboard({live = {}}) {
             fmt(toZarD(i)), i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
       } else if (type === "expenses") {
         const exps = await api("/expenses");
-        // All-time — matches dashboard expenses KPI exactly
+        // All-time — VAT-exclusive to match dashboard KPI (amount stored VAT-inclusive; back out vat_amount)
         const rows = exps.sort((a,b) => new Date(b.expense_date||b.created_at||0)-new Date(a.expense_date||a.created_at||0));
-        setDrill({type, title:"Expenses — All Time", color:C.red,
-          total: rows.reduce((s,e)=>s+(e.amount||0),0),
-          cols:["Description","Category","Amount","Date"],
-          rows: rows.map(e=>[e.description||"—", e.category||"—", fmt(e.amount||0),
+        setDrill({type, title:"Expenses — All Time (excl. VAT)", color:C.red,
+          total: rows.reduce((s,e)=>s+((e.amount||0)-(e.vat_amount||0)),0),
+          cols:["Description","Category","Amount (excl. VAT)","Date"],
+          rows: rows.map(e=>[e.description||"—", e.category||"—", fmt((e.amount||0)-(e.vat_amount||0)),
             e.expense_date ? new Date(e.expense_date).toLocaleDateString("en-ZA") : "—"])});
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
@@ -424,18 +424,32 @@ function Dashboard({live = {}}) {
             const p = calcPayroll(e.gross_salary);
             return [e.name, e.position||"—", fmt(e.gross_salary), fmt(p.netPay), fmt(p.totalCost)];
           })});
+      } else if (type === "vat") {
+        const invs = await api("/invoices");
+        const exps = await api("/expenses");
+        const outputVat = invs.reduce((s,i)=>s+(i.vat_amount||0),0);
+        const inputVat  = exps.reduce((s,e)=>s+(e.vat_amount||0),0);
+        const netVat    = outputVat - inputVat;
+        setDrill({type, title:"VAT Position — All Time", color: netVat>=0?C.red:C.green,
+          total: netVat,
+          cols:["Description","Amount"],
+          rows:[
+            ["Output VAT (charged on invoices)", fmt(outputVat)],
+            ["Input VAT (claimable on expenses)", `- ${fmt(inputVat)}`],
+            [netVat>=0?"Net VAT payable to SARS":"Net VAT refund due from SARS", fmt(Math.abs(netVat))],
+          ]});
       } else if (type === "profit") {
         const invs = await api("/invoices");
         const exps = await api("/expenses");
         const paidInvs = invs.filter(i=>i.status==="paid");
         const rev = paidInvs.reduce((s,i)=>s+toZarD(i),0);
-        const exp = exps.reduce((s,e)=>s+(e.amount||0),0);
+        const exp = exps.reduce((s,e)=>s+((e.amount||0)-(e.vat_amount||0)),0);
         setDrill({type, title:"Net Profit Breakdown — All Time", color:C.accent,
           total: rev-exp,
           cols:["Category","Amount"],
           rows:[
             ["Revenue (paid invoices)", fmt(rev)],
-            ["Expenses", `- ${fmt(exp)}`],
+            ["Expenses (excl. VAT)", `- ${fmt(exp)}`],
             ["Net Profit", fmt(rev-exp)],
           ]});
       }
@@ -449,6 +463,9 @@ function Dashboard({live = {}}) {
   const outstanding   = d ? d.total_outstanding : MOCK_INVOICES.filter(i => i.status !== "paid").reduce((s,i) => s + i.amount, 0);
   const profit        = d ? d.net_profit     : totalRevenue - totalExpenses;
   const totalPayroll  = d ? d.total_payroll  : MOCK_EMPLOYEES.reduce((s,e) => s + calcPayroll(e.salary).totalCost, 0);
+  const netVatPayable = d ? d.net_vat_payable : null;
+  const vatColor      = netVatPayable === null ? C.inkMid : netVatPayable >= 0 ? C.red : C.green;
+  const vatSub        = netVatPayable === null ? "Output minus input VAT" : netVatPayable >= 0 ? "Payable to SARS" : "Refund due from SARS";
   return (
     <div>
       <div style={{marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -463,10 +480,11 @@ function Dashboard({live = {}}) {
       </div>
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
         <KPI label="Revenue" value={fmt(totalRevenue)} sub="All paid invoices" color={C.green} icon="💰" onClick={()=>openDrill("revenue")}/>
-        <KPI label="Expenses" value={fmt(totalExpenses)} sub="All time" color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
+        <KPI label="Expenses" value={fmt(totalExpenses)} sub="Excl. VAT, all time" color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
         <KPI label="Net Profit" value={fmt(profit)} sub="Revenue minus expenses" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
         <KPI label="Outstanding" value={fmt(outstanding)} sub="Pending invoices" color={C.gold} icon="⏳" onClick={()=>openDrill("outstanding")}/>
         <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${d?.employee_count||""} employees`} color={C.blue} icon="👥" onClick={()=>openDrill("payroll")}/>
+        <KPI label="Net VAT" value={netVatPayable !== null ? fmt(Math.abs(netVatPayable)) : "—"} sub={vatSub} color={vatColor} icon="🏛️" onClick={()=>openDrill("vat")}/>
       </div>
 
       {/* ── KPI Drill-down Modal ── */}

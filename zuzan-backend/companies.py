@@ -204,7 +204,12 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         journal_engine.post_invoice_raised(invoice, db)
         db.commit()
     except Exception as e:
-        logger.warning(f"Journal post failed for invoice {invoice.invoice_number}: {e}")
+        logger.error(f"Journal post failed for invoice {invoice.invoice_number}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invoice created but journal entry failed: {e}. Invoice has been rolled back — please retry.",
+        )
     return invoice
 
 
@@ -229,7 +234,12 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
             journal_engine.post_invoice_paid(invoice, db)
             db.commit()
         except Exception as e:
-            logger.warning(f"Journal post failed for invoice payment {invoice.invoice_number}: {e}")
+            logger.error(f"Journal post failed for invoice payment {invoice.invoice_number}: {e}")
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Payment recorded but journal entry failed: {e}. Payment has been rolled back — please retry.",
+            )
     return invoice
 
 
@@ -288,7 +298,12 @@ async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_c
         journal_engine.post_expense(expense, db)
         db.commit()
     except Exception as e:
-        logger.warning(f"Journal post failed for expense {expense.id}: {e}")
+        logger.error(f"Journal post failed for expense {expense.id}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Expense saved but journal entry failed: {e}. Expense has been rolled back — please retry.",
+        )
     return expense
 
 

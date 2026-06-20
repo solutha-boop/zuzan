@@ -282,9 +282,9 @@ async def dashboard(
     ).all()
     total_expenses = sum(e.amount - (e.vat_amount or 0) for e in expenses)
 
-    # Include PO COGS: all received purchase orders
+    # Include PO COGS: all received purchase orders — ex-VAT to match expense treatment
     po_cogs = sum(
-        po.total_amount or 0
+        (po.total_amount or 0) - (po.vat_amount or 0)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
@@ -309,6 +309,12 @@ async def dashboard(
     net_profit   = gross_profit - total_payroll
     tax_provision = max(0, net_profit * 0.27)
 
+    # VAT position — all-time output vs input VAT
+    all_invoices_vat = db.query(Invoice).filter(Invoice.company_id == cid).all()
+    output_vat = round(sum(i.vat_amount or 0 for i in all_invoices_vat), 2)
+    input_vat  = round(sum(e.vat_amount or 0 for e in expenses), 2)
+    net_vat_payable = round(output_vat - input_vat, 2)
+
     return {
         "period":            now.strftime("%B %Y"),
         "total_revenue":     round(total_revenue, 2),
@@ -321,6 +327,9 @@ async def dashboard(
         "invoice_count":     len(paid_invoices),
         "employee_count":    len(employees),
         "outstanding_count": len(outstanding_invoices),
+        "output_vat":        output_vat,
+        "input_vat":         input_vat,
+        "net_vat_payable":   net_vat_payable,
     }
 
 
@@ -364,9 +373,9 @@ async def monthly_trend(
                 Expense.expense_date < end
             ).all()
         )
-        # Add PO COGS for POs received/partial/paid in this month
+        # Add PO COGS for POs received/partial/paid in this month — ex-VAT
         po_cogs = sum(
-            po.total_amount or 0
+            (po.total_amount or 0) - (po.vat_amount or 0)
             for po in db.query(PurchaseOrder).filter(
                 PurchaseOrder.company_id == cid,
                 PurchaseOrder.status.in_(["received", "partial", "paid"]),
@@ -792,13 +801,13 @@ async def management_accounts(
         key = e.category or "Other"
         expense_by_cat[key] = round(expense_by_cat.get(key, 0) + (e.amount - (e.vat_amount or 0)), 2)
 
-    # Include PO COGS: received purchase orders this month
+    # Include PO COGS: received purchase orders this month — ex-VAT
     po_cogs_items = db.query(PurchaseOrder).filter(
         PurchaseOrder.company_id == cid,
         PurchaseOrder.status.in_(["received", "partial", "paid"]),
         PurchaseOrder.received_date >= month_start,
     ).all()
-    po_cogs = round(sum(po.total_amount or 0 for po in po_cogs_items), 2)
+    po_cogs = round(sum((po.total_amount or 0) - (po.vat_amount or 0) for po in po_cogs_items), 2)
     if po_cogs:
         total_expenses = round(total_expenses + po_cogs, 2)
         expense_by_cat["Cost of Sales (POs)"] = round(
@@ -851,7 +860,7 @@ async def management_accounts(
             Expense.company_id == cid,
             Expense.expense_date >= start, Expense.expense_date < end).all()
         exp = round(sum(ex.amount - (ex.vat_amount or 0) for ex in exp_rows), 2)
-        po_c = round(sum(po.total_amount or 0 for po in db.query(PurchaseOrder).filter(
+        po_c = round(sum((po.total_amount or 0) - (po.vat_amount or 0) for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
             PurchaseOrder.received_date >= start,
@@ -923,9 +932,9 @@ async def provisional_tax(
     # Ex-VAT expenses — consistent with dashboard/management endpoints
     ytd_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
 
-    # Add PO COGS (received/partial/paid POs) — consistent with dashboard
+    # Add PO COGS (received/partial/paid POs) — ex-VAT, consistent with dashboard
     po_cogs_ytd = sum(
-        po.total_amount or 0
+        (po.total_amount or 0) - (po.vat_amount or 0)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),

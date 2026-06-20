@@ -218,9 +218,9 @@ async def api_summary(auth=Depends(require_api_key)):
     # Expenses ex-VAT
     exp_rows = db.query(Expense).filter(Expense.company_id==company.id).all()
     total_expenses = sum(e.amount - (e.vat_amount or 0) for e in exp_rows)
-    # Add PO COGS (received/partial/paid purchase orders)
+    # Add PO COGS (received/partial/paid purchase orders) — ex-VAT
     po_cogs = sum(
-        po.total_amount or 0
+        (po.total_amount or 0) - (po.vat_amount or 0)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id==company.id,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
