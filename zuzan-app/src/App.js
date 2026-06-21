@@ -1136,6 +1136,9 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
 
   // InvFormFields moved outside component — see top-level definition below
 
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+  const printInvoice = () => { const el=document.getElementById("invoice-preview-content"); if(!el)return; const w=window.open("","_blank"); if(!w){alert("Allow popups to print.");return;} w.document.write(`<html><head><title>Invoice ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#1A1209;}@media print{body{padding:20px;}}</style></head><body>${el.innerHTML}</body></html>`); w.document.close(); w.onload=()=>{w.focus();w.print();w.close();}; };
+
   return (
     <div>
       <SectionHeader title="Invoicing" sub="Manage your client invoices" action="+ New Invoice" onAction={() => setShowNew(true)}/>
@@ -1163,21 +1166,54 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
         </div>
       )}
 
-      {/* View Modal */}
-      {preview && (
+      {/* ── MOBILE: Full-screen invoice detail ── */}
+      {preview && isMobile && (
+        <div style={{position:"fixed",inset:0,background:C.bg,zIndex:200,display:"flex",flexDirection:"column",overflowY:"hidden"}}>
+          {/* Sticky header */}
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 16px",background:C.surface,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+            <button onClick={()=>setPreview(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.ink,lineHeight:1,padding:"0 4px"}}>←</button>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,fontSize:16,color:C.accent}}>{preview.id}</div>
+              <div style={{fontSize:12,color:C.inkMid}}>{preview.client}</div>
+            </div>
+            <StatusBadge status={preview.status}/>
+          </div>
+          {/* Scrollable document body */}
+          <div style={{flex:1,overflowY:"auto",padding:"20px 16px",WebkitOverflowScrolling:"touch"}}>
+            <div id="invoice-preview-content">
+              <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
+            </div>
+            {user.payfastMerchantId && (
+              <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"12px 14px",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div><div style={{fontSize:12,fontWeight:700,color:C.green}}>Online Payment</div><div style={{fontSize:11,color:C.inkMid}}>PayFast payment link</div></div>
+                <button onClick={()=>{const params=new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");}} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Pay →</button>
+              </div>
+            )}
+          </div>
+          {/* Sticky action bar */}
+          <div style={{flexShrink:0,background:C.surface,borderTop:`1px solid ${C.border}`,padding:"12px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {preview.status !== "paid" && (
+              <button onClick={()=>{setPreview(null);openPayModal(preview);}} style={{gridColumn:"1/-1",background:C.green,color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ Record Payment</button>
+            )}
+            <button onClick={()=>{setPreview(null);setEditInv({...preview});}} style={{background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
+            <button onClick={printInvoice} style={{background:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
+            <button onClick={async()=>{if(!window.confirm(`Delete ${preview.id}?`))return;setInvoices(p=>p.filter(i=>i.id!==preview.id));setPreview(null);try{await api(`/invoices/${preview._dbId||preview.id}`,{method:"DELETE"});}catch(e){}}} style={{background:C.redLt,color:C.red,border:`1px solid ${C.red}30`,borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Delete</button>
+            <button onClick={()=>setPreview(null)} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:12,padding:"13px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── DESKTOP: floating modal ── */}
+      {preview && !isMobile && (
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={() => setPreview(null)}>
           <div style={{background:"#fff",borderRadius:20,padding:40,width:560,maxHeight:"80vh",overflow:"auto"}} onClick={e => e.stopPropagation()}>
             <div id="invoice-preview-content">
             <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
-            </div>{/* end invoice-preview-content */}
-            {/* PayFast payment link */}
+            </div>
             {user.payfastMerchantId && (
               <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"12px 16px",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div><div style={{fontSize:12,fontWeight:700,color:C.green}}>Online Payment</div><div style={{fontSize:11,color:C.inkMid}}>Send client a PayFast payment link</div></div>
-                <button onClick={()=>{
-                  const params = new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});
-                  window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");
-                }} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Open PayFast →</button>
+                <button onClick={()=>{const params=new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");}} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Open PayFast →</button>
               </div>
             )}
             {!user.payfastMerchantId && (
@@ -1185,7 +1221,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             )}
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
-              <button onClick={() => { const el=document.getElementById("invoice-preview-content"); if(!el)return; const w=window.open("","_blank"); if(!w){alert("Allow popups to print.");return;} w.document.write(`<html><head><title>Invoice ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#1A1209;}@media print{body{padding:20px;}}</style></head><body>${el.innerHTML}</body></html>`); w.document.close(); w.onload=()=>{w.focus();w.print();w.close();}; }} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
+              <button onClick={printInvoice} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={() => setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
             </div>
           </div>
@@ -1251,46 +1287,71 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
         </div>
       )}
 
-      {/* Invoice Table */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-          <thead>
-            <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-              {["Invoice #","Client","Description","Amount","Date","Due","Status","Actions"].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {displayedInvoices.length === 0 && (
-              <tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13}}>No {filterStatus} invoices found.</td></tr>
-            )}
-            {displayedInvoices.map((inv) => (
-              <tr key={inv.id} style={{borderBottom:`1px solid ${C.border}30`}}>
-                <td style={{padding:"13px 16px",fontWeight:700,color:C.accent}}>{inv.id}</td>
-                <td style={{padding:"13px 16px",fontWeight:500}}>{inv.client}</td>
-                <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{inv.desc}</td>
-                <td style={{padding:"13px 16px",fontWeight:700}}>
-                  {inv.currency && inv.currency!=="ZAR"
-                    ? <>{fmt((inv.amount||0)*(inv.exchange_rate||1))}<div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(inv.amount,inv.currency)}</div></>
-                    : fmt(inv.amount||0)}
-                </td>
-                <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
-                <td style={{padding:"13px 16px",color:inv.status==="overdue"?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
-                <td style={{padding:"13px 16px"}}><StatusBadge status={inv.status}/></td>
-                <td style={{padding:"13px 16px"}}>
-                  <div style={{display:"flex",gap:6}}>
-                    <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
-                    <button onClick={() => setEditInv({...inv})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
-                    {inv.status !== "paid" && (
-                      <button onClick={() => openPayModal(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Record Payment</button>
-                    )}
-                    <button onClick={async()=>{ if(!window.confirm(`Delete ${inv.id}?`))return; setInvoices(p=>p.filter(i=>i.id!==inv.id)); try{await api(`/invoices/${inv._dbId || inv.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
-                  </div>
-                </td>
+      {/* ── MOBILE: card list ── */}
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {displayedInvoices.length === 0 && (
+            <div style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13,background:C.surface,borderRadius:16,border:`1px solid ${C.border}`}}>No {filterStatus||""} invoices found.</div>
+          )}
+          {displayedInvoices.map(inv => (
+            <div key={inv.id} onClick={()=>setPreview(inv)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                <div style={{fontWeight:800,fontSize:15,color:C.accent}}>{inv.id}</div>
+                <StatusBadge status={inv.status}/>
+              </div>
+              <div style={{fontWeight:600,fontSize:14,color:C.ink,marginBottom:2}}>{inv.client}</div>
+              <div style={{fontSize:12,color:C.inkMid,marginBottom:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.desc}</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                <div style={{fontWeight:800,fontSize:16,color:C.ink}}>
+                  {inv.currency && inv.currency!=="ZAR" ? fmt((inv.amount||0)*(inv.exchange_rate||1)) : fmt(inv.amount||0)}
+                </div>
+                <div style={{fontSize:11,color:inv.status==="overdue"?C.red:C.inkMid}}>Due {fmtDate(inv.due)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        /* ── DESKTOP: table ── */
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                {["Invoice #","Client","Description","Amount","Date","Due","Status","Actions"].map(h => <th key={h} style={{textAlign:"left",padding:"12px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {displayedInvoices.length === 0 && (
+                <tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13}}>No {filterStatus} invoices found.</td></tr>
+              )}
+              {displayedInvoices.map((inv) => (
+                <tr key={inv.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                  <td style={{padding:"13px 16px",fontWeight:700,color:C.accent,cursor:"pointer"}} onClick={()=>setPreview(inv)}>{inv.id}</td>
+                  <td style={{padding:"13px 16px",fontWeight:500}}>{inv.client}</td>
+                  <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{inv.desc}</td>
+                  <td style={{padding:"13px 16px",fontWeight:700}}>
+                    {inv.currency && inv.currency!=="ZAR"
+                      ? <>{fmt((inv.amount||0)*(inv.exchange_rate||1))}<div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(inv.amount,inv.currency)}</div></>
+                      : fmt(inv.amount||0)}
+                  </td>
+                  <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
+                  <td style={{padding:"13px 16px",color:inv.status==="overdue"?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
+                  <td style={{padding:"13px 16px"}}><StatusBadge status={inv.status}/></td>
+                  <td style={{padding:"13px 16px"}}>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
+                      <button onClick={() => setEditInv({...inv})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
+                      {inv.status !== "paid" && (
+                        <button onClick={() => openPayModal(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Record Payment</button>
+                      )}
+                      <button onClick={async()=>{ if(!window.confirm(`Delete ${inv.id}?`))return; setInvoices(p=>p.filter(i=>i.id!==inv.id)); try{await api(`/invoices/${inv._dbId || inv.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -5711,6 +5772,8 @@ function Quotes({live={},user={},onNavigate,docTemplate}) {
   };
 
   const inputStyle = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+  const printQuote = () => { const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${(preview||{}).id||""}</title><style>body{font-family:${(docTemplate||DEFAULT_DOC_TEMPLATE).fontFamily};padding:40px;}</style></head><body>${(document.getElementById("quote-print-content")||{}).innerHTML||""}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();}; };
 
   return (
     <div>
@@ -5822,8 +5885,40 @@ function Quotes({live={},user={},onNavigate,docTemplate}) {
         </div>
       )}
 
-      {/* Quote Preview Modal */}
-      {preview && (
+      {/* ── MOBILE: Full-screen quote detail ── */}
+      {preview && isMobile && (
+        <div style={{position:"fixed",inset:0,background:C.bg,zIndex:200,display:"flex",flexDirection:"column"}}>
+          {/* Sticky header */}
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 16px",background:C.surface,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+            <button onClick={()=>setPreview(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.ink,lineHeight:1,padding:"0 4px"}}>←</button>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,fontSize:16,color:C.accent}}>{preview.id}</div>
+              <div style={{fontSize:12,color:C.inkMid}}>{preview.client}</div>
+            </div>
+            {(() => { const [label,color,bg]=QUOTE_STATUSES[preview.status]||QUOTE_STATUSES.draft; return <Badge label={label} color={color} bg={bg}/>; })()}
+          </div>
+          {/* Scrollable body */}
+          <div style={{flex:1,overflowY:"auto",padding:"20px 16px",WebkitOverflowScrolling:"touch"}}>
+            <div id="quote-print-content">
+              <InvoiceDocument type="quote" doc={preview} user={user} tmpl={docTemplate}/>
+              {preview.currency&&preview.currency!=="ZAR" && <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginTop:12,fontSize:12,color:C.blue}}>≈ {fmt((preview.totalAmount||preview.amount)*(preview.rate||18.5))} ZAR at R{preview.rate||18.5}/{preview.currency}</div>}
+              {preview.notes && <div style={{background:C.bg,borderRadius:8,padding:"10px 14px",marginTop:10,fontSize:12,color:C.inkMid}}><strong>Notes:</strong> {preview.notes}</div>}
+            </div>
+          </div>
+          {/* Sticky action bar */}
+          <div style={{flexShrink:0,background:C.surface,borderTop:`1px solid ${C.border}`,padding:"12px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {preview.status==="sent" && <button onClick={()=>{setPreview(null);convertToInvoice(preview);}} disabled={saving} style={{gridColumn:"1/-1",background:C.green,color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Converting...":"✓ Convert to Invoice"}</button>}
+            {preview.status==="draft" && <button onClick={()=>updateStatus(preview._id,"sent")} style={{gridColumn:"1/-1",background:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Send Quote</button>}
+            <button onClick={()=>{setPreview(null);setEditQuote({...preview,rate:preview.rate||"18.5",vatAmount:preview.vatAmount||"0"});}} style={{background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
+            <button onClick={printQuote} style={{background:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
+            {preview.status==="sent" && <button onClick={()=>updateStatus(preview._id,"declined")} style={{background:C.redLt,color:C.red,border:`1px solid ${C.red}30`,borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Decline</button>}
+            <button onClick={()=>{if(!window.confirm(`Delete ${preview.id}?`))return;deleteQuote(preview._id);setPreview(null);}} style={{background:C.redLt,color:C.red,border:`1px solid ${C.red}30`,borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Delete</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── DESKTOP: floating modal ── */}
+      {preview && !isMobile && (
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setPreview(null)}>
           <div style={{background:"#fff",borderRadius:20,padding:40,width:580,maxHeight:"85vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
             <div id="quote-print-content">
@@ -5834,53 +5929,78 @@ function Quotes({live={},user={},onNavigate,docTemplate}) {
             <div style={{display:"flex",gap:8,marginTop:20}}>
               <button onClick={()=>{setPreview(null);setEditQuote({...preview,rate:preview.rate||"18.5",vatAmount:preview.vatAmount||"0"});}} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={()=>convertToInvoice(preview)} disabled={saving} style={{flex:1,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Converting...":"Convert to Invoice"}</button>
-              <button onClick={()=>{const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${preview.id}</title><style>body{font-family:${(docTemplate||DEFAULT_DOC_TEMPLATE).fontFamily};padding:40px;}</style></head><body>${document.getElementById("quote-print-content").innerHTML}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();};}} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
+              <button onClick={printQuote} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={()=>setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
             </div>
           </div>
         </div>
       )}
 
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
-        {quotes.length===0 ? (
-          <div style={{padding:48,textAlign:"center",color:C.inkMid,fontSize:13}}>No quotes yet. Create your first quote above.</div>
-        ) : (
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:700}}>
-            <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Quote #","Client","Description","Amount","Currency","Valid Until","Status","Actions"].map(h=><th key={h} style={{textAlign:"left",padding:"12px 14px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
-            <tbody>
-              {displayedQuotes.length===0 && <tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13}}>No {filterStatus==="sent"?"pending":filterStatus||""} quotes.</td></tr>}
-              {displayedQuotes.map(q=>{
-                const [label,color,bg] = QUOTE_STATUSES[q.status]||QUOTE_STATUSES.draft;
-                return (
-                  <tr key={q.id} style={{borderBottom:`1px solid ${C.border}30`}}>
-                    <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{q.id}</td>
-                    <td style={{padding:"13px 14px",fontWeight:500}}>{q.client}</td>
-                    <td style={{padding:"13px 14px",color:C.inkMid,fontSize:12}}>{q.desc}</td>
-                    <td style={{padding:"13px 14px",fontWeight:700}}>
-                      {q.currency && q.currency!=="ZAR"
-                        ? <>{fmt((q.totalAmount||q.amount||0)*(q.rate||1))}<div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(q.totalAmount||q.amount,q.currency)}</div></>
-                        : fmt(q.totalAmount||q.amount||0)}
-                    </td>
-                    <td style={{padding:"13px 14px"}}><Badge label={q.currency||"ZAR"} color={C.blue} bg={C.blueLt}/></td>
-                    <td style={{padding:"13px 14px",color:C.inkMid}}>{q.validUntil?fmtDate(q.validUntil):"—"}</td>
-                    <td style={{padding:"13px 14px"}}><Badge label={label} color={color} bg={bg}/></td>
-                    <td style={{padding:"13px 14px"}}>
-                      <div style={{display:"flex",gap:5}}>
-                        <button onClick={()=>setPreview(q)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
-                        <button onClick={()=>setEditQuote({...q,rate:q.rate||"18.5",vatAmount:q.vatAmount||"0"})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
-                        {q.status==="draft" && <button onClick={()=>updateStatus(q._id,"sent")} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Send</button>}
-                        {q.status==="sent"  && <button onClick={()=>convertToInvoice(q)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Accept</button>}
-                        {q.status==="sent"  && <button onClick={()=>updateStatus(q._id,"declined")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Decline</button>}
-                        <button onClick={()=>deleteQuote(q._id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {/* ── MOBILE: card list ── */}
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {quotes.length===0 && <div style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13,background:C.surface,borderRadius:16,border:`1px solid ${C.border}`}}>No quotes yet. Create your first quote above.</div>}
+          {displayedQuotes.map(q=>{
+            const [label,color,bg]=QUOTE_STATUSES[q.status]||QUOTE_STATUSES.draft;
+            return (
+              <div key={q.id} onClick={()=>setPreview(q)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                  <div style={{fontWeight:800,fontSize:15,color:C.accent}}>{q.id}</div>
+                  <Badge label={label} color={color} bg={bg}/>
+                </div>
+                <div style={{fontWeight:600,fontSize:14,color:C.ink,marginBottom:2}}>{q.client}</div>
+                <div style={{fontSize:12,color:C.inkMid,marginBottom:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q.desc}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                  <div style={{fontWeight:800,fontSize:16,color:C.ink}}>{fmt(q.totalAmount||q.amount||0)}</div>
+                  <div style={{fontSize:11,color:C.inkMid}}>{q.validUntil?`Valid: ${fmtDate(q.validUntil)}`:"—"}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* ── DESKTOP: table ── */
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          {quotes.length===0 ? (
+            <div style={{padding:48,textAlign:"center",color:C.inkMid,fontSize:13}}>No quotes yet. Create your first quote above.</div>
+          ) : (
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:700}}>
+              <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Quote #","Client","Description","Amount","Currency","Valid Until","Status","Actions"].map(h=><th key={h} style={{textAlign:"left",padding:"12px 14px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
+              <tbody>
+                {displayedQuotes.length===0 && <tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:C.inkMid,fontSize:13}}>No {filterStatus==="sent"?"pending":filterStatus||""} quotes.</td></tr>}
+                {displayedQuotes.map(q=>{
+                  const [label,color,bg] = QUOTE_STATUSES[q.status]||QUOTE_STATUSES.draft;
+                  return (
+                    <tr key={q.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                      <td style={{padding:"13px 14px",fontWeight:700,color:C.accent,cursor:"pointer"}} onClick={()=>setPreview(q)}>{q.id}</td>
+                      <td style={{padding:"13px 14px",fontWeight:500}}>{q.client}</td>
+                      <td style={{padding:"13px 14px",color:C.inkMid,fontSize:12}}>{q.desc}</td>
+                      <td style={{padding:"13px 14px",fontWeight:700}}>
+                        {q.currency && q.currency!=="ZAR"
+                          ? <>{fmt((q.totalAmount||q.amount||0)*(q.rate||1))}<div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(q.totalAmount||q.amount,q.currency)}</div></>
+                          : fmt(q.totalAmount||q.amount||0)}
+                      </td>
+                      <td style={{padding:"13px 14px"}}><Badge label={q.currency||"ZAR"} color={C.blue} bg={C.blueLt}/></td>
+                      <td style={{padding:"13px 14px",color:C.inkMid}}>{q.validUntil?fmtDate(q.validUntil):"—"}</td>
+                      <td style={{padding:"13px 14px"}}><Badge label={label} color={color} bg={bg}/></td>
+                      <td style={{padding:"13px 14px"}}>
+                        <div style={{display:"flex",gap:5}}>
+                          <button onClick={()=>setPreview(q)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
+                          <button onClick={()=>setEditQuote({...q,rate:q.rate||"18.5",vatAmount:q.vatAmount||"0"})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
+                          {q.status==="draft" && <button onClick={()=>updateStatus(q._id,"sent")} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Send</button>}
+                          {q.status==="sent"  && <button onClick={()=>convertToInvoice(q)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Accept</button>}
+                          {q.status==="sent"  && <button onClick={()=>updateStatus(q._id,"declined")} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Decline</button>}
+                          <button onClick={()=>deleteQuote(q._id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }
