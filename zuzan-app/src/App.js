@@ -7832,6 +7832,30 @@ export default function App() {
     setScreen("login");
   };
 
+  // ── Auto-logout after 5 minutes of inactivity ──
+  useEffect(() => {
+    if (screen !== "app") return;
+    const TIMEOUT_MS = 5 * 60 * 1000;
+    let timer;
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        localStorage.removeItem("zuzan_token");
+        setUser(null);
+        setScreen("login");
+        // Brief delay so React can unmount cleanly before the alert
+        setTimeout(() => alert("You were signed out due to 5 minutes of inactivity."), 50);
+      }, TIMEOUT_MS);
+    };
+    const events = ["mousemove","mousedown","keydown","touchstart","scroll","click"];
+    events.forEach(e => window.addEventListener(e, reset, {passive:true}));
+    reset(); // start timer on mount
+    return () => {
+      clearTimeout(timer);
+      events.forEach(e => window.removeEventListener(e, reset));
+    };
+  }, [screen]);
+
   if (screen === "loading") return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
       <div style={{textAlign:"center"}}>
