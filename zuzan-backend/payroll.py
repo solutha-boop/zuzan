@@ -255,6 +255,59 @@ async def get_tax_years(current_user: User = Depends(get_current_user)):
     }
 
 
+def _cipc_status(company, now: datetime) -> dict:
+    """
+    Compute days until CIPC Annual Return is due.
+    AR must be filed within 30 business days after the company's registration anniversary.
+    We warn 60 days before the due date (= ~30 days before anniversary) so there's
+    time to prepare and file.
+    Returns a dict with: due_date, days_until_due, warning (bool), overdue (bool), message.
+    """
+    from datetime import timedelta
+    # Use cipc_registration_date if set; fall back to company created_at
+    reg_date = getattr(company, "cipc_registration_date", None) or company.created_at
+    if not reg_date:
+        return {"due_date": None, "days_until_due": None, "warning": False, "overdue": False,
+                "message": "Set your company registration date in Settings to enable CIPC AR reminders."}
+
+    # This year's anniversary
+    try:
+        anniversary = reg_date.replace(year=now.year)
+    except ValueError:
+        # Handles 29 Feb on non-leap years
+        anniversary = reg_date.replace(year=now.year, day=28)
+
+    # AR due date = anniversary + 30 business days (approx as 42 calendar days)
+    due_date = anniversary + __import__("datetime").timedelta(days=42)
+
+    # If the due date has already passed this year, look at next year's
+    if due_date < now:
+        try:
+            anniversary = reg_date.replace(year=now.year + 1)
+        except ValueError:
+            anniversary = reg_date.replace(year=now.year + 1, day=28)
+        due_date = anniversary + __import__("datetime").timedelta(days=42)
+
+    days_until = (due_date - now).days
+    warning  = days_until <= 60
+    overdue  = days_until < 0
+
+    if overdue:
+        msg = f"⚠️ CIPC Annual Return is OVERDUE by {abs(days_until)} days. File immediately at cipc.co.za to avoid penalties."
+    elif warning:
+        msg = f"📋 CIPC Annual Return due in {days_until} days ({due_date.strftime('%d %b %Y')}). File at cipc.co.za."
+    else:
+        msg = f"CIPC Annual Return due {due_date.strftime('%d %b %Y')} ({days_until} days)."
+
+    return {
+        "due_date":      due_date.strftime("%Y-%m-%d"),
+        "days_until_due": days_until,
+        "warning":        warning,
+        "overdue":        overdue,
+        "message":        msg,
+    }
+
+
 @reports_router.get("/dashboard")
 async def dashboard(
     current_user: User = Depends(get_current_user),
@@ -315,6 +368,29 @@ async def dashboard(
     input_vat  = round(sum(e.vat_amount or 0 for e in expenses), 2)
     net_vat_payable = round(output_vat - input_vat, 2)
 
+    # PO double-count warning: check if any expense descriptions reference a PO number
+    import re as _re
+    po_numbers_in_db = {
+        po.po_number for po in db.query(PurchaseOrder).filter(
+            PurchaseOrder.company_id == cid,
+            PurchaseOrder.status.in_(["received", "partial", "paid"]),
+        ).all()
+    }
+    duplicate_expense_warning = None
+    if po_numbers_in_db:
+        for exp in expenses:
+            desc = (exp.description or "") + (exp.vendor or "")
+            if any(pn in desc for pn in po_numbers_in_db):
+                duplicate_expense_warning = (
+                    "One or more expenses may duplicate a received Purchase Order cost. "
+                    "Check Expenses for entries referencing PO numbers to avoid double-counting."
+                )
+                break
+
+    # CIPC Annual Return reminder
+    company = db.query(Company).filter(Company.id == cid).first()
+    cipc = _cipc_status(company, now) if company else None
+
     return {
         "period":            now.strftime("%B %Y"),
         "total_revenue":     round(total_revenue, 2),
@@ -330,6 +406,8 @@ async def dashboard(
         "output_vat":        output_vat,
         "input_vat":         input_vat,
         "net_vat_payable":   net_vat_payable,
+        "cipc":              cipc,
+        "po_duplicate_warning": duplicate_expense_warning,
     }
 
 
@@ -438,11 +516,8 @@ async def balance_sheet(
 
     # ── EQUITY ────────────────────────────────────────────────────────────────
     retained_income = bal("3000")
-    # If no explicit equity postings yet, derive from Revenue − Expenses
-    if retained_income == 0:
-        revenue  = bal("4000")
-        expenses = sum(bal(code) for code in ["5000","5100","5110","5200","5210","5220","5230","5240","5250","5260","5270","5280","5290","5300","5900"])
-        retained_income = round(revenue - expenses, 2)
+    # Always use the journal balance for retained income (audit fix: removed Revenue−Expenses
+    # derivation fallback that could mask manual equity journal adjustments)
     total_equity = retained_income
 
     # ── BALANCE CHECK ─────────────────────────────────────────────────────────
@@ -1015,26 +1090,33 @@ async def debtors_aging(
     buckets = {"current": [], "31_60": [], "61_90": [], "over_90": [], "not_due": []}
 
     for inv in outstanding:
-        due = inv.due_date or inv.issue_date or inv.created_at
-        days_overdue = (now - due).days if due else 0
+        # Only age from due_date — invoices without a due_date go into not_due to avoid
+        # falsely overstating overdue balances (audit fix: removed issue_date/created_at fallback)
+        due = inv.due_date
         entry = {
             "id":             inv.invoice_number,
             "client":         inv.client_name,
             "amount":         round(_to_zar(inv), 2),
             "due_date":       due.strftime("%Y-%m-%d") if due else None,
-            "days_overdue":   max(0, days_overdue),
+            "days_overdue":   0,
             "status":         str(inv.status).split(".")[-1],
         }
-        if days_overdue < 0:
+        if due is None:
+            # No due date — treat as not yet due
             buckets["not_due"].append(entry)
-        elif days_overdue <= 30:
-            buckets["current"].append(entry)
-        elif days_overdue <= 60:
-            buckets["31_60"].append(entry)
-        elif days_overdue <= 90:
-            buckets["61_90"].append(entry)
         else:
-            buckets["over_90"].append(entry)
+            days_overdue = (now - due).days
+            entry["days_overdue"] = max(0, days_overdue)
+            if days_overdue < 0:
+                buckets["not_due"].append(entry)
+            elif days_overdue <= 30:
+                buckets["current"].append(entry)
+            elif days_overdue <= 60:
+                buckets["31_60"].append(entry)
+            elif days_overdue <= 90:
+                buckets["61_90"].append(entry)
+            else:
+                buckets["over_90"].append(entry)
 
     def bucket_total(b): return round(sum(i["amount"] for i in b), 2)
 

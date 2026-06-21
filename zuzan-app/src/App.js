@@ -156,7 +156,13 @@ const Badge = ({label,color,bg}) => (
 );
 
 const StatusBadge = ({status}) => {
-  const m={paid:[C.green,C.greenLt,"Paid"],pending:[C.gold,C.goldLt,"Pending"],overdue:[C.red,C.redLt,"Overdue"]};
+  const m={
+    paid:   [C.green,  C.greenLt,  "Paid"],
+    sent:   [C.blue,   C.blueLt,   "Sent"],
+    pending:[C.gold,   C.goldLt,   "Pending"],
+    draft:  [C.inkMid, C.border,   "Draft"],
+    overdue:[C.red,    C.redLt,    "Overdue"],
+  };
   const [c,bg,l]=m[status]||m.pending;
   return <Badge label={l} color={c} bg={bg}/>;
 };
@@ -364,6 +370,59 @@ function parseDt(str) {
   return new Date().toISOString().slice(0,10);
 }
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
+function CIPCBanner({cipc, poDupWarning}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+
+  const banners = [];
+  if (cipc && cipc.warning) {
+    banners.push({
+      msg:   cipc.message,
+      color: cipc.overdue ? "#C82A2A" : "#C4920A",
+      bg:    cipc.overdue ? "#FFF0F0" : "#FFFBF0",
+      link:  "https://www.cipc.co.za",
+      label: "File at CIPC ↗",
+    });
+  }
+  if (poDupWarning) {
+    banners.push({
+      msg:   poDupWarning,
+      color: "#C8401A",
+      bg:    "#FFF5F0",
+      link:  null,
+      label: null,
+    });
+  }
+  if (banners.length === 0) return null;
+
+  return (
+    <div style={{marginBottom:16}}>
+      {banners.map((b,i) => (
+        <div key={i} style={{
+          display:"flex", alignItems:"center", justifyContent:"space-between",
+          background:b.bg, border:`1px solid ${b.color}30`,
+          borderLeft:`4px solid ${b.color}`, borderRadius:10,
+          padding:"10px 16px", marginBottom:8, gap:12,
+        }}>
+          <span style={{fontSize:13, color:b.color, fontWeight:600, flex:1}}>{b.msg}</span>
+          <div style={{display:"flex",gap:8,flexShrink:0}}>
+            {b.link && (
+              <a href={b.link} target="_blank" rel="noopener noreferrer"
+                style={{fontSize:12,fontWeight:700,color:b.color,textDecoration:"none",
+                  padding:"4px 12px",border:`1px solid ${b.color}`,borderRadius:6}}>
+                {b.label}
+              </a>
+            )}
+            <button onClick={()=>setDismissed(true)}
+              style={{background:"none",border:"none",color:b.color,cursor:"pointer",
+                fontSize:16,lineHeight:1,padding:"2px 4px",opacity:0.6}}>✕</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Dashboard({live = {}}) {
   const d = live.dashboard;
   const revenueData = live.trend || REVENUE_DATA;
@@ -468,6 +527,7 @@ function Dashboard({live = {}}) {
   const vatSub        = netVatPayable === null ? "Output minus input VAT" : netVatPayable >= 0 ? "Payable to SARS" : "Refund due from SARS";
   return (
     <div>
+      <CIPCBanner cipc={d?.cipc} poDupWarning={d?.po_duplicate_warning}/>
       <div style={{marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div>
           <h1 style={{fontFamily:"serif",fontSize:28,color:C.ink,margin:"0 0 4px"}}>{(()=>{const h=new Date().getHours();return h<12?"Good morning":h<17?"Good afternoon":"Good evening";})()}</h1>
@@ -4421,17 +4481,18 @@ function BankImport({live = {}, onNavigate}) {
 function AppSettings({user, onLogout, onUserUpdate}) {
   const [settingsTab, setSettingsTab] = useState("company"); // company | developer
   const [form, setForm] = useState({
-    companyName:    user?.companyName    || "",
-    regNumber:      user?.regNumber      || "",
-    industry:       user?.industry       || "",
-    vatNumber:      user?.vatNumber      || "",
-    bankName:       user?.bankName       || "",
-    bankAccount:    user?.bankAccount    || "",
-    branchCode:     user?.branchCode     || "",
-    bankingDetails:    user?.bankingDetails    || "",
-    payfastMerchantId: user?.payfastMerchantId || "",
-    payfastMerchantKey:user?.payfastMerchantKey|| "",
-    logoUrl:           user?.logoUrl           || "",
+    companyName:          user?.companyName          || "",
+    regNumber:            user?.regNumber            || "",
+    industry:             user?.industry             || "",
+    vatNumber:            user?.vatNumber            || "",
+    bankName:             user?.bankName             || "",
+    bankAccount:          user?.bankAccount          || "",
+    branchCode:           user?.branchCode           || "",
+    bankingDetails:       user?.bankingDetails       || "",
+    payfastMerchantId:    user?.payfastMerchantId    || "",
+    payfastMerchantKey:   user?.payfastMerchantKey   || "",
+    logoUrl:              user?.logoUrl              || "",
+    cipcRegistrationDate: user?.cipcRegistrationDate || "",
   });
   const [saved, setSaved] = useState(false);
   const [showUpgrade,  setShowUpgrade]  = useState(false);
@@ -4475,14 +4536,15 @@ function AppSettings({user, onLogout, onUserUpdate}) {
   const handleSave = async () => {
     try {
       await api("/companies/me", { method:"PUT", body: JSON.stringify({
-        name:            form.companyName,
-        reg_number:      form.regNumber,
-        industry:        form.industry,
-        vat_number:      form.vatNumber,
-        bank_name:       form.bankName,
-        bank_account:    form.bankAccount,
-        branch_code:     form.branchCode,
-        logo_url:        form.logoUrl || null,
+        name:                   form.companyName,
+        reg_number:             form.regNumber,
+        industry:               form.industry,
+        vat_number:             form.vatNumber,
+        bank_name:              form.bankName,
+        bank_account:           form.bankAccount,
+        branch_code:            form.branchCode,
+        logo_url:               form.logoUrl || null,
+        cipc_registration_date: form.cipcRegistrationDate || null,
       })});
     } catch(e) { console.warn("Settings save failed:", e.message); }
     // Update local user context
@@ -4563,10 +4625,10 @@ function AppSettings({user, onLogout, onUserUpdate}) {
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
         <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Details</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
-          {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"Industry",k:"industry"},{l:"VAT Number",k:"vatNumber"}].map(f=>(
+          {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"Industry",k:"industry"},{l:"VAT Number",k:"vatNumber"},{l:"CIPC Registration Date",k:"cipcRegistrationDate",type:"date",hint:"Used for Annual Return reminders"}].map(f=>(
             <div key={f.k}>
-              <label style={labelStyle}>{f.l}</label>
-              <input value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
+              <label style={labelStyle}>{f.l}{f.hint&&<span style={{fontWeight:400,textTransform:"none",color:C.inkDim,marginLeft:6}}>{f.hint}</span>}</label>
+              <input type={f.type||"text"} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
             </div>
           ))}
         </div>

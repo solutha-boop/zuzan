@@ -211,6 +211,31 @@ def post_invoice_paid(invoice, db: Session) -> JournalEntry:
     return entry
 
 
+def post_invoice_cogs(invoice, cogs_amount: float, db: Session) -> JournalEntry:
+    """
+    Record Cost of Goods Sold when an invoice is raised for inventory items:
+      DR Cost of Sales (5000)      (cogs_amount)
+      CR Inventory at Cost (1200)  (cogs_amount)
+    Call after post_invoice_raised. cogs_amount should be the total cost price of goods sold.
+    """
+    cid = invoice.company_id
+    cogs_amount = round(cogs_amount, 2)
+    entry = _make_entry(cid, invoice.issue_date or datetime.utcnow(),
+        f"COGS — {invoice.client_name} ({invoice.invoice_number})",
+        invoice.invoice_number, "invoice_cogs", invoice.id, db)
+
+    cogs_acct = get_account(cid, "5000", db)
+    inventory  = get_account(cid, "1200", db)
+
+    lines = [
+        _line(entry.id, cogs_acct, debit=cogs_amount,  description="Cost of goods sold"),
+        _line(entry.id, inventory, credit=cogs_amount, description=invoice.invoice_number),
+    ]
+    _assert_balanced(lines)
+    for l in lines: db.add(l)
+    return entry
+
+
 def post_expense(expense, db: Session) -> JournalEntry:
     """
     Expense paid:

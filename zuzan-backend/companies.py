@@ -28,17 +28,18 @@ def clean(value, max_len=500):
 router = APIRouter()
 
 class CompanyUpdate(BaseModel):
-    name:         Optional[str] = None
-    reg_number:   Optional[str] = None
-    vat_number:   Optional[str] = None
-    industry:     Optional[str] = None
-    address:      Optional[str] = None
-    phone:        Optional[str] = None
-    email:        Optional[str] = None
-    bank_name:    Optional[str] = None
-    bank_account: Optional[str] = None
-    bank_branch:  Optional[str] = None
-    logo_url:     Optional[str] = None
+    name:                   Optional[str] = None
+    reg_number:             Optional[str] = None
+    vat_number:             Optional[str] = None
+    industry:               Optional[str] = None
+    address:                Optional[str] = None
+    phone:                  Optional[str] = None
+    email:                  Optional[str] = None
+    bank_name:              Optional[str] = None
+    bank_account:           Optional[str] = None
+    bank_branch:            Optional[str] = None
+    logo_url:               Optional[str] = None
+    cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
 
 
 def _company_dict(c: Company) -> dict:
@@ -54,6 +55,7 @@ def _company_dict(c: Company) -> dict:
         "subscription_status": c.subscription_status,
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
         "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
+        "cipc_registration_date": c.cipc_registration_date.isoformat() if c.cipc_registration_date else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 
@@ -72,6 +74,8 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(get_c
     for field, value in data.dict(exclude_none=True).items():
         if field in ("bank_name", "bank_account", "bank_branch"):
             setattr(company, field, encrypt_field(value))
+        elif field == "cipc_registration_date":
+            setattr(company, field, datetime.fromisoformat(value) if value else None)
         else:
             setattr(company, field, value)
     db.commit()
@@ -127,6 +131,7 @@ class InvoiceCreate(BaseModel):
     currency:            Optional[str] = "ZAR"
     exchange_rate:       Optional[float] = 1.0
     vat_amount_override: Optional[float] = None  # Manual VAT for non-ZAR invoices
+    cogs_amount:         Optional[float] = None  # If set, post DR Cost of Sales / CR Inventory for this amount
 
 class InvoiceUpdate(BaseModel):
     status:          Optional[str] = None
@@ -202,6 +207,9 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     try:
         journal_engine.init_accounts(current_user.company_id, db)
         journal_engine.post_invoice_raised(invoice, db)
+        # Optional COGS entry: DR Cost of Sales (5000) / CR Inventory at Cost (1200)
+        if data.cogs_amount and data.cogs_amount > 0:
+            journal_engine.post_invoice_cogs(invoice, round(data.cogs_amount, 2), db)
         db.commit()
     except Exception as e:
         logger.error(f"Journal post failed for invoice {invoice.invoice_number}: {e}")
@@ -265,10 +273,11 @@ class ExpenseCreate(BaseModel):
     expense_date:    Optional[str] = None
 
 class ExpenseUpdate(BaseModel):
-    vendor:       Optional[str] = None
-    description:  Optional[str] = None
-    amount:       Optional[float] = None
-    category:     Optional[str] = None
+    vendor:          Optional[str] = None
+    description:     Optional[str] = None
+    amount:          Optional[float] = None   # excl. VAT — vat_amount is recalculated automatically
+    vat_applicable:  Optional[bool] = None    # if omitted, inferred from existing vat_amount
+    category:        Optional[str] = None
 
 
 @expenses_router.get("/")
@@ -312,8 +321,82 @@ async def update_expense(expense_id: int, data: ExpenseUpdate, current_user: Use
     expense = db.query(Expense).filter(Expense.id == expense_id, Expense.company_id == current_user.company_id).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    for field, value in data.dict(exclude_none=True).items():
+
+    # Apply non-amount fields first
+    non_amount_fields = {k: v for k, v in data.dict(exclude_none=True).items()
+                         if k not in ("amount", "vat_applicable")}
+    for field, value in non_amount_fields.items():
         setattr(expense, field, value)
+
+    # If amount is being updated, recalculate vat_amount to keep it consistent.
+    # expense.amount is stored VAT-inclusive; data.amount is excl-VAT (matching create convention).
+    if data.amount is not None:
+        # Determine whether VAT applies: explicit flag > infer from existing vat_amount
+        apply_vat = data.vat_applicable if data.vat_applicable is not None else (
+            (expense.vat_amount or 0) > 0
+        )
+        new_vat = round(data.amount * VAT_RATE, 2) if apply_vat else 0.0
+        new_total = round(data.amount + new_vat, 2)
+
+        # Post a correcting journal entry (delta) if the stored amount has changed
+        old_total = expense.amount or 0
+        old_vat   = expense.vat_amount or 0
+        if abs(new_total - old_total) > 0.01:
+            try:
+                journal_engine.init_accounts(current_user.company_id, db)
+                # Build a temporary expense-like object with the delta values
+                # Reversing entry: negate old amounts, then post new amounts
+                class _Delta:
+                    pass
+                old_exp = _Delta()
+                old_exp.company_id  = expense.company_id
+                old_exp.amount      = old_total
+                old_exp.vat_amount  = old_vat
+                old_exp.vendor      = expense.vendor
+                old_exp.description = f"[REVERSAL] {expense.description or ''}"
+                old_exp.category    = expense.category
+                old_exp.expense_date = expense.expense_date
+                old_exp.id          = expense.id
+                # Reverse old entry by swapping debits/credits (negate amounts trick:
+                # post a negative-amount expense using a manual credit/debit swap)
+                from database import Account, JournalEntry, JournalLine, AccountType
+                existing_entries = db.query(JournalEntry).filter(
+                    JournalEntry.company_id == current_user.company_id,
+                    JournalEntry.source == "expense",
+                    JournalEntry.source_id == expense.id,
+                ).all()
+                for entry in existing_entries:
+                    rev_entry = JournalEntry(
+                        company_id  = current_user.company_id,
+                        date        = datetime.utcnow(),
+                        description = f"Expense correction (reversal) — {expense.vendor}",
+                        reference   = f"REV-EXP-{expense.id}",
+                        source      = "expense_reversal",
+                        source_id   = expense.id,
+                    )
+                    db.add(rev_entry)
+                    db.flush()
+                    for line in entry.lines:
+                        db.add(JournalLine(
+                            entry_id   = rev_entry.id,
+                            account_id = line.account_id,
+                            debit      = line.credit,   # swap
+                            credit     = line.debit,    # swap
+                            description= f"Reversal of line {line.id}",
+                        ))
+                # Now post the new entry
+                # Temporarily set values for post_expense
+                expense.amount     = new_total
+                expense.vat_amount = new_vat
+                journal_engine.post_expense(expense, db)
+                db.commit()
+            except Exception as e:
+                logger.error(f"Journal correction failed for expense {expense.id}: {e}")
+                # Non-fatal — still save the field update
+
+        expense.amount     = new_total
+        expense.vat_amount = new_vat
+
     db.commit()
     return expense
 
@@ -445,11 +528,12 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
 bank_router = APIRouter()
 
 class BankTransaction(BaseModel):
-    date:        str
-    description: str
-    amount:      float
-    type:        str  # debit or credit
-    category:    Optional[str] = "Other"
+    date:           str
+    description:    str
+    amount:         float   # VAT-inclusive amount as it appears on the bank statement
+    type:           str     # debit or credit
+    category:       Optional[str] = "Other"
+    vat_applicable: bool = False  # set True to split out 15% VAT input on import
 
 class BankImportRequest(BaseModel):
     bank:         str
@@ -483,11 +567,20 @@ async def import_bank_statement(
                 expenses_skipped += 1
                 continue
 
+            # Calculate VAT split if applicable (bank amount is VAT-inclusive)
+            if txn.vat_applicable:
+                imp_vat   = round(txn.amount * 0.15 / 1.15, 2)  # back-calculate from incl-VAT
+                imp_total = txn.amount                            # store as-is (VAT-inclusive)
+            else:
+                imp_vat   = 0.0
+                imp_total = txn.amount
+
             expense = Expense(
                 company_id   = current_user.company_id,
                 vendor       = txn.description[:100],
                 description  = f"Imported from {data.bank.upper()} statement",
-                amount       = txn.amount,
+                amount       = imp_total,
+                vat_amount   = imp_vat,
                 category     = txn.category,
                 expense_date = datetime.fromisoformat(txn.date),
             )

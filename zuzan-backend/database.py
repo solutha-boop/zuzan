@@ -59,6 +59,7 @@ class Company(Base):
     subscription_status=Column(Enum(SubscriptionStatus),default=SubscriptionStatus.trial)
     trial_ends=Column(DateTime); payroll_enabled=Column(Boolean,default=False)
     payroll_employees=Column(Integer,default=0)
+    cipc_registration_date=Column(DateTime,nullable=True)   # Company anniversary for CIPC AR reminder
     created_at=Column(DateTime,default=datetime.utcnow)
     users=relationship("User",back_populates="company")
     invoices=relationship("Invoice",back_populates="company")

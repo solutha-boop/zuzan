@@ -241,6 +241,32 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
     }
 
 
+@router.post("/backfill-received-dates")
+async def backfill_received_dates(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Audit fix: set received_date = created_at for any PO in received/partial/paid status
+    that is missing a received_date. Safe to run multiple times (idempotent).
+    """
+    pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == current_user.company_id,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+        PurchaseOrder.received_date == None,  # noqa: E711
+    ).all()
+    updated = 0
+    for po in pos:
+        po.received_date = po.created_at
+        updated += 1
+    db.commit()
+    return {
+        "status":  "ok",
+        "updated": updated,
+        "message": f"Set received_date on {updated} purchase order(s) using their created_at date.",
+    }
+
+
 @router.post("/{po_id}/pay")
 async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
