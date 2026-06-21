@@ -7579,7 +7579,7 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
     debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
     creditors:  <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div>,
     coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
-    settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange}/></div>,
+    settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={onTemplateChange}/></div>,
   };
 
   const activeLabel = [...BOTTOM_TABS,...MORE_ITEMS].find(t=>t.id===tab)?.label || "ZuZan";
