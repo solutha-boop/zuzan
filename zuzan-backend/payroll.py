@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder
 from auth import get_current_user, User
 import hashlib
@@ -263,7 +263,6 @@ def _cipc_status(company, now: datetime) -> dict:
     time to prepare and file.
     Returns a dict with: due_date, days_until_due, warning (bool), overdue (bool), message.
     """
-    from datetime import timedelta
     # Use cipc_registration_date if set; fall back to company created_at
     reg_date = getattr(company, "cipc_registration_date", None) or company.created_at
     if not reg_date:
@@ -278,7 +277,7 @@ def _cipc_status(company, now: datetime) -> dict:
         anniversary = reg_date.replace(year=now.year, day=28)
 
     # AR due date = anniversary + 30 business days (approx as 42 calendar days)
-    due_date = anniversary + __import__("datetime").timedelta(days=42)
+    due_date = anniversary + timedelta(days=42)
 
     # If the due date has already passed this year, look at next year's
     if due_date < now:
@@ -286,7 +285,7 @@ def _cipc_status(company, now: datetime) -> dict:
             anniversary = reg_date.replace(year=now.year + 1)
         except ValueError:
             anniversary = reg_date.replace(year=now.year + 1, day=28)
-        due_date = anniversary + __import__("datetime").timedelta(days=42)
+        due_date = anniversary + timedelta(days=42)
 
     days_until = (due_date - now).days
     warning  = days_until <= 60
@@ -1176,7 +1175,7 @@ async def creditors_aging(
 
         # Age from due date: delivery_date + payment_terms days
         base_date = po.received_date or po.order_date or po.created_at
-        due_date = base_date + __import__("datetime").timedelta(days=payment_terms) if base_date else None
+        due_date = base_date + timedelta(days=payment_terms) if base_date else None
         days_overdue = (now - due_date).days if due_date else 0
         bucket = (
             "not_due" if days_overdue < 0

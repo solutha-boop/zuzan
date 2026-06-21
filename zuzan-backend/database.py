@@ -425,7 +425,36 @@ class SubscriptionPayment(Base):
     company         = relationship("Company", foreign_keys=[company_id])
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    # Enable WAL mode for SQLite — far more resilient to crashes than the default
+    # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
+    if DATABASE_URL.startswith("sqlite"):
+        import sqlite3 as _sqlite3, re as _re
+        db_path = _re.sub(r"^sqlite:///", "", DATABASE_URL)
+        try:
+            _conn = _sqlite3.connect(db_path)
+            _conn.execute("PRAGMA journal_mode=WAL")
+            _conn.close()
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger("zuzan.db").warning(
+                f"Could not set WAL mode on {db_path}: {_e}. "
+                "If the server fails to start, check for a stale .db-journal or .db-wal file "
+                "in the backend directory and delete it, then restart."
+            )
+
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger("zuzan.db").critical(
+            f"Database schema init failed: {exc}\n"
+            "Common causes:\n"
+            "  • A stale zuzan.db-journal file (delete it and restart)\n"
+            "  • DB file is inside a OneDrive/Dropbox folder (move it outside)\n"
+            "  • DATABASE_URL env var points to the wrong host\n"
+            "  • PostgreSQL connection refused (check credentials and host)"
+        )
+        raise
     from sqlalchemy import text
     with engine.connect() as conn:
         for sql in [
@@ -452,6 +481,7 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN logo_url TEXT",
             "ALTER TABLE purchase_orders ADD COLUMN received_date TIMESTAMP",
             "ALTER TABLE companies ADD COLUMN payroll_pin_hash VARCHAR",
+            "ALTER TABLE companies ADD COLUMN cipc_registration_date TIMESTAMP",
             """CREATE TABLE IF NOT EXISTS leave_requests (
                 id SERIAL PRIMARY KEY,
                 company_id INTEGER REFERENCES companies(id),
