@@ -14,6 +14,16 @@ const C = {
   purple:"#6B2A8B", purpleLt:"#6B2A8B12",
 };
 
+const DEFAULT_DOC_TEMPLATE = {
+  layout:       "classic",        // classic | modern | minimal | bold
+  primaryColor: "#C8401A",
+  fontFamily:   "Arial, sans-serif",
+  invoiceTitle: "TAX INVOICE",
+  quoteTitle:   "QUOTE / ESTIMATE",
+  footerNote:   "",
+  tableStyle:   "shaded",         // shaded | lines | clean
+};
+
 const BASE_URL = "https://zuzan-backend.onrender.com";
 const fmt = n => `R${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2})}`;
 const fmtDate = d => new Date(d).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"});
@@ -731,8 +741,333 @@ function InvFormFields({data, onChange, customers=[]}) {
   );
 }
 
+// ── DOCUMENT RENDERER ────────────────────────────────────────────────────────
+// Renders invoice or quote in the chosen template layout.
+// type: "invoice" | "quote"
+// doc:  the invoice/quote object
+// user: company info
+// tmpl: document template config
+function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
+  const t = {...DEFAULT_DOC_TEMPLATE, ...tmpl};
+  const pc = t.primaryColor;
+  const ff = t.fontFamily;
+  const title = type === "quote" ? t.quoteTitle : t.invoiceTitle;
+  const currency = doc.currency || "ZAR";
+  const amount   = doc.amount || 0;
+  const vatAmt   = doc.vatAmount || 0;
+  const total    = doc.totalAmount || (amount + vatAmt) || amount;
+
+  const logoBlock = user.logoUrl
+    ? <img src={user.logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:2}}/>
+    : <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:pc}}>{user.companyName||"Your Company"}</div>;
+
+  const tableHeader = (
+    <thead>
+      <tr style={{
+        background: t.tableStyle==="shaded" ? "#f4f4f4" : "transparent",
+        borderBottom: `2px solid ${t.tableStyle==="lines"||t.tableStyle==="shaded" ? "#ddd" : "transparent"}`,
+      }}>
+        <th style={{padding:"9px 12px",textAlign:"left",fontSize:11,color:"#555",fontFamily:ff}}>Description</th>
+        <th style={{padding:"9px 12px",textAlign:"right",fontSize:11,color:"#555",fontFamily:ff}}>Amount</th>
+      </tr>
+    </thead>
+  );
+
+  const tableBody = (
+    <tbody>
+      <tr style={{borderBottom:t.tableStyle!=="clean"?"1px solid #eee":"none"}}>
+        <td style={{padding:"12px",color:"#1A1209",fontFamily:ff}}>{doc.desc}</td>
+        <td style={{padding:"12px",textAlign:"right",fontWeight:600,fontFamily:ff}}>{fmtCurrency(amount, currency)}</td>
+      </tr>
+      {vatAmt > 0 && <tr style={{borderBottom:t.tableStyle!=="clean"?"1px solid #eee":"none"}}>
+        <td style={{padding:"12px",color:"#888",fontSize:12,fontFamily:ff}}>VAT</td>
+        <td style={{padding:"12px",textAlign:"right",color:"#C4920A",fontWeight:600,fontFamily:ff}}>{fmtCurrency(vatAmt, currency)}</td>
+      </tr>}
+    </tbody>
+  );
+
+  const bankingBlock = (t.tableStyle !== "clean" || type === "invoice") && user.bankingDetails
+    ? <div style={{background:"#f9f9f9",borderRadius:8,padding:"10px 14px",marginTop:16,fontSize:11,color:"#666",fontFamily:ff}}>
+        {user.bankingDetails}
+      </div>
+    : null;
+
+  const footerBlock = t.footerNote
+    ? <div style={{marginTop:12,fontSize:11,color:"#888",fontFamily:ff,borderTop:"1px solid #eee",paddingTop:10}}>{t.footerNote}</div>
+    : null;
+
+  // ── CLASSIC ──
+  if (t.layout === "classic") return (
+    <div style={{fontFamily:ff,color:"#1A1209"}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${pc}`}}>
+        <div>{logoBlock}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,marginTop:2}}>{user.companyName||""}</div>}</div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:20,fontWeight:800,color:"#1A1209"}}>{title}</div>
+          <div style={{fontSize:13,color:"#888",marginTop:4}}>{doc.id}</div>
+          {type==="quote"&&doc.validUntil&&<div style={{fontSize:12,color:"#888"}}>Valid until: {fmtDate(doc.validUntil)}</div>}
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
+        <div>
+          <div style={{fontSize:10,color:"#888",fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Bill To</div>
+          <div style={{fontWeight:700}}>{doc.client}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:12,color:"#888"}}>Date: {fmtDate(doc.date)}</div>
+          {doc.due&&<div style={{fontSize:12,color:"#888"}}>Due: {fmtDate(doc.due)}</div>}
+        </div>
+      </div>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>{tableHeader}{tableBody}</table>
+      <div style={{borderTop:`2px solid #ddd`,paddingTop:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0"}}>
+          <span style={{fontWeight:800,fontSize:15}}>TOTAL {type==="invoice"?"DUE":""}</span>
+          <span style={{fontWeight:800,fontSize:18,color:pc}}>{fmtCurrency(total, currency)}</span>
+        </div>
+      </div>
+      {type==="invoice"&&bankingBlock}
+      {footerBlock}
+    </div>
+  );
+
+  // ── MODERN ──
+  if (t.layout === "modern") return (
+    <div style={{fontFamily:ff,color:"#1A1209"}}>
+      <div style={{background:pc,borderRadius:"8px 8px 0 0",padding:"24px 28px",marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div>
+          {user.logoUrl
+            ? <img src={user.logoUrl} alt="logo" style={{height:48,maxWidth:160,objectFit:"contain",filter:"brightness(0) invert(1)",display:"block"}}/>
+            : <div style={{fontSize:22,fontWeight:800,color:"#fff"}}>{user.companyName||"Your Company"}</div>}
+          {user.logoUrl&&<div style={{fontSize:11,color:"rgba(255,255,255,0.8)",marginTop:4}}>{user.companyName}</div>}
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:22,fontWeight:800,color:"#fff"}}>{title}</div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,0.85)",marginTop:4}}>{doc.id}</div>
+          {type==="quote"&&doc.validUntil&&<div style={{fontSize:11,color:"rgba(255,255,255,0.75)"}}>Valid until: {fmtDate(doc.validUntil)}</div>}
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24,padding:"0 4px"}}>
+        <div>
+          <div style={{fontSize:10,color:"#888",fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Bill To</div>
+          <div style={{fontWeight:700,fontSize:14}}>{doc.client}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:12,color:"#888"}}>Date: {fmtDate(doc.date)}</div>
+          {doc.due&&<div style={{fontSize:12,color:"#888"}}>Due: {fmtDate(doc.due)}</div>}
+        </div>
+      </div>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
+        <thead><tr style={{background:pc}}>
+          <th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:"#fff",fontFamily:ff}}>Description</th>
+          <th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:"#fff",fontFamily:ff}}>Amount</th>
+        </tr></thead>
+        {tableBody}
+      </table>
+      <div style={{background:pc+"18",border:`1px solid ${pc}30`,borderRadius:8,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <span style={{fontWeight:800,fontSize:15}}>TOTAL {type==="invoice"?"DUE":""}</span>
+        <span style={{fontWeight:800,fontSize:20,color:pc}}>{fmtCurrency(total, currency)}</span>
+      </div>
+      {type==="invoice"&&bankingBlock}
+      {footerBlock}
+    </div>
+  );
+
+  // ── MINIMAL ──
+  if (t.layout === "minimal") return (
+    <div style={{fontFamily:ff,color:"#1A1209"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:32}}>
+        <div>
+          {user.logoUrl
+            ? <img src={user.logoUrl} alt="logo" style={{height:40,maxWidth:140,objectFit:"contain",display:"block",marginBottom:4}}/>
+            : <div style={{fontSize:16,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"#1A1209"}}>{user.companyName||"Your Company"}</div>}
+          {user.logoUrl&&<div style={{fontSize:11,color:"#888",marginTop:2,letterSpacing:1}}>{user.companyName}</div>}
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:pc}}>{title}</div>
+          <div style={{fontSize:18,fontWeight:800,color:"#1A1209",marginTop:4}}>{doc.id}</div>
+          {type==="quote"&&doc.validUntil&&<div style={{fontSize:11,color:"#888",marginTop:2}}>Valid: {fmtDate(doc.validUntil)}</div>}
+        </div>
+      </div>
+      <div style={{borderTop:"1px solid #eee",paddingTop:16,marginBottom:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <div>
+          <div style={{fontSize:10,color:"#888",fontWeight:600,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Bill To</div>
+          <div style={{fontWeight:600}}>{doc.client}</div>
+        </div>
+        <div style={{textAlign:"right",fontSize:12,color:"#888"}}>
+          <div>Date: {fmtDate(doc.date)}</div>
+          {doc.due&&<div>Due: {fmtDate(doc.due)}</div>}
+        </div>
+      </div>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
+        <thead><tr style={{borderBottom:"1px solid #ddd"}}>
+          <th style={{padding:"8px 0",textAlign:"left",fontSize:10,color:"#888",letterSpacing:1,fontWeight:600,textTransform:"uppercase",fontFamily:ff}}>Description</th>
+          <th style={{padding:"8px 0",textAlign:"right",fontSize:10,color:"#888",letterSpacing:1,fontWeight:600,textTransform:"uppercase",fontFamily:ff}}>Amount</th>
+        </tr></thead>
+        <tbody>
+          <tr><td style={{padding:"12px 0",color:"#1A1209",fontFamily:ff}}>{doc.desc}</td><td style={{padding:"12px 0",textAlign:"right",fontWeight:600,fontFamily:ff}}>{fmtCurrency(amount,currency)}</td></tr>
+          {vatAmt>0&&<tr style={{borderTop:"1px solid #f0f0f0"}}><td style={{padding:"8px 0",color:"#888",fontSize:12,fontFamily:ff}}>VAT</td><td style={{padding:"8px 0",textAlign:"right",fontFamily:ff}}>{fmtCurrency(vatAmt,currency)}</td></tr>}
+        </tbody>
+      </table>
+      <div style={{borderTop:"1px solid #ddd",paddingTop:12,display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+        <span style={{fontSize:11,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"#888"}}>Total {type==="invoice"?"Due":""}</span>
+        <span style={{fontSize:22,fontWeight:800,color:pc}}>{fmtCurrency(total,currency)}</span>
+      </div>
+      {type==="invoice"&&user.bankingDetails&&<div style={{marginTop:16,fontSize:11,color:"#888",fontFamily:ff}}>{user.bankingDetails}</div>}
+      {footerBlock}
+    </div>
+  );
+
+  // ── BOLD ──
+  return (
+    <div style={{fontFamily:ff,color:"#1A1209"}}>
+      <div style={{background:"#1A1209",padding:"28px 32px",marginBottom:0,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+        <div>
+          {user.logoUrl
+            ? <img src={user.logoUrl} alt="logo" style={{height:48,maxWidth:160,objectFit:"contain",filter:"brightness(0) invert(1)",display:"block",marginBottom:4}}/>
+            : <div style={{fontSize:20,fontWeight:800,color:"#fff"}}>{user.companyName||"Your Company"}</div>}
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:11,fontWeight:700,letterSpacing:3,color:pc,textTransform:"uppercase"}}>{title}</div>
+          <div style={{fontSize:28,fontWeight:900,color:"#fff",lineHeight:1.1,marginTop:4}}>{doc.id}</div>
+        </div>
+      </div>
+      <div style={{background:pc,padding:"12px 32px",display:"flex",justifyContent:"space-between",marginBottom:24}}>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.9)"}}>Bill To: <strong style={{color:"#fff"}}>{doc.client}</strong></div>
+        <div style={{fontSize:12,color:"rgba(255,255,255,0.9)"}}>Date: {fmtDate(doc.date)}{doc.due?` · Due: ${fmtDate(doc.due)}`:""}</div>
+      </div>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
+        <thead><tr style={{background:"#f5f5f5"}}>
+          <th style={{padding:"11px 16px",textAlign:"left",fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:"#555",fontFamily:ff}}>Description</th>
+          <th style={{padding:"11px 16px",textAlign:"right",fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:"#555",fontFamily:ff}}>Amount</th>
+        </tr></thead>
+        <tbody>
+          <tr style={{borderBottom:"1px solid #eee"}}><td style={{padding:"14px 16px",fontFamily:ff}}>{doc.desc}</td><td style={{padding:"14px 16px",textAlign:"right",fontWeight:700,fontFamily:ff}}>{fmtCurrency(amount,currency)}</td></tr>
+          {vatAmt>0&&<tr style={{borderBottom:"1px solid #eee"}}><td style={{padding:"10px 16px",color:"#888",fontSize:12,fontFamily:ff}}>VAT</td><td style={{padding:"10px 16px",textAlign:"right",fontFamily:ff}}>{fmtCurrency(vatAmt,currency)}</td></tr>}
+        </tbody>
+      </table>
+      <div style={{background:"#1A1209",borderRadius:8,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",margin:"0 0 16px"}}>
+        <span style={{fontWeight:800,fontSize:14,color:"#fff",letterSpacing:1,textTransform:"uppercase"}}>Total {type==="invoice"?"Due":""}</span>
+        <span style={{fontWeight:900,fontSize:22,color:pc}}>{fmtCurrency(total,currency)}</span>
+      </div>
+      {type==="invoice"&&user.bankingDetails&&<div style={{background:"#f9f9f9",borderRadius:6,padding:"10px 14px",fontSize:11,color:"#666",fontFamily:ff}}>{user.bankingDetails}</div>}
+      {footerBlock}
+    </div>
+  );
+}
+
+// ── DOCUMENT TEMPLATE SETTINGS ───────────────────────────────────────────────
+function DocumentTemplateSettings({template, onChange}) {
+  const t = {...DEFAULT_DOC_TEMPLATE, ...template};
+  const set = (k, v) => onChange({...t, [k]: v});
+
+  const LAYOUTS = [
+    {id:"classic", label:"Classic",  desc:"Logo left, title right. Clean professional.",   preview:"🗒️"},
+    {id:"modern",  label:"Modern",   desc:"Coloured header band. Bold and contemporary.",  preview:"🎨"},
+    {id:"minimal", label:"Minimal",  desc:"Clean lines, elegant typography. Less is more.", preview:"✏️"},
+    {id:"bold",    label:"Bold",     desc:"Dark header, large number. High impact.",        preview:"⚡"},
+  ];
+  const FONTS = [
+    {id:"Arial, sans-serif",           label:"Arial (Sans-serif)"},
+    {id:"Georgia, serif",              label:"Georgia (Serif)"},
+    {id:"'Courier New', monospace",    label:"Courier (Monospace)"},
+    {id:"Helvetica, Arial, sans-serif",label:"Helvetica"},
+  ];
+  const TABLE_STYLES = [
+    {id:"shaded", label:"Shaded header"},
+    {id:"lines",  label:"Lines only"},
+    {id:"clean",  label:"Clean / no lines"},
+  ];
+
+  const inputStyle = {width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const labelStyle = {fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5};
+
+  // Sample doc for live preview
+  const sampleDoc = {id:"INV-001",client:"Sample Client Pty Ltd",desc:"Professional services rendered",date:new Date().toISOString().slice(0,10),due:new Date(Date.now()+30*864e5).toISOString().slice(0,10),amount:10000,vatAmount:1500,totalAmount:11500,currency:"ZAR"};
+  const sampleUser = {companyName:"Your Company",logoUrl:"",bankingDetails:"FNB Business · Acc: 123456789 · Branch: 250655",...(template||{})};
+
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"1fr 420px",gap:24,alignItems:"start"}}>
+      {/* ── Left: Controls ── */}
+      <div>
+        {/* Layout picker */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Layout</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {LAYOUTS.map(l=>(
+              <div key={l.id} onClick={()=>set("layout",l.id)} style={{border:`2px solid ${t.layout===l.id?t.primaryColor:C.border}`,background:t.layout===l.id?t.primaryColor+"10":"transparent",borderRadius:12,padding:"14px 16px",cursor:"pointer",transition:"all 0.15s"}}>
+                <div style={{fontSize:22,marginBottom:6}}>{l.preview}</div>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{l.label}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>{l.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Colours + Font */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Branding</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <div>
+              <label style={labelStyle}>Primary Colour</label>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <input type="color" value={t.primaryColor} onChange={e=>set("primaryColor",e.target.value)} style={{width:44,height:36,border:`1px solid ${C.border}`,borderRadius:6,cursor:"pointer",padding:2}}/>
+                <input value={t.primaryColor} onChange={e=>set("primaryColor",e.target.value)} style={{...inputStyle,flex:1}} placeholder="#C8401A"/>
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Font</label>
+              <select value={t.fontFamily} onChange={e=>set("fontFamily",e.target.value)} style={inputStyle}>
+                {FONTS.map(f=><option key={f.id} value={f.id}>{f.label}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Table style */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Table Style</div>
+          <div style={{display:"flex",gap:8}}>
+            {TABLE_STYLES.map(s=>(
+              <button key={s.id} onClick={()=>set("tableStyle",s.id)} style={{flex:1,padding:"9px 12px",borderRadius:8,border:`2px solid ${t.tableStyle===s.id?t.primaryColor:C.border}`,background:t.tableStyle===s.id?t.primaryColor+"10":"transparent",color:t.tableStyle===s.id?C.ink:C.inkMid,fontSize:12,fontWeight:t.tableStyle===s.id?700:400,cursor:"pointer",fontFamily:"inherit"}}>{s.label}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Titles + Footer */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20,marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Document Titles &amp; Footer</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+            <div>
+              <label style={labelStyle}>Invoice Title</label>
+              <input value={t.invoiceTitle} onChange={e=>set("invoiceTitle",e.target.value)} style={inputStyle} placeholder="TAX INVOICE"/>
+            </div>
+            <div>
+              <label style={labelStyle}>Quote Title</label>
+              <input value={t.quoteTitle} onChange={e=>set("quoteTitle",e.target.value)} style={inputStyle} placeholder="QUOTE / ESTIMATE"/>
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Footer Note (appears at bottom of every document)</label>
+            <textarea value={t.footerNote} onChange={e=>set("footerNote",e.target.value)} rows={3} style={{...inputStyle,resize:"vertical"}} placeholder="e.g. Payment terms: 30 days. Thank you for your business!"/>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Right: Live Preview ── */}
+      <div style={{position:"sticky",top:24}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>Live Preview</div>
+        <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",boxShadow:"0 4px 24px rgba(0,0,0,0.08)"}}>
+          <div style={{padding:24,transform:"scale(0.85)",transformOrigin:"top left",width:"117%"}}>
+            <InvoiceDocument type="invoice" doc={sampleDoc} user={sampleUser} tmpl={t}/>
+          </div>
+        </div>
+        <div style={{fontSize:11,color:C.inkMid,marginTop:8,textAlign:"center"}}>Preview updates in real time</div>
+      </div>
+    </div>
+  );
+}
+
 // ── INVOICING ─────────────────────────────────────────────────────────────────
-function Invoicing({live = {}, user = {}}) {
+function Invoicing({live = {}, user = {}, docTemplate}) {
   const liveInvoices = live.invoices;
   const [invoices, setInvoices] = useState(MOCK_INVOICES);
   useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
@@ -833,22 +1168,7 @@ function Invoicing({live = {}, user = {}}) {
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={() => setPreview(null)}>
           <div style={{background:"#fff",borderRadius:20,padding:40,width:560,maxHeight:"80vh",overflow:"auto"}} onClick={e => e.stopPropagation()}>
             <div id="invoice-preview-content">
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:32}}>
-              <div>{user.logoUrl?<img src={user.logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:4}}/>:<div style={{fontFamily:"serif",fontSize:24,fontWeight:800,color:C.accent}}>{user.companyName||"Your Company"}</div>}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,color:C.ink}}>{user.companyName||""}</div>}</div>
-              <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:C.ink}}>TAX INVOICE</div><div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div></div>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
-              <div><div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Bill To</div><div style={{fontWeight:700,color:C.ink}}>{preview.client}</div></div>
-              <div style={{textAlign:"right"}}><div style={{fontSize:12,color:C.inkMid}}>Date: {fmtDate(preview.date)}</div><div style={{fontSize:12,color:C.inkMid}}>Due: {fmtDate(preview.due)}</div></div>
-            </div>
-            <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
-              <thead><tr style={{background:C.bg}}><th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:C.inkMid}}>Description</th><th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.inkMid}}>Amount</th></tr></thead>
-              <tbody><tr><td style={{padding:"12px",color:C.ink}}>{preview.desc}</td><td style={{padding:"12px",textAlign:"right",fontWeight:600}}>{fmtCurrency(preview.amount, preview.currency||"ZAR")}</td></tr></tbody>
-            </table>
-            <div style={{borderTop:`2px solid ${C.border}`,paddingTop:16}}>
-              <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0"}}><span style={{fontWeight:800,fontSize:15}}>TOTAL DUE</span><span style={{fontWeight:800,fontSize:18,color:C.accent}}>{fmtCurrency(preview.amount, preview.currency||"ZAR")}</span></div>
-            </div>
-            <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>{user.bankingDetails || "Banking details not set — update in Settings"}</div>
+            <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>{/* end invoice-preview-content */}
             {/* PayFast payment link */}
             {user.payfastMerchantId && (
@@ -4478,8 +4798,8 @@ function BankImport({live = {}, onNavigate}) {
   );
 }
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
-function AppSettings({user, onLogout, onUserUpdate}) {
-  const [settingsTab, setSettingsTab] = useState("company"); // company | developer
+function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange}) {
+  const [settingsTab, setSettingsTab] = useState("company"); // company | templates | developer
   const [form, setForm] = useState({
     companyName:          user?.companyName          || "",
     regNumber:            user?.regNumber            || "",
@@ -4577,13 +4897,26 @@ function AppSettings({user, onLogout, onUserUpdate}) {
           <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Manage your ZuZan account</p>
         </div>
         <div style={{display:"flex",gap:4,background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:4}}>
-          {[["company","⚙️ General"],["developer","🔑 Developer API"]].map(([id,label])=>(
+          {[["company","⚙️ General"],["templates","🎨 Templates"],["developer","🔑 Developer API"]].map(([id,label])=>(
             <button key={id} onClick={()=>setSettingsTab(id)} style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:settingsTab===id?700:400,background:settingsTab===id?C.surface:"transparent",color:settingsTab===id?C.ink:C.inkMid,fontFamily:"inherit",boxShadow:settingsTab===id?"0 1px 4px rgba(0,0,0,0.08)":"none"}}>{label}</button>
           ))}
         </div>
       </div>
 
-      {settingsTab === "developer" ? <Developer/> : <>
+      {settingsTab === "developer" ? <Developer/> : settingsTab === "templates" ? (
+        <div>
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase"}}>Document Templates</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Customise how your invoices and quotes look when printed or shared.</div>
+              </div>
+              <button onClick={()=>{if(onTemplateChange)onTemplateChange(DEFAULT_DOC_TEMPLATE);}} style={{padding:"7px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:11,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Reset to Default</button>
+            </div>
+            <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
+          </div>
+        </div>
+      ) : <>
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
         <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Subscription</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -5262,7 +5595,7 @@ function fmtCurrency(amount, currency="ZAR") {
 
 // ── QUOTES / ESTIMATES ────────────────────────────────────────────────────────
 const QUOTE_STATUSES = {draft:["Draft",C.inkMid,"#E8E0D5"],sent:["Sent",C.blue,C.blueLt],accepted:["Accepted",C.green,C.greenLt],declined:["Declined",C.red,C.redLt]};
-function Quotes({live={},user={},onNavigate}) {
+function Quotes({live={},user={},onNavigate,docTemplate}) {
   const [quotes,    setQuotes]    = useState([]);
   const [showNew,   setShowNew]   = useState(false);
   const [preview,   setPreview]   = useState(null);
@@ -5494,32 +5827,14 @@ function Quotes({live={},user={},onNavigate}) {
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setPreview(null)}>
           <div style={{background:"#fff",borderRadius:20,padding:40,width:580,maxHeight:"85vh",overflow:"auto"}} onClick={e=>e.stopPropagation()}>
             <div id="quote-print-content">
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${C.accent}`}}>
-                <div>{user.logoUrl?<img src={user.logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:4}}/>:<div style={{fontFamily:"serif",fontSize:24,fontWeight:800,color:C.accent}}>{user.companyName||"Your Company"}</div>}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,color:C.ink}}>{user.companyName||""}</div>}</div>
-                <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:C.ink}}>QUOTE / ESTIMATE</div><div style={{fontSize:13,color:C.inkMid}}>{preview.id}</div><div style={{fontSize:12,color:C.inkMid}}>Valid until: {preview.validUntil?fmtDate(preview.validUntil):"30 days"}</div></div>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:24}}>
-                <div><div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Prepared For</div><div style={{fontWeight:700,color:C.ink}}>{preview.client}</div></div>
-                <div style={{textAlign:"right"}}><div style={{fontSize:12,color:C.inkMid}}>Date: {fmtDate(preview.date)}</div></div>
-              </div>
-              <table style={{width:"100%",borderCollapse:"collapse",marginBottom:24}}>
-                <thead><tr style={{background:C.bg}}><th style={{padding:"10px 12px",textAlign:"left",fontSize:11,color:C.inkMid}}>Description</th><th style={{padding:"10px 12px",textAlign:"right",fontSize:11,color:C.inkMid}}>Amount</th></tr></thead>
-                <tbody>
-                  <tr><td style={{padding:"12px",color:C.ink}}>{preview.desc}</td><td style={{padding:"12px",textAlign:"right",fontWeight:600}}>{fmtCurrency(preview.amount,preview.currency||"ZAR")}</td></tr>
-                  {preview.vatAmount > 0 && <tr style={{borderTop:`1px solid ${C.border}`}}><td style={{padding:"12px",color:C.inkMid,fontSize:12}}>VAT</td><td style={{padding:"12px",textAlign:"right",color:C.gold,fontWeight:600}}>{fmtCurrency(preview.vatAmount,preview.currency||"ZAR")}</td></tr>}
-                </tbody>
-              </table>
-              {preview.currency&&preview.currency!=="ZAR" && <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.blue}}>ZAR equivalent: ≈ {fmt((preview.totalAmount||preview.amount)*(preview.rate||18.5))} at R{preview.rate||18.5}/{preview.currency}</div>}
-              {preview.notes && <div style={{background:C.bg,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.inkMid}}><strong>Notes:</strong> {preview.notes}</div>}
-              <div style={{borderTop:`2px solid ${C.border}`,paddingTop:16}}>
-                <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0"}}><span style={{fontWeight:800,fontSize:15}}>TOTAL</span><span style={{fontWeight:800,fontSize:18,color:C.accent}}>{fmtCurrency(preview.totalAmount||preview.amount,preview.currency||"ZAR")}</span></div>
-              </div>
-              <div style={{background:C.bg,borderRadius:10,padding:12,marginTop:16,fontSize:11,color:C.inkMid}}>This quote is valid for 30 days from the date of issue. Prices exclude VAT unless stated.</div>
+              <InvoiceDocument type="quote" doc={preview} user={user} tmpl={docTemplate}/>
+              {preview.currency&&preview.currency!=="ZAR" && <div style={{background:C.blueLt,borderRadius:8,padding:"10px 14px",marginTop:12,fontSize:12,color:C.blue}}>ZAR equivalent: ≈ {fmt((preview.totalAmount||preview.amount)*(preview.rate||18.5))} at R{preview.rate||18.5}/{preview.currency}</div>}
+              {preview.notes && <div style={{background:C.bg,borderRadius:8,padding:"10px 14px",marginTop:10,fontSize:12,color:C.inkMid}}><strong>Notes:</strong> {preview.notes}</div>}
             </div>
             <div style={{display:"flex",gap:8,marginTop:20}}>
               <button onClick={()=>{setPreview(null);setEditQuote({...preview,rate:preview.rate||"18.5",vatAmount:preview.vatAmount||"0"});}} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={()=>convertToInvoice(preview)} disabled={saving} style={{flex:1,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Converting...":"Convert to Invoice"}</button>
-              <button onClick={()=>{const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;}</style></head><body>${document.getElementById("quote-print-content").innerHTML}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();};}} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
+              <button onClick={()=>{const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${preview.id}</title><style>body{font-family:${(docTemplate||DEFAULT_DOC_TEMPLATE).fontFamily};padding:40px;}</style></head><body>${document.getElementById("quote-print-content").innerHTML}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();};}} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={()=>setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
             </div>
           </div>
@@ -7217,7 +7532,7 @@ function MobileDashboard({live, user, onNavigate}) {
 }
 
 // ── MOBILE SHELL ──────────────────────────────────────────────────────────────
-function MobileApp({user, onLogout, onUserUpdate, live}) {
+function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateChange}) {
   const [tab, setTab] = useState("home");
   const [moreOpen, setMoreOpen] = useState(false);
 
@@ -7249,10 +7564,10 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
 
   const screens = {
     home:       <MobileDashboard live={live} user={user} onNavigate={navigate}/>,
-    invoicing:  <div style={{padding:"16px 16px 100px"}}><Invoicing  live={live} user={user}/></div>,
+    invoicing:  <div style={{padding:"16px 16px 100px"}}><Invoicing  live={live} user={user} docTemplate={docTemplate}/></div>,
     expenses:   <div style={{padding:"16px 16px 100px"}}><Expenses   live={live}/></div>,
     payroll:    <div style={{padding:"16px 16px 100px"}}><Payroll    live={live} user={user}/></div>,
-    quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate}/></div>,
+    quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate} docTemplate={docTemplate}/></div>,
     budgeting:  <div style={{padding:"16px 16px 100px"}}><Budgeting  live={live}/></div>,
     reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live}/></div>,
     inventory:       <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
@@ -7264,7 +7579,7 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
     debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
     creditors:  <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div>,
     coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
-    settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/></div>,
+    settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange}/></div>,
   };
 
   const activeLabel = [...BOTTOM_TABS,...MORE_ITEMS].find(t=>t.id===tab)?.label || "ZuZan";
@@ -7327,6 +7642,13 @@ function MobileApp({user, onLogout, onUserUpdate, live}) {
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
   const [tab, setTab] = useState("dashboard");
+  const [docTemplate, setDocTemplate] = useState(() => {
+    try { const s = localStorage.getItem("zuzan_doc_template"); return s ? {...DEFAULT_DOC_TEMPLATE, ...JSON.parse(s)} : DEFAULT_DOC_TEMPLATE; } catch { return DEFAULT_DOC_TEMPLATE; }
+  });
+  const handleTemplateChange = (tmpl) => {
+    setDocTemplate(tmpl);
+    try { localStorage.setItem("zuzan_doc_template", JSON.stringify(tmpl)); } catch {}
+  };
   const [expanded, setExpanded] = useState({sales: true, procurement: false, banking: false});
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
@@ -7379,12 +7701,12 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     );
   };
 
-  if (isMobile) return <MobileApp user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} live={live}/>;
+  if (isMobile) return <MobileApp user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} live={live} docTemplate={docTemplate} onTemplateChange={handleTemplateChange}/>;
 
   const screens = {
     dashboard:  <Dashboard  live={live}/>,
-    invoicing:  <Invoicing  live={live} user={user}/>,
-    quotes:     <Quotes     live={live} user={user} onNavigate={setTab}/>,
+    invoicing:  <Invoicing  live={live} user={user} docTemplate={docTemplate}/>,
+    quotes:     <Quotes     live={live} user={user} onNavigate={setTab} docTemplate={docTemplate}/>,
     expenses:   <Expenses   live={live}/>,
     payroll:    <Payroll    live={live} user={user}/>,
     reports:    <Reports    live={live}/>,
@@ -7399,7 +7721,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     purchase_orders: <PurchaseOrders/>,
     bankimport:      <BankImport live={live} onNavigate={setTab}/>,
     bankfeeds:       <BankFeeds/>,
-    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate}/>,
+    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange}/>,
   };
 
   return (
