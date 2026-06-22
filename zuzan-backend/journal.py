@@ -160,9 +160,14 @@ def _assert_balanced(lines):
 def post_invoice_raised(invoice, db: Session) -> JournalEntry:
     """
     Invoice sent to client:
-      DR Accounts Receivable   (total incl VAT)
-      CR Sales Revenue         (amount excl VAT)
-      CR VAT Output Payable    (vat_amount)
+      DR Accounts Receivable   (total incl VAT, ZAR equivalent)
+      CR Sales Revenue         (amount excl VAT, ZAR equivalent)
+      CR VAT Output Payable    (vat_amount, ZAR equivalent)
+
+    All amounts are converted to ZAR before posting so that the AR control
+    account (1100) is always denominated in ZAR.  For non-ZAR invoices the
+    exchange_rate stored on the invoice is used; this is the same rate that
+    _to_zar() applies in the reports layer, ensuring consistency.
     """
     cid = invoice.company_id
     lines = []
@@ -174,10 +179,18 @@ def post_invoice_raised(invoice, db: Session) -> JournalEntry:
     rev = get_account(cid, "4000", db)
     vat = get_account(cid, "2100", db)
 
-    lines.append(_line(entry.id, ar,  debit=invoice.total_amount, description=invoice.invoice_number))
-    lines.append(_line(entry.id, rev, credit=invoice.amount,      description="Revenue excl VAT"))
-    if invoice.vat_amount:
-        lines.append(_line(entry.id, vat, credit=invoice.vat_amount, description="VAT output"))
+    # Convert to ZAR — foreign-currency invoices multiply by exchange_rate so
+    # that account 1100 (AR) is always in ZAR.  ZAR invoices are used as-is.
+    is_foreign = bool(invoice.currency and invoice.currency != "ZAR")
+    rate        = float(invoice.exchange_rate or 1.0) if is_foreign else 1.0
+    total_zar   = round((invoice.total_amount or 0) * rate, 2)
+    amount_zar  = round((invoice.amount       or 0) * rate, 2)
+    vat_zar     = round((invoice.vat_amount   or 0) * rate, 2)
+
+    lines.append(_line(entry.id, ar,  debit=total_zar,  description=invoice.invoice_number))
+    lines.append(_line(entry.id, rev, credit=amount_zar, description="Revenue excl VAT"))
+    if vat_zar:
+        lines.append(_line(entry.id, vat, credit=vat_zar, description="VAT output"))
 
     _assert_balanced(lines)
     for l in lines: db.add(l)
@@ -198,10 +211,17 @@ def post_invoice_paid(invoice, db: Session) -> JournalEntry:
     bank = get_account(cid, "1000", db)
     ar   = get_account(cid, "1100", db)
 
-    # For foreign-currency invoices use the ZAR amount actually received;
-    # fall back to total_amount if paid_amount_zar was not recorded.
-    # Both sides MUST use the same ZAR value to keep the entry balanced.
-    zar_received = invoice.paid_amount_zar if invoice.paid_amount_zar else invoice.total_amount
+    # For foreign-currency invoices use the ZAR amount actually received.
+    # Fall back chain (both sides must use the same value to stay balanced):
+    #   1. paid_amount_zar  — exact ZAR received, set by the mark-as-paid UI
+    #   2. total_amount × exchange_rate — estimated ZAR for non-ZAR invoices
+    #   3. total_amount — ZAR invoices (exchange_rate == 1)
+    if invoice.paid_amount_zar:
+        zar_received = invoice.paid_amount_zar
+    elif invoice.currency and invoice.currency != "ZAR":
+        zar_received = round((invoice.total_amount or 0) * float(invoice.exchange_rate or 1.0), 2)
+    else:
+        zar_received = invoice.total_amount or 0
     lines = [
         _line(entry.id, bank, debit=zar_received,  description="Cash received"),
         _line(entry.id, ar,   credit=zar_received, description=invoice.invoice_number),
