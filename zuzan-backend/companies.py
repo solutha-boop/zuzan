@@ -424,6 +424,9 @@ class EmployeeCreate(BaseModel):
     address:          Optional[str] = None
     position:         Optional[str] = None
     department:       Optional[str] = None
+    grade:            Optional[str] = None           # e.g. "A", "B2", "Senior"
+    employment_type:  Optional[str] = "salaried"    # "salaried" | "hourly"
+    hourly_rate:      Optional[float] = None         # explicit rate for hourly employees
     gross_salary:     float
     employee_number:  Optional[str] = None
     bank_name:        Optional[str] = None
@@ -436,6 +439,9 @@ class EmployeeCreate(BaseModel):
 class EmployeeUpdate(BaseModel):
     position:         Optional[str] = None
     department:       Optional[str] = None
+    grade:            Optional[str] = None
+    employment_type:  Optional[str] = None
+    hourly_rate:      Optional[float] = None
     gross_salary:     Optional[float] = None
     tax_number:       Optional[str] = None
     address:          Optional[str] = None
@@ -449,6 +455,7 @@ class EmployeeUpdate(BaseModel):
 
 def _employee_dict(e: Employee) -> dict:
     """Return employee as dict with bank fields decrypted."""
+    from payroll import bcea_hourly_rate
     return {
         "id": e.id, "company_id": e.company_id,
         "employee_number": e.employee_number,
@@ -457,6 +464,10 @@ def _employee_dict(e: Employee) -> dict:
         "date_of_birth": e.date_of_birth.isoformat() if e.date_of_birth else None,
         "appointment_date": e.appointment_date.isoformat() if e.appointment_date else None,
         "address": e.address, "position": e.position, "department": e.department,
+        "grade": e.grade,
+        "employment_type": e.employment_type or "salaried",
+        "hourly_rate": e.hourly_rate,
+        "hourly_rate_bcea": round(bcea_hourly_rate(e.gross_salary, e.hourly_rate), 4),
         "gross_salary": e.gross_salary,
         "bank_name":      decrypt_field(e.bank_name),
         "bank_account":   decrypt_field(e.bank_account),
@@ -497,6 +508,9 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(get
         address=data.address,
         position=data.position,
         department=data.department,
+        grade=data.grade,
+        employment_type=data.employment_type or "salaried",
+        hourly_rate=data.hourly_rate,
         gross_salary=data.gross_salary,
         bank_name=encrypt_field(data.bank_name),
         bank_account=encrypt_field(data.bank_account),

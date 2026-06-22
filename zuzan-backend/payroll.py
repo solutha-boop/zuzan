@@ -79,6 +79,57 @@ SDL_RATE        = 0.01
 PAYROLL_PER_EMP = 17.50
 PAYROLL_MIN     = 99.00
 
+# ── BCEA (Basic Conditions of Employment Act) overtime constants ──────────────
+# Reference: BCEA No. 75 of 1997 as amended
+BCEA_WEEKLY_HOURS    = 45       # normal maximum working hours per week (s9)
+BCEA_WEEKS_PER_MONTH = 52 / 12  # 4.3333 weeks/month — used to derive hourly rate
+BCEA_OT_RATE_WEEKDAY = 1.5      # weekday & Saturday overtime multiplier (s10)
+BCEA_OT_RATE_SUNDAY  = 2.0      # Sunday work multiplier (s16)
+BCEA_OT_RATE_PH      = 2.0      # public holiday work multiplier (s18)
+BCEA_MAX_OT_WEEKLY   = 10       # max overtime hours per week (s10)
+
+
+def bcea_hourly_rate(gross_monthly: float, explicit_hourly_rate: float = None) -> float:
+    """
+    Return the hourly rate used for BCEA overtime calculations.
+    Explicit hourly_rate takes priority (hourly employees).
+    Otherwise derived from gross monthly ÷ (45 h/week × 52/12 weeks).
+    """
+    if explicit_hourly_rate:
+        return explicit_hourly_rate
+    return gross_monthly / (BCEA_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH)
+
+
+def calc_overtime(
+    gross_monthly: float,
+    overtime_hours: float = 0,
+    sunday_hours: float = 0,
+    ph_hours: float = 0,
+    explicit_hourly_rate: float = None,
+) -> dict:
+    """
+    Calculate BCEA overtime amounts for a single employee in a pay period.
+    - overtime_hours : weekday / Saturday OT (1.5x)
+    - sunday_hours   : Sunday hours worked  (2x)
+    - ph_hours       : public holiday hours (2x)
+    Returns per-category hours, rand amounts, and combined total.
+    """
+    hr = bcea_hourly_rate(gross_monthly, explicit_hourly_rate)
+    ot_amount  = round(overtime_hours * hr * BCEA_OT_RATE_WEEKDAY, 2)
+    sun_amount = round(sunday_hours   * hr * BCEA_OT_RATE_SUNDAY,  2)
+    ph_amount_ = round(ph_hours       * hr * BCEA_OT_RATE_PH,      2)
+    total_ot   = round(ot_amount + sun_amount + ph_amount_, 2)
+    return {
+        "hourly_rate":     round(hr, 4),
+        "overtime_hours":  overtime_hours,
+        "overtime_amount": ot_amount,
+        "sunday_hours":    sunday_hours,
+        "sunday_amount":   sun_amount,
+        "ph_hours":        ph_hours,
+        "ph_amount":       ph_amount_,
+        "total_overtime":  total_ot,
+    }
+
 
 def calc_paye(annual_income: float, tax_year: str = None) -> float:
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
@@ -93,37 +144,81 @@ def calc_paye(annual_income: float, tax_year: str = None) -> float:
     return max(0, tax)
 
 
-def calc_payroll(gross_monthly: float, tax_year: str = None, annual_payroll_total: float = None) -> dict:
+def calc_payroll(
+    gross_monthly: float,
+    tax_year: str = None,
+    annual_payroll_total: float = None,
+    overtime_hours: float = 0,
+    sunday_hours: float = 0,
+    ph_hours: float = 0,
+    explicit_hourly_rate: float = None,
+) -> dict:
     """
+    Compute monthly payroll including BCEA overtime.
+
     annual_payroll_total: sum of ALL employees' gross monthly salary * 12.
     SDL only applies if annual_payroll_total >= 500_000 (SA law).
     Pass None to always apply SDL (conservative default for single-employee calculations).
+
+    overtime_hours : weekday/Saturday OT hours (BCEA s10 — 1.5x)
+    sunday_hours   : Sunday hours worked        (BCEA s16 — 2.0x)
+    ph_hours       : public holiday hours       (BCEA s18 — 2.0x)
+    explicit_hourly_rate: set for hourly employees; salaried employees derive
+                          hourly rate from gross_monthly / (45h × 4.333 weeks).
     """
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
-    annual_paye = calc_paye(gross_monthly * 12, tax_year)
+
+    # ── Overtime ──────────────────────────────────────────────────────────────
+    ot = calc_overtime(gross_monthly, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate)
+    total_overtime = ot["total_overtime"]
+
+    # ── Taxable gross = base salary + overtime ────────────────────────────────
+    taxable_gross = gross_monthly + total_overtime
+
+    # ── PAYE on taxable gross (annualised) ────────────────────────────────────
+    annual_paye  = calc_paye(taxable_gross * 12, tax_year)
     monthly_paye = annual_paye / 12
-    uif_base = min(gross_monthly, yr["uif_ceil"])
+
+    # ── UIF on base salary only (overtime is excluded from UIF per SARS) ─────
+    uif_base     = min(gross_monthly, yr["uif_ceil"])
     uif_employee = uif_base * UIF_RATE
     uif_employer = uif_base * UIF_RATE
-    SDL_THRESHOLD = 500_000  # R500k annual payroll
+
+    # ── SDL on taxable gross ──────────────────────────────────────────────────
+    SDL_THRESHOLD  = 500_000
     sdl_applicable = annual_payroll_total is None or annual_payroll_total >= SDL_THRESHOLD
-    sdl = gross_monthly * SDL_RATE if sdl_applicable else 0
-    net_pay = gross_monthly - monthly_paye - uif_employee
-    total_cost = gross_monthly + uif_employer + sdl
+    sdl = taxable_gross * SDL_RATE if sdl_applicable else 0
+
+    net_pay    = taxable_gross - monthly_paye - uif_employee
+    total_cost = taxable_gross + uif_employer + sdl
+
     return {
-        "gross":        round(gross_monthly, 2),
-        "paye":         round(monthly_paye, 2),
-        "uif_employee": round(uif_employee, 2),
-        "uif_employer": round(uif_employer, 2),
-        "sdl":          round(sdl, 2),
-        "net_pay":      round(net_pay, 2),
-        "total_cost":   round(total_cost, 2),
-        "tax_year":     tax_year or CURRENT_TAX_YEAR,
+        "gross":           round(gross_monthly, 2),
+        "overtime":        ot,                           # full BCEA breakdown
+        "taxable_gross":   round(taxable_gross, 2),
+        "paye":            round(monthly_paye, 2),
+        "uif_employee":    round(uif_employee, 2),
+        "uif_employer":    round(uif_employer, 2),
+        "sdl":             round(sdl, 2),
+        "net_pay":         round(net_pay, 2),
+        "total_cost":      round(total_cost, 2),
+        "tax_year":        tax_year or CURRENT_TAX_YEAR,
     }
 
 
 # PAYROLL ROUTER
 payroll_router = APIRouter()
+
+
+class OvertimeEntry(BaseModel):
+    employee_id:    int
+    overtime_hours: float = 0   # weekday/Saturday OT (BCEA s10 — 1.5x)
+    sunday_hours:   float = 0   # Sunday hours         (BCEA s16 — 2.0x)
+    ph_hours:       float = 0   # public holiday hours (BCEA s18 — 2.0x)
+
+
+class RunPayrollRequest(BaseModel):
+    overtime: list[OvertimeEntry] = []
 
 
 @payroll_router.get("/calculate")
@@ -138,19 +233,23 @@ async def calculate_all(
 
     results = []
     totals = {
-        "gross": 0, "paye": 0, "uif_employee": 0,
+        "gross": 0, "taxable_gross": 0, "paye": 0, "uif_employee": 0,
         "uif_employer": 0, "sdl": 0, "net_pay": 0, "total_cost": 0
     }
 
     annual_payroll_total = sum(e.gross_salary for e in employees) * 12
 
     for emp in employees:
-        c = calc_payroll(emp.gross_salary, annual_payroll_total=annual_payroll_total)
-        c["employee_id"]     = emp.id
-        c["employee_name"]   = f"{emp.first_name} {emp.last_name}"
-        c["employee_number"] = emp.employee_number
-        c["position"]        = emp.position
-        c["department"]      = emp.department
+        c = calc_payroll(emp.gross_salary, annual_payroll_total=annual_payroll_total,
+                         explicit_hourly_rate=emp.hourly_rate)
+        c["employee_id"]      = emp.id
+        c["employee_name"]    = f"{emp.first_name} {emp.last_name}"
+        c["employee_number"]  = emp.employee_number
+        c["position"]         = emp.position
+        c["department"]       = emp.department
+        c["grade"]            = emp.grade
+        c["employment_type"]  = emp.employment_type or "salaried"
+        c["hourly_rate_bcea"] = round(bcea_hourly_rate(emp.gross_salary, emp.hourly_rate), 4)
         results.append(c)
         for key in totals:
             totals[key] = round(totals[key] + c[key], 2)
@@ -163,11 +262,19 @@ async def calculate_all(
         "employee_count": len(employees),
         "zuzan_fee":      round(zuzan_fee, 2),
         "period":         datetime.utcnow().strftime("%B %Y"),
+        "bcea": {
+            "normal_weekly_hours": BCEA_WEEKLY_HOURS,
+            "max_ot_weekly":       BCEA_MAX_OT_WEEKLY,
+            "ot_rate_weekday":     BCEA_OT_RATE_WEEKDAY,
+            "ot_rate_sunday":      BCEA_OT_RATE_SUNDAY,
+            "ot_rate_ph":          BCEA_OT_RATE_PH,
+        },
     }
 
 
 @payroll_router.post("/run")
 async def run_payroll(
+    data: RunPayrollRequest = RunPayrollRequest(),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -178,6 +285,9 @@ async def run_payroll(
 
     if not employees:
         raise HTTPException(status_code=400, detail="No active employees found")
+
+    # Build overtime lookup keyed by employee_id
+    ot_map = {entry.employee_id: entry for entry in (data.overtime or [])}
 
     period = datetime.utcnow().strftime("%Y-%m")
     created = []
@@ -190,7 +300,16 @@ async def run_payroll(
         ).first()
         if existing:
             continue
-        c = calc_payroll(emp.gross_salary, annual_payroll_total=annual_payroll_total)
+        ot_entry = ot_map.get(emp.id, OvertimeEntry(employee_id=emp.id))
+        c = calc_payroll(
+            emp.gross_salary,
+            annual_payroll_total=annual_payroll_total,
+            overtime_hours=ot_entry.overtime_hours,
+            sunday_hours=ot_entry.sunday_hours,
+            ph_hours=ot_entry.ph_hours,
+            explicit_hourly_rate=emp.hourly_rate,
+        )
+        ot = c["overtime"]
         payslip = Payslip(
             employee_id=emp.id,
             period=period,
@@ -201,6 +320,12 @@ async def run_payroll(
             sdl=c["sdl"],
             net_pay=c["net_pay"],
             total_cost=c["total_cost"],
+            overtime_hours=ot["overtime_hours"],
+            overtime_amount=ot["overtime_amount"],
+            sunday_hours=ot["sunday_hours"],
+            sunday_amount=ot["sunday_amount"],
+            ph_hours=ot["ph_hours"],
+            ph_amount=ot["ph_amount"],
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post

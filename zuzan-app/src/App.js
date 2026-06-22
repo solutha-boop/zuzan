@@ -145,19 +145,45 @@ function calcPAYE(annual, taxYear) {
   return Math.max(0, b.base + (annual - b.min) * b.rate - yr.rebate);
 }
 
-function calcPayroll(salary, taxYear) {
+// BCEA overtime constants (mirrors backend payroll.py)
+const BCEA_WEEKLY_HOURS    = 45;
+const BCEA_WEEKS_PER_MONTH = 52 / 12;  // 4.3333
+const BCEA_OT_WEEKDAY      = 1.5;      // s10 weekday/Saturday
+const BCEA_OT_SUNDAY       = 2.0;      // s16
+const BCEA_OT_PH           = 2.0;      // s18 public holiday
+
+function bceaHourlyRate(grossMonthly, explicitHourlyRate) {
+  if (explicitHourlyRate) return explicitHourlyRate;
+  return grossMonthly / (BCEA_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH);
+}
+
+function calcOvertime(grossMonthly, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null) {
+  const hr = bceaHourlyRate(grossMonthly, explicitHourlyRate);
+  const otAmt  = Math.round(otHours  * hr * BCEA_OT_WEEKDAY * 100) / 100;
+  const sunAmt = Math.round(sunHours * hr * BCEA_OT_SUNDAY  * 100) / 100;
+  const phAmt  = Math.round(phHours  * hr * BCEA_OT_PH      * 100) / 100;
+  return { hourlyRate:hr, otAmount:otAmt, sunAmount:sunAmt, phAmount:phAmt,
+           total: Math.round((otAmt + sunAmt + phAmt)*100)/100 };
+}
+
+function calcPayroll(salary, taxYear, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null) {
   const yr = TAX_YEARS[taxYear || CURRENT_TAX_YEAR] || TAX_YEARS[CURRENT_TAX_YEAR];
-  const paye = calcPAYE(salary*12, taxYear)/12;
+  const ot = calcOvertime(salary, otHours, sunHours, phHours, explicitHourlyRate);
+  const taxableGross = salary + ot.total;
+  const paye = calcPAYE(taxableGross*12, taxYear)/12;
+  // UIF on base salary only (SARS excludes overtime from UIF)
   const uifBase = Math.min(salary, yr.uifCeil);
-  const uifEmp = uifBase*0.01, uifEmpr = uifBase*0.01, sdl = salary*0.01;
+  const uifEmp = uifBase*0.01, uifEmpr = uifBase*0.01, sdl = taxableGross*0.01;
   return {
     gross:salary,
+    overtime: ot,
+    taxableGross: Math.round(taxableGross),
     paye:Math.round(paye),
     uifEmployee:Math.round(uifEmp),
     uifEmployer:Math.round(uifEmpr),
     sdl:Math.round(sdl),
-    netPay:Math.round(salary-paye-uifEmp),
-    totalCost:Math.round(salary+uifEmpr+sdl)
+    netPay:Math.round(taxableGross-paye-uifEmp),
+    totalCost:Math.round(taxableGross+uifEmpr+sdl)
   };
 }
 
@@ -1775,9 +1801,11 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               {[
                 ["Employee Name", employee.name],
-                ["Employee ID",   employee.id || "EMP-001"],
+                ["Employee ID",   employee.employee_number || employee.id || "EMP-001"],
                 ["Position",      employee.position || "Staff"],
                 ["Department",    employee.dept || "General"],
+                ...(employee.grade ? [["Grade / Pay Band", employee.grade]] : []),
+                ...(employee.employment_type ? [["Employment Type", employee.employment_type === "hourly" ? "Hourly" : "Salaried"]] : []),
               ].map(([l,v]) => (
                 <div key={l}>
                   <div style={{fontSize:10,color:C.inkMid,marginBottom:2}}>{l}</div>
@@ -1794,6 +1822,32 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               <span style={{color:C.inkMid}}>Basic Salary</span>
               <span style={{fontWeight:600,color:C.green}}>{fmt(p.gross)}</span>
             </div>
+            {p.overtime && p.overtime.total > 0 && (
+              <>
+                {p.overtime.overtime_amount > 0 && (
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
+                    <span style={{color:C.inkMid}}>Weekday/Sat Overtime ({p.overtime.overtime_hours}h × 1.5×)</span>
+                    <span style={{fontWeight:600,color:C.green}}>{fmt(p.overtime.overtime_amount)}</span>
+                  </div>
+                )}
+                {p.overtime.sunday_amount > 0 && (
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
+                    <span style={{color:C.inkMid}}>Sunday Time ({p.overtime.sunday_hours}h × 2×)</span>
+                    <span style={{fontWeight:600,color:C.green}}>{fmt(p.overtime.sunday_amount)}</span>
+                  </div>
+                )}
+                {p.overtime.ph_amount > 0 && (
+                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
+                    <span style={{color:C.inkMid}}>Public Holiday ({p.overtime.ph_hours}h × 2×)</span>
+                    <span style={{fontWeight:600,color:C.green}}>{fmt(p.overtime.ph_amount)}</span>
+                  </div>
+                )}
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}>
+                  <span style={{color:C.inkMid}}>Taxable Gross (incl. OT)</span>
+                  <span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Deductions */}
@@ -1846,9 +1900,10 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           {/* SARS info */}
           <div style={{background:C.bg,borderRadius:10,padding:"12px 16px",fontSize:11,color:C.inkMid,lineHeight:1.8}}>
             <strong style={{color:C.ink}}>SARS Reference (2026/2027)</strong><br/>
-            PAYE calculated on annual income of {fmt(p.gross * 12)} — Primary rebate R17,235/year<br/>
-            UIF: 1% employee + 1% employer — capped at R17,712/month<br/>
-            SDL: 1% of gross payroll
+            PAYE calculated on annualised taxable gross of {fmt((p.taxableGross||p.gross) * 12)} — Primary rebate R17,820/year<br/>
+            UIF: 1% employee + 1% employer — capped at R17,712/month (on basic salary only)<br/>
+            SDL: 1% of taxable gross payroll<br/>
+            {p.overtime && p.overtime.total > 0 && `BCEA Overtime: Weekday/Sat 1.5× · Sunday 2× · Public Holiday 2× · Hourly rate: ${fmt(p.overtime.hourly_rate||p.overtime.hourlyRate)}/hr`}
           </div>
 
         </div>
@@ -2266,7 +2321,9 @@ function Payroll({live = {}, user = {}}) {
   useEffect(() => { if (liveEmployees && liveEmployees.length > 0) setEmployees(liveEmployees.map(e => ({...e, name: `${e.first_name} ${e.last_name}`, salary: e.gross_salary, dept: e.department || "General"}))); }, [liveEmployees]);
   const [showNew, setShowNew] = useState(false);
   const [payrollRun, setPayrollRun] = useState(false);
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
+  const [showOtModal, setShowOtModal] = useState(false);
+  const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
@@ -2290,7 +2347,7 @@ function Payroll({live = {}, user = {}}) {
     };
     setEmployees([...employees, newEmp]);
     setShowNew(false);
-    setForm({name:"",position:"",salary:"",dept:"",empNo:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
+    setForm({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
     try {
       const token = localStorage.getItem("zuzan_token");
       if (token && !token.startsWith("demo_")) {
@@ -2303,6 +2360,9 @@ function Payroll({live = {}, user = {}}) {
           last_name:        lastName,
           position:         form.position,
           department:       form.dept,
+          grade:            form.grade || null,
+          employment_type:  form.employmentType || "salaried",
+          hourly_rate:      form.hourlyRate ? +form.hourlyRate : null,
           gross_salary:     +form.salary,
           employee_number:  form.empNo,
           id_number:        form.idNumber,
@@ -2414,16 +2474,86 @@ function Payroll({live = {}, user = {}}) {
           <div style={{fontWeight:700,fontSize:15,color:C.ink}}>{new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})} Payroll</div>
           <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Net pay: {fmt(totalNet)} - SARS due: 7 {new Date(new Date().getFullYear(),new Date().getMonth()+1,7).toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
         </div>
-        <button onClick={async () => {
-          try {
-            await api("/payroll/run", {method:"POST"});
-            if (live && live.reload) live.reload();
-          } catch(err) {
-            console.warn("Payroll run failed:", err.message);
-          }
-          setPayrollRun(true);
+        <button onClick={() => {
+          // Initialise overtime entries for all employees (default 0)
+          const init = {};
+          employees.forEach(e => { init[e.id] = {otHours:0, sunHours:0, phHours:0}; });
+          setOtData(init);
+          setShowOtModal(true);
         }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Run Payroll</button>
       </div>
+      {/* ── BCEA Overtime Entry Modal ────────────────────────────────────── */}
+      {showOtModal && (
+        <div style={{position:"fixed",inset:0,background:"#00000070",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:700,maxHeight:"85vh",overflowY:"auto",boxShadow:"0 8px 40px #00000030"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — Overtime Entry</h3>
+              <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
+            </div>
+            <p style={{fontSize:12,color:C.inkMid,marginBottom:20}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:20}}>
+              <thead>
+                <tr style={{background:C.bg}}>
+                  {["Employee","Grade","BCEA Hourly Rate","Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview"].map(h=>(
+                    <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {employees.map(emp => {
+                  const ot = otData[emp.id] || {otHours:0,sunHours:0,phHours:0};
+                  const hr = bceaHourlyRate(emp.salary, emp.hourly_rate||null);
+                  const preview = calcOvertime(emp.salary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null);
+                  const inpStyle = {width:"60px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
+                  const setOt = (k,v) => setOtData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
+                  return (
+                    <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                      <td style={{padding:"10px 12px"}}>
+                        <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
+                        <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
+                      </td>
+                      <td style={{padding:"10px 12px"}}>
+                        {emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid}}>—</span>}
+                      </td>
+                      <td style={{padding:"10px 12px",color:C.inkMid}}>{fmt(hr)}/hr</td>
+                      <td style={{padding:"10px 12px"}}>
+                        <input style={inpStyle} type="number" min="0" max="10" step="0.5" value={ot.otHours||""} placeholder="0" onChange={e=>setOt("otHours",e.target.value)}/>
+                      </td>
+                      <td style={{padding:"10px 12px"}}>
+                        <input style={inpStyle} type="number" min="0" step="0.5" value={ot.sunHours||""} placeholder="0" onChange={e=>setOt("sunHours",e.target.value)}/>
+                      </td>
+                      <td style={{padding:"10px 12px"}}>
+                        <input style={inpStyle} type="number" min="0" step="0.5" value={ot.phHours||""} placeholder="0" onChange={e=>setOt("phHours",e.target.value)}/>
+                      </td>
+                      <td style={{padding:"10px 12px",fontWeight:700,color:preview.total>0?C.green:C.inkMid}}>
+                        {preview.total > 0 ? `+ ${fmt(preview.total)}` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button onClick={()=>setShowOtModal(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              <button onClick={async () => {
+                setShowOtModal(false);
+                try {
+                  const otPayload = employees.map(emp => {
+                    const ot = otData[emp.id] || {};
+                    return { employee_id: emp.id, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
+                  }).filter(e => e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
+                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload})});
+                  if (live && live.reload) live.reload();
+                } catch(err) { console.warn("Payroll run failed:", err.message); }
+                setPayrollRun(true);
+              }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Confirm &amp; Run Payroll
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {payrollRun && (
         <div style={{background:C.surface,border:`2px solid ${C.green}`,borderRadius:16,padding:20,marginBottom:20}}>
           <div style={{fontSize:16,fontWeight:700,color:C.green,marginBottom:12}}>Payroll Processed - {new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
@@ -2455,21 +2585,42 @@ function Payroll({live = {}, user = {}}) {
 
           {/* Employment Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Employment Details</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
             {[
-              {l:"Employee #",        k:"empNo",           p:"EMP-001",    t:"text"},
-              {l:"Full Name",         k:"name",            p:"Sipho Dlamini",t:"text"},
-              {l:"Position / Title",  k:"position",        p:"Developer",  t:"text"},
-              {l:"Department",        k:"dept",            p:"Tech",       t:"text"},
-              {l:"Monthly Salary (ZAR)",k:"salary",        p:"35000",      t:"number"},
-              {l:"Date of Appointment",k:"appointmentDate",p:"",           t:"date"},
+              {l:"Employee #",           k:"empNo",           p:"EMP-001",     t:"text"},
+              {l:"Full Name",            k:"name",            p:"Sipho Dlamini",t:"text"},
+              {l:"Position / Title",     k:"position",        p:"Developer",   t:"text"},
+              {l:"Department",           k:"dept",            p:"Tech",        t:"text"},
+              {l:"Monthly Salary (ZAR)", k:"salary",          p:"35000",       t:"number"},
+              {l:"Date of Appointment",  k:"appointmentDate", p:"",            t:"date"},
+              {l:"Grade / Pay Band",     k:"grade",           p:"e.g. A, B2, Senior", t:"text"},
             ].map(f => (
               <div key={f.k}>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
                 <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
               </div>
             ))}
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employment Type</label>
+              <select value={form.employmentType} onChange={e=>setForm(v=>({...v,employmentType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="salaried">Salaried (fixed monthly)</option>
+                <option value="hourly">Hourly rate</option>
+              </select>
+            </div>
+            {form.employmentType === "hourly" && (
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Hourly Rate (ZAR)</label>
+                <input type="number" placeholder="e.g. 150" value={form.hourlyRate} onChange={e=>setForm(v=>({...v,hourlyRate:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            )}
           </div>
+          {form.salary && (
+            <div style={{background:C.blueLt,border:`1px solid ${C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.inkMid}}>
+              <strong style={{color:C.blue}}>BCEA hourly rate: </strong>
+              {fmt(bceaHourlyRate(+form.salary, form.hourlyRate ? +form.hourlyRate : null))}/hr
+              <span style={{marginLeft:16}}>Weekday OT: {fmt(bceaHourlyRate(+form.salary, form.hourlyRate ? +form.hourlyRate : null) * 1.5)}/hr · Sunday: {fmt(bceaHourlyRate(+form.salary, form.hourlyRate ? +form.hourlyRate : null) * 2)}/hr</span>
+            </div>
+          )}
 
           {/* Personal Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Personal Details</div>
@@ -2527,7 +2678,7 @@ function Payroll({live = {}, user = {}}) {
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
           <thead>
             <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-              {["Employee","Position","Dept","Gross","PAYE","UIF","SDL","Net Pay","Employer Cost",""].map(h => <th key={h} style={{textAlign:"left",padding:"12px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>)}
+              {["Employee","Grade","Position","Dept","Gross","PAYE","UIF","SDL","Net Pay","Employer Cost",""].map(h => <th key={h} style={{textAlign:"left",padding:"12px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>)}
             </tr>
           </thead>
           <tbody>
@@ -2535,9 +2686,10 @@ function Payroll({live = {}, user = {}}) {
               const p = calcPayroll(emp.salary, taxYear);
               return (
                 <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
-                  <td style={{padding:"13px 14px"}}><div style={{fontWeight:600,color:C.ink}}>{emp.name}</div><div style={{fontSize:10,color:C.inkMid}}>{emp.id}</div></td>
+                  <td style={{padding:"13px 14px"}}><div style={{fontWeight:600,color:C.ink}}>{emp.name}</div><div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div></td>
+                  <td style={{padding:"13px 14px"}}>{emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid,fontSize:11}}>—</span>}</td>
                   <td style={{padding:"13px 14px",color:C.inkMid}}>{emp.position}</td>
-                  <td style={{padding:"13px 14px"}}><Badge label={emp.dept} color={C.blue} bg={C.blueLt}/></td>
+                  <td style={{padding:"13px 14px"}}><Badge label={emp.dept||"General"} color={C.blue} bg={C.blueLt}/></td>
                   <td style={{padding:"13px 14px",fontWeight:600}}>{fmt(p.gross)}</td>
                   <td style={{padding:"13px 14px",color:C.red}}>{fmt(p.paye)}</td>
                   <td style={{padding:"13px 14px",color:C.gold}}>{fmt(p.uifEmployee)}</td>
@@ -2565,10 +2717,11 @@ function Payroll({live = {}, user = {}}) {
         </table>
       </div>
       <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:16,fontSize:12,color:C.inkMid,lineHeight:1.8}}>
-        <strong style={{color:C.ink}}>SARS Compliance Notes {taxYear}</strong><br/>
-        PAYE: 2026/2027 tax tables - Primary rebate R17,820/year - Due 7th of each month<br/>
-        UIF: 1 percent employee plus 1 percent employer - Capped at R17,712/month<br/>
-        SDL: 1 percent of gross payroll - Payable if annual payroll exceeds R500,000
+        <strong style={{color:C.ink}}>SARS &amp; BCEA Compliance Notes {taxYear}</strong><br/>
+        PAYE: 2026/2027 tax tables · Primary rebate R17,820/year · Due 7th of each month<br/>
+        UIF: 1% employee + 1% employer · Capped at R17,712/month · Overtime excluded from UIF base<br/>
+        SDL: 1% of gross payroll · Payable if annual payroll ≥ R500,000<br/>
+        <strong style={{color:C.ink}}>BCEA Overtime (s9/s10/s16/s18):</strong> Normal week = 45 hrs · OT max 10 hrs/week · Weekday/Sat OT = 1.5× · Sunday = 2× · Public holiday = 2× · Hourly rate derived from salary ÷ 195 hrs/month
       </div>
 
       {viewPayslip && (

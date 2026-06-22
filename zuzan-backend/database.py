@@ -127,6 +127,9 @@ class Employee(Base):
     tax_number=Column(String); date_of_birth=Column(DateTime)
     appointment_date=Column(DateTime); address=Column(String)
     position=Column(String); department=Column(String)
+    grade=Column(String,nullable=True)                # e.g. "A", "B", "Senior", "Grade 7"
+    employment_type=Column(String,default="salaried") # "salaried" | "hourly"
+    hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
     bank_name=Column(String); bank_account=Column(String)
     account_number=Column(String); branch_code=Column(String); account_type=Column(String)
@@ -159,6 +162,13 @@ class Payslip(Base):
     period=Column(String); gross_salary=Column(Float); paye=Column(Float)
     uif_employee=Column(Float); uif_employer=Column(Float); sdl=Column(Float)
     net_pay=Column(Float); total_cost=Column(Float)
+    # BCEA overtime breakdown
+    overtime_hours=Column(Float,default=0)   # weekday/Saturday OT hours (1.5x)
+    overtime_amount=Column(Float,default=0)
+    sunday_hours=Column(Float,default=0)     # Sunday hours (2x)
+    sunday_amount=Column(Float,default=0)
+    ph_hours=Column(Float,default=0)         # public holiday hours (2x)
+    ph_amount=Column(Float,default=0)
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
