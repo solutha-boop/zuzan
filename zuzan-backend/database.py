@@ -570,6 +570,16 @@ def init_db():
                 notes TEXT,
                 created_at TIMESTAMP DEFAULT NOW()
             )""",
+            # ── BCEA grade + overtime columns (2026-06) ──────────────────────
+            "ALTER TABLE employees ADD COLUMN grade VARCHAR",
+            "ALTER TABLE employees ADD COLUMN employment_type VARCHAR DEFAULT 'salaried'",
+            "ALTER TABLE employees ADD COLUMN hourly_rate FLOAT",
+            "ALTER TABLE payslips ADD COLUMN overtime_hours FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN overtime_amount FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN sunday_hours FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN sunday_amount FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN ph_hours FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN ph_amount FLOAT DEFAULT 0",
         ]:
             try:
                 conn.execute(text(sql))

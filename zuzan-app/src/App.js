@@ -4768,19 +4768,10 @@ function BankImport({live = {}, onNavigate}) {
       });
       const data = await res.json();
 
-      // Handle expired token — retry without auth (demo mode)
+      // Session expired — remove token and prompt re-login (do NOT write a demo_ token)
       if (res.status === 401) {
         localStorage.removeItem("zuzan_token");
-        localStorage.setItem("zuzan_token", "demo_" + Date.now());
-        await new Promise(r => setTimeout(r, 800));
-        setResult({
-          expenses_created: selectedTxns.filter(t => t.type === "debit").length,
-          expenses_skipped: 0,
-          credits_recorded: selectedTxns.filter(t => t.type === "credit").length,
-          message: "Saved in demo mode (session expired)",
-        });
-        setStep("done");
-        return;
+        throw new Error("Your session has expired. Please log in again.");
       }
 
       if (!res.ok) throw new Error(data.detail || "Import failed");
