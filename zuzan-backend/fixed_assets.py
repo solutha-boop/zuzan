@@ -17,6 +17,131 @@ from auth import get_current_user, User
 logger = logging.getLogger("zuzan.fixed_assets")
 router = APIRouter()
 
+# ── SARS IN47 Wear & Tear Table (Section 11(e) of the Income Tax Act) ─────────
+# Source: SARS Interpretation Note 47 (IN47) and related practice notes.
+# "years" = prescribed write-off period (straight-line, full cost, no residual).
+# SARS does NOT allow residual values for tax purposes — full cost is written off.
+SARS_WEAR_TEAR = {
+    # ── Office & IT ──────────────────────────────────────────────────────────
+    "Computers — desktops / laptops":          {"years": 3,  "section": "11(e)"},
+    "Smartphones / Tablets":                   {"years": 2,  "section": "11(e)"},
+    "Printers / Photocopiers / Scanners":      {"years": 3,  "section": "11(e)"},
+    "Fax machines":                            {"years": 3,  "section": "11(e)"},
+    "Software — purchased (off-the-shelf)":    {"years": 2,  "section": "11(e)"},
+    "Software — custom developed":             {"years": 3,  "section": "11(e)"},
+    "Office equipment (general)":              {"years": 5,  "section": "11(e)"},
+    "Televisions / Display screens":           {"years": 6,  "section": "11(e)"},
+    # ── Furniture & Fittings ─────────────────────────────────────────────────
+    "Furniture and fittings":                  {"years": 6,  "section": "11(e)"},
+    "Carpets / Floor coverings":               {"years": 6,  "section": "11(e)"},
+    "Air conditioners (portable)":             {"years": 5,  "section": "11(e)"},
+    # ── Vehicles ─────────────────────────────────────────────────────────────
+    "Motor vehicles — passenger":              {"years": 5,  "section": "11(e)"},
+    "Motor vehicles — light delivery (≤3.5t)": {"years": 4,  "section": "11(e)"},
+    "Trucks / Heavy vehicles (>3.5t)":         {"years": 4,  "section": "11(e)"},
+    "Motorcycles":                             {"years": 4,  "section": "11(e)"},
+    "Trailers":                                {"years": 5,  "section": "11(e)"},
+    "Forklifts":                               {"years": 4,  "section": "11(e)"},
+    "Aircraft (light)":                        {"years": 4,  "section": "11(e)"},
+    # ── Plant & Machinery ────────────────────────────────────────────────────
+    "Machinery — general":                     {"years": 5,  "section": "11(e)"},
+    "Manufacturing plant (general)":           {"years": 5,  "section": "11(e)"},
+    "Manufacturing plant — new/unused (s12C)": {"years": 4,  "section": "12C",
+                                                "note": "40% yr1, 20% yrs 2-4"},
+    "Tools — hand tools":                      {"years": 3,  "section": "11(e)"},
+    "Tools — power tools":                     {"years": 3,  "section": "11(e)"},
+    # ── Buildings ────────────────────────────────────────────────────────────
+    "Commercial buildings (s13quin)":          {"years": 25, "section": "13quin",
+                                                "note": "Eligible commercial buildings only"},
+    "Industrial / Manufacturing buildings":    {"years": 10, "section": "13",
+                                                "note": "Used in process of manufacture"},
+    "Hotel buildings":                         {"years": 20, "section": "13bis"},
+    "Residential rental property":             {"years": 25, "section": "13sex",
+                                                "note": "New/unused residential units only"},
+    # ── Renewable Energy ─────────────────────────────────────────────────────
+    "Solar PV panels (≤1 MW, s12BA)":          {"years": 1,  "section": "12BA",
+                                                "note": "125% first-year deduction — energy cost only"},
+    "Wind energy equipment":                   {"years": 1,  "section": "12B",
+                                                "note": "100% first-year deduction"},
+    "Biomass / Small hydro equipment":         {"years": 3,  "section": "12B"},
+    # ── Other ────────────────────────────────────────────────────────────────
+    "Bicycles":                                {"years": 4,  "section": "11(e)"},
+    "Cash registers / POS systems":            {"years": 3,  "section": "11(e)"},
+    "Security systems / CCTV":                 {"years": 5,  "section": "11(e)"},
+    "Telephone systems (PABX / VoIP)":         {"years": 5,  "section": "11(e)"},
+    "Medical / Dental equipment":              {"years": 5,  "section": "11(e)"},
+    "Kitchen equipment (commercial)":          {"years": 6,  "section": "11(e)"},
+    "Gym / Fitness equipment":                 {"years": 5,  "section": "11(e)"},
+}
+
+# SA corporate income tax rate (27% from 1 April 2023)
+SA_CIT_RATE = 0.27
+
+
+def _calc_tax_base(asset, now: datetime = None) -> dict:
+    """
+    Compute SARS tax base and deferred tax for a fixed asset.
+
+    Tax base  = cost − cumulative SARS allowance claimed to date (floored at 0).
+    Accounting carrying value is taken from asset.cost - accumulated_depreciation (IAS 16).
+
+    Temporary difference:
+      positive (CV > tax base) → Taxable temp diff → Deferred Tax Liability (DTL)
+      negative (CV < tax base) → Deductible temp diff → Deferred Tax Asset (DTA)
+
+    Returns None if no SARS category is assigned to the asset.
+    """
+    if not asset.sars_category:
+        return None
+    sars_info = SARS_WEAR_TEAR.get(asset.sars_category)
+    if not sars_info:
+        return None
+
+    if now is None:
+        now = datetime.utcnow()
+
+    cost       = asset.cost
+    sars_years = sars_info["years"]
+
+    if sars_years <= 0:
+        # Immediate 100% write-off (e.g. certain renewable energy assets)
+        accumulated_allowance = cost
+        monthly_allowance     = cost
+    else:
+        monthly_allowance = round(cost / (sars_years * 12), 2)
+        months_elapsed    = max(0, (now.year  - asset.purchase_date.year) * 12
+                                  + (now.month - asset.purchase_date.month))
+        accumulated_allowance = round(min(months_elapsed * monthly_allowance, cost), 2)
+
+    tax_base       = round(max(0.0, cost - accumulated_allowance), 2)
+    # IAS 16 carrying value (ignoring residual cap — tax base comparison uses gross)
+    carrying_value = round(cost - asset.accumulated_depreciation, 2)
+    temp_diff      = round(carrying_value - tax_base, 2)
+    deferred_tax   = round(temp_diff * SA_CIT_RATE, 2)
+
+    if temp_diff > 0.01:
+        dt_type = "DTL"   # taxable — will pay more tax in future
+    elif temp_diff < -0.01:
+        dt_type = "DTA"   # deductible — will save tax in future
+    else:
+        dt_type = "Nil"
+
+    return {
+        "sars_category":             asset.sars_category,
+        "sars_years":                sars_years,
+        "section":                   sars_info["section"],
+        "note":                      sars_info.get("note"),
+        "monthly_tax_allowance":     monthly_allowance,
+        "accumulated_allowance":     accumulated_allowance,
+        "tax_base":                  tax_base,
+        "accounting_carrying_value": carrying_value,
+        "temporary_difference":      temp_diff,
+        "deferred_tax":              deferred_tax,
+        "deferred_tax_type":         dt_type,
+        "cit_rate":                  SA_CIT_RATE,
+    }
+
+
 # ── Asset categories ──────────────────────────────────────────────────────────
 ASSET_CATEGORIES = [
     "Land & Buildings",
@@ -55,6 +180,7 @@ class AssetCreate(BaseModel):
     useful_life_months:   int
     depreciation_method:  str             = "straight_line"  # straight_line | diminishing_balance
     depreciation_rate:    Optional[float] = None             # required for diminishing_balance
+    sars_category:        Optional[str]   = None             # SARS IN47 wear & tear category
     post_journal:         bool            = True             # post acquisition journal entry
 
 
@@ -66,6 +192,7 @@ class AssetUpdate(BaseModel):
     useful_life_months:   Optional[int]   = None
     depreciation_method:  Optional[str]   = None
     depreciation_rate:    Optional[float] = None
+    sars_category:        Optional[str]   = None
 
 
 class DisposalData(BaseModel):
@@ -105,9 +232,10 @@ def _calc_monthly_depreciation(asset: FixedAsset) -> float:
     return round(min(monthly, remaining), 2)
 
 
-def _asset_to_dict(a: FixedAsset) -> dict:
-    carrying = round(max(a.residual_value, a.cost - a.accumulated_depreciation), 2)
+def _asset_to_dict(a) -> dict:
+    carrying     = round(max(a.residual_value, a.cost - a.accumulated_depreciation), 2)
     monthly_depr = _calc_monthly_depreciation(a) if a.status == "active" else 0.0
+    tax_info     = _calc_tax_base(a) if a.status == "active" else None
     return {
         "id":                     a.id,
         "asset_number":           a.asset_number,
@@ -131,6 +259,9 @@ def _asset_to_dict(a: FixedAsset) -> dict:
         "disposal_gain_loss":     a.disposal_gain_loss,
         "disposal_notes":         a.disposal_notes,
         "created_at":             a.created_at.isoformat() if a.created_at else None,
+        # SARS / deferred tax fields (None if no SARS category assigned)
+        "sars_category":          a.sars_category,
+        "tax":                    tax_info,
     }
 
 
@@ -165,6 +296,10 @@ async def create_asset(
     if data.depreciation_method == "diminishing_balance" and not data.depreciation_rate:
         raise HTTPException(400, "depreciation_rate is required for diminishing balance method (e.g. 0.20 = 20% p.a.)")
 
+    # Validate SARS category if provided
+    if data.sars_category and data.sars_category not in SARS_WEAR_TEAR:
+        raise HTTPException(400, f"Unknown SARS category: '{data.sars_category}'. Use GET /fixed-assets/wear-tear-table for valid options.")
+
     asset = FixedAsset(
         company_id          = cid,
         asset_number        = _next_asset_number(cid, db),
@@ -178,6 +313,7 @@ async def create_asset(
         useful_life_months  = data.useful_life_months,
         depreciation_method = data.depreciation_method,
         depreciation_rate   = data.depreciation_rate,
+        sars_category       = data.sars_category or None,
     )
     db.add(asset)
     db.flush()  # get asset.id before journal post
@@ -220,6 +356,10 @@ async def update_asset(
     if data.useful_life_months  is not None: asset.useful_life_months  = data.useful_life_months
     if data.depreciation_method is not None: asset.depreciation_method = data.depreciation_method
     if data.depreciation_rate   is not None: asset.depreciation_rate   = data.depreciation_rate
+    if data.sars_category       is not None:
+        if data.sars_category not in SARS_WEAR_TEAR and data.sars_category != "":
+            raise HTTPException(400, f"Unknown SARS category: '{data.sars_category}'")
+        asset.sars_category = data.sars_category or None
 
     db.commit()
     db.refresh(asset)
@@ -326,6 +466,103 @@ async def get_categories():
         {"category": cat, "default_useful_life_months": DEFAULT_USEFUL_LIVES.get(cat, 60)}
         for cat in ASSET_CATEGORIES
     ]
+
+
+@router.get("/wear-tear-table")
+async def get_wear_tear_table():
+    """
+    Return the full SARS IN47 wear & tear table.
+    No auth required — reference data only.
+    """
+    return {
+        "source":   "SARS Interpretation Note 47 (IN47)",
+        "act":      "Income Tax Act No. 58 of 1962",
+        "cit_rate": SA_CIT_RATE,
+        "note":     "SARS does not allow residual values. Full cost is deducted over the prescribed period. "
+                    "This table is for guidance — always confirm with your tax advisor.",
+        "categories": [
+            {
+                "name":          cat,
+                "years":         info["years"],
+                "section":       info["section"],
+                "monthly_rate":  round(1 / (info["years"] * 12), 6) if info["years"] > 0 else 1.0,
+                "note":          info.get("note"),
+            }
+            for cat, info in SARS_WEAR_TEAR.items()
+        ],
+    }
+
+
+@router.get("/deferred-tax")
+async def get_deferred_tax(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return deferred tax schedule for all active assets with a SARS category assigned.
+
+    Each row shows:
+      - Accounting carrying value (IAS 16)
+      - SARS tax base (cost less accumulated wear & tear allowance)
+      - Temporary difference
+      - Deferred tax at 27%: DTL (liability) or DTA (asset)
+
+    Summary totals are broken out as gross DTL, gross DTA, and net deferred tax position.
+    """
+    assets = (
+        db.query(FixedAsset)
+        .filter(
+            FixedAsset.company_id == current_user.company_id,
+            FixedAsset.status     == "active",
+            FixedAsset.sars_category.isnot(None),
+        )
+        .all()
+    )
+
+    rows         = []
+    total_dtl    = 0.0
+    total_dta    = 0.0
+
+    for a in assets:
+        tax = _calc_tax_base(a)
+        if tax is None:
+            continue
+        row = {
+            "asset_id":     a.id,
+            "asset_number": a.asset_number,
+            "asset_name":   a.asset_name,
+            "category":     a.category,
+            "cost":         round(a.cost, 2),
+            **tax,
+        }
+        rows.append(row)
+        if tax["deferred_tax_type"] == "DTL":
+            total_dtl += tax["deferred_tax"]
+        elif tax["deferred_tax_type"] == "DTA":
+            total_dta += abs(tax["deferred_tax"])
+
+    net = round(total_dtl - total_dta, 2)
+
+    return {
+        "as_at":           datetime.utcnow().strftime("%Y-%m-%d"),
+        "cit_rate":        SA_CIT_RATE,
+        "assets":          rows,
+        "summary": {
+            "gross_dtl":   round(total_dtl, 2),   # total Deferred Tax Liabilities
+            "gross_dta":   round(total_dta, 2),   # total Deferred Tax Assets
+            "net_position": net,                   # positive = net DTL; negative = net DTA
+            "net_type":    "DTL" if net > 0.01 else ("DTA" if net < -0.01 else "Nil"),
+        },
+        "unclassified_count": (
+            db.query(FixedAsset)
+            .filter(
+                FixedAsset.company_id  == current_user.company_id,
+                FixedAsset.status      == "active",
+                FixedAsset.sars_category.is_(None),
+            )
+            .count()
+        ),
+    }
 
 
 # ── Internal — called by payroll engine ──────────────────────────────────────

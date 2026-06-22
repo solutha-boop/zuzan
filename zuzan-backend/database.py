@@ -390,6 +390,8 @@ class FixedAsset(Base):
     disposal_proceeds       = Column(Float, nullable=True)
     disposal_gain_loss      = Column(Float, nullable=True)        # positive = gain, negative = loss
     disposal_notes          = Column(Text, nullable=True)
+    # SARS tax depreciation (s11(e) / IN47 — for deferred tax)
+    sars_category           = Column(String, nullable=True)    # SARS IN47 category name
     # Audit
     created_at              = Column(DateTime, default=datetime.utcnow)
     updated_at              = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -580,6 +582,7 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN sunday_amount FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN ph_hours FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN ph_amount FLOAT DEFAULT 0",
+            "ALTER TABLE fixed_assets ADD COLUMN sars_category VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))

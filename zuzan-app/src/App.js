@@ -6896,19 +6896,79 @@ function AIAssistant({tab}) {
 const FA_CATS = ["Land & Buildings","Plant & Machinery","Motor Vehicles","Furniture & Fittings","Computer Equipment","Office Equipment","Leasehold Improvements","Other Fixed Assets"];
 const FA_USEFUL_LIVES = {"Land & Buildings":480,"Plant & Machinery":120,"Motor Vehicles":60,"Furniture & Fittings":120,"Computer Equipment":36,"Office Equipment":60,"Leasehold Improvements":120,"Other Fixed Assets":60};
 
+// SARS IN47 Wear & Tear table — client-side mirror for instant previews
+const SARS_WT = {
+  "Computers — desktops / laptops":          {years:3, section:"11(e)"},
+  "Smartphones / Tablets":                   {years:2, section:"11(e)"},
+  "Printers / Photocopiers / Scanners":      {years:3, section:"11(e)"},
+  "Fax machines":                            {years:3, section:"11(e)"},
+  "Software — purchased (off-the-shelf)":    {years:2, section:"11(e)"},
+  "Software — custom developed":             {years:3, section:"11(e)"},
+  "Office equipment (general)":              {years:5, section:"11(e)"},
+  "Televisions / Display screens":           {years:6, section:"11(e)"},
+  "Furniture and fittings":                  {years:6, section:"11(e)"},
+  "Carpets / Floor coverings":               {years:6, section:"11(e)"},
+  "Air conditioners (portable)":             {years:5, section:"11(e)"},
+  "Motor vehicles — passenger":              {years:5, section:"11(e)"},
+  "Motor vehicles — light delivery (≤3.5t)":{years:4, section:"11(e)"},
+  "Trucks / Heavy vehicles (>3.5t)":         {years:4, section:"11(e)"},
+  "Motorcycles":                             {years:4, section:"11(e)"},
+  "Trailers":                                {years:5, section:"11(e)"},
+  "Forklifts":                               {years:4, section:"11(e)"},
+  "Aircraft (light)":                        {years:4, section:"11(e)"},
+  "Machinery — general":                     {years:5, section:"11(e)"},
+  "Manufacturing plant (general)":           {years:5, section:"11(e)"},
+  "Manufacturing plant — new/unused (s12C)":{years:4, section:"12C", note:"40% yr1, 20% yrs 2-4"},
+  "Tools — hand tools":                      {years:3, section:"11(e)"},
+  "Tools — power tools":                     {years:3, section:"11(e)"},
+  "Commercial buildings (s13quin)":          {years:25, section:"13quin", note:"Eligible commercial buildings only"},
+  "Industrial / Manufacturing buildings":    {years:10, section:"13",     note:"Used in process of manufacture"},
+  "Hotel buildings":                         {years:20, section:"13bis"},
+  "Residential rental property":             {years:25, section:"13sex",  note:"New/unused residential units only"},
+  "Solar PV panels (≤1 MW, s12BA)":         {years:1, section:"12BA", note:"125% first-year deduction"},
+  "Wind energy equipment":                   {years:1, section:"12B",  note:"100% first-year deduction"},
+  "Biomass / Small hydro equipment":         {years:3, section:"12B"},
+  "Bicycles":                                {years:4, section:"11(e)"},
+  "Cash registers / POS systems":            {years:3, section:"11(e)"},
+  "Security systems / CCTV":                 {years:5, section:"11(e)"},
+  "Telephone systems (PABX / VoIP)":         {years:5, section:"11(e)"},
+  "Medical / Dental equipment":              {years:5, section:"11(e)"},
+  "Kitchen equipment (commercial)":          {years:6, section:"11(e)"},
+  "Gym / Fitness equipment":                 {years:5, section:"11(e)"},
+};
+const SARS_WT_CATS = Object.keys(SARS_WT);
+const SA_CIT = 0.27;
+
+function sarsCalcTaxBase(cost, purchaseDateStr, sarsCategory) {
+  const info = SARS_WT[sarsCategory];
+  if (!info || !purchaseDateStr || !cost) return null;
+  const years = info.years;
+  const purchaseDate = new Date(purchaseDateStr);
+  const now = new Date();
+  const monthsElapsed = Math.max(0,
+    (now.getFullYear() - purchaseDate.getFullYear()) * 12 +
+    (now.getMonth()    - purchaseDate.getMonth()));
+  const monthlyAllowance = years > 0 ? cost / (years * 12) : cost;
+  const accumulated = years > 0 ? Math.min(monthsElapsed * monthlyAllowance, cost) : cost;
+  const taxBase = Math.max(0, cost - accumulated);
+  return {taxBase, accumulated, monthlyAllowance, years, section:info.section, note:info.note};
+}
+
 function FixedAssets() {
-  const [assets,   setAssets]   = useState([]);
-  const [schedule, setSchedule] = useState([]);
-  const [cats,     setCats]     = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [section,  setSection]  = useState("register");  // register | schedule | add | dispose
-  const [disposing, setDisposing] = useState(null);      // asset being disposed
-  const [saving,   setSaving]   = useState(false);
+  const [assets,     setAssets]     = useState([]);
+  const [schedule,   setSchedule]   = useState([]);
+  const [cats,       setCats]       = useState([]);
+  const [deferredTax,setDeferredTax]= useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [section,    setSection]    = useState("register");  // register | schedule | tax | add
+  const [disposing,  setDisposing]  = useState(null);
+  const [saving,     setSaving]     = useState(false);
   const [form, setForm] = useState({
     asset_name:"", category:"Motor Vehicles", description:"", location:"",
     purchase_date: new Date().toISOString().slice(0,10),
     cost:"", residual_value:"0", useful_life_months:"60",
     depreciation_method:"straight_line", depreciation_rate:"0.20",
+    sars_category:"",
     post_journal:true,
   });
   const [dispForm, setDispForm] = useState({disposal_date: new Date().toISOString().slice(0,10), disposal_proceeds:"0", disposal_notes:"", is_write_off:false});
@@ -6916,12 +6976,13 @@ function FixedAssets() {
   const load = async () => {
     setLoading(true);
     try {
-      const [a, s, c] = await Promise.all([
+      const [a, s, c, dt] = await Promise.all([
         api("/fixed-assets/"),
         api("/fixed-assets/schedule"),
         api("/fixed-assets/categories"),
+        api("/fixed-assets/deferred-tax"),
       ]);
-      setAssets(a); setSchedule(s); setCats(c);
+      setAssets(a); setSchedule(s); setCats(c); setDeferredTax(dt);
     } catch(e) { console.warn("Fixed assets load:", e); }
     setLoading(false);
   };
@@ -6933,6 +6994,8 @@ function FixedAssets() {
   const totalAccumDepr = activeAssets.reduce((s,a) => s + a.accumulated_depreciation, 0);
   const totalNBV       = activeAssets.reduce((s,a) => s + a.carrying_value, 0);
   const monthlyDepr    = activeAssets.reduce((s,a) => s + (a.monthly_depreciation||0), 0);
+  const netDT          = deferredTax?.summary?.net_position ?? 0;
+  const netDTType      = deferredTax?.summary?.net_type ?? "Nil";
 
   const statusColor = st => st === "active" ? C.green : st === "disposed" ? C.blue : C.red;
   const statusBg    = st => st === "active" ? C.greenLt : st === "disposed" ? C.blueLt : C.redLt;
@@ -6957,9 +7020,10 @@ function FixedAssets() {
         useful_life_months:  +form.useful_life_months,
         depreciation_method: form.depreciation_method,
         depreciation_rate:   form.depreciation_method === "diminishing_balance" ? +form.depreciation_rate : null,
+        sars_category:       form.sars_category || null,
         post_journal:        form.post_journal,
       })});
-      setForm({asset_name:"",category:"Motor Vehicles",description:"",location:"",purchase_date:new Date().toISOString().slice(0,10),cost:"",residual_value:"0",useful_life_months:"60",depreciation_method:"straight_line",depreciation_rate:"0.20",post_journal:true});
+      setForm({asset_name:"",category:"Motor Vehicles",description:"",location:"",purchase_date:new Date().toISOString().slice(0,10),cost:"",residual_value:"0",useful_life_months:"60",depreciation_method:"straight_line",depreciation_rate:"0.20",sars_category:"",post_journal:true});
       setSection("register");
       load();
     } catch(e) { alert("Failed: " + e.message); }
@@ -6985,7 +7049,7 @@ function FixedAssets() {
 
   const INP = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
   const LBL = {fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:0.5};
-  const TABS = [{id:"register",label:"Asset Register"},{id:"schedule",label:"Depreciation Schedule"},{id:"add",label:"+ Add Asset"}];
+  const TABS = [{id:"register",label:"Asset Register"},{id:"schedule",label:"Depreciation Schedule"},{id:"tax",label:"Deferred Tax (IAS 12)"},{id:"add",label:"+ Add Asset"}];
 
   return (
     <div>
@@ -6999,10 +7063,16 @@ function FixedAssets() {
 
       {/* KPI cards */}
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label="At Cost"          value={fmt(totalCost)}      color={C.ink}    icon="🏭"/>
+        <KPI label="At Cost"             value={fmt(totalCost)}      color={C.ink}    icon="🏭"/>
         <KPI label="Accum. Depreciation" value={fmt(totalAccumDepr)} color={C.gold}   icon="📉"/>
-        <KPI label="Net Book Value"   value={fmt(totalNBV)}       color={C.accent} icon="📊"/>
-        <KPI label="Monthly Charge"   value={fmt(monthlyDepr)}    color={C.blue}   icon="📅"/>
+        <KPI label="Net Book Value"      value={fmt(totalNBV)}       color={C.accent} icon="📊"/>
+        <KPI label="Monthly Charge"      value={fmt(monthlyDepr)}    color={C.blue}   icon="📅"/>
+        <KPI label={`Deferred Tax (${netDTType})`}
+             value={fmt(Math.abs(netDT))}
+             color={netDTType==="DTL"?C.red:netDTType==="DTA"?C.green:C.inkMid}
+             icon="🧾"
+             onClick={()=>{setSection("tax");setDisposing(null);}}
+             active={section==="tax"}/>
       </div>
 
       {/* Section tabs */}
@@ -7132,6 +7202,108 @@ function FixedAssets() {
         </div>
       )}
 
+      {/* ── DEFERRED TAX (IAS 12) ── */}
+      {section === "tax" && (
+        <div>
+          {/* Summary cards */}
+          {deferredTax && (
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
+              <div style={{background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:12,padding:"16px 20px"}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Gross DTL</div>
+                <div style={{fontSize:20,fontWeight:800,color:C.red}}>{fmt(deferredTax.summary.gross_dtl)}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Deferred Tax Liabilities</div>
+              </div>
+              <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:12,padding:"16px 20px"}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.green,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Gross DTA</div>
+                <div style={{fontSize:20,fontWeight:800,color:C.green}}>{fmt(deferredTax.summary.gross_dta)}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Deferred Tax Assets</div>
+              </div>
+              <div style={{background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:12,padding:"16px 20px"}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Net Position</div>
+                <div style={{fontSize:20,fontWeight:800,color:deferredTax.summary.net_type==="DTL"?C.red:deferredTax.summary.net_type==="DTA"?C.green:C.inkMid}}>{fmt(Math.abs(deferredTax.summary.net_position))}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Net {deferredTax.summary.net_type} — Balance sheet line</div>
+              </div>
+            </div>
+          )}
+
+          {/* Deferred tax asset schedule */}
+          {deferredTax?.assets?.length > 0 ? (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden",marginBottom:16}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                <thead>
+                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                    {["Asset","SARS Category (s)","Cost","Accum. SARS Allowance","Tax Base","IAS 16 Carrying Value","Temp. Difference","Deferred Tax @ 27%","Type"].map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:"10px 12px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {deferredTax.assets.map(row => {
+                    const isLiability = row.deferred_tax_type === "DTL";
+                    const isAsset     = row.deferred_tax_type === "DTA";
+                    return (
+                      <tr key={row.asset_id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                        <td style={{padding:"11px 12px"}}>
+                          <div style={{fontWeight:600,color:C.ink}}>{row.asset_name}</div>
+                          <div style={{fontSize:10,color:C.inkMid}}>{row.asset_number} · {row.category}</div>
+                        </td>
+                        <td style={{padding:"11px 12px"}}>
+                          <div style={{color:C.ink,fontSize:11}}>{row.sars_category}</div>
+                          <div style={{fontSize:10,color:C.blue,fontWeight:600}}>s{row.section} · {row.sars_years}yr write-off</div>
+                          {row.note && <div style={{fontSize:9,color:C.inkMid,fontStyle:"italic",marginTop:2}}>{row.note}</div>}
+                        </td>
+                        <td style={{padding:"11px 12px",fontWeight:600}}>{fmt(row.cost)}</td>
+                        <td style={{padding:"11px 12px",color:C.gold,fontWeight:600}}>{fmt(row.accumulated_allowance)}</td>
+                        <td style={{padding:"11px 12px",fontWeight:700}}>{fmt(row.tax_base)}</td>
+                        <td style={{padding:"11px 12px",fontWeight:700,color:C.accent}}>{fmt(row.accounting_carrying_value)}</td>
+                        <td style={{padding:"11px 12px",fontWeight:700,color:row.temporary_difference>0?C.red:row.temporary_difference<0?C.green:C.inkMid}}>
+                          {row.temporary_difference > 0 ? "+" : ""}{fmt(row.temporary_difference)}
+                        </td>
+                        <td style={{padding:"11px 12px",fontWeight:800,color:isLiability?C.red:isAsset?C.green:C.inkMid}}>
+                          {fmt(Math.abs(row.deferred_tax))}
+                        </td>
+                        <td style={{padding:"11px 12px"}}>
+                          <span style={{background:isLiability?C.redLt:isAsset?C.greenLt:C.bg,color:isLiability?C.red:isAsset?C.green:C.inkMid,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>{row.deferred_tax_type}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{background:C.bg,borderTop:`2px solid ${C.border}`}}>
+                    <td colSpan={6} style={{padding:"11px 12px",fontWeight:800,color:C.ink}}>NET DEFERRED TAX POSITION</td>
+                    <td style={{padding:"11px 12px",fontWeight:800,color:deferredTax.summary.net_type==="DTL"?C.red:deferredTax.summary.net_type==="DTA"?C.green:C.inkMid}}>
+                      {deferredTax.summary.net_position > 0 ? "+" : ""}{fmt(deferredTax.summary.net_position)}
+                    </td>
+                    <td style={{padding:"11px 12px",fontWeight:800,color:deferredTax.summary.net_type==="DTL"?C.red:C.green}}>
+                      {fmt(Math.abs(deferredTax.summary.net_position))}
+                    </td>
+                    <td style={{padding:"11px 12px"}}>
+                      <span style={{background:deferredTax.summary.net_type==="DTL"?C.redLt:deferredTax.summary.net_type==="DTA"?C.greenLt:C.bg,color:deferredTax.summary.net_type==="DTL"?C.red:deferredTax.summary.net_type==="DTA"?C.green:C.inkMid,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>{deferredTax.summary.net_type}</span>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          ) : (
+            <div style={{textAlign:"center",color:C.inkMid,padding:40}}>
+              No assets with SARS categories assigned yet. Add a SARS category when creating an asset to see deferred tax.
+            </div>
+          )}
+
+          {/* Unclassified warning */}
+          {deferredTax?.unclassified_count > 0 && (
+            <div style={{background:"#fff8e1",border:"1px solid #ffc10730",borderRadius:10,padding:"12px 16px",fontSize:12,color:"#7c5c00",marginBottom:12}}>
+              ⚠️ <strong>{deferredTax.unclassified_count} active asset{deferredTax.unclassified_count>1?"s":""}</strong> have no SARS category assigned — these are excluded from the deferred tax calculation. Assign a SARS category by editing the asset.
+            </div>
+          )}
+
+          <div style={{fontSize:12,color:C.inkMid,padding:"10px 14px",background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10}}>
+            <strong style={{color:C.accent}}>IAS 12 note:</strong> Temporary differences arise when the IAS 16 carrying value differs from the SARS tax base (cost less IN47 wear & tear allowances claimed). A DTL arises when the carrying value exceeds the tax base (accounting depreciated more slowly than SARS allows). A DTA arises when the tax base exceeds the carrying value. CIT rate used: 27%.
+          </div>
+        </div>
+      )}
+
       {/* ── DEPRECIATION SCHEDULE ── */}
       {section === "schedule" && (
         <div>
@@ -7242,6 +7414,38 @@ function FixedAssets() {
               )}
             </div>
           </div>
+
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>SARS Tax Depreciation (IN47)</div>
+          <div style={{marginBottom:6}}>
+            <label style={LBL}>SARS Wear &amp; Tear Category (optional — for deferred tax)</label>
+            <select value={form.sars_category} onChange={e=>setForm(v=>({...v,sars_category:e.target.value}))} style={INP}>
+              <option value="">— None assigned —</option>
+              {SARS_WT_CATS.map(c=>{
+                const info = SARS_WT[c];
+                return <option key={c} value={c}>{c} — {info.years}yr (s{info.section})</option>;
+              })}
+            </select>
+          </div>
+          {/* SARS preview strip */}
+          {form.sars_category && form.cost && (() => {
+            const tb = sarsCalcTaxBase(+form.cost, form.purchase_date, form.sars_category);
+            if (!tb) return null;
+            const accountingCV  = Math.max(0, +form.cost - (((+form.cost - (+form.residual_value||0)) / Math.max(1,+form.useful_life_months)) * 0)); // at acquisition CV = cost
+            const tempDiff = +form.cost - tb.taxBase; // at acquisition tax base lags after month 1
+            const dtAmt    = Math.abs(tb.taxBase - +form.cost) * SA_CIT;
+            const wt       = SARS_WT[form.sars_category];
+            return (
+              <div style={{background:"#f0f7ff",border:"1px solid #b3d4f530",borderRadius:10,padding:"12px 16px",marginBottom:12,fontSize:12}}>
+                <div style={{fontWeight:700,color:C.blue,marginBottom:6}}>SARS {wt.section} — {tb.years}-year write-off</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+                  <div><span style={{color:C.inkMid}}>Monthly SARS allowance</span><br/><strong>{fmt(tb.monthlyAllowance)}/mo</strong></div>
+                  <div><span style={{color:C.inkMid}}>Annual SARS allowance</span><br/><strong>{fmt(tb.monthlyAllowance*12)}/yr</strong></div>
+                  <div><span style={{color:C.inkMid}}>Full deduction over</span><br/><strong>{tb.years} year{tb.years>1?"s":""}</strong></div>
+                </div>
+                {tb.note && <div style={{marginTop:8,fontSize:11,color:"#7c5c00",background:"#fff8e1",borderRadius:6,padding:"6px 10px"}}>⚠️ {tb.note}</div>}
+              </div>
+            );
+          })()}
 
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20,padding:"12px",background:C.accentLt,borderRadius:10}}>
             <input type="checkbox" checked={form.post_journal} onChange={e=>setForm(v=>({...v,post_journal:e.target.checked}))} style={{width:18,height:18}}/>
