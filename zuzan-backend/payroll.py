@@ -9,7 +9,7 @@ from sqlalchemy import func
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timedelta
-from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder
+from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry
 from auth import get_current_user, User
 import hashlib
 import logging
@@ -464,6 +464,12 @@ async def dashboard(
     )
     total_expenses = total_expenses + po_cogs
 
+    # Include all-time depreciation from fixed assets (IAS 16 — posted to journal acct 5800)
+    total_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
+        DepreciationEntry.company_id == cid
+    ).scalar() or 0
+    total_expenses = total_expenses + total_depreciation
+
     employees = db.query(Employee).filter(
         Employee.company_id == cid,
         Employee.is_active == True
@@ -581,6 +587,14 @@ async def monthly_trend(
             ).all()
         )
         expenses = expenses + po_cogs
+
+        # Add depreciation charged in this period (DepreciationEntry.period = "YYYY-MM")
+        period_str = start.strftime("%Y-%m")
+        depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
+            DepreciationEntry.company_id == cid,
+            DepreciationEntry.period == period_str,
+        ).scalar() or 0
+        expenses = expenses + depreciation
 
         months.append({
             "month":        start.strftime("%b"),
@@ -1008,6 +1022,16 @@ async def management_accounts(
             expense_by_cat.get("Cost of Sales (POs)", 0) + po_cogs, 2
         )
 
+    # Include depreciation for this month (IAS 16 — DepreciationEntry.period = "YYYY-MM")
+    current_period = now.strftime("%Y-%m")
+    monthly_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
+        DepreciationEntry.company_id == cid,
+        DepreciationEntry.period == current_period,
+    ).scalar() or 0
+    if monthly_depreciation:
+        total_expenses = round(total_expenses + monthly_depreciation, 2)
+        expense_by_cat["Depreciation"] = round(monthly_depreciation, 2)
+
     active_employees = db.query(Employee).filter(
         Employee.company_id == cid,
         Employee.is_active == True
@@ -1061,6 +1085,13 @@ async def management_accounts(
             PurchaseOrder.received_date < end,
         ).all()), 2)
         exp = round(exp + po_c, 2)
+        # Add depreciation for this period
+        trend_period = start.strftime("%Y-%m")
+        trend_depr = db.query(func.sum(DepreciationEntry.amount)).filter(
+            DepreciationEntry.company_id == cid,
+            DepreciationEntry.period == trend_period,
+        ).scalar() or 0
+        exp = round(exp + trend_depr, 2)
         trend.append({"month": start.strftime("%b"), "revenue": rev, "expenses": exp, "gross_profit": round(rev - exp, 2), "profit": round(rev - exp, 2)})
 
     return {
