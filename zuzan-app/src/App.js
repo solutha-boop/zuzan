@@ -1403,7 +1403,7 @@ function Expenses({live = {}}) {
   const unposted = expenses.filter(e => !isPosted(e.category));
   const posted   = expenses.filter(e => isPosted(e.category));
   const displayed = view === "unposted" ? unposted : posted;
-  const total = displayed.reduce((s,e) => s + e.amount, 0);
+  const total = displayed.reduce((s,e) => s + (e.amount||0) - (e.vat_amount||0), 0);
 
   // ── Auto-categorise engine ────────────────────────────────────────
   // Build vendor→category map from posted expenses
@@ -1504,8 +1504,8 @@ function Expenses({live = {}}) {
 
       {/* Summary bar */}
       <div style={{display:"flex",gap:12,marginBottom:16}}>
-        <KPI label="To Categorise"     value={unposted.length} sub={fmt(unposted.reduce((s,e)=>s+e.amount,0))} color={C.gold}  icon="⏳" onClick={()=>setView("unposted")} active={view==="unposted"}/>
-        <KPI label="Posted to Accounts" value={posted.length}  sub={fmt(posted.reduce((s,e)=>s+e.amount,0))}  color={C.green} icon="✅" onClick={()=>setView("posted")}   active={view==="posted"}/>
+        <KPI label="To Categorise"     value={unposted.length} sub={fmt(unposted.reduce((s,e)=>s+(e.amount||0)-(e.vat_amount||0),0))} color={C.gold}  icon="⏳" onClick={()=>setView("unposted")} active={view==="unposted"}/>
+        <KPI label="Posted to Accounts" value={posted.length}  sub={fmt(posted.reduce((s,e)=>s+(e.amount||0)-(e.vat_amount||0),0))}  color={C.green} icon="✅" onClick={()=>setView("posted")}   active={view==="posted"}/>
       </div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"10px 16px",background:view==="unposted"?C.goldLt:C.greenLt,border:`1px solid ${view==="unposted"?C.gold:C.green}30`,borderRadius:10}}>
         <span style={{fontSize:13,fontWeight:600,color:view==="unposted"?C.gold:C.green}}>
@@ -1601,7 +1601,7 @@ function Expenses({live = {}}) {
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={() => setViewExp(null)}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:480}} onClick={e=>e.stopPropagation()}>
             <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 20px"}}>Expense — {viewExp.id}</h3>
-            {[["Vendor",viewExp.vendor],["Description",viewExp.desc],["Date",fmtDate(viewExp.date)],["Amount",fmt(viewExp.amount)],["Account",viewExp.category||"Uncategorised"]].map(([l,v])=>(
+            {[["Vendor",viewExp.vendor],["Description",viewExp.desc],["Date",fmtDate(viewExp.date)],["Amount (excl. VAT)",fmt((viewExp.amount||0)-(viewExp.vat_amount||0))],["VAT",fmt(viewExp.vat_amount||0)],["Total (incl. VAT)",fmt(viewExp.amount||0)],["Account",viewExp.category||"Uncategorised"]].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:`1px solid ${C.border}30`,fontSize:13}}>
                 <span style={{color:C.inkMid,fontWeight:600}}>{l}</span>
                 <span style={{color:C.ink,fontWeight:l==="Amount"?700:400}}>{v}</span>
@@ -1683,7 +1683,7 @@ function Expenses({live = {}}) {
                   <td style={{padding:"13px 16px",fontWeight:600}}>{exp.vendor}</td>
                   <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{exp.desc}</td>
                   <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(exp.date)}</td>
-                  <td style={{padding:"13px 16px",fontWeight:700,color:C.red}}>{fmt(exp.amount)}</td>
+                  <td style={{padding:"13px 16px",fontWeight:700,color:C.red}}>{fmt((exp.amount||0)-(exp.vat_amount||0))}</td>
                   <td style={{padding:"13px 16px"}}>
                     {view === "unposted" ? (
                       <select value={pendingCats[exp.id] || ""} onChange={e => setPendingCats(p=>({...p,[exp.id]:e.target.value}))}
