@@ -2485,12 +2485,78 @@ function Payroll({live = {}, user = {}}) {
       {/* ── BCEA Overtime Entry Modal ────────────────────────────────────── */}
       {showOtModal && (
         <div style={{position:"fixed",inset:0,background:"#00000070",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:700,maxHeight:"85vh",overflowY:"auto",boxShadow:"0 8px 40px #00000030"}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:760,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px #00000030"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
               <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — Overtime Entry</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
-            <p style={{fontSize:12,color:C.inkMid,marginBottom:20}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
+            <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
+
+            {/* ── CSV / Excel upload strip ── */}
+            <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:20}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,fontWeight:700,color:C.ink}}>📂 Upload overtime from file</span>
+                <button onClick={() => {
+                  // Generate and download a template CSV/XLSX with employee list pre-filled
+                  const rows = employees.map(e => ({
+                    "Employee Number": e.employee_number || e.id,
+                    "Employee Name":   e.name,
+                    "Weekday_Sat_OT_Hours": 0,
+                    "Sunday_Hours":          0,
+                    "Public_Holiday_Hours":  0,
+                  }));
+                  const ws = XLSX.utils.json_to_sheet(rows);
+                  ws["!cols"] = [{wch:18},{wch:28},{wch:22},{wch:16},{wch:22}];
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, "Overtime");
+                  XLSX.writeFile(wb, `overtime_${new Date().toISOString().slice(0,7)}.xlsx`);
+                }} style={{background:C.greenLt,color:C.green,border:`1px solid ${C.green}40`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  ⬇ Download Template
+                </button>
+                <label style={{background:C.blueLt,color:C.blue,border:`1px solid ${C.blue}40`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  ⬆ Upload CSV / Excel
+                  <input type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}} onChange={e => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = ev => {
+                      try {
+                        const wb = XLSX.read(ev.target.result, {type:"binary"});
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(ws, {defval:0});
+                        let matched = 0, unmatched = [];
+                        const newOt = {...otData};
+                        rows.forEach(row => {
+                          // Accept employee_number, employee name, or id as lookup key
+                          const empNum = String(row["Employee Number"] || row["employee_number"] || row["EmpNo"] || "").trim();
+                          const empName = String(row["Employee Name"]   || row["employee_name"]   || row["Name"]  || "").trim().toLowerCase();
+                          const emp = employees.find(e =>
+                            (empNum && (String(e.employee_number||"").trim() === empNum || String(e.id) === empNum)) ||
+                            (empName && e.name.toLowerCase() === empName)
+                          );
+                          if (!emp) { unmatched.push(empNum || empName || "(unknown)"); return; }
+                          matched++;
+                          newOt[emp.id] = {
+                            otHours:  +(row["Weekday_Sat_OT_Hours"]  || row["overtime_hours"]  || row["OT Hours"]        || 0),
+                            sunHours: +(row["Sunday_Hours"]           || row["sunday_hours"]    || row["Sunday OT Hours"] || 0),
+                            phHours:  +(row["Public_Holiday_Hours"]   || row["ph_hours"]        || row["PH Hours"]        || 0),
+                          };
+                        });
+                        setOtData(newOt);
+                        if (unmatched.length) alert(`Imported ${matched} employees.\n\nCould not match ${unmatched.length} row(s):\n${unmatched.join(", ")}\n\nCheck that Employee Number in your file matches the payroll list.`);
+                        else alert(`✅ Imported ${matched} employee${matched!==1?"s":""} from file.`);
+                      } catch(err) {
+                        alert("Could not read file: " + err.message);
+                      }
+                    };
+                    reader.readAsBinaryString(file);
+                    e.target.value = "";   // allow re-upload of same file
+                  }}/>
+                </label>
+                <span style={{fontSize:11,color:C.inkMid}}>Columns: Employee Number · Employee Name · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours</span>
+              </div>
+            </div>
+
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:20}}>
               <thead>
                 <tr style={{background:C.bg}}>
