@@ -6961,8 +6961,9 @@ function FixedAssets() {
   const [deferredTax,setDeferredTax]= useState(null);
   const [loading,    setLoading]    = useState(true);
   const [section,    setSection]    = useState("register");  // register | schedule | tax | add
-  const [disposing,  setDisposing]  = useState(null);
-  const [saving,     setSaving]     = useState(false);
+  const [disposing,    setDisposing]    = useState(null);
+  const [saving,       setSaving]       = useState(false);
+  const [runningDepr,  setRunningDepr]  = useState(false);
   const [form, setForm] = useState({
     asset_name:"", category:"Motor Vehicles", description:"", location:"",
     purchase_date: new Date().toISOString().slice(0,10),
@@ -7059,6 +7060,21 @@ function FixedAssets() {
           <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Fixed Assets</h2>
           <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>IAS 16 — cost model, straight-line &amp; diminishing balance</p>
         </div>
+        <button
+          disabled={runningDepr}
+          onClick={async()=>{
+            if(!window.confirm("Run monthly depreciation for all active assets now?")) return;
+            setRunningDepr(true);
+            try {
+              const res = await api("/fixed-assets/run-depreciation", {method:"POST"});
+              alert(res.message || `Depreciation complete — ${res.assets_depreciated} asset(s), R${(res.total_depreciation||0).toFixed(2)} charged.`);
+              load();
+            } catch(e) { alert("Depreciation failed: " + e.message); }
+            setRunningDepr(false);
+          }}
+          style={{background:C.gold,color:"#fff",border:"none",borderRadius:10,padding:"10px 18px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:runningDepr?0.6:1,whiteSpace:"nowrap"}}>
+          {runningDepr ? "Running..." : "▶ Run Depreciation"}
+        </button>
       </div>
 
       {/* KPI cards */}
@@ -7141,7 +7157,7 @@ function FixedAssets() {
             </div>
           )}
           <div style={{fontSize:12,color:C.inkMid,padding:"10px 14px",background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10}}>
-            <strong style={{color:C.accent}}>Depreciation note:</strong> Monthly depreciation runs automatically with each payroll run. You can also trigger it manually via Settings or by running payroll.
+            <strong style={{color:C.accent}}>Depreciation note:</strong> Click "▶ Run Depreciation" at the top of this page to post monthly depreciation for all active assets. The run is idempotent — running it more than once in the same calendar month has no effect.
           </div>
         </div>
       )}
@@ -7308,7 +7324,7 @@ function FixedAssets() {
       {section === "schedule" && (
         <div>
           {loading ? <div style={{color:C.inkMid,padding:20}}>Loading...</div> : schedule.length === 0 ? (
-            <div style={{textAlign:"center",color:C.inkMid,padding:40}}>No depreciation entries yet. Depreciation runs monthly with payroll.</div>
+            <div style={{textAlign:"center",color:C.inkMid,padding:40}}>No depreciation entries yet. Use the "▶ Run Depreciation" button to post the first month.</div>
           ) : (
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
