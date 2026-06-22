@@ -35,7 +35,7 @@ if not exist "zuzan.db" (
     echo  Database created!
 )
 
-start "ZuZan Backend" cmd /k "python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload"
+start "ZuZan Backend" cmd /k "python start.py --reload"
 echo  Backend running on http://localhost:8001
 echo.
 timeout /t 5 /nobreak >NUL

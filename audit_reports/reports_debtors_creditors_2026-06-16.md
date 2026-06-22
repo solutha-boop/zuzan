@@ -1,6 +1,9 @@
 # ZuZan Audit Report — Reports, Debtors & Creditors
 **Date:** 2026-06-16  
-**Scope:** `payroll.py` (reports), `main.py` (/v1/summary), `purchase_orders.py`, `journal.py`, `suppliers.py`, `database.py`, `App_js_fixed.js`
+**Scope:** Reports (`payroll.py` `/reports/*`), Debtors (AR), Creditors (AP), cross-module journal consistency  
+**Files audited:**  
+- Frontend: `App_js_fixed.js`  
+- Backend: `payroll.py`, `companies.py`, `purchase_orders.py`, `journal.py`, `database.py`, `main.py`
 
 ---
 
@@ -8,259 +11,157 @@
 
 | Section | Verdict |
 |---|---|
-| Reports — `/reports/dashboard` | ✓ Pass (minor caveats noted) |
-| Reports — `/reports/management` | ✓ Pass |
-| Reports — `/reports/monthly-trend` | ✗ Fail — missing `_to_zar()` |
-| Reports — `/reports/cash-flow` | ✗ Fail — missing `_to_zar()` |
-| Reports — `/reports/reconciliation` | ⚠ Warn — partial `_to_zar()` gaps |
-| Reports — `/reports/provisional-tax` | ⚠ Warn — missing `_to_zar()` |
-| Reports — `/v1/summary` (public API) | ✗ Fail — outstanding includes draft invoices |
-| Debtors (AR) | ✗ Fail — amounts not converted to ZAR |
-| Creditors (AP) | ✗ Fail — queries Expense table instead of PurchaseOrder table |
-| Cross-module Journal | ⚠ Warn — backfill gap for paid POs |
+| Reports — `/reports/dashboard` | ⚠️ FAIL — expenses VAT-inclusive, payroll uses projection not actuals, trend misses PO COGS |
+| Reports — `/reports/management` | ⚠️ FAIL — same VAT issue; trend chart inconsistent with headline P&L |
+| Reports — `/v1/summary` (main.py) | ✓ PASS — `_to_zar()` applied correctly |
+| Debtors (AR) | ⚠️ PARTIAL — main aging view correct; reconciliation check ages from wrong date field |
+| Creditors (AP) | ✓ PASS — correct filtering, decryption, and aging logic |
+| Cross-module journal | ⚠️ FAIL — foreign-currency invoice payment entries silently fail and are never posted |
 
 ---
 
 ## 2. Reports
 
-### 2.1 `/reports/dashboard` — `payroll.py:235`
+### `/reports/dashboard` and `/reports/management` (payroll.py)
 
-- **total_revenue** (`payroll.py:249`): `sum(_to_zar(i) for i in paid_invoices)` — ✓ correct multi-currency conversion applied.
-- **total_outstanding** (`payroll.py:255`): `sum(_to_zar(i) for i in outstanding_invoices)` — ✓ correct.
-- Outstanding filter (`payroll.py:252`): `status.in_([sent, overdue])` — ✓ draft and paid excluded. Note: `InvoiceStatus` has no `pending` value; enum values are `draft`, `sent`, `paid`, `overdue`.
-- Expenses (`payroll.py:261`): summed from `Expense` table only — see §2.6 for PO cost gap.
-- Payroll costs (`payroll.py:267`): uses `calc_payroll()["total_cost"]` (gross + employer UIF + SDL) — ✓ correct.
-- **No issues** in dashboard itself beyond PO cost gap (§2.6).
+**✓ `total_revenue`** — Correctly queries `Invoice.status == InvoiceStatus.paid` and applies `_to_zar()` for every invoice. For paid foreign-currency invoices uses `paid_amount_zar` when available, falling back to `amount × exchange_rate`. Revenue is not contaminated by expenses. (payroll.py:247–248, 696)
 
-### 2.2 `/reports/management` — `payroll.py:673`
+**✓ `total_outstanding`** — Correctly queries `status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])` and applies `_to_zar()`. Covers all unpaid non-draft invoices. No `pending` status exists in `InvoiceStatus` enum (database.py:36–40: draft/sent/paid/overdue), so the filter is complete. (payroll.py:250–254, 735–739)
 
-- Revenue (`payroll.py:687`): `sum(_to_zar(i) for i in paid_invoices)` — ✓ correct.
-- Trend loop (`payroll.py:730`): `sum(_to_zar(inv) for inv in ...)` — ✓ correct, consistent with management accounts.
-- Payroll cost (`payroll.py:704`): included in EBIT — ✓ correct.
-- Expenses: same PO cost gap as dashboard (§2.6).
+**✗ HIGH — Expenses are summed VAT-inclusive, overstating `total_expenses` by ~13% for VAT-registered entities.**  
+When an expense is created, `companies.py:271–272` stores `amount = data.amount + vat_amount` (the VAT-inclusive total). Reports then sum `e.amount` directly: `sum(e.amount for e in expenses)` (payroll.py:259–260, 702). This means reported expenses include the 15% VAT component that is recoverable from SARS. For a business with R100,000 net expenses, the report will show R115,000 — inflating expenses and understating gross profit by 13%. The double-entry journal handles this correctly (journal.py:215–217 splits net and VAT into separate accounts), but the P&L figure is wrong.  
+**Affected endpoints:** `/reports/dashboard`, `/reports/management`, `/reports/monthly-trend`, `/reports/cash-flow`, `/reports/provisional-tax`
 
-### 2.3 `/reports/monthly-trend` — `payroll.py:289` — ✗ FAIL
+**✗ MEDIUM — Dashboard `total_payroll` uses projected salary, not actual payslip records.**  
+payroll.py:276: `total_payroll = sum(calc_payroll(e.gross_salary)["total_cost"] for e in employees)` — this re-computes payroll from active employees' current salaries rather than summing committed `Payslip.total_cost` records. If a salary was raised mid-period or an employee terminated after a payslip was issued, the dashboard figure will differ from the actual cost incurred. The `provisional_tax` endpoint correctly uses `Payslip.total_cost` (payroll.py:826). The dashboard should use the same approach.
 
-**Issue (High):** `payroll.py:312–313` uses `inv.total_amount` directly without `_to_zar()`:
+**✗ MEDIUM — Monthly trend excludes PO COGS; management P&L headline includes them.**  
+The trend loop in `/reports/monthly-trend` (payroll.py:329–337) and the trend inside `/reports/management` (payroll.py:755–758) sums only `Expense.amount` per month. The main management P&L section *does* add PO COGS (payroll.py:710–719). This makes the trend chart show lower expenses than the headline P&L for the same month, and the computed `profit` in the trend is overstated.
 
-```python
-revenue = sum(
-    inv.total_amount for inv in db.query(Invoice).filter(...)
-)
-```
+**✓ PO COGS not double-counted** — `purchase_orders.py:218–220` explicitly suppresses creation of an `Expense` record when goods are received, so PO costs enter the reports only through the explicit `po_cogs` aggregation. No double-counting.
 
-For multi-currency invoices (e.g., USD), `total_amount` stores the foreign-currency value, not ZAR. This endpoint is separate from `/management` and does **not** apply `_to_zar()`, causing the trend chart to show incorrect figures for companies with foreign-currency invoices.
+**✓ Management accounts trend loop applies `_to_zar()` consistently** — payroll.py:752–754 wraps each paid invoice with `_to_zar(inv)`.
 
-**Fix:** Replace with `sum(_to_zar(inv) for inv in ...)`.
-
-### 2.4 `/reports/cash-flow` — `payroll.py:570` — ✗ FAIL
-
-**Issue (High):** `payroll.py:584`:
-
-```python
-cash_receipts = round(sum(i.total_amount for i in paid_this_month), 2)
-```
-
-No `_to_zar()` applied. Foreign-currency receipts are counted at face value (e.g., USD 1000 instead of ZAR ~18,500).
-
-**Fix:** `sum(_to_zar(i) for i in paid_this_month)`.
-
-### 2.5 `/reports/reconciliation` — `payroll.py:419` — ⚠ WARN
-
-Two sub-issues:
-
-**a) 90-day debtors check (`payroll.py:450`):**
-```python
-amount_90 = round(sum(i.total_amount for i in overdue_90), 2)
-```
-No `_to_zar()`. Overdue foreign-currency invoice amounts are wrong in the warning detail.
-
-**b) Gross margin health check (`payroll.py:542`):**
-```python
-total_rev = round(sum(i.amount for i in db.query(Invoice)...paid...), 2)
-```
-Uses `i.amount` (excl. VAT) instead of `i.total_amount`, AND no `_to_zar()`. Inconsistent with all other revenue calculations which use `total_amount`. This causes:
-- Revenue understated by VAT component (15% for ZAR invoices)
-- Further distorted for foreign-currency invoices
-
-**Fix both:** use `sum(_to_zar(i) for i in ...)`.
-
-### 2.6 PO Costs not feeding Expense Totals — `purchase_orders.py:221` — ⚠ WARN (Medium)
-
-When a PO is received, `purchase_orders.py:221–224` explicitly sets `expense_id = None` and does NOT create an `Expense` record:
-
-```python
-# NOTE: We use the double-entry journal (post_po_received) as the single
-# source of truth — DR Inventory / CR Accounts Payable.
-# Creating a separate Expense record would double-count the cost, so we
-# ignore data.create_expense here; the journal entry IS the cost record.
-expense_id = None
-```
-
-This is intentionally correct from a double-entry standpoint. However, `/reports/dashboard` and `/reports/management` calculate `total_expenses` from the `Expense` table only (`payroll.py:257–260`, `payroll.py:689–693`). Received PO costs (COGS) therefore **do not appear** in the P&L expense totals shown on the dashboard and management accounts. This means:
-
-- Gross profit is overstated if goods are received via PO
-- The PO cost is captured in the journal (Account 1200 Inventory / 2000 AP) but not surfaced in the income statement reports
-
-**Fix:** Either (a) include a COGS line in the P&L/dashboard by querying received POs, or (b) add a dedicated COGS expense row sourced from `sum(po.total_amount for received POs)`.
-
-### 2.7 `/v1/summary` — `main.py:206` — ✗ FAIL
-
-**Issue (High):** `main.py:211`:
-
-```python
-out_invs = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status!="paid").all()
-outstanding = sum(_to_zar(i) for i in out_invs)
-```
-
-This includes **draft** invoices in the outstanding balance. Invoices in `draft` status have not been sent to clients and should not appear as receivables. Only `sent` and `overdue` should count.
-
-Note: The string comparison `Invoice.status=="paid"` works here because `InvoiceStatus` is a `str` enum (`class InvoiceStatus(str, enum.Enum)`), so `"paid"` compares correctly.
-
-**Fix:**
-```python
-out_invs = db.query(Invoice).filter(
-    Invoice.company_id==company.id,
-    Invoice.status.in_(["sent","overdue"])
-).all()
-```
-
-### 2.8 `/reports/provisional-tax` — `payroll.py:786` — ⚠ WARN (Low)
-
-`payroll.py:792`:
-```python
-ytd_revenue = round(sum(i.total_amount for i in paid_invoices), 2)
-```
-No `_to_zar()`. This is a low risk (provisional tax is an estimate) but creates inconsistency.
+**✓ `/v1/summary` (main.py:210–216)** — Uses `_to_zar()` for revenue and outstanding. String literals `"paid"`, `"sent"`, `"overdue"` used in queries are safe because `InvoiceStatus` is `str, enum.Enum` (database.py:36), so SQLAlchemy stores and compares string values.
 
 ---
 
 ## 3. Debtors (Accounts Receivable)
 
-### Backend `/reports/debtors-aging` — `payroll.py:855` — ✗ FAIL
+**Frontend** — `Debtors` component (App_js_fixed.js:3274–3389) calls `GET /reports/debtors-aging` on mount. Displays buckets: Not Yet Due, 0–30, 31–60, 61–90, 90+.
 
-**Source filter** (`payroll.py:864–867`): Queries `Invoice` with `status IN (sent, overdue)` — ✓ paid invoices excluded, draft excluded.
+**✓ Correct invoice filter** — `/reports/debtors-aging` (payroll.py:886–889) queries `status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])`. Draft and paid invoices are excluded.
 
-**Aging buckets** (`payroll.py:871–890`): Uses `inv.due_date or inv.created_at` as the reference date — ✓ aging is from `due_date`, not `issue_date`. Minor: fallback uses `created_at` rather than `issue_date`; for invoices without a due date, `created_at` (timestamp) may differ from `issue_date` (business date). Low impact.
+**✓ ZAR conversion** — All amounts use `_to_zar(inv)` (payroll.py:899).
 
-**Issue (High) — no ZAR conversion** (`payroll.py:875`):
+**✓ Paid invoices excluded** — Only `sent` and `overdue` statuses are fetched; `paid` is absent from the filter.
+
+**✓ Aging from `due_date`** — payroll.py:894 uses `inv.due_date or inv.issue_date or inv.created_at`. Primary key is `due_date`, falling back gracefully. Bucket assignment uses `days_overdue = (now - due).days` with negative values going to `not_due`.
+
+**✗ MEDIUM — Reconciliation aging check uses `issue_date`, not `due_date`.**  
+`/reports/reconciliation` rule 2 (payroll.py:453–470) identifies overdue > 90 days using:
 ```python
-"amount": round(inv.total_amount, 2),
+cutoff_90 = now - timedelta(days=90)
+Invoice.issue_date <= cutoff_90
 ```
-No `_to_zar()` applied. For multi-currency invoices, the debtors book shows the foreign-currency face value (e.g., USD 5,000) not the ZAR equivalent (e.g., R92,500). All bucket totals and the grand total are wrong for companies with foreign-currency invoices.
-
-**Fix:**
-```python
-"amount": round(_to_zar(inv), 2),
-```
-Import `_to_zar` into `payroll.py` (it's already defined in the same file).
-
-### Frontend Debtors component — `App_js_fixed.js:3128`
-
-- Calls `/reports/debtors-aging` ✓
-- Displays `inv.amount` returned by backend ✓ (relies on backend to provide ZAR — fix in backend)
-- Shows `due_date` column ✓
-- Aging buckets correctly labelled (Not Yet Due, 0–30, 31–60, 61–90, 90+) ✓
-- No client-side currency conversion needed once backend is fixed ✓
+This ages from the invoice **issue date** rather than `due_date`. An invoice with 60-day payment terms issued 95 days ago is not overdue (due date is 35 days in the future) but will appear in the reconciliation warning. Conversely, short-term invoices issued 85 days ago can be missed if their `issue_date` is within 90 days. The **main debtors aging report is correct**; only the reconciliation health check is wrong.
 
 ---
 
 ## 4. Creditors (Accounts Payable)
 
-### Backend `/reports/creditors-aging` — `payroll.py:911` — ✗ FAIL (Critical)
+**Frontend** — `Creditors` component (App_js_fixed.js:3392+) calls `GET /reports/creditors-aging` on mount and re-fetches on `live.expenses` change. Displays vendors grouped by aging bucket.
 
-**Critical Issue:** The entire creditors-aging endpoint queries the **`Expense` table**, not the `PurchaseOrder` table:
+**✓ Correct PO filter** — `/reports/creditors-aging` (payroll.py:949–952) queries `status.in_(["received", "partial"])`. Fully paid POs (`status=="paid"`) are excluded. Draft and sent POs are excluded.
 
-```python
-# payroll.py:920–923
-expenses = db.query(Expense).filter(
-    Expense.company_id == cid
-).order_by(Expense.expense_date.desc()).all()
-```
+**✓ Received-but-unpaid POs appear as outstanding creditors** — All `received` and `partial` POs are included.
 
-This means:
-- **Received-but-unpaid POs do not appear as creditors** — the primary source of AP is invisible
-- The view shows expenses grouped by vendor (historical spending), not actual outstanding supplier liabilities
-- A company could have R500k in received-but-unpaid POs and the creditors view would show R0 in AP for those suppliers
+**✓ Paid POs excluded** — `status=="paid"` is absent from the filter (payroll.py:950).
 
-Fully paid POs are correctly excluded, but only because POs aren't queried at all — this is coincidental.
+**✓ Supplier bank details decrypted** — `decrypt_field()` is called for `bank_name`, `account_number`, and `branch_code` before building the vendor map (payroll.py:987–989).
 
-**Secondary Issue — aging from expense_date, not due_date** (`payroll.py:931`):
-```python
-days_old = (now - exp_date).days
-```
-For a proper AP aging, the aging should be from the supplier's due date (e.g., `po.delivery_date` or `order_date + payment_terms`). Aging from expense transaction date overstates age.
+**✓ Aging from `due_date`** — payroll.py:972–974: `due_date = received_date + timedelta(days=payment_terms)`, where `payment_terms` comes from the `Supplier` record (defaulting to 30 days if absent).
 
-**Supplier bank details:** The `suppliers.py:to_dict()` correctly decrypts bank fields (`payroll.py:48–52` in suppliers.py), but supplier bank details are not surfaced in the creditors-aging view at all — bank fields would only appear if the creditors view were rebuilt to query POs joined to suppliers.
-
-**Fix (Critical):** Rewrite `/reports/creditors-aging` to:
-1. Query `PurchaseOrder` with `status IN ('received', 'partial')` for outstanding AP
-2. Join to `Supplier` to get payment terms and bank details
-3. Age from `po.delivery_date` + supplier `payment_terms` days
-4. Continue showing `Expense` data as a separate "Other Expenses" section or merge as non-PO payables
-
-### Frontend Creditors component — `App_js_fixed.js:3247`
-
-- Calls `/reports/creditors-aging` ✓ (but gets wrong data from backend)
-- Displays expense-based vendor ledger — will show correct data once backend is fixed
-- No supplier bank details rendered — acceptable for on-screen view; decryption handled in backend
+**✗ LOW — Frontend Creditors component re-fetches on `live.expenses` change.**  
+App_js_fixed.js:3403–3407: the `useEffect` dependency is `[live.expenses]`. Creditors (AP) depend on Purchase Orders, not expense records. This triggers a spurious API call every time any expense is updated. Functionally harmless but semantically incorrect.
 
 ---
 
-## 5. Cross-Module Journal Coverage
+## 5. Cross-module Journal Coverage
 
-### Posting functions in `journal.py`
+| Event | Posting function | Called from | Status |
+|---|---|---|---|
+| Invoice raised | `post_invoice_raised` | companies.py:204 | ✓ |
+| Invoice paid | `post_invoice_paid` | companies.py:229 | ✓ (but see Critical below) |
+| Expense created | `post_expense` | companies.py:288 | ✓ |
+| Payroll run | `post_payroll` | payroll.py:210 | ✓ |
+| PO received | `post_po_received` | purchase_orders.py:226 | ✓ |
+| PO paid | `post_po_paid` | purchase_orders.py:261 | ✓ |
 
-| Event | Function | Status |
-|---|---|---|
-| Invoice raised (sent) | `post_invoice_raised` (line 154) | ✓ |
-| Invoice paid | `post_invoice_paid` (line 181) | ✓ |
-| Expense paid | `post_expense` (line 207) | ✓ |
-| Payroll run | `post_payroll` (line 237) | ✓ |
-| PO received | `post_po_received` (line 274) | ✓ |
-| PO paid | `post_po_paid` (line 304) | ✓ |
-| Stock adjustment | `post_stock_adjustment` (line 328) | ✓ |
+All six event types have posting functions and are called at the right points. Backfill (`journal.py:369–443`) also covers all six for pre-existing data.
 
-All major event types have journal posting functions. Live transactions post correctly.
-
-### Backfill Gap — `journal.py:419`
-
-**Issue (Medium):** `backfill_company` only backfills POs with status `received` or `partial`:
-
+**✗ CRITICAL — Foreign-currency invoice payment journal entries silently fail.**  
+`post_invoice_paid` (journal.py:196–203) builds:
 ```python
-# journal.py:419–428
-for po in db.query(PurchaseOrder).filter(
-    PurchaseOrder.company_id == company_id,
-    PurchaseOrder.status.in_(["received", "partial"])
-).all():
+zar_received = invoice.paid_amount_zar if invoice.paid_amount_zar else invoice.total_amount
+lines = [
+    _line(entry.id, bank, debit=zar_received),        # e.g. ZAR 1,850
+    _line(entry.id, ar,   credit=invoice.total_amount), # e.g. USD 100 (foreign units)
+]
+_assert_balanced(lines)   # 1850 ≠ 100 → raises ValueError
 ```
+For any foreign-currency invoice where `paid_amount_zar ≠ total_amount` (i.e., virtually every foreign invoice), `_assert_balanced` raises `ValueError`. This is caught silently at companies.py:230–232:
+```python
+except Exception as e:
+    logger.warning(f"Journal post failed for invoice payment {invoice.invoice_number}: {e}")
+```
+**Impact:** The AR control account (1100) is never credited and the Bank account (1000) is never debited for foreign-currency invoice payments. The balance sheet permanently overstates Accounts Receivable for these invoices and understates the cash position. The Debtors aging report will correctly exclude paid invoices (the status filter handles this), but the double-entry ledger is incomplete — meaning the trial balance will not reconcile for companies that invoice in foreign currencies.
 
-POs with status `paid` are excluded. For companies migrated from an older version (before the journal engine was added), paid POs will have **no journal entries** — neither the receive entry (DR Inventory / CR AP) nor the pay entry (DR AP / CR Bank). This causes:
-- Account 2000 (Accounts Payable) balance understated
-- Account 1200 (Inventory) potentially understated
-- Account 1000 (Bank) potentially overstated
-
-**Fix:** Extend backfill to cover paid POs — post `post_po_received` then `post_po_paid` for each paid PO not already in the journal.
-
-### Balance Sheet vs AR/AP Reconciliation
-
-- **AR (Account 1100):** Sourced from journal entries for invoice raised/paid. This will reconcile with the debtors-aging view *after* the `_to_zar()` fix in §3.
-- **AP (Account 2000):** Sourced from journal entries for PO received/paid. This will **not** reconcile with the creditors-aging view because creditors-aging is based on expenses, not POs. Even after fixing the backfill, the creditors-aging backend rewrite (§4) is required for reconciliation.
+**Balance sheet control account reconciliation:**
+- Debtors Control (1100): Debited on invoice raised, credited on payment. Reconciles for ZAR invoices. Permanently out-of-sync for foreign-currency paid invoices due to the bug above.
+- Creditors Control (2000): Credited on PO receipt, debited on PO payment. Fully correct.
 
 ---
 
 ## 6. Action Items
 
-| # | Severity | File | Description |
-|---|---|---|---|
-| 1 | **Critical** | `payroll.py:920` | Rewrite `/reports/creditors-aging` to query `PurchaseOrder` table (`status IN received, partial`) instead of `Expense` table. Join to `Supplier` for payment terms and bank details. Age from due date. |
-| 2 | **High** | `payroll.py:312` | Apply `_to_zar()` in `/reports/monthly-trend`: `sum(_to_zar(inv) for inv in ...)`. |
-| 3 | **High** | `payroll.py:584` | Apply `_to_zar()` in `/reports/cash-flow` cash receipts: `sum(_to_zar(i) for i in paid_this_month)`. |
-| 4 | **High** | `payroll.py:875` | Apply `_to_zar()` in `/reports/debtors-aging` amount field: `"amount": round(_to_zar(inv), 2)`. Update bucket totals accordingly. |
-| 5 | **High** | `main.py:211` | Fix `/v1/summary` outstanding filter: change `Invoice.status!="paid"` to `Invoice.status.in_(["sent","overdue"])` to exclude draft invoices. |
-| 6 | **Medium** | `payroll.py:257` | Surface PO/COGS costs in dashboard and management P&L. Either query received POs for a COGS line, or document that the dashboard P&L excludes inventory-route expenses by design. |
-| 7 | **Medium** | `payroll.py:450` | Apply `_to_zar()` in `/reports/reconciliation` 90-day debtors check: `sum(_to_zar(i) for i in overdue_90)`. |
-| 8 | **Medium** | `payroll.py:542` | Fix gross margin health check: use `_to_zar(i)` instead of `i.amount`. This fixes both the excl-VAT inconsistency and the multi-currency issue. |
-| 9 | **Medium** | `journal.py:419` | Extend `backfill_company` to include paid POs: post `post_po_received` + `post_po_paid` for each paid PO not already journaled. |
-| 10 | **Low** | `payroll.py:792` | Apply `_to_zar()` in `/reports/provisional-tax` YTD revenue: `sum(_to_zar(i) for i in paid_invoices)`. |
-| 11 | **Low** | `payroll.py:872` | In `/reports/debtors-aging`, change due-date fallback from `inv.created_at` to `inv.issue_date` for consistency. |
+**Critical**
+
+1. **Fix foreign-currency invoice payment journal entry** (`journal.py:196–204`). The AR credit must use `paid_amount_zar` (ZAR equivalent), not `invoice.total_amount` (foreign currency units). Add a realised FX gain/loss line to account for exchange differences between the original invoice ZAR equivalent and the actual ZAR received. Example fix:
+   ```python
+   zar_booked = _to_zar(invoice)          # ZAR value at time of raising
+   zar_received = invoice.paid_amount_zar or zar_booked
+   lines = [
+       _line(entry.id, bank, debit=zar_received,    description="Cash received"),
+       _line(entry.id, ar,   credit=zar_booked,     description=invoice.invoice_number),
+   ]
+   if abs(zar_received - zar_booked) > 0.01:
+       fx_acct = get_account(cid, "4100", db)   # add FX Gain/Loss account
+       diff = round(zar_received - zar_booked, 2)
+       lines.append(_line(entry.id, fx_acct, credit=diff if diff > 0 else 0,
+                                             debit=abs(diff) if diff < 0 else 0))
+   ```
+
+**High**
+
+2. **Fix expense P&L reporting to use VAT-exclusive amounts** (`payroll.py:259–260, 702, 755, and others`). The `Expense.amount` column stores the VAT-inclusive total. Change all report queries to sum `e.amount - (e.vat_amount or 0)` for the P&L expense figure. Alternatively, add a `net_amount` column to `Expense` storing the ex-VAT value and use that in reports. Affects `/reports/dashboard`, `/reports/management`, `/reports/monthly-trend`, `/reports/cash-flow`, `/reports/provisional-tax`.
+
+**Medium**
+
+3. **Fix reconciliation debtor aging to use `due_date` instead of `issue_date`** (`payroll.py:454–458`). Change:
+   ```python
+   Invoice.issue_date <= cutoff_90
+   ```
+   to:
+   ```python
+   (Invoice.due_date != None), Invoice.due_date <= cutoff_90
+   ```
+   (with a null-safe fallback to `issue_date` for invoices without a due date.)
+
+4. **Fix monthly trend to include PO COGS in expense calculation** (`payroll.py:329–337` and `payroll.py:755–758`). For each month in the trend loop, add a PO COGS sub-query matching the approach at payroll.py:710–719, so that trend `expenses` and `profit` columns are consistent with the headline P&L.
+
+5. **Fix dashboard `total_payroll` to use actual payslip records** (`payroll.py:276`). Replace `calc_payroll(e.gross_salary)["total_cost"]` with a sum of `Payslip.total_cost` for the relevant period, matching the approach in `provisional_tax` (payroll.py:824–826).
+
+**Low**
+
+6. **Fix Creditors frontend dependency array** (`App_js_fixed.js:3407`). Change `}, [live.expenses])` to `}, [live.reload])` or remove the dependency entirely, since creditors depend on POs, not expense records.
