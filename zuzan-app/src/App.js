@@ -2943,13 +2943,14 @@ function Reports({live = {}}) {
       if (tab==="jnl")   setJournal(await api(`/journal/?limit=100`).catch(()=>null));
       if (tab==="cf")   setCfData(await api(`/reports/cash-flow?${dateParams}`).catch(()=>null));
       if (tab==="emp")  setEmp201(await api(`/reports/emp201?${dateParams}`).catch(()=>null));
+      if (tab==="pl")   setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
       if (tab==="mgmt") setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
       if (tab==="prov") setProvTax(await api(`/reports/provisional-tax?${dateParams}`).catch(()=>null));
       if (tab==="vat")  setVat201(await api(`/reports/vat201?period=${vatPeriod}&${dateParams}`).catch(()=>null));
     } finally { setLoading(false); }
   };
   // Reload current tab when date range changes
-  useEffect(() => { if (activeTab !== "pl") loadTab(activeTab, true); }, [dateFrom, dateTo]);
+  useEffect(() => { loadTab(activeTab, true); }, [dateFrom, dateTo]);
   const RTABS = [
     {id:"pl",   label:"Income Statement"},
     {id:"bs",   label:"Balance Sheet"},
@@ -3595,47 +3596,96 @@ function Reports({live = {}}) {
       <div id="report-print-area">
         {activeTab==="pl" && (
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
-              <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Income Statement</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the month ended {period}</div></div>
-              <ExcelBtn filename="income-statement.csv" data={[{Item:"Revenue",Amount:totalRevenue},{Item:"Expenses",Amount:-totalExpenses},{Item:"Gross Profit",Amount:grossProfit},{Item:"Payroll",Amount:-totalPayroll},{Item:"Net Profit Before Tax",Amount:netProfit},{Item:"Tax 27%",Amount:-taxProvision},{Item:"Net Profit After Tax",Amount:netAfterTax}]}/>
-            </div>
-            <ReportRow label="Revenue" value={totalRevenue} bold color={C.green}/>
-            {/* Posted expenses broken down by COA account */}
-            {(() => {
-              const postedExps = (live.expenses || MOCK_EXPENSES).filter(e => isPosted(e.category));
-              // Use ex-VAT amounts (backend stores VAT-inclusive; depreciation has no VAT)
-              const byAccount = postedExps.reduce((acc, e) => {
-                const key = e.category;
-                acc[key] = (acc[key] || 0) + ((e.amount||0) - (e.vat_amount||0));
-                return acc;
-              }, {});
-              const accountEntries = Object.entries(byAccount).sort(([a],[b]) => a.localeCompare(b));
-              return accountEntries.length > 0 ? (
+            {loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : (() => {
+              // Use management accounts data (loaded alongside this tab) for full breakdown
+              const pl = mgmt ? mgmt.pl : null;
+              const plRev     = pl ? pl.revenue          : totalRevenue;
+              const plCogs    = pl ? (pl.po_cogs || 0)   : 0;
+              // True gross profit = revenue minus cost of sales only
+              const plTrueGP  = Math.round((plRev - plCogs)*100)/100;
+              // Operating expenses = all non-COGS expenses (incl. depreciation)
+              const breakdown = pl ? pl.expense_breakdown : {};
+              const opExEntries = Object.entries(breakdown)
+                .filter(([k]) => k !== "Cost of Sales (POs)")
+                .sort(([a],[b]) => a.localeCompare(b));
+              const plTotalOpEx = opExEntries.reduce((s,[,v])=>s+v, 0);
+              const plEbit      = Math.round((plTrueGP - plTotalOpEx)*100)/100;
+              const plPayroll   = pl ? pl.payroll_cost    : totalPayroll;
+              const plNBT       = Math.round((plEbit - plPayroll)*100)/100;
+              const plTax       = Math.round(Math.max(0, plNBT * 0.27)*100)/100;
+              const plNAT       = Math.round((plNBT - plTax)*100)/100;
+              const plGM        = plRev ? Math.round(plTrueGP/plRev*100) : 0;
+              const plNM        = plRev ? Math.round(plNAT/plRev*100)   : 0;
+              return (
                 <>
-                  <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",padding:"12px 0 4px",borderTop:"1px solid "+C.border+"50"}}>Operating Expenses</div>
-                  {accountEntries.map(([account, amount]) => (
-                    <ReportRow key={account} label={account} value={-amount} indent color={C.red}/>
-                  ))}
-                  {/* totalExpenses from backend includes depreciation + PO COGS — authoritative total */}
-                  <ReportRow label="Total Operating Expenses" value={-totalExpenses} bold/>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
+                    <div>
+                      <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Income Statement</div>
+                      <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>{pl ? `For the period: ${mgmt.period}` : `As at ${period}`}</div>
+                    </div>
+                    <ExcelBtn filename="income-statement.csv" data={[
+                      {Item:"Revenue",Amount:plRev},
+                      {Item:"Cost of Sales",Amount:-plCogs},
+                      {Item:"Gross Profit",Amount:plTrueGP},
+                      ...opExEntries.map(([k,v])=>({Item:k,Amount:-v})),
+                      {Item:"Total Operating Expenses",Amount:-plTotalOpEx},
+                      {Item:"EBIT",Amount:plEbit},
+                      {Item:"Payroll",Amount:-plPayroll},
+                      {Item:"Net Profit Before Tax",Amount:plNBT},
+                      {Item:"Tax 27%",Amount:-plTax},
+                      {Item:"Net Profit After Tax",Amount:plNAT},
+                    ]}/>
+                  </div>
+
+                  {/* Revenue */}
+                  <ReportRow label="Revenue" value={plRev} bold color={C.green}/>
+
+                  {/* Cost of Sales — separate section above gross profit */}
+                  {plCogs > 0 && (
+                    <>
+                      <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",padding:"12px 0 4px",borderTop:"1px solid "+C.border+"50"}}>Cost of Sales</div>
+                      <ReportRow label="Purchase Orders (received)" value={-plCogs} indent color={C.red}/>
+                      <ReportRow label="Total Cost of Sales" value={-plCogs} bold/>
+                    </>
+                  )}
+
+                  {/* True Gross Profit = Revenue − COGS */}
+                  <ReportRow label="Gross Profit" value={plTrueGP} bold border color={plTrueGP>=0?C.ink:C.red}/>
+
+                  {/* Operating Expenses (incl. depreciation as its own line) */}
+                  {opExEntries.length > 0 ? (
+                    <>
+                      <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",padding:"12px 0 4px",borderTop:"1px solid "+C.border+"50"}}>Operating Expenses</div>
+                      {opExEntries.map(([account, amount]) => (
+                        <ReportRow key={account} label={account} value={-amount} indent color={C.red}/>
+                      ))}
+                      <ReportRow label="Total Operating Expenses" value={-plTotalOpEx} bold/>
+                    </>
+                  ) : (
+                    plTotalOpEx > 0 && <ReportRow label="Less: Operating Expenses" value={-plTotalOpEx} indent/>
+                  )}
+
+                  {/* EBIT */}
+                  <ReportRow label="Earnings Before Interest & Tax (EBIT)" value={plEbit} bold border color={plEbit>=0?C.ink:C.red}/>
+
+                  {/* Payroll & Net Profit */}
+                  <ReportRow label="Less: Payroll Costs" value={-plPayroll} indent/>
+                  <ReportRow label="Net Profit Before Tax" value={plNBT} bold border color={plNBT>=0?C.ink:C.red}/>
+                  <ReportRow label="Less: Tax Provision (27%)" value={-plTax} indent/>
+                  <ReportRow label="Net Profit After Tax" value={plNAT} bold border large color={plNAT>=0?C.accent:C.red}/>
+
+                  {/* KPI pills */}
+                  <div style={{marginTop:24,display:"flex",gap:12}}>
+                    {[["Gross Margin",plGM,C.green,C.greenLt],["Net Margin",plNM,C.accent,C.accentLt],["Tax Rate",27,C.gold,C.goldLt]].map(([l,v,c,bg])=>(
+                      <div key={l} style={{flex:1,background:bg,border:"1px solid "+c+"30",borderRadius:12,padding:16,textAlign:"center"}}>
+                        <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>{l}</div>
+                        <div style={{fontSize:22,fontWeight:800,color:c}}>{v}%</div>
+                      </div>
+                    ))}
+                  </div>
                 </>
-              ) : (
-                <ReportRow label="Less: Operating Expenses" value={-totalExpenses} indent/>
               );
             })()}
-            <ReportRow label="Gross Profit" value={grossProfit} bold border color={grossProfit>=0?C.ink:C.red}/>
-            <ReportRow label="Less: Payroll Costs" value={-totalPayroll} indent/>
-            <ReportRow label="Net Profit Before Tax" value={netProfit} bold border color={netProfit>=0?C.ink:C.red}/>
-            <ReportRow label="Less: Tax Provision (27%)" value={-taxProvision} indent/>
-            <ReportRow label="Net Profit After Tax" value={netAfterTax} bold border large color={netAfterTax>=0?C.accent:C.red}/>
-            <div style={{marginTop:24,display:"flex",gap:12}}>
-              {[["Gross Margin",totalRevenue?Math.round(grossProfit/totalRevenue*100):0,C.green,C.greenLt],["Net Margin",totalRevenue?Math.round(netAfterTax/totalRevenue*100):0,C.accent,C.accentLt],["Tax Rate",27,C.gold,C.goldLt]].map(([l,v,c,bg])=>(
-                <div key={l} style={{flex:1,background:bg,border:"1px solid "+c+"30",borderRadius:12,padding:16,textAlign:"center"}}>
-                  <div style={{fontSize:10,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>{l}</div>
-                  <div style={{fontSize:22,fontWeight:800,color:c}}>{v}%</div>
-                </div>
-              ))}
-            </div>
           </div>
         )}
         {activeTab==="bs"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderBS()}</div>}
