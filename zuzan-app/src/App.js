@@ -2338,7 +2338,10 @@ function Payroll({live = {}, user = {}}) {
   const [pinSet,    setPinSet]    = useState(null);  // null=loading, true/false
   const [pinError,  setPinError]  = useState("");
   const [pinBusy,   setPinBusy]   = useState(false);
-  const [payrollSection, setPayrollSection] = useState("payroll"); // payroll | leave
+  const [payrollSection, setPayrollSection] = useState("payroll"); // payroll | leave | emp201
+  const [emp201Data,    setEmp201Data]    = useState(null);
+  const [emp201Loading, setEmp201Loading] = useState(false);
+  const [emp201Period,  setEmp201Period]  = useState(new Date().toISOString().slice(0,7));
 
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
@@ -2465,18 +2468,116 @@ function Payroll({live = {}, user = {}}) {
     );
   }
 
+  const SECTION_LABELS = {payroll:"Payroll", leave:"Leave Management", emp201:"EMP201 / IRP5"};
+  const SectionTabs = () => (
+    <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:24,borderBottom:"1px solid "+C.border}}>
+      {["payroll","leave","emp201"].map(s => (
+        <button key={s} onClick={()=>setPayrollSection(s)}
+          style={{background:"none",border:"none",borderBottom:payrollSection===s?`2px solid ${C.accent}`:"2px solid transparent",padding:"10px 18px",fontSize:13,fontWeight:payrollSection===s?700:400,color:payrollSection===s?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          {SECTION_LABELS[s]}
+        </button>
+      ))}
+    </div>
+  );
+
   // Leave management sub-tab (accessible after PIN gate)
   if (payrollSection === "leave") {
     return (
       <div>
-        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
-          {["payroll","leave"].map(s => (
-            <button key={s} onClick={()=>setPayrollSection(s)} style={{background:"none",border:"none",borderBottom:payrollSection===s?`2px solid ${C.accent}`:"2px solid transparent",padding:"8px 16px",fontSize:14,fontWeight:payrollSection===s?700:400,color:payrollSection===s?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
-              {s==="payroll"?"Payroll":"Leave Management"}
-            </button>
-          ))}
-        </div>
+        <SectionTabs/>
         <LeaveManagement employees={employees} />
+      </div>
+    );
+  }
+
+  // EMP201 / IRP5 sub-tab — confidential, behind PIN gate
+  if (payrollSection === "emp201") {
+    const loadEmp201 = async () => {
+      setEmp201Loading(true);
+      try {
+        const data = await api(`/reports/emp201?date_from=${emp201Period}-01&date_to=${emp201Period}-28`);
+        setEmp201Data(data);
+      } catch(err) { setEmp201Data(null); }
+      setEmp201Loading(false);
+    };
+    const e         = emp201Data;
+    const nowD      = new Date();
+    const totalPaye = e ? e.total_paye : employees.reduce((s,emp)=>s+calcPayroll(emp.salary||emp.gross_salary, taxYear).paye,0);
+    const totalUif  = e ? e.total_uif  : employees.reduce((s,emp)=>s+(calcPayroll(emp.salary||emp.gross_salary, taxYear).uifEmployee+calcPayroll(emp.salary||emp.gross_salary, taxYear).uifEmployer),0);
+    const totalSdl  = e ? e.total_sdl  : employees.reduce((s,emp)=>s+calcPayroll(emp.salary||emp.gross_salary, taxYear).sdl,0);
+    const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
+    const dueDate   = e ? e.due_date : "7 "+new Date(nowD.getFullYear(),nowD.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
+    const empList   = e ? e.employees : employees.map(emp=>{const p=calcPayroll(emp.salary||emp.gross_salary, taxYear);return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
+    return (
+      <div>
+        <SectionTabs/>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+          <div>
+            <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>EMP201 Monthly Employer Return</h2>
+            <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Period: {e?e.period:emp201Period} — Due: <strong style={{color:C.red}}>{dueDate}</strong></p>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <input type="month" value={emp201Period} onChange={ev=>{ setEmp201Period(ev.target.value); setEmp201Data(null); }}
+              style={{padding:"7px 12px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+            <button onClick={loadEmp201} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {emp201Loading?"Loading…":"Load"}
+            </button>
+            <ExcelBtn filename="emp201.csv" data={empList.map(emp=>({Name:emp.employee_name,Number:emp.employee_number,Gross:emp.gross_salary,PAYE:emp.paye,UIF_Emp:emp.uif_employee,UIF_Empr:emp.uif_employer,SDL:emp.sdl,Net_Pay:emp.net_pay}))}/>
+            <PrintBtn onClick={()=>{const el=document.getElementById("emp201-print");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
+          </div>
+        </div>
+        <div id="emp201-print">
+          <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+            <KPI label="PAYE Due"       value={fmt(totalPaye)} color={C.red}    icon="💼" sub="Income tax withheld"/>
+            <KPI label="UIF Due"        value={fmt(totalUif)}  color={C.gold}   icon="🛡️" sub="Emp + employer 1%"/>
+            <KPI label="SDL Due"        value={fmt(totalSdl)}  color={C.blue}   icon="📚" sub="Skills levy 1%"/>
+            <KPI label="Total Due SARS" value={fmt(totalDue)}  color={C.accent} icon="🏛️" sub={"By "+dueDate}/>
+          </div>
+          <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.red}}>SARS eFiling Reminder</div>
+              <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>EMP201 due by the 7th. Late submission incurs a 10% penalty.</div>
+            </div>
+            <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling</a>
+          </div>
+          <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,overflow:"hidden"}}>
+            <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,fontSize:13,fontWeight:700,color:C.ink}}>Employee Tax Certificates (IRP5)</div>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{background:C.bg,borderBottom:"1px solid "+C.border}}>
+                  {["Employee","Emp #","Gross","PAYE","UIF (Emp)","UIF (Empr)","SDL","Net Pay"].map(h=>(
+                    <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {empList.map((emp,i)=>(
+                  <tr key={i} style={{borderBottom:"1px solid "+C.border+"20"}}>
+                    <td style={{padding:"11px 14px",fontWeight:600,color:C.ink}}>{emp.employee_name}</td>
+                    <td style={{padding:"11px 14px",color:C.inkMid,fontSize:11}}>{emp.employee_number}</td>
+                    <td style={{padding:"11px 14px",fontWeight:600}}>{fmt(emp.gross_salary)}</td>
+                    <td style={{padding:"11px 14px",color:C.red}}>{fmt(emp.paye)}</td>
+                    <td style={{padding:"11px 14px",color:C.gold}}>{fmt(emp.uif_employee)}</td>
+                    <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.uif_employer)}</td>
+                    <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.sdl)}</td>
+                    <td style={{padding:"11px 14px",fontWeight:700,color:C.green}}>{fmt(emp.net_pay)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
+                  <td colSpan={2} style={{padding:"11px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
+                  <td style={{padding:"11px 14px",fontWeight:800}}>{fmt(empList.reduce((s,e)=>s+(e.gross_salary||0),0))}</td>
+                  <td style={{padding:"11px 14px",fontWeight:800,color:C.red}}>{fmt(totalPaye)}</td>
+                  <td style={{padding:"11px 14px",fontWeight:800,color:C.gold}}>{fmt(empList.reduce((s,e)=>s+(e.uif_employee||0),0))}</td>
+                  <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(empList.reduce((s,e)=>s+(e.uif_employer||0),0))}</td>
+                  <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(totalSdl)}</td>
+                  <td style={{padding:"11px 14px",fontWeight:800,color:C.green}}>{fmt(empList.reduce((s,e)=>s+(e.net_pay||0),0))}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
       </div>
     );
   }
@@ -2486,9 +2587,9 @@ function Payroll({live = {}, user = {}}) {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
         <div>
           <div style={{display:"flex",gap:4,marginBottom:0}}>
-            {["payroll","leave"].map(s => (
+            {["payroll","leave","emp201"].map(s => (
               <button key={s} onClick={()=>setPayrollSection(s)} style={{background:"none",border:"none",borderBottom:payrollSection===s?`2px solid ${C.accent}`:"2px solid transparent",padding:"4px 14px",fontSize:13,fontWeight:payrollSection===s?700:400,color:payrollSection===s?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
-                {s==="payroll"?"Payroll":"Leave Management"}
+                {SECTION_LABELS[s]}
               </button>
             ))}
           </div>
@@ -2880,7 +2981,7 @@ function Reports({live = {}}) {
   const [activeTab, setActiveTab] = useState("pl");
   const [bsData,  setBsData]  = useState(null);
   const [cfData,  setCfData]  = useState(null);
-  const [emp201,   setEmp201]   = useState(null);
+  // emp201 moved to Payroll component
   const [mgmt,     setMgmt]     = useState(null);
   const [provTax,  setProvTax]  = useState(null);
   const [vat201,   setVat201]   = useState(null);
@@ -2890,6 +2991,8 @@ function Reports({live = {}}) {
   const [jnlExpanded, setJnlExpanded] = useState(new Set());
   const [vatPeriod,setVatPeriod]= useState(new Date().toISOString().slice(0,7));
   const [loading,  setLoading]  = useState(false);
+  const [mgmtDrill, setMgmtDrill] = useState(null); // {type,title,cols,rows,total,color}
+  const [mgmtDrillLoading, setMgmtDrillLoading] = useState(false);
 
   // ── Date range ──────────────────────────────────────────────────
   const now = new Date();
@@ -2942,7 +3045,7 @@ function Reports({live = {}}) {
       if (tab==="tb")    setTrialBal(await api(`/journal/trial-balance`).catch(()=>null));
       if (tab==="jnl")   setJournal(await api(`/journal/?limit=100`).catch(()=>null));
       if (tab==="cf")   setCfData(await api(`/reports/cash-flow?${dateParams}`).catch(()=>null));
-      if (tab==="emp")  setEmp201(await api(`/reports/emp201?${dateParams}`).catch(()=>null));
+      // emp201 now lives in Payroll component
       if (tab==="pl")   setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
       if (tab==="mgmt") setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
       if (tab==="prov") setProvTax(await api(`/reports/provisional-tax?${dateParams}`).catch(()=>null));
@@ -2959,7 +3062,7 @@ function Reports({live = {}}) {
     {id:"jnl",  label:"Journal"},
     {id:"cf",   label:"Cash Flow"},
     {id:"mgmt", label:"Management Pack"},
-    {id:"emp",  label:"EMP201 / IRP5"},
+
     {id:"prov", label:"Provisional Tax"},
     {id:"vat",  label:"VAT201"},
   ];
@@ -3247,6 +3350,77 @@ function Reports({live = {}}) {
       </div>
     );
   };
+  const openMgmtDrill = async (type) => {
+    if (mgmtDrill && mgmtDrill.type === type) { setMgmtDrill(null); return; } // toggle off
+    setMgmtDrillLoading(true);
+    setMgmtDrill({type, title:"", cols:[], rows:[], total:0, color:C.ink});
+    try {
+      const m = mgmt;
+      const pl = m ? m.pl : null;
+      if (type === "revenue") {
+        const invs = await api("/invoices");
+        const dfrom = new Date(dateFrom); const dto = new Date(dateTo);
+        const rows = invs.filter(i => {
+          if (i.status !== "paid") return false;
+          const d = new Date(i.paid_date || i.created_at || 0);
+          return d >= dfrom && d <= dto;
+        }).sort((a,b)=>new Date(b.paid_date||0)-new Date(a.paid_date||0));
+        setMgmtDrill({type, title:"Revenue — Paid Invoices (period)", color:C.green,
+          total: rows.reduce((s,i)=>s+toZarD(i),0),
+          cols:["Invoice","Client","Currency","Amount (ZAR)","Paid Date"],
+          rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client,
+            i.currency||"ZAR", fmt(toZarD(i)),
+            i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
+      } else if (type === "profit") {
+        // Use management accounts P&L breakdown
+        const bd = pl ? (pl.expense_breakdown || {}) : {};
+        const cogs = pl ? (pl.po_cogs||0) : 0;
+        const rows = [
+          ["Revenue", fmt(pl ? pl.revenue : 0), ""],
+          ["Cost of Sales (POs)", fmt(cogs), "deduct"],
+          ["Gross Profit", fmt(pl ? pl.revenue - cogs : 0), "subtotal"],
+          ...Object.entries(bd).filter(([k])=>k!=="Cost of Sales (POs)").sort((a,b)=>b[1]-a[1])
+            .map(([k,v])=>[k, fmt(v), "deduct"]),
+          ["Total Operating Expenses", fmt(Object.entries(bd).filter(([k])=>k!=="Cost of Sales (POs)").reduce((s,[,v])=>s+v,0)), "subtotal"],
+          ["Payroll Cost", fmt(pl ? pl.payroll_cost : 0), "deduct"],
+          ["Net Profit Before Tax", fmt(pl ? pl.net_profit + (pl.tax_provision||0) : 0), "subtotal"],
+          ["Tax Provision (27%)", fmt(pl ? pl.tax_provision : 0), "deduct"],
+          ["Net Profit After Tax", fmt(pl ? pl.net_profit : 0), "total"],
+        ];
+        setMgmtDrill({type, title:"Net Profit — P&L Breakdown (period)", color:pl&&pl.net_profit>=0?C.accent:C.red,
+          total: pl ? pl.net_profit : 0,
+          cols:["Line Item","Amount",""],
+          rows});
+      } else if (type === "outstanding") {
+        const invs = await api("/invoices");
+        const today = new Date();
+        const rows = invs.filter(i=>["pending","sent","overdue"].includes(i.status))
+          .sort((a,b)=>new Date(a.due_date||0)-new Date(b.due_date||0));
+        setMgmtDrill({type, title:"Outstanding — Pending & Overdue Invoices", color:C.gold,
+          total: rows.reduce((s,i)=>s+toZarD(i),0),
+          cols:["Invoice","Client","Amount (ZAR)","Due Date","Status"],
+          rows: rows.map(i=>{
+            const due = i.due_date ? new Date(i.due_date) : null;
+            const overdue = due ? Math.max(0,Math.floor((today-due)/(1000*60*60*24))) : 0;
+            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)),
+              due ? due.toLocaleDateString("en-ZA") : "—",
+              overdue > 0 ? `${overdue}d overdue` : i.status];
+          })});
+      } else if (type === "payroll") {
+        const emps = await api("/employees");
+        const active = emps.filter(e=>e.is_active!==false);
+        setMgmtDrill({type, title:"Payroll — Active Employees", color:C.blue,
+          total: pl ? pl.payroll_cost : active.reduce((s,e)=>s+calcPayroll(e.gross_salary).totalCost,0),
+          cols:["Employee","Position","Gross Salary","Net Pay","Total Cost"],
+          rows: active.map(e=>{
+            const p = calcPayroll(e.gross_salary);
+            return [e.name, e.position||"—", fmt(e.gross_salary), fmt(p.netPay), fmt(p.totalCost)];
+          })});
+      }
+    } catch(err) { setMgmtDrill(null); }
+    setMgmtDrillLoading(false);
+  };
+
   const renderMgmt = () => {
     const m    = mgmt;
     const pl   = m ? m.pl : {revenue:totalRevenue,total_expenses:totalExpenses,gross_profit:grossProfit,payroll_cost:totalPayroll,ebit:netProfit,tax_provision:taxProvision,net_profit:netAfterTax,gross_margin_pct:totalRevenue?Math.round(grossProfit/totalRevenue*100):0,net_margin_pct:totalRevenue?Math.round(netAfterTax/totalRevenue*100):0,expense_breakdown:{}};
@@ -3255,12 +3429,64 @@ function Reports({live = {}}) {
     const expBreakdown = pl.expense_breakdown || {};
     return (
       <div>
-        <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-          <KPI label="Revenue"     value={fmt(kpis.revenue)}      color={C.green}                           icon="Revenue"  sub={"Gross margin "+kpis.gross_margin_pct+"%"}/>
-          <KPI label="Net Profit"  value={fmt(kpis.net_profit)}   color={kpis.net_profit>=0?C.accent:C.red} icon="Profit"   sub={"Net margin "+kpis.net_margin_pct+"%"}/>
-          <KPI label="Outstanding" value={fmt(kpis.outstanding)}  color={C.gold}                            icon="Outstand" sub={kpis.overdue_count+" overdue"}/>
-          <KPI label="Payroll"     value={fmt(kpis.payroll_cost)} color={C.blue}                            icon="Payroll"  sub={kpis.employee_count+" employees"}/>
+        <div style={{display:"flex",gap:12,marginBottom:mgmtDrill?12:20,flexWrap:"wrap"}}>
+          <KPI label="Revenue"     value={fmt(kpis.revenue)}      color={C.green}                           icon="💰" active={mgmtDrill?.type==="revenue"}     onClick={()=>openMgmtDrill("revenue")}     sub={"Gross margin "+kpis.gross_margin_pct+"%"}/>
+          <KPI label="Net Profit"  value={fmt(kpis.net_profit)}   color={kpis.net_profit>=0?C.accent:C.red} icon="📊" active={mgmtDrill?.type==="profit"}      onClick={()=>openMgmtDrill("profit")}      sub={"Net margin "+kpis.net_margin_pct+"%"}/>
+          <KPI label="Outstanding" value={fmt(kpis.outstanding)}  color={C.gold}                            icon="⏳" active={mgmtDrill?.type==="outstanding"} onClick={()=>openMgmtDrill("outstanding")} sub={kpis.overdue_count+" overdue"}/>
+          <KPI label="Payroll"     value={fmt(kpis.payroll_cost)} color={C.blue}                            icon="👥" active={mgmtDrill?.type==="payroll"}     onClick={()=>openMgmtDrill("payroll")}     sub={kpis.employee_count+" employees"}/>
         </div>
+
+        {/* Drill-down panel */}
+        {(mgmtDrill || mgmtDrillLoading) && (
+          <div style={{background:C.surface,border:"2px solid "+(mgmtDrill?.color||C.accent)+"40",borderRadius:16,padding:20,marginBottom:20}}>
+            {mgmtDrillLoading ? (
+              <div style={{textAlign:"center",padding:24,color:C.inkMid,fontSize:13}}>Loading…</div>
+            ) : mgmtDrill && (
+              <>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                  <div style={{fontSize:13,fontWeight:700,color:mgmtDrill.color}}>{mgmtDrill.title}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    {mgmtDrill.total !== undefined && mgmtDrill.type !== "profit" && (
+                      <div style={{fontSize:15,fontWeight:800,color:mgmtDrill.color}}>{fmt(mgmtDrill.total)}</div>
+                    )}
+                    <button onClick={()=>setMgmtDrill(null)} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:C.inkMid,lineHeight:1}}>✕</button>
+                  </div>
+                </div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead>
+                      <tr style={{background:C.bg}}>
+                        {mgmtDrill.cols.map((c,i)=>(
+                          <th key={i} style={{padding:"8px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap",borderBottom:"1px solid "+C.border}}>{c}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mgmtDrill.rows.length === 0
+                        ? <tr><td colSpan={mgmtDrill.cols.length} style={{padding:"20px 12px",textAlign:"center",color:C.inkMid}}>No data for this period</td></tr>
+                        : mgmtDrill.rows.map((row,ri)=>{
+                            const tag = Array.isArray(row) ? row[row.length-1] : "";
+                            const isCols = !["deduct","subtotal","total",""].includes(tag) || mgmtDrill.type !== "profit";
+                            const displayRow = mgmtDrill.type === "profit" ? row.slice(0,-1) : row;
+                            const bg = tag==="total" ? C.accentLt : tag==="subtotal" ? C.bg : "transparent";
+                            const fw = (tag==="total"||tag==="subtotal") ? 700 : 400;
+                            return (
+                              <tr key={ri} style={{borderBottom:"1px solid "+C.border+"20",background:bg}}>
+                                {displayRow.map((cell,ci)=>(
+                                  <td key={ci} style={{padding:"10px 12px",color:ci===1&&tag==="deduct"?C.red:C.ink,fontWeight:ci===0?fw:ci===1?fw:400}}>{cell}</td>
+                                ))}
+                              </tr>
+                            );
+                          })
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20,marginBottom:20}}>
           <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>6-Month Revenue vs Expenses</div>
           <ResponsiveContainer width="100%" height={200}>
@@ -3297,79 +3523,6 @@ function Reports({live = {}}) {
               : <div style={{fontSize:12,color:C.inkDim,padding:"20px 0",textAlign:"center"}}>No expense data this month</div>
             }
           </div>
-        </div>
-      </div>
-    );
-  };
-  const renderEmp = () => {
-    const e       = emp201;
-    const totalPaye = e ? e.total_paye : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).paye,0);
-    const totalUif  = e ? e.total_uif  : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).uifEmployee+calcPayroll(emp.salary).uifEmployer,0);
-    const totalSdl  = e ? e.total_sdl  : MOCK_EMPLOYEES.reduce((s,emp)=>s+calcPayroll(emp.salary).sdl,0);
-    const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
-    const dueDate   = e ? e.due_date : "7 "+new Date(now.getFullYear(),now.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
-    const empList   = e ? e.employees : MOCK_EMPLOYEES.map(emp=>{const p=calcPayroll(emp.salary);return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
-    return (
-      <div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
-          <div>
-            <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>EMP201 Monthly Employer Return</h2>
-            <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Period: {e?e.period:period} — Due: <strong style={{color:C.red}}>{dueDate}</strong></p>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            <ExcelBtn filename="emp201.csv" data={empList.map(emp=>({Name:emp.employee_name,Number:emp.employee_number,Gross:emp.gross_salary,PAYE:emp.paye,UIF_Emp:emp.uif_employee,UIF_Empr:emp.uif_employer,SDL:emp.sdl,Net_Pay:emp.net_pay}))}/>
-            <PrintBtn onClick={()=>{const el=document.getElementById("report-print-area");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:12,marginBottom:20}}>
-          <KPI label="PAYE Due"       value={fmt(totalPaye)} color={C.red}    icon="PAYE" sub="Income tax withheld"/>
-          <KPI label="UIF Due"        value={fmt(totalUif)}  color={C.gold}   icon="UIF"  sub="Emp + employer 1%"/>
-          <KPI label="SDL Due"        value={fmt(totalSdl)}  color={C.blue}   icon="SDL"  sub="Skills levy 1%"/>
-          <KPI label="Total Due SARS" value={fmt(totalDue)}  color={C.accent} icon="SARS" sub={"By "+dueDate}/>
-        </div>
-        <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div>
-            <div style={{fontSize:13,fontWeight:700,color:C.red}}>SARS eFiling Reminder</div>
-            <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>EMP201 due by the 7th. Late submission incurs a 10% penalty.</div>
-          </div>
-          <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling</a>
-        </div>
-        <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,overflow:"hidden"}}>
-          <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,fontSize:13,fontWeight:700,color:C.ink}}>Employee Tax Certificates (IRP5)</div>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-            <thead>
-              <tr style={{background:C.bg,borderBottom:"1px solid "+C.border}}>
-                {["Employee","Emp #","Gross","PAYE","UIF (Emp)","UIF (Empr)","SDL","Net Pay"].map(h=>(
-                  <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {empList.map((emp,i)=>(
-                <tr key={i} style={{borderBottom:"1px solid "+C.border+"20"}}>
-                  <td style={{padding:"11px 14px",fontWeight:600,color:C.ink}}>{emp.employee_name}</td>
-                  <td style={{padding:"11px 14px",color:C.inkMid,fontSize:11}}>{emp.employee_number}</td>
-                  <td style={{padding:"11px 14px",fontWeight:600}}>{fmt(emp.gross_salary)}</td>
-                  <td style={{padding:"11px 14px",color:C.red}}>{fmt(emp.paye)}</td>
-                  <td style={{padding:"11px 14px",color:C.gold}}>{fmt(emp.uif_employee)}</td>
-                  <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.uif_employer)}</td>
-                  <td style={{padding:"11px 14px",color:C.blue}}>{fmt(emp.sdl)}</td>
-                  <td style={{padding:"11px 14px",fontWeight:700,color:C.green}}>{fmt(emp.net_pay)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
-                <td colSpan={2} style={{padding:"11px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
-                <td style={{padding:"11px 14px",fontWeight:800}}>{fmt(empList.reduce((s,e)=>s+e.gross_salary,0))}</td>
-                <td style={{padding:"11px 14px",fontWeight:800,color:C.red}}>{fmt(totalPaye)}</td>
-                <td style={{padding:"11px 14px",fontWeight:800,color:C.gold}}>{fmt(empList.reduce((s,e)=>s+e.uif_employee,0))}</td>
-                <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(empList.reduce((s,e)=>s+e.uif_employer,0))}</td>
-                <td style={{padding:"11px 14px",fontWeight:800,color:C.blue}}>{fmt(totalSdl)}</td>
-                <td style={{padding:"11px 14px",fontWeight:800,color:C.green}}>{fmt(empList.reduce((s,e)=>s+e.net_pay,0))}</td>
-              </tr>
-            </tfoot>
-          </table>
         </div>
       </div>
     );
@@ -3694,7 +3847,7 @@ function Reports({live = {}}) {
         {activeTab==="jnl"  && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderJournal()}</div>}
         {activeTab==="cf"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderCF()}</div>}
         {activeTab==="mgmt" && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderMgmt()}</div>}
-        {activeTab==="emp"  && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderEmp()}</div>}
+        {/* EMP201/IRP5 moved to Payroll component */}
         {activeTab==="prov" && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderProvTax()}</div>}
         {activeTab==="vat"  && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{renderVat201()}</div>}
       </div>
