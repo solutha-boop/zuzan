@@ -861,9 +861,11 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
       <div style={{background:pc,borderRadius:"8px 8px 0 0",padding:"24px 28px",marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
           {user.logoUrl
-            ? <img src={user.logoUrl} alt="logo" style={{height:48,maxWidth:160,objectFit:"contain",filter:"brightness(0) invert(1)",display:"block"}}/>
+            ? <div style={{background:"#fff",borderRadius:8,padding:"6px 10px",display:"inline-block"}}>
+                <img src={user.logoUrl} alt="logo" style={{height:42,maxWidth:150,objectFit:"contain",display:"block"}}/>
+              </div>
             : <div style={{fontSize:22,fontWeight:800,color:"#fff"}}>{user.companyName||"Your Company"}</div>}
-          {user.logoUrl&&<div style={{fontSize:11,color:"rgba(255,255,255,0.8)",marginTop:4}}>{user.companyName}</div>}
+          {user.logoUrl&&<div style={{fontSize:11,color:"rgba(255,255,255,0.85)",marginTop:6}}>{user.companyName}</div>}
         </div>
         <div style={{textAlign:"right"}}>
           <div style={{fontSize:22,fontWeight:800,color:"#fff"}}>{title}</div>
@@ -948,7 +950,9 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
       <div style={{background:"#1A1209",padding:"28px 32px",marginBottom:0,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
         <div>
           {user.logoUrl
-            ? <img src={user.logoUrl} alt="logo" style={{height:48,maxWidth:160,objectFit:"contain",filter:"brightness(0) invert(1)",display:"block",marginBottom:4}}/>
+            ? <div style={{background:"#fff",borderRadius:8,padding:"6px 10px",display:"inline-block"}}>
+                <img src={user.logoUrl} alt="logo" style={{height:42,maxWidth:150,objectFit:"contain",display:"block"}}/>
+              </div>
             : <div style={{fontSize:20,fontWeight:800,color:"#fff"}}>{user.companyName||"Your Company"}</div>}
         </div>
         <div style={{textAlign:"right"}}>
