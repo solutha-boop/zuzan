@@ -2975,6 +2975,9 @@ function Reports({live = {}}) {
             {Item:"Trade Receivables",Amount:bs.assets.trade_receivables},
             {Item:"Inventory at Cost",Amount:bs.assets.inventory_at_cost},
             {Item:"VAT Input Recoverable",Amount:bs.assets.vat_input_recoverable},
+            {Item:"Fixed Assets at Cost",Amount:bs.assets.fixed_assets_cost||0},
+            {Item:"Accumulated Depreciation",Amount:bs.assets.accum_depreciation||0},
+            {Item:"Fixed Assets (Net)",Amount:bs.assets.fixed_assets_net||0},
             {Item:"Total Assets",Amount:bs.assets.total},
             {Item:"Accounts Payable",Amount:bs.liabilities.accounts_payable},
             {Item:"VAT Payable",Amount:bs.liabilities.vat_payable},
@@ -3003,6 +3006,11 @@ function Reports({live = {}}) {
             <ReportRow label="Trade Receivables (Debtors)" value={bs.assets.trade_receivables}    color={C.blue}/>
             <ReportRow label="Inventory at Cost"           value={bs.assets.inventory_at_cost}    color={C.blue}/>
             {bs.assets.vat_input_recoverable > 0 && <ReportRow label="VAT Input Recoverable" value={bs.assets.vat_input_recoverable} color={C.blue}/>}
+            {(bs.assets.fixed_assets_cost||0) > 0 && <>
+              <ReportRow label="Fixed Assets at Cost"       value={bs.assets.fixed_assets_cost}   color={C.blue} indent/>
+              <ReportRow label="Accumulated Depreciation"   value={bs.assets.accum_depreciation}  color={C.red}  indent/>
+              <ReportRow label="Fixed Assets (Net)"         value={bs.assets.fixed_assets_net}    color={C.blue}/>
+            </>}
             <ReportRow label="Total Assets"                value={bs.assets.total} bold border color={C.blue}/>
           </div>
           <div>
@@ -3595,9 +3603,10 @@ function Reports({live = {}}) {
             {/* Posted expenses broken down by COA account */}
             {(() => {
               const postedExps = (live.expenses || MOCK_EXPENSES).filter(e => isPosted(e.category));
+              // Use ex-VAT amounts (backend stores VAT-inclusive; depreciation has no VAT)
               const byAccount = postedExps.reduce((acc, e) => {
                 const key = e.category;
-                acc[key] = (acc[key] || 0) + e.amount;
+                acc[key] = (acc[key] || 0) + ((e.amount||0) - (e.vat_amount||0));
                 return acc;
               }, {});
               const accountEntries = Object.entries(byAccount).sort(([a],[b]) => a.localeCompare(b));
@@ -3607,7 +3616,8 @@ function Reports({live = {}}) {
                   {accountEntries.map(([account, amount]) => (
                     <ReportRow key={account} label={account} value={-amount} indent color={C.red}/>
                   ))}
-                  <ReportRow label="Total Operating Expenses" value={-postedExps.reduce((s,e)=>s+e.amount,0)} bold/>
+                  {/* totalExpenses from backend includes depreciation + PO COGS — authoritative total */}
+                  <ReportRow label="Total Operating Expenses" value={-totalExpenses} bold/>
                 </>
               ) : (
                 <ReportRow label="Less: Operating Expenses" value={-totalExpenses} indent/>

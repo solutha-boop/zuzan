@@ -661,7 +661,11 @@ async def balance_sheet(
     trade_receivables     = bal("1100")
     inventory_at_cost     = bal("1200")
     vat_input_recoverable = bal("1300")
-    total_assets = round(cash_and_equivalents + trade_receivables + inventory_at_cost + vat_input_recoverable, 2)
+    # Fixed assets (IAS 16) — cost less accumulated depreciation
+    fixed_assets_cost     = bal("1500")
+    accum_depreciation    = bal("1510")   # contra-asset: journal stores as negative (credit normal)
+    fixed_assets_net      = round(fixed_assets_cost + accum_depreciation, 2)  # cost - accum (accum is negative)
+    total_assets = round(cash_and_equivalents + trade_receivables + inventory_at_cost + vat_input_recoverable + fixed_assets_net, 2)
 
     # ── LIABILITIES ───────────────────────────────────────────────────────────
     accounts_payable = bal("2000")
@@ -692,6 +696,9 @@ async def balance_sheet(
             "trade_receivables":     trade_receivables,
             "inventory_at_cost":     inventory_at_cost,
             "vat_input_recoverable": vat_input_recoverable,
+            "fixed_assets_cost":     fixed_assets_cost,
+            "accum_depreciation":    accum_depreciation,
+            "fixed_assets_net":      fixed_assets_net,
             "total":                 total_assets,
         },
         "liabilities": {
@@ -1191,6 +1198,16 @@ async def provisional_tax(
         ).all()
     )
     ytd_expenses = round(ytd_expenses + po_cogs_ytd, 2)
+
+    # Add YTD depreciation (DepreciationEntry records for periods in this year)
+    year_start_period = f"{now.year}-01"
+    year_end_period   = f"{now.year}-12"
+    ytd_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
+        DepreciationEntry.company_id == cid,
+        DepreciationEntry.period >= year_start_period,
+        DepreciationEntry.period <= year_end_period,
+    ).scalar() or 0
+    ytd_expenses = round(ytd_expenses + ytd_depreciation, 2)
 
     payslips = db.query(Payslip).join(Employee).filter(
         Employee.company_id == cid,
