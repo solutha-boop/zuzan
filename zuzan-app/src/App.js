@@ -486,14 +486,29 @@ function Dashboard({live = {}}) {
           rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client, i.currency||"ZAR",
             fmt(toZarD(i)), i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
       } else if (type === "expenses") {
-        const exps = await api("/expenses");
-        // All-time — VAT-exclusive to match dashboard KPI (amount stored VAT-inclusive; back out vat_amount)
-        const rows = exps.sort((a,b) => new Date(b.expense_date||b.created_at||0)-new Date(a.expense_date||a.created_at||0));
-        setDrill({type, title:"Expenses — All Time (excl. VAT)", color:C.red,
-          total: rows.reduce((s,e)=>s+((e.amount||0)-(e.vat_amount||0)),0),
+        const [exps, deprSchedule] = await Promise.all([
+          api("/expenses"),
+          api("/fixed-assets/schedule").catch(()=>[]),
+        ]);
+        // Expense rows — VAT-exclusive
+        const expRows = exps.map(e=>({
+          _date: new Date(e.expense_date||e.created_at||0),
+          cols: [e.description||"—", e.category||"—", fmt((e.amount||0)-(e.vat_amount||0)),
+            e.expense_date ? new Date(e.expense_date).toLocaleDateString("en-ZA") : "—"],
+          amount: (e.amount||0)-(e.vat_amount||0),
+        }));
+        // Depreciation rows — one row per DepreciationEntry
+        const deprRows = (deprSchedule||[]).map(d=>({
+          _date: new Date(d.period+"-01"),
+          cols: [`${d.asset_name} — Depreciation`, "Depreciation (IAS 16)", fmt(d.amount||0),
+            d.period ? new Date(d.period+"-01").toLocaleDateString("en-ZA",{year:"numeric",month:"short"}) : "—"],
+          amount: d.amount||0,
+        }));
+        const allRows = [...expRows, ...deprRows].sort((a,b)=>b._date-a._date);
+        setDrill({type, title:"Expenses — All Time (excl. VAT, incl. Depreciation)", color:C.red,
+          total: allRows.reduce((s,r)=>s+r.amount,0),
           cols:["Description","Category","Amount (excl. VAT)","Date"],
-          rows: rows.map(e=>[e.description||"—", e.category||"—", fmt((e.amount||0)-(e.vat_amount||0)),
-            e.expense_date ? new Date(e.expense_date).toLocaleDateString("en-ZA") : "—"])});
+          rows: allRows.map(r=>r.cols)});
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
         const rows = invs.filter(i => ["pending","sent","overdue"].includes(i.status))
