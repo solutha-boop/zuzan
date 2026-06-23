@@ -3354,6 +3354,9 @@ function Reports({live = {}}) {
     if (mgmtDrill && mgmtDrill.type === type) { setMgmtDrill(null); return; } // toggle off
     setMgmtDrillLoading(true);
     setMgmtDrill({type, title:"", cols:[], rows:[], total:0, color:C.ink});
+    const toZarD = i => (i.currency && i.currency !== "ZAR")
+      ? (i.paid_amount_zar || (i.total_amount||i.amount||0)*(i.exchange_rate||1))
+      : (i.total_amount||i.amount||0);
     try {
       const m = mgmt;
       const pl = m ? m.pl : null;
