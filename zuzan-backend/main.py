@@ -211,7 +211,7 @@ async def api_list_employees(auth=Depends(require_api_key)):
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
     from payroll import _to_zar
-    from database import InvoiceStatus, PurchaseOrder
+    from database import InvoiceStatus, PurchaseOrder, Payslip
     paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.paid).all()
     out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
     total_revenue  = sum(_to_zar(i) for i in paid_invs)
@@ -227,8 +227,22 @@ async def api_summary(auth=Depends(require_api_key)):
         ).all()
     )
     total_expenses = total_expenses + po_cogs
+    # Add payroll costs — consistent with /reports/dashboard
+    active_emps = db.query(Employee).filter(Employee.company_id==company.id, Employee.is_active==True).all()
+    total_payroll = 0.0
+    if active_emps:
+        total_payroll = db.query(_func.sum(Payslip.total_cost)).filter(
+            Payslip.employee_id.in_([e.id for e in active_emps])
+        ).scalar() or 0.0
     outstanding    = sum(_to_zar(i) for i in out_invs)
-    return {"company":company.name,"total_revenue":round(total_revenue,2),"total_expenses":round(total_expenses,2),"outstanding":round(outstanding,2),"net_profit":round(total_revenue-total_expenses,2)}
+    return {
+        "company":        company.name,
+        "total_revenue":  round(total_revenue, 2),
+        "total_expenses": round(total_expenses, 2),
+        "total_payroll":  round(total_payroll, 2),
+        "outstanding":    round(outstanding, 2),
+        "net_profit":     round(total_revenue - total_expenses - total_payroll, 2),
+    }
 
 
 # ── AI CHAT ───────────────────────────────────────────────────────────────────

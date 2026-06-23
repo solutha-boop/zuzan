@@ -4443,7 +4443,7 @@ function Creditors({live = {}}) {
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,background:C.bg}}>
                     <thead>
                       <tr style={{borderBottom:`1px solid ${C.border}`}}>
-                        {["PO Ref","Description","Received","Due Date","Overdue","Amount"].map(h=>(
+                        {["PO Ref","Description","Received","Due Date","Overdue","Amount (incl. VAT)"].map(h=>(
                           <th key={h} style={{padding:"9px 20px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>
                         ))}
                       </tr>

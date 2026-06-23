@@ -13,6 +13,7 @@ from datetime import datetime
 from database import (
     get_db, Account, AccountType, JournalEntry, JournalLine,
     Invoice, Expense, Payslip, Employee, PurchaseOrder, Company, InvoiceStatus,
+    FixedAsset, DepreciationEntry,
 )
 from auth import get_current_user, User
 
@@ -595,6 +596,44 @@ def backfill_company(company_id: int, db: Session) -> dict:
                 posted["purchase_orders"] += 1
             except Exception as e:
                 posted["errors"].append(f"PO {po.po_number} payment: {e}")
+
+    # Fixed asset acquisitions — one journal entry per asset (DR Fixed Assets / CR Bank)
+    posted["fixed_assets"] = 0
+    # Build a set of already-posted depreciation references once for the whole company
+    # (avoids re-querying inside the per-asset loop).
+    existing_depr_refs = {
+        row.reference for row in
+        db.query(JournalEntry.reference).filter(
+            JournalEntry.company_id == company_id,
+            JournalEntry.source == "depreciation",
+        ).all()
+    }
+    for asset in db.query(FixedAsset).filter(FixedAsset.company_id == company_id).all():
+        if ("fixed_asset", asset.id) not in existing:
+            try:
+                post_asset_acquisition(asset, db)
+                posted["fixed_assets"] += 1
+            except Exception as e:
+                posted["errors"].append(f"Asset {asset.asset_number or asset.id} acquisition: {e}")
+        # Depreciation entries — deduplicate by reference "DEP-{asset_id}-{period}" since
+        # multiple periods share the same source_id (asset.id)
+        existing_refs = existing_depr_refs  # use company-wide set; updated in-place below
+        for depr in asset.depreciation_entries:
+            ref = f"DEP-{asset.id}-{depr.period}"
+            if ref not in existing_refs:
+                try:
+                    post_depreciation(asset, depr.amount, depr.period, db)
+                    existing_depr_refs.add(ref)   # prevent double-post within this backfill run
+                    posted["fixed_assets"] += 1
+                except Exception as e:
+                    posted["errors"].append(f"Depreciation {ref}: {e}")
+        # Asset disposals
+        if asset.status in ("disposed", "written_off") and ("asset_disposal", asset.id) not in existing:
+            try:
+                post_asset_disposal(asset, asset.disposal_proceeds or 0, db)
+                posted["fixed_assets"] += 1
+            except Exception as e:
+                posted["errors"].append(f"Asset {asset.asset_number or asset.id} disposal: {e}")
 
     db.commit()
     return posted

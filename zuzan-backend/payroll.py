@@ -493,24 +493,48 @@ async def dashboard(
     input_vat  = round(sum(e.vat_amount or 0 for e in expenses), 2)
     net_vat_payable = round(output_vat - input_vat, 2)
 
-    # PO double-count warning: check if any expense descriptions reference a PO number
-    import re as _re
-    po_numbers_in_db = {
-        po.po_number for po in db.query(PurchaseOrder).filter(
-            PurchaseOrder.company_id == cid,
-            PurchaseOrder.status.in_(["received", "partial", "paid"]),
-        ).all()
-    }
+    # PO double-count warning: structural check — find expenses whose (supplier, month, net amount)
+    # closely match a received PO, which would indicate the same cost recorded twice.
+    # Uses ±5% amount tolerance and same calendar month to avoid false positives.
+    received_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+    ).all()
     duplicate_expense_warning = None
-    if po_numbers_in_db:
+    for po in received_pos:
+        po_date = po.received_date or po.order_date or po.created_at
+        if not po_date:
+            continue
+        po_net = (po.total_amount or 0) - (po.vat_amount or 0)
+        if po_net <= 0:
+            continue
+        po_sup = (po.supplier_name or "").strip().lower()
         for exp in expenses:
-            desc = (exp.description or "") + (exp.vendor or "")
-            if any(pn in desc for pn in po_numbers_in_db):
-                duplicate_expense_warning = (
-                    "One or more expenses may duplicate a received Purchase Order cost. "
-                    "Check Expenses for entries referencing PO numbers to avoid double-counting."
-                )
-                break
+            if not exp.expense_date:
+                continue
+            # Must be in the same calendar month
+            if exp.expense_date.year != po_date.year or exp.expense_date.month != po_date.month:
+                continue
+            # Supplier name must overlap (one contains the other, case-insensitive)
+            exp_sup = (exp.vendor or "").strip().lower()
+            if not po_sup or not exp_sup:
+                continue
+            if po_sup not in exp_sup and exp_sup not in po_sup:
+                continue
+            # Amount must be within 5%
+            exp_net = (exp.amount or 0) - (exp.vat_amount or 0)
+            if abs(exp_net - po_net) / po_net > 0.05:
+                continue
+            duplicate_expense_warning = (
+                f"Possible double-count: Expense '{exp.vendor}' "
+                f"({exp.expense_date.strftime('%b %Y')}, R{exp_net:,.2f} excl. VAT) "
+                f"matches received PO {po.po_number} "
+                f"({po_date.strftime('%b %Y')}, R{po_net:,.2f} excl. VAT). "
+                f"Verify this expense does not duplicate the PO cost."
+            )
+            break
+        if duplicate_expense_warning:
+            break
 
     # CIPC Annual Return reminder
     company = db.query(Company).filter(Company.id == cid).first()
