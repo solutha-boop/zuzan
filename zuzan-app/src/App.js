@@ -486,9 +486,10 @@ function Dashboard({live = {}}) {
           rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client, i.currency||"ZAR",
             fmt(toZarD(i)), i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
       } else if (type === "expenses") {
-        const [exps, deprSchedule] = await Promise.all([
+        const [exps, deprSchedule, allPOs] = await Promise.all([
           api("/expenses"),
           api("/fixed-assets/schedule").catch(()=>[]),
+          api("/purchase-orders/").catch(()=>[]),
         ]);
         // Expense rows — VAT-exclusive
         const expRows = exps.map(e=>({
@@ -504,8 +505,16 @@ function Dashboard({live = {}}) {
             d.period ? new Date(d.period+"-01").toLocaleDateString("en-ZA",{year:"numeric",month:"short"}) : "—"],
           amount: d.amount||0,
         }));
-        const allRows = [...expRows, ...deprRows].sort((a,b)=>b._date-a._date);
-        setDrill({type, title:"Expenses — All Time (excl. VAT, incl. Depreciation)", color:C.red,
+        // PO COGS rows — received/partial/paid purchase orders (ex-VAT, matching backend)
+        const poRows = (allPOs||[]).filter(po=>["received","partial","paid"].includes(po.status)).map(po=>({
+          _date: new Date(po.received_date||po.created_at||0),
+          cols: [po.description||po.po_number||"Purchase Order", "Cost of Sales (POs)",
+            fmt((po.total_amount||0)-(po.vat_amount||0)),
+            po.received_date ? new Date(po.received_date).toLocaleDateString("en-ZA") : "—"],
+          amount: (po.total_amount||0)-(po.vat_amount||0),
+        }));
+        const allRows = [...expRows, ...deprRows, ...poRows].sort((a,b)=>b._date-a._date);
+        setDrill({type, title:"Expenses — All Time (excl. VAT, incl. Depreciation & PO COGS)", color:C.red,
           total: allRows.reduce((s,r)=>s+r.amount,0),
           cols:["Description","Category","Amount (excl. VAT)","Date"],
           rows: allRows.map(r=>r.cols)});
@@ -1412,7 +1421,26 @@ function Expenses({live = {}}) {
   const [viewExp,  setViewExp]  = useState(null);
   const [editExp,  setEditExp]  = useState(null);
 
-  useEffect(() => { if (liveExpenses && liveExpenses.length > 0) setExpenses(liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, category: e.category || "", id: `EXP-${String(e.id).padStart(3,"0")}`}))); }, [liveExpenses]);
+  useEffect(() => {
+    const expRows = liveExpenses && liveExpenses.length > 0
+      ? liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, vat_amount: e.vat_amount||0, category: e.category || "", id: `EXP-${String(e.id).padStart(3,"0")}`}))
+      : [];
+    // Fetch depreciation entries and merge as auto-posted expense rows
+    api("/fixed-assets/schedule").then(deprEntries => {
+      const deprRows = (deprEntries||[]).map(d => ({
+        id: `DEP-${d.id}`,
+        date: d.period ? d.period+"-01" : null,
+        desc: `${d.asset_name} — Monthly Depreciation`,
+        vendor: "Fixed Assets",
+        amount: d.amount||0,
+        vat_amount: 0,
+        category: "5800 - Depreciation",
+        _readonly: true,
+      }));
+      const merged = [...expRows, ...deprRows].sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+      if (merged.length > 0) setExpenses(merged);
+    }).catch(()=>{ if (expRows.length > 0) setExpenses(expRows); });
+  }, [liveExpenses]);
 
   const [showNew,    setShowNew]    = useState(false);
   const [form,       setForm]       = useState({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
