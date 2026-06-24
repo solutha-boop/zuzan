@@ -591,6 +591,18 @@ def init_db():
                 conn.rollback()  # Reset connection so next statement starts fresh
 
 
+        # Backfill: paid invoices missing paid_date get created_at as fallback.
+        # Fixes revenue gap between dashboard and management/income-statement endpoints.
+        try:
+            conn.execute(text(
+                "UPDATE invoices SET paid_date = created_at "
+                "WHERE status = 'paid' AND paid_date IS NULL"
+            ))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+
 def get_db():
     db = SessionLocal()
     try:

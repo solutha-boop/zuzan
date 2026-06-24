@@ -231,6 +231,9 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         invoice.status = InvoiceStatus(data.status)
     if data.paid_date:
         invoice.paid_date = datetime.fromisoformat(data.paid_date)
+    # If being marked paid with no paid_date, default to now so date-filtered reports include it
+    if not was_paid and invoice.status == InvoiceStatus.paid and not invoice.paid_date:
+        invoice.paid_date = datetime.utcnow()
     if data.notes:
         invoice.notes = data.notes
     if data.paid_amount_zar is not None:
