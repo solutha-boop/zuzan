@@ -3027,8 +3027,8 @@ function Reports({live = {}}) {
     {label:"All Time",       from:"2000-01-01",         to:toISO(now)},
     {label:"Custom",         from:"",                  to:""},
   ];
-  const [preset,   setPreset]   = useState("Current Month");
-  const [dateFrom, setDateFrom] = useState(toISO(firstOfMonth));
+  const [preset,   setPreset]   = useState("All Time");
+  const [dateFrom, setDateFrom] = useState("2000-01-01");
   const [dateTo,   setDateTo]   = useState(toISO(now));
   const handlePreset = (label) => {
     setPreset(label);
@@ -3448,7 +3448,7 @@ function Reports({live = {}}) {
     const expBreakdown = pl.expense_breakdown || {};
     return (
       <div>
-        {m && <div style={{fontSize:11,color:C.inkMid,marginBottom:10,fontWeight:500}}>Period: {m.period} &nbsp;·&nbsp; Select "All Time" in the date filter to match the Dashboard totals</div>}
+        {m && <div style={{fontSize:11,color:C.inkMid,marginBottom:10,fontWeight:500}}>Period: {m.period}</div>}
         <div style={{display:"flex",gap:12,marginBottom:mgmtDrill?12:20,flexWrap:"wrap"}}>
           <KPI label="Revenue"     value={fmt(kpis.revenue)}      color={C.green}                           icon="💰" active={mgmtDrill?.type==="revenue"}     onClick={()=>openMgmtDrill("revenue")}     sub={"Gross margin "+kpis.gross_margin_pct+"%"}/>
           <KPI label="Net Profit"  value={fmt(kpis.net_profit)}   color={kpis.net_profit>=0?C.accent:C.red} icon="📊" active={mgmtDrill?.type==="profit"}      onClick={()=>openMgmtDrill("profit")}      sub={"Net margin "+kpis.net_margin_pct+"%"}/>
