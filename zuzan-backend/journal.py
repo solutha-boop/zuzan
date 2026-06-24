@@ -327,9 +327,15 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
 def post_po_received(po, db: Session) -> JournalEntry:
     """
     Purchase order received (goods/services delivered, not yet paid):
-      DR Inventory at Cost / Expense  (amount excl VAT)
-      DR VAT Input Recoverable        (vat_amount)
-      CR Accounts Payable             (total_amount)
+      DR Cost of Sales (5000)      (amount excl VAT)
+      DR VAT Input Recoverable     (vat_amount)
+      CR Accounts Payable          (total_amount)
+
+    Design note: PO costs are expensed immediately on receipt (matching the
+    direct-query P&L in /reports/dashboard) rather than routed through
+    Inventory (1200). Physical stock levels are tracked separately via the
+    InventoryItem table. This keeps the journal P&L consistent with the
+    dashboard figures shown to users.
     """
     cid = po.company_id
     total = round(po.total_amount or 0, 2)
@@ -340,14 +346,14 @@ def post_po_received(po, db: Session) -> JournalEntry:
         f"PO received — {po.supplier_name or 'Supplier'}",
         po.po_number, "purchase_order", po.id, db)
 
-    inventory = get_account(cid, "1200", db)
-    vat_in    = get_account(cid, "1300", db)
-    ap        = get_account(cid, "2000", db)
+    cogs   = get_account(cid, "5000", db)
+    vat_in = get_account(cid, "1300", db)
+    ap     = get_account(cid, "2000", db)
 
-    lines = [_line(entry.id, inventory, debit=net,    description="Goods/services received")]
+    lines = [_line(entry.id, cogs, debit=net,      description="Goods/services received")]
     if vat > 0:
         lines.append(_line(entry.id, vat_in, debit=vat, description="VAT input"))
-    lines.append(_line(entry.id, ap, credit=total,    description=po.po_number))
+    lines.append(_line(entry.id, ap, credit=total, description=po.po_number))
 
     _assert_balanced(lines)
     for l in lines: db.add(l)

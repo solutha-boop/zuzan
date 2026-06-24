@@ -35,6 +35,27 @@ async def lifespan(app: FastAPI):
         logger.info("Journal backfill complete")
     except Exception as e:
         logger.warning(f"Journal backfill failed (non-fatal): {e}")
+    # Backfill NULL received_date on POs that were received before the column existed
+    try:
+        from database import PurchaseOrder as _PO
+        db = SessionLocal()
+        companies = db.query(Company).all()
+        total_fixed = 0
+        for co in companies:
+            pos = db.query(_PO).filter(
+                _PO.company_id == co.id,
+                _PO.status.in_(["received", "partial", "paid"]),
+                _PO.received_date == None,  # noqa: E711
+            ).all()
+            for po in pos:
+                po.received_date = po.created_at
+                total_fixed += 1
+        if total_fixed:
+            db.commit()
+            logger.info(f"Backfilled received_date on {total_fixed} purchase order(s)")
+        db.close()
+    except Exception as e:
+        logger.warning(f"PO received_date backfill failed (non-fatal): {e}")
     # Encrypt any existing plain-text bank fields
     try:
         from crypto import encrypt_field, _is_fernet_token, encryption_enabled
@@ -211,7 +232,7 @@ async def api_list_employees(auth=Depends(require_api_key)):
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
     from payroll import _to_zar
-    from database import InvoiceStatus, PurchaseOrder, Payslip
+    from database import InvoiceStatus, PurchaseOrder, Payslip, DepreciationEntry
     paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.paid).all()
     out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
     total_revenue  = sum(_to_zar(i) for i in paid_invs)
@@ -227,6 +248,11 @@ async def api_summary(auth=Depends(require_api_key)):
         ).all()
     )
     total_expenses = total_expenses + po_cogs
+    # Add depreciation — consistent with /reports/dashboard
+    total_depreciation = db.query(_func.sum(DepreciationEntry.amount)).filter(
+        DepreciationEntry.company_id == company.id
+    ).scalar() or 0
+    total_expenses = total_expenses + total_depreciation
     # Add payroll costs — consistent with /reports/dashboard
     active_emps = db.query(Employee).filter(Employee.company_id==company.id, Employee.is_active==True).all()
     total_payroll = 0.0

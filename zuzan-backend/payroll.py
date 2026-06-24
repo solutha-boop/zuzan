@@ -879,7 +879,7 @@ async def reconciliation(
             "detail": f"All {len(inv_items)} stock item(s) above reorder level. Total inventory at cost: R {inv_total:,.2f}.",
             "amount": inv_total})
 
-    # ── RULE 7: Unmatched revenue — paid invoices with no expense offset ───────
+    # ── RULE 8: Unmatched revenue — paid invoices with no expense offset ───────
     # Simple check: gross margin — warn if expenses are >90% of revenue
     total_rev = round(sum(_to_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()), 2)
     total_exp = round(sum(e.amount - (e.vat_amount or 0) for e in all_expenses), 2)
