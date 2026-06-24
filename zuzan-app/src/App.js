@@ -558,18 +558,33 @@ function Dashboard({live = {}}) {
             [netVat>=0?"Net VAT payable to SARS":"Net VAT refund due from SARS", fmt(Math.abs(netVat))],
           ]});
       } else if (type === "profit") {
-        const invs = await api("/invoices");
-        const exps = await api("/expenses");
+        const [invs, exps, allPOs, deprSchedule, emps] = await Promise.all([
+          api("/invoices"),
+          api("/expenses"),
+          api("/purchase-orders/").catch(()=>[]),
+          api("/fixed-assets/schedule").catch(()=>[]),
+          api("/employees").catch(()=>[]),
+        ]);
         const paidInvs = invs.filter(i=>i.status==="paid");
-        const rev = paidInvs.reduce((s,i)=>s+toZarD(i),0);
-        const exp = exps.reduce((s,e)=>s+((e.amount||0)-(e.vat_amount||0)),0);
+        const rev  = paidInvs.reduce((s,i)=>s+toZarD(i),0);
+        const exp  = exps.reduce((s,e)=>s+((e.amount||0)-(e.vat_amount||0)),0);
+        const poCogs = (allPOs||[])
+          .filter(po=>["received","partial","paid"].includes(po.status))
+          .reduce((s,po)=>s+((po.total_amount||0)-(po.vat_amount||0)),0);
+        const depr = (deprSchedule||[]).reduce((s,d)=>s+(d.amount||0),0);
+        const payrollCost = (emps||[]).filter(e=>e.is_active!==false)
+          .reduce((s,e)=>s+calcPayroll(e.gross_salary).totalCost,0);
+        const netProfit = rev - exp - poCogs - depr - payrollCost;
         setDrill({type, title:"Net Profit Breakdown — All Time", color:C.accent,
-          total: rev-exp,
+          total: netProfit,
           cols:["Category","Amount"],
           rows:[
-            ["Revenue (paid invoices)", fmt(rev)],
-            ["Expenses (excl. VAT)", `- ${fmt(exp)}`],
-            ["Net Profit", fmt(rev-exp)],
+            ["Revenue (paid invoices)",          fmt(rev)],
+            ["Expenses (excl. VAT)",             `- ${fmt(exp)}`],
+            ["Cost of Sales — POs (excl. VAT)",  `- ${fmt(poCogs)}`],
+            ["Depreciation (IAS 16)",            `- ${fmt(depr)}`],
+            ["Payroll (employer total cost)",    `- ${fmt(payrollCost)}`],
+            ["Net Profit",                        fmt(netProfit)],
           ]});
       }
     } catch(e) { setDrill(null); }
@@ -601,7 +616,7 @@ function Dashboard({live = {}}) {
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
         <KPI label="Revenue" value={fmt(totalRevenue)} sub="All paid invoices" color={C.green} icon="💰" onClick={()=>openDrill("revenue")}/>
         <KPI label="Expenses" value={fmt(totalExpenses)} sub="Excl. VAT, all time" color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
-        <KPI label="Net Profit" value={fmt(profit)} sub="Revenue minus expenses" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
+        <KPI label="Net Profit" value={fmt(profit)} sub="After expenses, COGS, depreciation &amp; payroll" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
         <KPI label="Outstanding" value={fmt(outstanding)} sub="Pending invoices" color={C.gold} icon="⏳" onClick={()=>openDrill("outstanding")}/>
         <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${d?.employee_count||""} employees`} color={C.blue} icon="👥" onClick={()=>openDrill("payroll")}/>
         <KPI label="Net VAT" value={netVatPayable !== null ? fmt(Math.abs(netVatPayable)) : "—"} sub={vatSub} color={vatColor} icon="🏛️" onClick={()=>openDrill("vat")}/>
