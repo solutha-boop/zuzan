@@ -595,7 +595,7 @@ function Dashboard({live = {}}) {
   const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
   const totalExpenses = d ? d.total_expenses : MOCK_EXPENSES.reduce((s,e) => s + e.amount, 0);
   const outstanding   = d ? d.total_outstanding : MOCK_INVOICES.filter(i => i.status !== "paid").reduce((s,i) => s + i.amount, 0);
-  const profit        = d ? d.net_profit     : totalRevenue - totalExpenses;
+  const profit        = d ? Math.round((d.net_profit - (d.tax_provision||0))*100)/100 : totalRevenue - totalExpenses;
   const totalPayroll  = d ? d.total_payroll  : MOCK_EMPLOYEES.reduce((s,e) => s + calcPayroll(e.salary).totalCost, 0);
   const netVatPayable = d ? d.net_vat_payable : null;
   const vatColor      = netVatPayable === null ? C.inkMid : netVatPayable >= 0 ? C.red : C.green;
@@ -616,7 +616,7 @@ function Dashboard({live = {}}) {
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
         <KPI label="Revenue" value={fmt(totalRevenue)} sub="All paid invoices" color={C.green} icon="💰" onClick={()=>openDrill("revenue")}/>
         <KPI label="Expenses" value={fmt(totalExpenses)} sub="Excl. VAT, all time" color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
-        <KPI label="Net Profit" value={fmt(profit)} sub="After expenses, COGS, depreciation &amp; payroll" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
+        <KPI label="Net Profit" value={fmt(profit)} sub="After all costs &amp; 27% tax" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
         <KPI label="Outstanding" value={fmt(outstanding)} sub="Pending invoices" color={C.gold} icon="⏳" onClick={()=>openDrill("outstanding")}/>
         <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${d?.employee_count||""} employees`} color={C.blue} icon="👥" onClick={()=>openDrill("payroll")}/>
         <KPI label="Net VAT" value={netVatPayable !== null ? fmt(Math.abs(netVatPayable)) : "—"} sub={vatSub} color={vatColor} icon="🏛️" onClick={()=>openDrill("vat")}/>
@@ -3024,6 +3024,7 @@ function Reports({live = {}}) {
     {label:"Current Month",  from:toISO(firstOfMonth), to:toISO(now)},
     {label:"Last Month",     from:toISO(firstOfLast),  to:toISO(lastOfLast)},
     {label:"Financial Year", from:toISO(fyStart),      to:toISO(fyEnd)},
+    {label:"All Time",       from:"2000-01-01",         to:toISO(now)},
     {label:"Custom",         from:"",                  to:""},
   ];
   const [preset,   setPreset]   = useState("Current Month");
@@ -3447,6 +3448,7 @@ function Reports({live = {}}) {
     const expBreakdown = pl.expense_breakdown || {};
     return (
       <div>
+        {m && <div style={{fontSize:11,color:C.inkMid,marginBottom:10,fontWeight:500}}>Period: {m.period} &nbsp;·&nbsp; Select "All Time" in the date filter to match the Dashboard totals</div>}
         <div style={{display:"flex",gap:12,marginBottom:mgmtDrill?12:20,flexWrap:"wrap"}}>
           <KPI label="Revenue"     value={fmt(kpis.revenue)}      color={C.green}                           icon="💰" active={mgmtDrill?.type==="revenue"}     onClick={()=>openMgmtDrill("revenue")}     sub={"Gross margin "+kpis.gross_margin_pct+"%"}/>
           <KPI label="Net Profit"  value={fmt(kpis.net_profit)}   color={kpis.net_profit>=0?C.accent:C.red} icon="📊" active={mgmtDrill?.type==="profit"}      onClick={()=>openMgmtDrill("profit")}      sub={"Net margin "+kpis.net_margin_pct+"%"}/>
@@ -3521,13 +3523,13 @@ function Reports({live = {}}) {
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Profit and Loss</div>
-            <ReportRow label="Revenue"            value={pl.revenue}         bold color={C.green}/>
-            <ReportRow label="Operating Expenses" value={-pl.total_expenses} indent/>
-            <ReportRow label="Gross Profit"        value={pl.gross_profit}    bold border/>
+            <ReportRow label="Revenue"              value={pl.revenue}         bold color={C.green}/>
+            <ReportRow label="Operating Expenses"  value={-pl.total_expenses} indent/>
+            <ReportRow label="Operating Profit"    value={pl.gross_profit}    bold border/>
             <ReportRow label="Payroll Cost"        value={-pl.payroll_cost}   indent/>
-            <ReportRow label="EBIT"                value={pl.ebit}            bold border color={pl.ebit>=0?C.ink:C.red}/>
-            <ReportRow label="Tax Provision 27%"   value={-pl.tax_provision} indent/>
-            <ReportRow label="Net Profit"          value={pl.net_profit}      bold border large color={pl.net_profit>=0?C.accent:C.red}/>
+            <ReportRow label="Net Profit Before Tax" value={pl.ebit}          bold border color={pl.ebit>=0?C.ink:C.red}/>
+            <ReportRow label="Tax Provision 27%"   value={-pl.tax_provision}  indent/>
+            <ReportRow label="Net Profit After Tax" value={pl.net_profit}     bold border large color={pl.net_profit>=0?C.accent:C.red}/>
           </div>
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Expense Breakdown</div>
@@ -3538,7 +3540,7 @@ function Reports({live = {}}) {
                     <span style={{fontSize:12,fontWeight:700,color:C.red}}>{fmt(amt)}</span>
                   </div>
                 ))
-              : <div style={{fontSize:12,color:C.inkDim,padding:"20px 0",textAlign:"center"}}>No expense data this month</div>
+              : <div style={{fontSize:12,color:C.inkDim,padding:"20px 0",textAlign:"center"}}>No expense data for this period</div>
             }
           </div>
         </div>

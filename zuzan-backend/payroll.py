@@ -1014,23 +1014,45 @@ async def emp201(
 
 @reports_router.get("/management")
 async def management_accounts(
+    date_from: Optional[str] = None,
+    date_to:   Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     cid = current_user.company_id
     now = datetime.utcnow()
-    month_start = datetime(now.year, now.month, 1)
+
+    # Parse date range; default to current month if not provided
+    if date_from and date_to:
+        try:
+            period_start = datetime.strptime(date_from, "%Y-%m-%d")
+            period_end   = datetime.strptime(date_to,   "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            period_start = datetime(now.year, now.month, 1)
+            period_end   = now + timedelta(days=1)
+    else:
+        period_start = datetime(now.year, now.month, 1)
+        period_end   = now + timedelta(days=1)
+
+    from_period = period_start.strftime("%Y-%m")
+    to_period   = (period_end - timedelta(days=1)).strftime("%Y-%m")
+    period_label = (
+        f"{period_start.strftime('%d %b %Y')} – {(period_end - timedelta(days=1)).strftime('%d %b %Y')}"
+        if date_from and date_to else now.strftime("%B %Y")
+    )
 
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
-        Invoice.paid_date >= month_start
+        Invoice.paid_date >= period_start,
+        Invoice.paid_date < period_end,
     ).all()
     revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
 
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
-        Expense.expense_date >= month_start
+        Expense.expense_date >= period_start,
+        Expense.expense_date < period_end,
     ).all()
     # Ex-VAT expenses for P&L — consistent with dashboard and monthly-trend endpoints
     total_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
@@ -1040,11 +1062,12 @@ async def management_accounts(
         key = e.category or "Other"
         expense_by_cat[key] = round(expense_by_cat.get(key, 0) + (e.amount - (e.vat_amount or 0)), 2)
 
-    # Include PO COGS: received purchase orders this month — ex-VAT
+    # Include PO COGS: received purchase orders in range — ex-VAT
     po_cogs_items = db.query(PurchaseOrder).filter(
         PurchaseOrder.company_id == cid,
         PurchaseOrder.status.in_(["received", "partial", "paid"]),
-        PurchaseOrder.received_date >= month_start,
+        PurchaseOrder.received_date >= period_start,
+        PurchaseOrder.received_date < period_end,
     ).all()
     po_cogs = round(sum((po.total_amount or 0) - (po.vat_amount or 0) for po in po_cogs_items), 2)
     if po_cogs:
@@ -1053,28 +1076,28 @@ async def management_accounts(
             expense_by_cat.get("Cost of Sales (POs)", 0) + po_cogs, 2
         )
 
-    # Include depreciation for this month (IAS 16 — DepreciationEntry.period = "YYYY-MM")
-    current_period = now.strftime("%Y-%m")
-    monthly_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
+    # Include depreciation across all periods in range (IAS 16 — DepreciationEntry.period = "YYYY-MM")
+    period_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
         DepreciationEntry.company_id == cid,
-        DepreciationEntry.period == current_period,
+        DepreciationEntry.period >= from_period,
+        DepreciationEntry.period <= to_period,
     ).scalar() or 0
-    if monthly_depreciation:
-        total_expenses = round(total_expenses + monthly_depreciation, 2)
-        expense_by_cat["Depreciation"] = round(monthly_depreciation, 2)
+    if period_depreciation:
+        total_expenses = round(total_expenses + period_depreciation, 2)
+        expense_by_cat["Depreciation"] = round(period_depreciation, 2)
 
     active_employees = db.query(Employee).filter(
         Employee.company_id == cid,
         Employee.is_active == True
     ).all()
-    # Use actual payslips for this month if payroll has been run; otherwise estimate
-    current_period = now.strftime("%Y-%m")
-    month_payslips_total = db.query(func.sum(Payslip.total_cost)).filter(
+    # Use actual payslips for the period if run; otherwise estimate from current headcount
+    period_payslips_total = db.query(func.sum(Payslip.total_cost)).filter(
         Payslip.employee_id.in_([e.id for e in active_employees]),
-        Payslip.period == current_period,
+        Payslip.period >= from_period,
+        Payslip.period <= to_period,
     ).scalar() if active_employees else None
-    if month_payslips_total:
-        total_payroll_cost = round(month_payslips_total, 2)
+    if period_payslips_total:
+        total_payroll_cost = round(period_payslips_total, 2)
     else:
         total_payroll_cost = round(sum(calc_payroll(e.gross_salary)["total_cost"] for e in active_employees), 2)
 
@@ -1126,12 +1149,12 @@ async def management_accounts(
         trend.append({"month": start.strftime("%b"), "revenue": rev, "expenses": exp, "gross_profit": round(rev - exp, 2), "profit": round(rev - exp, 2)})
 
     return {
-        "period":       now.strftime("%B %Y"),
+        "period":       period_label,
         "generated_at": now.isoformat(),
         "pl": {
             "revenue":              revenue,
             "po_cogs":              po_cogs,
-            "depreciation_amount":  round(monthly_depreciation, 2),
+            "depreciation_amount":  round(period_depreciation, 2),
             "total_expenses":       total_expenses,
             "expense_breakdown":    expense_by_cat,
             "gross_profit":         gross_profit,
