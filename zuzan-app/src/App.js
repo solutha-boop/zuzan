@@ -3004,6 +3004,10 @@ function Reports({live = {}}) {
   const [trialBal, setTrialBal] = useState(null);
   const [journal,  setJournal]  = useState(null);
   const [jnlExpanded, setJnlExpanded] = useState(new Set());
+  const [jnlAccounts, setJnlAccounts] = useState([]);
+  const [jnlForm, setJnlForm] = useState(null); // null = hidden, object = visible
+  const JNL_EMPTY_FORM = {date:new Date().toISOString().slice(0,10),description:"",reference:"",auto_reverse:false,reversal_date:"",lines:[{account_id:"",debit:"",credit:"",description:""},{account_id:"",debit:"",credit:"",description:""}]};
+
   const [vatPeriod,setVatPeriod]= useState(new Date().toISOString().slice(0,7));
   const [loading,  setLoading]  = useState(false);
   const [mgmtDrill, setMgmtDrill] = useState(null); // {type,title,cols,rows,total,color}
@@ -3059,7 +3063,10 @@ function Reports({live = {}}) {
       if (tab==="bs")    setBsData(await api(`/reports/balance-sheet`).catch(()=>null));
       if (tab==="recon") setRecon(await api(`/reports/reconciliation`).catch(()=>null));
       if (tab==="tb")    setTrialBal(await api(`/journal/trial-balance`).catch(()=>null));
-      if (tab==="jnl")   setJournal(await api(`/journal/?limit=100`).catch(()=>null));
+      if (tab==="jnl") {
+        setJournal(await api(`/journal/?limit=100`).catch(()=>null));
+        if (!jnlAccounts.length) api("/journal/accounts").then(setJnlAccounts).catch(()=>null);
+      }
       if (tab==="cf")   setCfData(await api(`/reports/cash-flow?${dateParams}`).catch(()=>null));
       // emp201 now lives in Payroll component
       if (tab==="pl")   setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
@@ -3286,8 +3293,33 @@ function Reports({live = {}}) {
 
   const renderJournal = () => {
     if (!journal) return <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading journal…</div>;
-    const SOURCE_ICON = {invoice:"🧾",invoice_payment:"💰",expense:"💳",payroll:"👥",purchase_order:"📦",po_payment:"🏭",manual:"✏️"};
+    const SOURCE_ICON = {invoice:"🧾",invoice_payment:"💰",invoice_reversal:"↩️",expense:"💳",expense_reversal:"↩️",payroll:"👥",purchase_order:"📦",po_payment:"🏭",purchase_order_reversal:"↩️",po_payment_reversal:"↩️",manual:"✏️",manual_reversal:"↩️"};
     const toggle = id => setJnlExpanded(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
+
+    // ── Manual entry form helpers ─────────────────────────────────────────────
+    const addLine = () => setJnlForm(f=>({...f,lines:[...f.lines,{account_id:"",debit:"",credit:"",description:""}]}));
+    const removeLine = i => setJnlForm(f=>({...f,lines:f.lines.filter((_,j)=>j!==i)}));
+    const updateLine = (i,field,val) => setJnlForm(f=>{const ls=[...f.lines];ls[i]={...ls[i],[field]:val};return{...f,lines:ls};});
+
+    const submitManual = async () => {
+      const lines = jnlForm.lines
+        .filter(l=>l.account_id)
+        .map(l=>({account_id:parseInt(l.account_id),debit:parseFloat(l.debit)||0,credit:parseFloat(l.credit)||0,description:l.description||undefined}));
+      const dr = lines.reduce((s,l)=>s+l.debit,0);
+      const cr = lines.reduce((s,l)=>s+l.credit,0);
+      if (Math.abs(dr-cr)>0.01) { alert(`Entry is unbalanced: DR R${dr.toFixed(2)} ≠ CR R${cr.toFixed(2)}`); return; }
+      if (!jnlForm.description) { alert("Description is required."); return; }
+      if (jnlForm.auto_reverse && !jnlForm.reversal_date) { alert("Reversal date is required when auto-reverse is on."); return; }
+      try {
+        await api("/journal/manual",{method:"POST",body:JSON.stringify({
+          date:jnlForm.date, description:jnlForm.description, reference:jnlForm.reference||undefined, lines,
+          auto_reverse:jnlForm.auto_reverse, reversal_date:jnlForm.auto_reverse?jnlForm.reversal_date:undefined,
+        })});
+        setJnlForm(null);
+        setJournal(await api("/journal/?limit=100"));
+      } catch(e) { alert("Failed to save: "+(e.message||e)); }
+    };
+
     return (
       <div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
@@ -3295,50 +3327,186 @@ function Reports({live = {}}) {
             <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>General Journal</div>
             <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Every transaction as debit/credit pairs — click any entry to expand</div>
           </div>
-          <button onClick={async()=>{setLoading(true);try{await api("/journal/backfill",{method:"POST"});setJournal(await api("/journal/?limit=100"));}catch(e){alert("Backfill failed");}finally{setLoading(false);}}}
-            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>
-            ↻ Re-run backfill
-          </button>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setJnlForm(jnlForm?null:{...JNL_EMPTY_FORM,date:new Date().toISOString().slice(0,10)})}
+              style={{background:jnlForm?C.surface:C.accent,color:jnlForm?C.inkMid:"#fff",border:`1px solid ${jnlForm?C.border:C.accent}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+              {jnlForm ? "✕ Cancel" : "+ New Entry"}
+            </button>
+            <button onClick={async()=>{setLoading(true);try{await api("/journal/backfill",{method:"POST"});setJournal(await api("/journal/?limit=100"));}catch(e){alert("Backfill failed");}finally{setLoading(false);}}}
+              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>
+              ↻ Re-run backfill
+            </button>
+          </div>
         </div>
-        {journal.length === 0 && (
+
+        {/* ── Manual entry form ──────────────────────────────────────────────── */}
+        {jnlForm && (
+          <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:14,padding:24,marginBottom:20}}>
+            <div style={{fontWeight:700,fontSize:15,color:C.ink,marginBottom:16}}>New Manual Journal Entry</div>
+
+            {/* Header fields */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
+              <div>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:4,fontWeight:600}}>DATE *</div>
+                <input type="date" value={jnlForm.date} onChange={e=>setJnlForm(f=>({...f,date:e.target.value}))}
+                  style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,fontFamily:"inherit"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:4,fontWeight:600}}>DESCRIPTION *</div>
+                <input placeholder="e.g. Month-end accrual" value={jnlForm.description} onChange={e=>setJnlForm(f=>({...f,description:e.target.value}))}
+                  style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,fontFamily:"inherit"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:4,fontWeight:600}}>REFERENCE</div>
+                <input placeholder="e.g. JNL-001" value={jnlForm.reference} onChange={e=>setJnlForm(f=>({...f,reference:e.target.value}))}
+                  style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,fontFamily:"inherit"}}/>
+              </div>
+            </div>
+
+            {/* Auto-reverse toggle */}
+            <div style={{background:jnlForm.auto_reverse?"#EEF6FF":"#f9f9f9",border:`1px solid ${jnlForm.auto_reverse?C.blue:C.border}`,borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none"}}>
+                <input type="checkbox" checked={jnlForm.auto_reverse} onChange={e=>setJnlForm(f=>({...f,auto_reverse:e.target.checked,reversal_date:""}))}
+                  style={{width:16,height:16,accentColor:C.blue}}/>
+                <span style={{fontSize:13,fontWeight:600,color:jnlForm.auto_reverse?C.blue:C.inkMid}}>
+                  🔄 Auto-reverse this entry
+                </span>
+              </label>
+              {jnlForm.auto_reverse && (
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:12,color:C.inkMid}}>Reverse on:</span>
+                  <input type="date" value={jnlForm.reversal_date} onChange={e=>setJnlForm(f=>({...f,reversal_date:e.target.value}))}
+                    style={{border:`1px solid ${C.blue}`,borderRadius:6,padding:"5px 8px",fontSize:12,fontFamily:"inherit",color:C.ink}}/>
+                  <span style={{fontSize:11,color:C.inkMid}}>The mirror entry will be posted automatically on this date.</span>
+                </div>
+              )}
+              {!jnlForm.auto_reverse && (
+                <span style={{fontSize:11,color:C.inkMid}}>Use for accruals or prepayments that need to unwind in a future period.</span>
+              )}
+            </div>
+
+            {/* Line items */}
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,marginBottom:12}}>
+              <thead>
+                <tr style={{background:"#f5f5f5"}}>
+                  {["Account","Debit (R)","Credit (R)","Memo",""].map(h=>(
+                    <th key={h} style={{padding:"7px 10px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {jnlForm.lines.map((line,i)=>(
+                  <tr key={i}>
+                    <td style={{padding:"5px 6px",width:"40%"}}>
+                      <select value={line.account_id} onChange={e=>updateLine(i,"account_id",e.target.value)}
+                        style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",fontSize:12,fontFamily:"inherit"}}>
+                        <option value="">— select account —</option>
+                        {jnlAccounts.map(a=>(
+                          <option key={a.id} value={a.id}>{a.code} — {a.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={{padding:"5px 6px",width:"15%"}}>
+                      <input type="number" min="0" step="0.01" placeholder="0.00" value={line.debit}
+                        onChange={e=>updateLine(i,"debit",e.target.value)}
+                        style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",fontSize:12,fontFamily:"inherit",textAlign:"right"}}/>
+                    </td>
+                    <td style={{padding:"5px 6px",width:"15%"}}>
+                      <input type="number" min="0" step="0.01" placeholder="0.00" value={line.credit}
+                        onChange={e=>updateLine(i,"credit",e.target.value)}
+                        style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",fontSize:12,fontFamily:"inherit",textAlign:"right"}}/>
+                    </td>
+                    <td style={{padding:"5px 6px",width:"25%"}}>
+                      <input placeholder="Optional memo" value={line.description}
+                        onChange={e=>updateLine(i,"description",e.target.value)}
+                        style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",fontSize:12,fontFamily:"inherit"}}/>
+                    </td>
+                    <td style={{padding:"5px 6px",textAlign:"center"}}>
+                      {jnlForm.lines.length > 2 &&
+                        <button onClick={()=>removeLine(i)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16,padding:"0 4px"}}>✕</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Running totals + actions */}
+            {(()=>{
+              const dr=jnlForm.lines.reduce((s,l)=>s+(parseFloat(l.debit)||0),0);
+              const cr=jnlForm.lines.reduce((s,l)=>s+(parseFloat(l.credit)||0),0);
+              const balanced=Math.abs(dr-cr)<0.01;
+              return (
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+                  <button onClick={addLine}
+                    style={{background:"none",border:`1px dashed ${C.border}`,borderRadius:8,padding:"6px 14px",fontSize:12,cursor:"pointer",color:C.inkMid,fontFamily:"inherit"}}>
+                    + Add line
+                  </button>
+                  <div style={{display:"flex",alignItems:"center",gap:16}}>
+                    <span style={{fontSize:12,color:balanced?C.green:C.red,fontWeight:600}}>
+                      {balanced?"✅ Balanced":`DR R${dr.toFixed(2)} ≠ CR R${cr.toFixed(2)}`}
+                    </span>
+                    <button onClick={submitManual} disabled={!balanced}
+                      style={{background:balanced?C.accent:"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"8px 20px",fontSize:13,cursor:balanced?"pointer":"not-allowed",fontFamily:"inherit",fontWeight:700}}>
+                      Post Entry{jnlForm.auto_reverse?" + Schedule Reversal":""}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {journal.length === 0 && !jnlForm && (
           <div style={{textAlign:"center",padding:"40px 20px",color:C.inkMid}}>
             <div style={{fontSize:32,marginBottom:12}}>📒</div>
             <div style={{fontSize:15,fontWeight:600,marginBottom:6}}>No journal entries yet</div>
             <div style={{fontSize:13}}>Journal entries are created automatically when you add invoices, expenses or process payroll.</div>
           </div>
         )}
-        {journal.map(entry => (
-          <div key={entry.id} style={{border:`1px solid ${C.border}`,borderRadius:10,marginBottom:8,overflow:"hidden"}}>
-            <div onClick={()=>toggle(entry.id)} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",cursor:"pointer",background:jnlExpanded.has(entry.id)?C.accentLt:C.surface}}>
-              <span style={{fontSize:18}}>{SOURCE_ICON[entry.source]||"📝"}</span>
-              <div style={{flex:1}}>
-                <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{entry.description}</div>
-                <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{entry.date} · {entry.reference} · {entry.source}</div>
+
+        {journal.map(entry => {
+          const isReversal = entry.source && entry.source.endsWith("_reversal");
+          const hasScheduledReversal = entry.auto_reverse && entry.reversal_date;
+          const alreadyReversed = journal.some(e=>e.is_reversal_of===entry.id);
+          return (
+            <div key={entry.id} style={{border:`1px solid ${isReversal?"#FFC107":entry.is_reversal_of?C.border:C.border}`,borderLeft:`3px solid ${isReversal?C.gold:hasScheduledReversal?C.blue:C.border}`,borderRadius:10,marginBottom:8,overflow:"hidden",opacity:isReversal?0.85:1}}>
+              <div onClick={()=>toggle(entry.id)} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",cursor:"pointer",background:jnlExpanded.has(entry.id)?C.accentLt:C.surface}}>
+                <span style={{fontSize:18}}>{SOURCE_ICON[entry.source]||"📝"}</span>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                    <span style={{fontSize:13,fontWeight:600,color:C.ink}}>{entry.description}</span>
+                    {isReversal && <span style={{fontSize:10,background:"#FFF3CD",color:"#856404",borderRadius:20,padding:"2px 8px",fontWeight:700}}>REVERSAL</span>}
+                    {hasScheduledReversal && !alreadyReversed && <span style={{fontSize:10,background:"#EEF6FF",color:C.blue,borderRadius:20,padding:"2px 8px",fontWeight:700}}>🔄 Reverses {entry.reversal_date}</span>}
+                    {hasScheduledReversal && alreadyReversed && <span style={{fontSize:10,background:C.greenLt,color:C.green,borderRadius:20,padding:"2px 8px",fontWeight:700}}>✓ Reversed</span>}
+                    {entry.is_reversal_of && <span style={{fontSize:10,background:"#f5f5f5",color:C.inkMid,borderRadius:20,padding:"2px 8px"}}>reversal of #{entry.is_reversal_of}</span>}
+                  </div>
+                  <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{entry.date} · {entry.reference||"—"} · {entry.source}</div>
+                </div>
+                <div style={{fontSize:11,color:C.inkMid}}>{jnlExpanded.has(entry.id)?"▲":"▼"}</div>
               </div>
-              <div style={{fontSize:11,color:C.inkMid}}>{jnlExpanded.has(entry.id)?"▲":"▼"}</div>
-            </div>
-            {jnlExpanded.has(entry.id) && (
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead>
-                  <tr style={{background:"#f8f8f8"}}>
-                    <th style={{padding:"6px 14px",textAlign:"left",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Account</th>
-                    <th style={{padding:"6px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Debit</th>
-                    <th style={{padding:"6px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Credit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {entry.lines.map((line,i)=>(
-                    <tr key={i} style={{borderTop:`1px solid ${C.border}`}}>
-                      <td style={{padding:"6px 14px",color:C.ink}}><span style={{fontFamily:"monospace",color:C.inkMid,marginRight:8}}>{line.account_code}</span>{line.account_name}{line.description?<span style={{color:C.inkMid}}> — {line.description}</span>:""}</td>
-                      <td style={{padding:"6px 14px",textAlign:"right",color:C.blue,fontWeight:line.debit?600:400}}>{line.debit?`R ${line.debit.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
-                      <td style={{padding:"6px 14px",textAlign:"right",color:C.red,fontWeight:line.credit?600:400}}>{line.credit?`R ${line.credit.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
+              {jnlExpanded.has(entry.id) && (
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:"#f8f8f8"}}>
+                      <th style={{padding:"6px 14px",textAlign:"left",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Account</th>
+                      <th style={{padding:"6px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Debit</th>
+                      <th style={{padding:"6px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,borderTop:`1px solid ${C.border}`}}>Credit</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        ))}
+                  </thead>
+                  <tbody>
+                    {entry.lines.map((line,i)=>(
+                      <tr key={i} style={{borderTop:`1px solid ${C.border}`}}>
+                        <td style={{padding:"6px 14px",color:C.ink}}><span style={{fontFamily:"monospace",color:C.inkMid,marginRight:8}}>{line.account_code}</span>{line.account_name}{line.description?<span style={{color:C.inkMid}}> — {line.description}</span>:""}</td>
+                        <td style={{padding:"6px 14px",textAlign:"right",color:C.blue,fontWeight:line.debit?600:400}}>{line.debit?`R ${line.debit.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
+                        <td style={{padding:"6px 14px",textAlign:"right",color:C.red,fontWeight:line.credit?600:400}}>{line.credit?`R ${line.credit.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   };

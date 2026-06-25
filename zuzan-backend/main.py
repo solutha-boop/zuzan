@@ -35,6 +35,20 @@ async def lifespan(app: FastAPI):
         logger.info("Journal backfill complete")
     except Exception as e:
         logger.warning(f"Journal backfill failed (non-fatal): {e}")
+    # Process any auto-reversals that became due while the server was offline
+    try:
+        from journal import process_pending_reversals
+        db = SessionLocal()
+        companies = db.query(Company).all()
+        total_reversed = 0
+        for co in companies:
+            reversed_ids = process_pending_reversals(co.id, db)
+            total_reversed += len(reversed_ids)
+        db.close()
+        if total_reversed:
+            logger.info(f"Auto-reversal startup: {total_reversed} pending reversal(s) posted across all companies")
+    except Exception as e:
+        logger.warning(f"Auto-reversal startup processing failed (non-fatal): {e}")
     # Backfill NULL received_date on POs that were received before the column existed
     try:
         from database import PurchaseOrder as _PO

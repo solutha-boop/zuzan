@@ -645,6 +645,130 @@ def backfill_company(company_id: int, db: Session) -> dict:
     return posted
 
 
+# ── REVERSAL HELPER ──────────────────────────────────────────────────────────
+
+def _post_reversal_for_entry(entry: JournalEntry, db: Session, reason: str = None) -> JournalEntry:
+    """
+    Post a single reversal entry that mirrors `entry` with debits/credits swapped.
+    Sets `is_reversal_of` on the new entry so the pair can be linked in the UI.
+    Internal helper — callers commit after this returns.
+    """
+    rev = JournalEntry(
+        company_id    = entry.company_id,
+        date          = datetime.utcnow(),
+        description   = reason or f"Reversal — {entry.description}",
+        reference     = f"REV-{entry.reference or entry.id}",
+        source        = f"{entry.source}_reversal",
+        source_id     = entry.source_id,
+        is_reversal_of= entry.id,
+    )
+    db.add(rev)
+    db.flush()
+    for line in entry.lines:
+        db.add(JournalLine(
+            entry_id    = rev.id,
+            account_id  = line.account_id,
+            debit       = line.credit,   # swap
+            credit      = line.debit,    # swap
+            description = f"Reversal of line {line.id}",
+        ))
+    return rev
+
+
+def reverse_journal_entries(
+    company_id: int,
+    source: str,
+    source_id: int,
+    db: Session,
+    reason: str = None,
+) -> int:
+    """
+    Post reversal entries for every JournalEntry matching (company_id, source, source_id).
+    Skips entries that have already been reversed (is_reversal_of pointing at them exists).
+    Returns the count of entries reversed.
+    """
+    entries = db.query(JournalEntry).filter(
+        JournalEntry.company_id == company_id,
+        JournalEntry.source     == source,
+        JournalEntry.source_id  == source_id,
+    ).all()
+
+    already_reversed = {
+        row.is_reversal_of for row in
+        db.query(JournalEntry.is_reversal_of).filter(
+            JournalEntry.company_id    == company_id,
+            JournalEntry.is_reversal_of.isnot(None),
+        ).all()
+    }
+
+    count = 0
+    for entry in entries:
+        if entry.id in already_reversed:
+            continue
+        _post_reversal_for_entry(entry, db, reason=reason)
+        count += 1
+    return count
+
+
+def reverse_entry_by_id(entry_id: int, db: Session, reason: str = None) -> JournalEntry:
+    """
+    Post a reversal for a single JournalEntry identified by its primary key.
+    Raises ValueError if the entry is not found or has already been reversed.
+    """
+    entry = db.query(JournalEntry).filter(JournalEntry.id == entry_id).first()
+    if not entry:
+        raise ValueError(f"JournalEntry {entry_id} not found")
+    already = db.query(JournalEntry).filter(
+        JournalEntry.is_reversal_of == entry_id
+    ).first()
+    if already:
+        raise ValueError(f"JournalEntry {entry_id} has already been reversed (reversal entry: {already.id})")
+    return _post_reversal_for_entry(entry, db, reason=reason)
+
+
+def process_pending_reversals(company_id: int, db: Session) -> list[int]:
+    """
+    Find all journal entries for `company_id` where:
+      - auto_reverse is True
+      - reversal_date <= now (due to be reversed)
+      - no reversal entry exists yet (is_reversal_of not yet posted)
+
+    Posts the reversal for each and returns a list of the original entry IDs processed.
+    Safe to call repeatedly — already-reversed entries are skipped.
+    """
+    now = datetime.utcnow()
+
+    due = db.query(JournalEntry).filter(
+        JournalEntry.company_id   == company_id,
+        JournalEntry.auto_reverse == True,          # noqa: E712
+        JournalEntry.reversal_date.isnot(None),
+        JournalEntry.reversal_date <= now,
+    ).all()
+
+    already_reversed = {
+        row.is_reversal_of for row in
+        db.query(JournalEntry.is_reversal_of).filter(
+            JournalEntry.company_id    == company_id,
+            JournalEntry.is_reversal_of.isnot(None),
+        ).all()
+    }
+
+    processed = []
+    for entry in due:
+        if entry.id in already_reversed:
+            continue
+        _post_reversal_for_entry(
+            entry, db,
+            reason=f"Auto-reversal — {entry.description}",
+        )
+        processed.append(entry.id)
+
+    if processed:
+        db.commit()
+
+    return processed
+
+
 # ── ACCOUNT BALANCE HELPER ────────────────────────────────────────────────────
 
 def account_balance(account: Account, db: Session) -> float:
@@ -699,12 +823,15 @@ async def list_journal(
     entries = q.order_by(JournalEntry.date.desc()).offset(offset).limit(limit).all()
     return [
         {
-            "id":          e.id,
-            "date":        e.date.strftime("%Y-%m-%d"),
-            "description": e.description,
-            "reference":   e.reference,
-            "source":      e.source,
+            "id":            e.id,
+            "date":          e.date.strftime("%Y-%m-%d"),
+            "description":   e.description,
+            "reference":     e.reference,
+            "source":        e.source,
             "is_reconciled": e.is_reconciled,
+            "auto_reverse":  getattr(e, "auto_reverse", False) or False,
+            "reversal_date": e.reversal_date.strftime("%Y-%m-%d") if getattr(e, "reversal_date", None) else None,
+            "is_reversal_of":getattr(e, "is_reversal_of", None),
             "lines": [
                 {
                     "account_code": l.account.code,
@@ -783,10 +910,14 @@ class ManualEntryLine(BaseModel):
     description: Optional[str] = None
 
 class ManualEntry(BaseModel):
-    date:        str
-    description: str
-    reference:   Optional[str] = None
-    lines:       List[ManualEntryLine]
+    date:          str
+    description:   str
+    reference:     Optional[str] = None
+    lines:         List[ManualEntryLine]
+    # Auto-reversal — set auto_reverse=True and provide reversal_date to have the
+    # system automatically post the mirror entry on that date (e.g. month-end accruals).
+    auto_reverse:  bool = False
+    reversal_date: Optional[str] = None   # ISO date string "YYYY-MM-DD"
 
 @router.post("/manual")
 async def create_manual_entry(
@@ -799,13 +930,29 @@ async def create_manual_entry(
     if abs(total_dr - total_cr) > 0.01:
         raise HTTPException(400, f"Entry is unbalanced: DR {total_dr} ≠ CR {total_cr}")
 
-    entry = _make_entry(
-        current_user.company_id,
-        datetime.fromisoformat(data.date),
-        data.description,
-        data.reference,
-        "manual", None, db,
+    if data.auto_reverse and not data.reversal_date:
+        raise HTTPException(400, "reversal_date is required when auto_reverse is true")
+
+    reversal_dt = None
+    if data.auto_reverse and data.reversal_date:
+        try:
+            reversal_dt = datetime.fromisoformat(data.reversal_date)
+        except ValueError:
+            raise HTTPException(400, f"Invalid reversal_date format: {data.reversal_date}. Use YYYY-MM-DD.")
+
+    entry = JournalEntry(
+        company_id    = current_user.company_id,
+        date          = datetime.fromisoformat(data.date),
+        description   = data.description,
+        reference     = data.reference,
+        source        = "manual",
+        source_id     = None,
+        auto_reverse  = data.auto_reverse,
+        reversal_date = reversal_dt,
     )
+    db.add(entry)
+    db.flush()
+
     for l in data.lines:
         acct = db.query(Account).filter(
             Account.id == l.account_id,
@@ -816,4 +963,57 @@ async def create_manual_entry(
         db.add(_line(entry.id, acct, l.debit, l.credit, l.description))
 
     db.commit()
-    return {"id": entry.id, "message": "Journal entry created"}
+    return {
+        "id":            entry.id,
+        "message":       "Journal entry created",
+        "auto_reverse":  entry.auto_reverse,
+        "reversal_date": entry.reversal_date.strftime("%Y-%m-%d") if entry.reversal_date else None,
+    }
+
+
+@router.post("/process-reversals")
+async def process_reversals_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Manually trigger processing of all pending auto-reversals for the current company.
+    This is also called automatically on server startup for all companies.
+    Returns the list of original entry IDs that were reversed.
+    """
+    processed = process_pending_reversals(current_user.company_id, db)
+    return {
+        "status":    "ok",
+        "reversed":  len(processed),
+        "entry_ids": processed,
+        "message":   f"{len(processed)} auto-reversal(s) posted." if processed else "No reversals due.",
+    }
+
+
+@router.post("/reverse/{entry_id}")
+async def reverse_entry_endpoint(
+    entry_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Manually reverse a single journal entry by ID.
+    Posts the mirror entry immediately regardless of auto_reverse or reversal_date.
+    Returns 400 if the entry has already been reversed.
+    """
+    entry = db.query(JournalEntry).filter(
+        JournalEntry.id         == entry_id,
+        JournalEntry.company_id == current_user.company_id,
+    ).first()
+    if not entry:
+        raise HTTPException(404, "Journal entry not found")
+    try:
+        rev = reverse_entry_by_id(entry_id, db, reason=f"Manual reversal — {entry.description}")
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "status":          "ok",
+        "reversal_entry_id": rev.id,
+        "message":         f"Reversal entry {rev.id} posted for original entry {entry_id}.",
+    }

@@ -174,8 +174,31 @@ async def send_po(po_id: int, current_user: User = Depends(get_current_user), db
 @router.delete("/{po_id}")
 async def delete_po(po_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id, PurchaseOrder.company_id == current_user.company_id).first()
-    if not po: raise HTTPException(404, "Purchase order not found")
-    db.delete(po); db.commit()
+    if not po:
+        raise HTTPException(404, "Purchase order not found")
+    # Block deletion of POs that have already been received or paid — these have
+    # journal entries (DR COGS / CR AP, and DR AP / CR Bank) that must be reversed
+    # first, otherwise COGS and the AP control account (2000) become permanently misstated.
+    if po.status in ("received", "partial", "paid"):
+        # Reverse all journal entries linked to this PO before deleting.
+        # Sources: "purchase_order" (received entry) and "po_payment" (payment clearance).
+        try:
+            journal_engine.init_accounts(current_user.company_id, db)
+            reason = f"PO deleted — {po.po_number} ({po.supplier_name or 'Supplier'})"
+            for src in ("purchase_order", "po_payment"):
+                journal_engine.reverse_journal_entries(
+                    current_user.company_id, src, po.id, db, reason=reason
+                )
+            db.commit()
+        except Exception as e:
+            logger.error(f"Journal reversal failed for PO {po.po_number}: {e}")
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"PO deletion aborted — journal reversal failed: {e}. Please retry.",
+            )
+    db.delete(po)
+    db.commit()
     return {"message": "Purchase order deleted"}
 
 

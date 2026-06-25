@@ -259,6 +259,24 @@ async def delete_invoice(invoice_id: int, current_user: User = Depends(get_curre
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    # Reverse all journal entries linked to this invoice before deleting, so that
+    # AR control account (1100), Sales Revenue (4000), and Bank (1000) remain accurate.
+    # Sources to reverse: "invoice" (raised), "invoice_payment" (paid), "invoice_cogs" (COGS).
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        reason = f"Invoice deleted — {invoice.invoice_number} ({invoice.client_name})"
+        for src in ("invoice", "invoice_payment", "invoice_cogs"):
+            journal_engine.reverse_journal_entries(
+                current_user.company_id, src, invoice.id, db, reason=reason
+            )
+        db.commit()
+    except Exception as e:
+        logger.error(f"Journal reversal failed for invoice {invoice.invoice_number}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invoice deletion aborted — journal reversal failed: {e}. Please retry.",
+        )
     db.delete(invoice)
     db.commit()
     return {"status": "deleted"}
@@ -409,6 +427,22 @@ async def delete_expense(expense_id: int, current_user: User = Depends(get_curre
     expense = db.query(Expense).filter(Expense.id == expense_id, Expense.company_id == current_user.company_id).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
+    # Reverse journal entry for this expense before deleting, so that the
+    # Expense account, VAT Input (1300), and Bank (1000) remain accurate.
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.reverse_journal_entries(
+            current_user.company_id, "expense", expense.id, db,
+            reason=f"Expense deleted — {expense.vendor}: {expense.description or ''}",
+        )
+        db.commit()
+    except Exception as e:
+        logger.error(f"Journal reversal failed for expense {expense.id}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Expense deletion aborted — journal reversal failed: {e}. Please retry.",
+        )
     db.delete(expense)
     db.commit()
     return {"status": "deleted"}

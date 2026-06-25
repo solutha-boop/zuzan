@@ -283,6 +283,10 @@ class JournalEntry(Base):
     source=Column(String)           # "invoice","expense","payroll","purchase_order","manual"
     source_id=Column(Integer,nullable=True)   # FK to the originating record
     is_reconciled=Column(Boolean,default=False)
+    # ── Auto-reversal fields ─────────────────────────────────────────────────
+    auto_reverse=Column(Boolean,default=False)        # True = reverse automatically on reversal_date
+    reversal_date=Column(DateTime,nullable=True)      # Date on which the reversal entry should be posted
+    is_reversal_of=Column(Integer,nullable=True)      # ID of the original entry this one reverses
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="journal_entries")
     lines=relationship("JournalLine",back_populates="entry",cascade="all, delete-orphan")
@@ -583,6 +587,10 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN ph_hours FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN ph_amount FLOAT DEFAULT 0",
             "ALTER TABLE fixed_assets ADD COLUMN sars_category VARCHAR",
+            # ── Reversing journal entries (2026-06) ─────────────────────────
+            "ALTER TABLE journal_entries ADD COLUMN auto_reverse BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE journal_entries ADD COLUMN reversal_date TIMESTAMP",
+            "ALTER TABLE journal_entries ADD COLUMN is_reversal_of INTEGER",
         ]:
             try:
                 conn.execute(text(sql))
