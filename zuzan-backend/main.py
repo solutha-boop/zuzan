@@ -268,12 +268,14 @@ async def api_summary(auth=Depends(require_api_key)):
     ).scalar() or 0
     total_expenses = total_expenses + total_depreciation
     # Add payroll costs — consistent with /reports/dashboard
-    active_emps = db.query(Employee).filter(Employee.company_id==company.id, Employee.is_active==True).all()
-    total_payroll = 0.0
-    if active_emps:
-        total_payroll = db.query(_func.sum(Payslip.total_cost)).filter(
-            Payslip.employee_id.in_([e.id for e in active_emps])
-        ).scalar() or 0.0
+    # Sum ALL payslips for the company (including terminated employees) so that historical
+    # payroll cost is never understated when headcount has changed.
+    total_payroll = (
+        db.query(_func.sum(Payslip.total_cost))
+        .join(Employee, Payslip.employee_id == Employee.id)
+        .filter(Employee.company_id == company.id)
+        .scalar()
+    ) or 0.0
     outstanding    = sum(_to_zar(i) for i in out_invs)
     return {
         "company":        company.name,

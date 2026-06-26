@@ -474,13 +474,18 @@ async def dashboard(
         Employee.company_id == cid,
         Employee.is_active == True
     ).all()
-    # Use sum of actual payslips (all-time) if any exist; fall back to current-month estimate
-    actual_payslips_total = db.query(func.sum(Payslip.total_cost)).filter(
-        Payslip.employee_id.in_([e.id for e in employees])
-    ).scalar() if employees else None
+    # Sum ALL payslips for the company (including terminated employees) so that historical
+    # payroll cost is never understated when headcount has changed.
+    actual_payslips_total = (
+        db.query(func.sum(Payslip.total_cost))
+        .join(Employee, Payslip.employee_id == Employee.id)
+        .filter(Employee.company_id == cid)
+        .scalar()
+    )
     if actual_payslips_total:
         total_payroll = actual_payslips_total
     else:
+        # No payslips yet — estimate from currently active employees only
         total_payroll = sum(calc_payroll(e.gross_salary)["total_cost"] for e in employees)
 
     gross_profit = total_revenue - total_expenses
@@ -1090,15 +1095,22 @@ async def management_accounts(
         Employee.company_id == cid,
         Employee.is_active == True
     ).all()
-    # Use actual payslips for the period if run; otherwise estimate from current headcount
-    period_payslips_total = db.query(func.sum(Payslip.total_cost)).filter(
-        Payslip.employee_id.in_([e.id for e in active_employees]),
-        Payslip.period >= from_period,
-        Payslip.period <= to_period,
-    ).scalar() if active_employees else None
+    # Sum payslips for ALL employees (including terminated) so that periods where headcount
+    # changed are not understated. Active employees are still used for the fallback estimate.
+    period_payslips_total = (
+        db.query(func.sum(Payslip.total_cost))
+        .join(Employee, Payslip.employee_id == Employee.id)
+        .filter(
+            Employee.company_id == cid,
+            Payslip.period >= from_period,
+            Payslip.period <= to_period,
+        )
+        .scalar()
+    )
     if period_payslips_total:
         total_payroll_cost = round(period_payslips_total, 2)
     else:
+        # No payslips in range — estimate from currently active employees
         total_payroll_cost = round(sum(calc_payroll(e.gross_salary)["total_cost"] for e in active_employees), 2)
 
     gross_profit  = round(revenue - total_expenses, 2)
