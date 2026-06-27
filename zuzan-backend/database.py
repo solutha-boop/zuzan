@@ -34,8 +34,8 @@ class BillingCycle(str, enum.Enum):
     annual="annual"
 
 class InvoiceStatus(str, enum.Enum):
-    draft="draft" 
-    sent="sent"
+    draft="draft"
+    sent="sent"       # aka "pending" in AR/audit terminology — invoice issued and awaiting payment
     paid="paid"
     overdue="overdue"
 
@@ -115,6 +115,9 @@ class Expense(Base):
     vendor=Column(String,nullable=False); description=Column(Text)
     amount=Column(Float,nullable=False); vat_amount=Column(Float,default=0); category=Column(String)
     expense_date=Column(DateTime,default=datetime.utcnow)
+    # When True, the expense was purchased on credit (not yet cash-paid).
+    # journal.post_expense will credit Accounts Payable (2000) instead of Bank (1000).
+    is_on_credit=Column(Boolean,default=False)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="expenses")
 
@@ -591,6 +594,8 @@ def init_db():
             "ALTER TABLE journal_entries ADD COLUMN auto_reverse BOOLEAN DEFAULT FALSE",
             "ALTER TABLE journal_entries ADD COLUMN reversal_date TIMESTAMP",
             "ALTER TABLE journal_entries ADD COLUMN is_reversal_of INTEGER",
+            # ── Credit-term expenses (2026-06) ───────────────────────────────
+            "ALTER TABLE expenses ADD COLUMN is_on_credit BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 conn.execute(text(sql))

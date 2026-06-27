@@ -259,28 +259,33 @@ def post_invoice_cogs(invoice, cogs_amount: float, db: Session) -> JournalEntry:
 
 def post_expense(expense, db: Session) -> JournalEntry:
     """
-    Expense paid:
+    Expense incurred:
       DR Expense Account       (amount excl VAT)
       DR VAT Input Recoverable (vat_amount)
-      CR Bank / Cash           (total paid)
+      CR Bank / Cash           (total)   — when expense.is_on_credit is False (default)
+      CR Accounts Payable      (total)   — when expense.is_on_credit is True
+                                            (purchase on credit, not yet cash-paid)
     """
-    cid = invoice_cid = expense.company_id
+    cid   = expense.company_id
     total = round((expense.amount or 0), 2)
     vat   = round((expense.vat_amount or 0), 2)
     net   = round(total - vat, 2)
+
+    on_credit = getattr(expense, "is_on_credit", False) or False
 
     entry = _make_entry(cid, expense.expense_date or datetime.utcnow(),
         f"Expense — {expense.vendor}: {expense.description or ''}",
         f"EXP-{expense.id}", "expense", expense.id, db)
 
-    exp_acct = expense_account(cid, expense.category, db)
-    vat_in   = get_account(cid, "1300", db)
-    bank     = get_account(cid, "1000", db)
+    exp_acct    = expense_account(cid, expense.category, db)
+    vat_in      = get_account(cid, "1300", db)
+    credit_acct = get_account(cid, "2000" if on_credit else "1000", db)
+    credit_desc = "On credit (AP)" if on_credit else "Cash paid"
 
-    lines = [_line(entry.id, exp_acct, debit=net,   description=expense.category)]
+    lines = [_line(entry.id, exp_acct, debit=net, description=expense.category)]
     if vat > 0:
         lines.append(_line(entry.id, vat_in, debit=vat, description="VAT input"))
-    lines.append(_line(entry.id, bank, credit=total, description="Cash paid"))
+    lines.append(_line(entry.id, credit_acct, credit=total, description=credit_desc))
 
     _assert_balanced(lines)
     for l in lines: db.add(l)

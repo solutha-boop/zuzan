@@ -292,6 +292,7 @@ class ExpenseCreate(BaseModel):
     vat_applicable:  bool = True     # Apply 15% VAT
     category:        Optional[str] = "General"
     expense_date:    Optional[str] = None
+    is_on_credit:    bool = False    # True = purchased on credit; journals to AP (2000) not Bank (1000)
 
 class ExpenseUpdate(BaseModel):
     vendor:          Optional[str] = None
@@ -299,6 +300,7 @@ class ExpenseUpdate(BaseModel):
     amount:          Optional[float] = None   # excl. VAT — vat_amount is recalculated automatically
     vat_applicable:  Optional[bool] = None    # if omitted, inferred from existing vat_amount
     category:        Optional[str] = None
+    is_on_credit:    Optional[bool] = None
 
 
 @expenses_router.get("/")
@@ -319,6 +321,7 @@ async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_c
         vat_amount=exp_vat,
         category=clean(data.category, 200),
         expense_date=datetime.fromisoformat(data.expense_date) if data.expense_date else datetime.utcnow(),
+        is_on_credit=data.is_on_credit,
     )
     db.add(expense)
     db.commit()
@@ -417,6 +420,9 @@ async def update_expense(expense_id: int, data: ExpenseUpdate, current_user: Use
 
         expense.amount     = new_total
         expense.vat_amount = new_vat
+
+    if data.is_on_credit is not None:
+        expense.is_on_credit = data.is_on_credit
 
     db.commit()
     return expense

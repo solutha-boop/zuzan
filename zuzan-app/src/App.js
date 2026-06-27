@@ -1552,10 +1552,10 @@ function Expenses({live = {}}) {
     if(!form.vendor||!form.amount){alert("Vendor and amount are required.");return;}
     setSaving(true);
     try {
-      await api("/expenses/", { method:"POST", body: JSON.stringify({ vendor:form.vendor, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, category:form.category, expense_date:new Date().toISOString().slice(0,10) }) });
+      await api("/expenses/", { method:"POST", body: JSON.stringify({ vendor:form.vendor, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, category:form.category, expense_date:new Date().toISOString().slice(0,10), is_on_credit:form.onCredit||false }) });
       if (live && live.reload) live.reload();
       setShowNew(false);
-      setForm({vendor:"",amount:"",category:"",desc:"",vatApplicable:true});
+      setForm({vendor:"",amount:"",category:"",desc:"",vatApplicable:true,onCredit:false});
     } catch(err) { alert("Failed to save expense. Please try again."); }
     finally { setSaving(false); }
   };
@@ -1638,11 +1638,20 @@ function Expenses({live = {}}) {
               </select>
             </div>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
               <input type="checkbox" checked={form.vatApplicable} onChange={e=>setForm({...form,vatApplicable:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
               Apply VAT @ 15%
             </label>
+            <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+              <input type="checkbox" checked={form.onCredit||false} onChange={e=>setForm({...form,onCredit:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
+              On Credit
+            </label>
+            {form.onCredit && (
+              <span style={{fontSize:11,color:C.inkMid,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 8px"}}>
+                Posts to Accounts Payable — record payment separately when cash leaves the bank
+              </span>
+            )}
             {form.amount && (
               <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:12}}>
                 <span style={{color:C.inkMid}}>Excl. VAT: <strong style={{color:C.ink}}>{fmt(+form.amount||0)}</strong></span>
@@ -4671,6 +4680,13 @@ function Debtors({live = {}}) {
     api("/reports/debtors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
   }, []);
 
+  // Refresh when an invoice payment is recorded
+  useEffect(() => {
+    if (live.invoices) {
+      api("/reports/debtors-aging").then(setData).catch(()=>null);
+    }
+  }, [live.invoices]); // eslint-disable-line
+
   const BUCKETS = [
     {key:"not_due", label:"Not Yet Due",  color:C.blue},
     {key:"current", label:"0 – 30 Days",  color:C.green},
@@ -4791,11 +4807,12 @@ function Creditors({live = {}}) {
     api("/reports/creditors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
   }, []);
 
+  // Refresh when a PO is received or paid
   useEffect(() => {
-    if (live.reload) {
+    if (live.purchaseOrders) {
       api("/reports/creditors-aging").then(setData).catch(()=>null);
     }
-  }, [live.expenses]); // eslint-disable-line
+  }, [live.purchaseOrders]); // eslint-disable-line
 
   const BUCKETS = [
     {key:"not_due",  label:"Not Yet Due",   color:C.blue},
