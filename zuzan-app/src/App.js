@@ -5545,14 +5545,14 @@ function BankImport({live = {}, onNavigate}) {
 
 // ── ACCEPT INVITE ─────────────────────────────────────────────────────────────
 function AcceptInvite({token, onLogin, onSignIn}) {
-  const [info,    setInfo]    = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const [error,   setError]   = React.useState("");
-  const [form,    setForm]    = React.useState({firstName:"", lastName:"", password:"", confirm:""});
-  const [saving,  setSaving]  = React.useState(false);
-  const [done,    setDone]    = React.useState(false);
+  const [info,    setInfo]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState("");
+  const [form,    setForm]    = useState({firstName:"", lastName:"", password:"", confirm:""});
+  const [saving,  setSaving]  = useState(false);
+  const [done,    setDone]    = useState(false);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!token) { setError("Invalid invite link."); setLoading(false); return; }
     fetch(`${BASE_URL}/auth/invite/${token}`)
       .then(r => r.json().then(d => r.ok ? d : Promise.reject(d.detail)))
@@ -5664,14 +5664,14 @@ function AcceptInvite({token, onLogin, onSignIn}) {
 
 // ── TEAM SETTINGS ─────────────────────────────────────────────────────────────
 function TeamSettings({user}) {
-  const [members,    setMembers]    = React.useState([]);
-  const [invites,    setInvites]    = React.useState([]);
-  const [auditLog,   setAuditLog]   = React.useState([]);
-  const [loading,    setLoading]    = React.useState(true);
-  const [inviteForm, setInviteForm] = React.useState({email:"", role:"accountant"});
-  const [inviting,   setInviting]   = React.useState(false);
-  const [msg,        setMsg]        = React.useState("");
-  const [activeView, setActiveView] = React.useState("members"); // members | log
+  const [members,    setMembers]    = useState([]);
+  const [invites,    setInvites]    = useState([]);
+  const [auditLog,   setAuditLog]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [inviteForm, setInviteForm] = useState({email:"", role:"accountant"});
+  const [inviting,   setInviting]   = useState(false);
+  const [msg,        setMsg]        = useState("");
+  const [activeView, setActiveView] = useState("members"); // members | log
 
   const load = async () => {
     setLoading(true);
@@ -5685,7 +5685,7 @@ function TeamSettings({user}) {
     } catch(e) { console.warn("Team load error:", e.message); }
     setLoading(false);
   };
-  React.useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, []);
 
   const sendInvite = async () => {
     if (!inviteForm.email.trim()) { setMsg("Please enter an email address."); return; }
