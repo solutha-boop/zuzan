@@ -1152,10 +1152,18 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
   useEffect(()=>{ api("/customers/").then(setCustomers).catch(()=>{}); },[]);
 
   const toZar = i => (i.currency && i.currency !== "ZAR") ? (i.amount||0) * (i.exchange_rate||1) : (i.amount||0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const isOverdue = i => i.status === "sent" && i.due && new Date(i.due) < today;
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
-  const totalPending = invoices.filter(i => i.status === "sent").reduce((s,i) => s + toZar(i), 0);
-  const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + toZar(i), 0);
-  const displayedInvoices = filterStatus ? invoices.filter(i => i.status === filterStatus) : invoices;
+  const totalOverdue = invoices.filter(isOverdue).reduce((s,i) => s + toZar(i), 0);
+  const totalPending = invoices.filter(i => i.status === "sent" && !isOverdue(i)).reduce((s,i) => s + toZar(i), 0);
+  const displayedInvoices = filterStatus === "overdue"
+    ? invoices.filter(isOverdue)
+    : filterStatus === "sent"
+    ? invoices.filter(i => i.status === "sent" && !isOverdue(i))
+    : filterStatus
+    ? invoices.filter(i => i.status === filterStatus)
+    : invoices;
   const toggleFilter = (status) => setFilterStatus(prev => prev === status ? null : status);
 
   const openPayModal = (inv) => {
@@ -1367,7 +1375,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div key={inv.id} onClick={()=>setPreview(inv)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                 <div style={{fontWeight:800,fontSize:15,color:C.accent}}>{inv.id}</div>
-                <StatusBadge status={inv.status}/>
+                <StatusBadge status={isOverdue(inv)?"overdue":inv.status}/>
               </div>
               <div style={{fontWeight:600,fontSize:14,color:C.ink,marginBottom:2}}>{inv.client}</div>
               <div style={{fontSize:12,color:C.inkMid,marginBottom:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.desc}</div>
@@ -1375,7 +1383,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                 <div style={{fontWeight:800,fontSize:16,color:C.ink}}>
                   {inv.currency && inv.currency!=="ZAR" ? fmt((inv.amount||0)*(inv.exchange_rate||1)) : fmt(inv.amount||0)}
                 </div>
-                <div style={{fontSize:11,color:inv.status==="overdue"?C.red:C.inkMid}}>Due {fmtDate(inv.due)}</div>
+                <div style={{fontSize:11,color:isOverdue(inv)?C.red:C.inkMid}}>Due {fmtDate(inv.due)}</div>
               </div>
             </div>
           ))}
@@ -1404,8 +1412,8 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                       : fmt(inv.amount||0)}
                   </td>
                   <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
-                  <td style={{padding:"13px 16px",color:inv.status==="overdue"?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
-                  <td style={{padding:"13px 16px"}}><StatusBadge status={inv.status}/></td>
+                  <td style={{padding:"13px 16px",color:isOverdue(inv)?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
+                  <td style={{padding:"13px 16px"}}><StatusBadge status={isOverdue(inv)?"overdue":inv.status}/></td>
                   <td style={{padding:"13px 16px"}}>
                     <div style={{display:"flex",gap:6}}>
                       <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
