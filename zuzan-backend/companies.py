@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus
-from auth import get_current_user, User
+from auth import get_current_user, require_role, log_action, User
 from crypto import encrypt_field, decrypt_field
 from passlib.context import CryptContext
 import logging
@@ -69,7 +69,7 @@ async def get_company(current_user: User = Depends(get_current_user), db: Sessio
 
 
 @router.put("/me")
-async def update_company(data: CompanyUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def update_company(data: CompanyUpdate, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     for field, value in data.dict(exclude_none=True).items():
         if field in ("bank_name", "bank_account", "bank_branch"):
@@ -89,7 +89,7 @@ class PayrollPinVerify(BaseModel):
     pin: str
 
 @router.put("/payroll-pin")
-async def set_payroll_pin(data: PayrollPinSet, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def set_payroll_pin(data: PayrollPinSet, current_user: User = Depends(require_role("owner")), db: Session = Depends(get_db)):
     if not data.pin.isdigit() or not (4 <= len(data.pin) <= 8):
         raise HTTPException(status_code=400, detail="PIN must be 4–8 digits.")
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
@@ -272,7 +272,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
 
 
 @invoices_router.delete("/{invoice_id}")
-async def delete_invoice(invoice_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def delete_invoice(invoice_id: int, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -446,7 +446,7 @@ async def update_expense(expense_id: int, data: ExpenseUpdate, current_user: Use
 
 
 @expenses_router.delete("/{expense_id}")
-async def delete_expense(expense_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def delete_expense(expense_id: int, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     expense = db.query(Expense).filter(Expense.id == expense_id, Expense.company_id == current_user.company_id).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -549,7 +549,7 @@ async def list_employees(current_user: User = Depends(get_current_user), db: Ses
 
 
 @employees_router.post("/")
-async def create_employee(data: EmployeeCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def create_employee(data: EmployeeCreate, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     # Check payroll is enabled
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     if not company.payroll_enabled:
@@ -588,7 +588,7 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(get
 _EMPLOYEE_BANK_FIELDS = {"bank_name", "bank_account", "account_number", "branch_code"}
 
 @employees_router.put("/{employee_id}")
-async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     emp = db.query(Employee).filter(Employee.id == employee_id, Employee.company_id == current_user.company_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")

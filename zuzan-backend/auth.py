@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import secrets
 from typing import Optional
 from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus
-from email_service import send_verification_email, send_welcome_email, send_password_reset_email, send_admin_signup_notification
+from email_service import send_verification_email, send_welcome_email, send_password_reset_email, send_admin_signup_notification, send_invite_email
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -342,3 +342,383 @@ async def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_d
     db.commit()
 
     return {"message": "Password updated successfully. You can now sign in."}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Role-based access control
+# ─────────────────────────────────────────────────────────────────────────────
+
+ROLE_HIERARCHY = ["owner", "admin", "accountant", "employee"]
+
+def require_role(*allowed_roles):
+    """
+    Dependency factory.  Usage:
+        Depends(require_role("owner", "admin"))
+    Returns the current user if their role is in allowed_roles, else 403.
+    """
+    def _check(current_user: User = Depends(get_current_user)):
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied. Requires one of: {', '.join(allowed_roles)}"
+            )
+        return current_user
+    return _check
+
+
+def log_action(db, company_id: int, user, action: str, target_type: str = None, target_id: int = None, detail: str = None):
+    """Write a row to audit_log. Non-fatal — never raises."""
+    try:
+        from database import AuditLog
+        entry = AuditLog(
+            company_id=company_id,
+            user_id=user.id if user else None,
+            user_email=user.email if user else None,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            detail=detail,
+        )
+        db.add(entry)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Team management request models
+# ─────────────────────────────────────────────────────────────────────────────
+
+class InviteRequest(BaseModel):
+    email: str
+    role:  str = "accountant"   # admin | accountant | employee
+
+class UpdateRoleRequest(BaseModel):
+    role: str
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Team endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/team")
+async def list_team(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all users in the current company."""
+    members = db.query(User).filter(
+        User.company_id == current_user.company_id,
+        User.is_active == True,
+    ).all()
+    return [
+        {
+            "id":         m.id,
+            "first_name": m.first_name,
+            "last_name":  m.last_name,
+            "email":      m.email,
+            "role":       m.role,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+            "is_self":    m.id == current_user.id,
+        }
+        for m in members
+    ]
+
+
+@router.get("/team/invites")
+async def list_invites(
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """List pending (unused, unexpired) invitations."""
+    from database import InviteToken
+    now = datetime.utcnow()
+    invites = db.query(InviteToken).filter(
+        InviteToken.company_id == current_user.company_id,
+        InviteToken.used_at == None,
+        InviteToken.expires_at > now,
+    ).all()
+    return [
+        {
+            "id":         inv.id,
+            "email":      inv.email,
+            "role":       inv.role,
+            "expires_at": inv.expires_at.isoformat(),
+            "created_at": inv.created_at.isoformat() if inv.created_at else None,
+        }
+        for inv in invites
+    ]
+
+
+@router.post("/team/invite")
+async def invite_member(
+    data: InviteRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Send an email invitation to join the company."""
+    from database import InviteToken, Company
+    import secrets as _secrets
+
+    # Validate role
+    valid_roles = ["admin", "accountant", "employee"]
+    if data.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Role must be one of: {', '.join(valid_roles)}")
+
+    email = data.email.lower().strip()
+
+    # Check if email already in this company
+    existing = db.query(User).filter(
+        User.email == email,
+        User.company_id == current_user.company_id,
+        User.is_active == True,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="This email is already a member of your company.")
+
+    # Invalidate any prior pending invite for same email+company
+    prior = db.query(InviteToken).filter(
+        InviteToken.company_id == current_user.company_id,
+        InviteToken.email == email,
+        InviteToken.used_at == None,
+    ).all()
+    for p in prior:
+        db.delete(p)
+    db.flush()
+
+    token_str = _secrets.token_urlsafe(32)
+    invite = InviteToken(
+        company_id=current_user.company_id,
+        email=email,
+        role=data.role,
+        token=token_str,
+        invited_by=current_user.id,
+        expires_at=datetime.utcnow() + timedelta(hours=48),
+    )
+    db.add(invite)
+    db.commit()
+
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    inviter_name = f"{current_user.first_name} {current_user.last_name}"
+    background_tasks.add_task(
+        send_invite_email,
+        email, company.name, inviter_name, data.role, token_str
+    )
+
+    log_action(db, current_user.company_id, current_user, "team.invite_sent",
+               detail=f"Invited {email} as {data.role}")
+
+    return {"message": f"Invitation sent to {email}", "role": data.role}
+
+
+@router.get("/invite/{token}")
+async def get_invite_info(token: str, db: Session = Depends(get_db)):
+    """Public endpoint — return invite metadata so the accept page can show company + role."""
+    from database import InviteToken, Company
+    now = datetime.utcnow()
+    invite = db.query(InviteToken).filter(InviteToken.token == token).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite link not found.")
+    if invite.used_at:
+        raise HTTPException(status_code=400, detail="This invite has already been used.")
+    if invite.expires_at < now:
+        raise HTTPException(status_code=400, detail="This invite link has expired.")
+    company = db.query(Company).filter(Company.id == invite.company_id).first()
+    return {
+        "email":        invite.email,
+        "role":         invite.role,
+        "company_name": company.name if company else "Unknown",
+        "expires_at":   invite.expires_at.isoformat(),
+    }
+
+
+class AcceptInviteRequest(BaseModel):
+    token:      str
+    first_name: str
+    last_name:  str
+    password:   str
+
+
+@router.post("/accept-invite")
+async def accept_invite(
+    data: AcceptInviteRequest,
+    db: Session = Depends(get_db),
+):
+    """Accept an invitation — create a new user account linked to the inviting company."""
+    from database import InviteToken, Company
+    now = datetime.utcnow()
+    invite = db.query(InviteToken).filter(InviteToken.token == data.token).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite link not found.")
+    if invite.used_at:
+        raise HTTPException(status_code=400, detail="This invite has already been used.")
+    if invite.expires_at < now:
+        raise HTTPException(status_code=400, detail="This invite link has expired.")
+
+    # Check if email already has an account
+    existing = db.query(User).filter(User.email == invite.email).first()
+    if existing:
+        # If they already belong to this company, just mark the invite used
+        if existing.company_id == invite.company_id:
+            invite.used_at = now
+            db.commit()
+            raise HTTPException(status_code=400, detail="You already have an account in this company.")
+        raise HTTPException(
+            status_code=400,
+            detail="An account with this email already exists. "
+                   "Contact support to move your account to this company."
+        )
+
+    if len(data.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+
+    # Create user
+    user = User(
+        company_id=invite.company_id,
+        first_name=data.first_name.strip(),
+        last_name=data.last_name.strip(),
+        email=invite.email,
+        hashed_password=hash_password(data.password),
+        role=invite.role,
+        is_active=True,
+        email_verified=True,   # verified implicitly — they clicked the invite link
+    )
+    db.add(user)
+    invite.used_at = now
+    db.flush()
+
+    company = db.query(Company).filter(Company.id == invite.company_id).first()
+    db.commit()
+
+    log_action(db, invite.company_id, user, "team.invite_accepted",
+               detail=f"{invite.email} joined as {invite.role}")
+
+    token_str = create_token({"user_id": user.id, "company_id": invite.company_id})
+    return {
+        "access_token": token_str,
+        "token_type": "bearer",
+        "user": {
+            "id":         user.id,
+            "first_name": user.first_name,
+            "last_name":  user.last_name,
+            "email":      user.email,
+            "role":       user.role,
+        },
+        "company": {
+            "id":                  company.id,
+            "name":                company.name,
+            "logo_url":            company.logo_url,
+            "plan":                str(company.plan.value),
+            "subscription_status": str(company.subscription_status.value),
+            "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
+            "payroll_enabled":     company.payroll_enabled,
+        },
+    }
+
+
+@router.patch("/team/{user_id}")
+async def update_team_member(
+    user_id: int,
+    data: UpdateRoleRequest,
+    current_user: User = Depends(require_role("owner")),
+    db: Session = Depends(get_db),
+):
+    """Change a team member's role (owner only)."""
+    valid_roles = ["admin", "accountant", "employee"]
+    if data.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Role must be one of: {', '.join(valid_roles)}")
+
+    member = db.query(User).filter(
+        User.id == user_id,
+        User.company_id == current_user.company_id,
+    ).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Team member not found.")
+    if member.role == "owner":
+        raise HTTPException(status_code=400, detail="Cannot change the owner's role.")
+    if member.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot change your own role.")
+
+    old_role = member.role
+    member.role = data.role
+    db.commit()
+
+    log_action(db, current_user.company_id, current_user, "team.role_changed",
+               target_type="user", target_id=user_id,
+               detail=f"{member.email}: {old_role} → {data.role}")
+
+    return {"message": f"Role updated to {data.role}", "user_id": user_id}
+
+
+@router.delete("/team/{user_id}")
+async def remove_team_member(
+    user_id: int,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Remove a team member (deactivate their account). Owner cannot be removed."""
+    member = db.query(User).filter(
+        User.id == user_id,
+        User.company_id == current_user.company_id,
+    ).first()
+    if not member:
+        raise HTTPException(status_code=404, detail="Team member not found.")
+    if member.role == "owner":
+        raise HTTPException(status_code=400, detail="Cannot remove the company owner.")
+    if member.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot remove yourself.")
+
+    member.is_active = False
+    db.commit()
+
+    log_action(db, current_user.company_id, current_user, "team.member_removed",
+               target_type="user", target_id=user_id,
+               detail=f"Removed {member.email} ({member.role})")
+
+    return {"message": f"Member {member.email} removed."}
+
+
+@router.delete("/team/invites/{invite_id}")
+async def cancel_invite(
+    invite_id: int,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Cancel a pending invitation."""
+    from database import InviteToken
+    invite = db.query(InviteToken).filter(
+        InviteToken.id == invite_id,
+        InviteToken.company_id == current_user.company_id,
+    ).first()
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found.")
+    db.delete(invite)
+    db.commit()
+    return {"message": "Invitation cancelled."}
+
+
+@router.get("/audit-log")
+async def get_audit_log(
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Return recent audit log entries for this company."""
+    from database import AuditLog
+    entries = db.query(AuditLog).filter(
+        AuditLog.company_id == current_user.company_id,
+    ).order_by(AuditLog.created_at.desc()).offset(offset).limit(limit).all()
+    return [
+        {
+            "id":          e.id,
+            "user_email":  e.user_email,
+            "action":      e.action,
+            "target_type": e.target_type,
+            "target_id":   e.target_id,
+            "detail":      e.detail,
+            "created_at":  e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in entries
+    ]

@@ -443,6 +443,35 @@ class SubscriptionPayment(Base):
     created_at      = Column(DateTime, default=datetime.utcnow)
     company         = relationship("Company", foreign_keys=[company_id])
 
+
+class InviteToken(Base):
+    """Pending team invitation — one row per invite sent."""
+    __tablename__ = "invite_tokens"
+    id         = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    email      = Column(String, nullable=False, index=True)
+    role       = Column(String, nullable=False, default="accountant")  # admin|accountant|employee
+    token      = Column(String, nullable=False, unique=True, index=True)
+    invited_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used_at    = Column(DateTime, nullable=True)
+    company    = relationship("Company", foreign_keys=[company_id])
+
+class AuditLog(Base):
+    """Immutable record of every mutation in a company."""
+    __tablename__ = "audit_log"
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    user_id     = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_email  = Column(String, nullable=True)   # denormalised for easy display
+    action      = Column(String, nullable=False)  # e.g. "invoice.created"
+    target_type = Column(String, nullable=True)   # e.g. "invoice"
+    target_id   = Column(Integer, nullable=True)
+    detail      = Column(Text, nullable=True)     # JSON string for extra context
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    company     = relationship("Company", foreign_keys=[company_id])
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
@@ -604,6 +633,30 @@ def init_db():
                 conn.rollback()  # Reset connection so next statement starts fresh
 
 
+            # ── Pillar 1: Multi-User & Roles (2026-06) ──────────────────────
+            """CREATE TABLE IF NOT EXISTS invite_tokens (
+                id INTEGER PRIMARY KEY,
+                company_id INTEGER NOT NULL REFERENCES companies(id),
+                email VARCHAR NOT NULL,
+                role VARCHAR NOT NULL DEFAULT 'accountant',
+                token VARCHAR NOT NULL UNIQUE,
+                invited_by INTEGER REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT NOW(),
+                expires_at TIMESTAMP NOT NULL,
+                used_at TIMESTAMP
+            )""",
+            """CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY,
+                company_id INTEGER NOT NULL REFERENCES companies(id),
+                user_id INTEGER REFERENCES users(id),
+                user_email VARCHAR,
+                action VARCHAR NOT NULL,
+                target_type VARCHAR,
+                target_id INTEGER,
+                detail TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "UPDATE users SET role = 'owner' WHERE role IS NULL OR role = ''",
         # Backfill: paid invoices missing paid_date get created_at as fallback.
         # Fixes revenue gap between dashboard and management/income-statement endpoints.
         try:

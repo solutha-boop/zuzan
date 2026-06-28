@@ -5542,6 +5542,310 @@ function BankImport({live = {}, onNavigate}) {
     </div>
   );
 }
+
+// ── ACCEPT INVITE ─────────────────────────────────────────────────────────────
+function AcceptInvite({token, onLogin, onSignIn}) {
+  const [info,    setInfo]    = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error,   setError]   = React.useState("");
+  const [form,    setForm]    = React.useState({firstName:"", lastName:"", password:"", confirm:""});
+  const [saving,  setSaving]  = React.useState(false);
+  const [done,    setDone]    = React.useState(false);
+
+  React.useEffect(() => {
+    if (!token) { setError("Invalid invite link."); setLoading(false); return; }
+    fetch(`${BASE_URL}/auth/invite/${token}`)
+      .then(r => r.json().then(d => r.ok ? d : Promise.reject(d.detail)))
+      .then(d => { setInfo(d); setLoading(false); })
+      .catch(e => { setError(typeof e === "string" ? e : "This invite link is invalid or has expired."); setLoading(false); });
+  }, [token]);
+
+  const handleAccept = async () => {
+    if (!form.firstName.trim() || !form.lastName.trim()) { setError("Please enter your name."); return; }
+    if (!form.password || form.password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (form.password !== form.confirm) { setError("Passwords do not match."); return; }
+    setSaving(true); setError("");
+    try {
+      const res = await fetch(`${BASE_URL}/auth/accept-invite`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({token, first_name:form.firstName.trim(), last_name:form.lastName.trim(), password:form.password}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not accept invite.");
+      localStorage.setItem("zuzan_token", data.access_token);
+      setDone(true);
+      setTimeout(() => {
+        onLogin({
+          firstName: data.user.first_name, lastName: data.user.last_name,
+          email: data.user.email, companyName: data.company.name,
+          logoUrl: data.company.logo_url||"", plan:{name:data.company.plan,id:data.company.plan},
+          access_token: data.access_token, trialEnds: data.company.trial_ends,
+          role: data.user.role||"accountant",
+        });
+      }, 1200);
+    } catch(e) { setError(e.message); }
+    setSaving(false);
+  };
+
+  const card = {maxWidth:420, margin:"80px auto", background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:36, fontFamily:"sans-serif"};
+  const inp = {width:"100%", padding:"11px 14px", borderRadius:9, border:`1px solid ${C.border}`, fontSize:14, fontFamily:"inherit", background:C.bg, color:C.ink, outline:"none", boxSizing:"border-box"};
+
+  if (loading) return <div style={{...card, textAlign:"center", color:C.inkMid}}>Checking invite...</div>;
+
+  if (error && !info) return (
+    <div style={{...card, textAlign:"center"}}>
+      <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.ink,marginBottom:24}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+      <div style={{fontSize:14,color:"#c00",marginBottom:20}}>{error}</div>
+      <button onClick={onSignIn} style={{fontSize:13,color:C.accent,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Go to sign in →</button>
+    </div>
+  );
+
+  if (done) return (
+    <div style={{...card, textAlign:"center"}}>
+      <div style={{fontSize:40,marginBottom:12}}>✅</div>
+      <div style={{fontSize:16,fontWeight:700,color:C.ink}}>Welcome to {info?.company_name}!</div>
+      <div style={{fontSize:13,color:C.inkMid,marginTop:8}}>Signing you in...</div>
+    </div>
+  );
+
+  const roleLabels = {admin:"Admin", accountant:"Accountant", employee:"Employee"};
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={card}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.ink,marginBottom:4}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <div style={{fontSize:15,fontWeight:600,color:C.ink}}>You've been invited to join</div>
+          <div style={{fontSize:20,fontWeight:700,color:C.accent,marginTop:4}}>{info?.company_name}</div>
+          <div style={{display:"inline-block",marginTop:10,padding:"4px 14px",borderRadius:20,background:C.accentLt,color:C.accent,fontSize:12,fontWeight:700}}>
+            Role: {roleLabels[info?.role] || info?.role}
+          </div>
+        </div>
+
+        <div style={{marginBottom:16}}>
+          <div style={{display:"flex",gap:10,marginBottom:12}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>First Name</div>
+              <input value={form.firstName} onChange={e=>setForm(v=>({...v,firstName:e.target.value}))} placeholder="First name" style={inp}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Last Name</div>
+              <input value={form.lastName} onChange={e=>setForm(v=>({...v,lastName:e.target.value}))} placeholder="Last name" style={inp}/>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Email (from invite)</div>
+            <input value={info?.email||""} disabled style={{...inp,color:C.inkMid,cursor:"not-allowed"}}/>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Password</div>
+            <input type="password" value={form.password} onChange={e=>setForm(v=>({...v,password:e.target.value}))} placeholder="Choose a password (6+ chars)" style={inp}/>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Confirm Password</div>
+            <input type="password" value={form.confirm} onChange={e=>setForm(v=>({...v,confirm:e.target.value}))}
+              onKeyDown={e=>e.key==="Enter"&&handleAccept()} placeholder="Confirm password" style={inp}/>
+          </div>
+        </div>
+
+        {error && <div style={{color:"#c00",fontSize:12,marginBottom:12}}>{error}</div>}
+
+        <button onClick={handleAccept} disabled={saving} style={{width:"100%",padding:"13px",border:"none",borderRadius:10,
+          background:saving?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:saving?"wait":"pointer",fontFamily:"inherit",marginBottom:16}}>
+          {saving ? "Creating account..." : "Accept & Create Account"}
+        </button>
+        <div style={{textAlign:"center",fontSize:12,color:C.inkMid}}>
+          Already have an account? <span onClick={onSignIn} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>Sign in</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── TEAM SETTINGS ─────────────────────────────────────────────────────────────
+function TeamSettings({user}) {
+  const [members,    setMembers]    = React.useState([]);
+  const [invites,    setInvites]    = React.useState([]);
+  const [auditLog,   setAuditLog]   = React.useState([]);
+  const [loading,    setLoading]    = React.useState(true);
+  const [inviteForm, setInviteForm] = React.useState({email:"", role:"accountant"});
+  const [inviting,   setInviting]   = React.useState(false);
+  const [msg,        setMsg]        = React.useState("");
+  const [activeView, setActiveView] = React.useState("members"); // members | log
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [m, inv, log] = await Promise.all([
+        api("/auth/team"),
+        api("/auth/team/invites"),
+        api("/auth/audit-log?limit=30"),
+      ]);
+      setMembers(m); setInvites(inv); setAuditLog(log);
+    } catch(e) { console.warn("Team load error:", e.message); }
+    setLoading(false);
+  };
+  React.useEffect(() => { load(); }, []);
+
+  const sendInvite = async () => {
+    if (!inviteForm.email.trim()) { setMsg("Please enter an email address."); return; }
+    setInviting(true); setMsg("");
+    try {
+      await api("/auth/team/invite", {method:"POST", body:JSON.stringify({email:inviteForm.email.trim(), role:inviteForm.role})});
+      setMsg(`✓ Invitation sent to ${inviteForm.email}`);
+      setInviteForm({email:"", role:"accountant"});
+      load();
+    } catch(e) { setMsg("Error: " + e.message); }
+    setInviting(false);
+  };
+
+  const changeRole = async (memberId, newRole) => {
+    try {
+      await api(`/auth/team/${memberId}`, {method:"PATCH", body:JSON.stringify({role:newRole})});
+      load();
+    } catch(e) { alert(e.message); }
+  };
+
+  const removeMember = async (memberId, email) => {
+    if (!window.confirm(`Remove ${email} from your team?`)) return;
+    try {
+      await api(`/auth/team/${memberId}`, {method:"DELETE"});
+      load();
+    } catch(e) { alert(e.message); }
+  };
+
+  const cancelInvite = async (inviteId) => {
+    try {
+      await api(`/auth/team/invites/${inviteId}`, {method:"DELETE"});
+      load();
+    } catch(e) { alert(e.message); }
+  };
+
+  const isOwnerOrAdmin = user?.role === "owner" || user?.role === "admin";
+  const roleBadge = (role) => {
+    const map = {owner:["#1B3A6B","#E8EEF8"],admin:["#C8401A","#FBF0EC"],accountant:["#00878A","#E0F4F5"],employee:["#888","#F5F5F5"]};
+    const [fg, bg] = map[role] || ["#888","#F5F5F5"];
+    return <span style={{padding:"2px 9px",borderRadius:20,fontSize:10,fontWeight:700,color:fg,background:bg}}>{role.charAt(0).toUpperCase()+role.slice(1)}</span>;
+  };
+
+  const inp = {padding:"9px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"};
+
+  const actionLabel = (action) => {
+    const map = {"team.invite_sent":"Invite sent","team.invite_accepted":"Member joined","team.member_removed":"Member removed","team.role_changed":"Role changed","invoice.created":"Invoice created","expense.created":"Expense added"};
+    return map[action] || action;
+  };
+
+  if (loading) return <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading team...</div>;
+
+  return (
+    <div>
+      {/* View toggle */}
+      <div style={{display:"flex",gap:6,marginBottom:20}}>
+        {[["members","👥 Members & Invites"],["log","📋 Activity Log"]].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setActiveView(id)} style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:activeView===id?700:400,background:activeView===id?C.surface:"transparent",color:activeView===id?C.ink:C.inkMid,fontFamily:"inherit",boxShadow:activeView===id?"0 1px 4px rgba(0,0,0,0.08)":"none"}}>{lbl}</button>
+        ))}
+      </div>
+
+      {activeView === "members" && <>
+        {/* Current members */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Team Members ({members.length})</div>
+          {members.map(m=>(
+            <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:`1px solid ${C.border}`,last:{borderBottom:"none"}}}>
+              <div style={{width:36,height:36,borderRadius:"50%",background:C.accentLt,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:C.accent}}>
+                {(m.first_name||"?")[0].toUpperCase()}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{m.first_name} {m.last_name} {m.is_self && <span style={{fontSize:10,color:C.inkMid}}>(you)</span>}</div>
+                <div style={{fontSize:11,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.email}</div>
+              </div>
+              {roleBadge(m.role)}
+              {isOwnerOrAdmin && !m.is_self && m.role !== "owner" && (
+                <div style={{display:"flex",gap:6}}>
+                  <select value={m.role} onChange={e=>changeRole(m.id,e.target.value)}
+                    style={{...inp,fontSize:11,padding:"5px 8px",cursor:"pointer"}}>
+                    <option value="admin">Admin</option>
+                    <option value="accountant">Accountant</option>
+                    <option value="employee">Employee</option>
+                  </select>
+                  <button onClick={()=>removeMember(m.id,m.email)}
+                    style={{padding:"5px 10px",borderRadius:7,border:`1px solid ${C.border}`,background:"transparent",color:"#c00",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Pending invites */}
+        {invites.length > 0 && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Pending Invitations ({invites.length})</div>
+            {invites.map(inv=>(
+              <div key={inv.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,color:C.ink}}>{inv.email}</div>
+                  <div style={{fontSize:11,color:C.inkMid}}>Expires {new Date(inv.expires_at).toLocaleDateString()}</div>
+                </div>
+                {roleBadge(inv.role)}
+                {isOwnerOrAdmin && (
+                  <button onClick={()=>cancelInvite(inv.id)} style={{padding:"5px 10px",borderRadius:7,border:`1px solid ${C.border}`,background:"transparent",color:C.inkMid,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Invite form */}
+        {isOwnerOrAdmin && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Invite a Team Member</div>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+              <div style={{flex:2,minWidth:200}}>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:5}}>Email address</div>
+                <input value={inviteForm.email} onChange={e=>setInviteForm(v=>({...v,email:e.target.value}))}
+                  onKeyDown={e=>e.key==="Enter"&&sendInvite()}
+                  placeholder="colleague@example.com" style={{...inp,width:"100%",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{flex:1,minWidth:140}}>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:5}}>Role</div>
+                <select value={inviteForm.role} onChange={e=>setInviteForm(v=>({...v,role:e.target.value}))} style={{...inp,width:"100%"}}>
+                  <option value="admin">Admin</option>
+                  <option value="accountant">Accountant</option>
+                  <option value="employee">Employee</option>
+                </select>
+              </div>
+              <button onClick={sendInvite} disabled={inviting} style={{padding:"9px 20px",borderRadius:8,border:"none",background:C.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:inviting?"wait":"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                {inviting ? "Sending..." : "Send Invite"}
+              </button>
+            </div>
+            {msg && <div style={{fontSize:12,color:msg.startsWith("✓")?C.teal:"#c00",marginTop:10}}>{msg}</div>}
+          </div>
+        )}
+      </>}
+
+      {activeView === "log" && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Recent Activity</div>
+          {auditLog.length === 0 && <div style={{fontSize:13,color:C.inkMid,textAlign:"center",padding:24}}>No activity yet.</div>}
+          {auditLog.map(entry=>(
+            <div key={entry.id} style={{display:"flex",gap:12,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:C.accent,marginTop:5,flexShrink:0}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,color:C.ink,fontWeight:500}}>{actionLabel(entry.action)}{entry.target_type ? ` — ${entry.target_type} #${entry.target_id||""}` : ""}</div>
+                {entry.detail && <div style={{fontSize:11,color:C.inkMid}}>{entry.detail}</div>}
+              </div>
+              <div style={{fontSize:10,color:C.inkDim,whiteSpace:"nowrap",paddingTop:2}}>
+                {entry.user_email && <div>{entry.user_email}</div>}
+                <div>{new Date(entry.created_at).toLocaleString()}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
 function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange}) {
   const [settingsTab, setSettingsTab] = useState("company"); // company | templates | developer
@@ -5642,13 +5946,13 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Manage your ZuZan account</p>
         </div>
         <div style={{display:"flex",gap:4,background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:4}}>
-          {[["company","⚙️ General"],["templates","🎨 Templates"],["developer","🔑 Developer API"]].map(([id,label])=>(
+          {([...(["owner","admin"].includes(user?.role)?[["team","👥 Team"]]:[]),["company","⚙️ General"],["templates","🎨 Templates"],["developer","🔑 Developer API"]]).map(([id,label])=>(
             <button key={id} onClick={()=>setSettingsTab(id)} style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:settingsTab===id?700:400,background:settingsTab===id?C.surface:"transparent",color:settingsTab===id?C.ink:C.inkMid,fontFamily:"inherit",boxShadow:settingsTab===id?"0 1px 4px rgba(0,0,0,0.08)":"none"}}>{label}</button>
           ))}
         </div>
       </div>
 
-      {settingsTab === "developer" ? <Developer/> : settingsTab === "templates" ? (
+      {settingsTab === "team" ? <TeamSettings user={user}/> : settingsTab === "developer" ? <Developer/> : settingsTab === "templates" ? (
         <div>
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
@@ -5907,7 +6211,7 @@ function Login({onLogin, onRegister}) {
       }
       localStorage.setItem("zuzan_token", data.access_token);
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, role:data.user.role||"owner"});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -8704,6 +9008,12 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
   ];
 
   const toggleGroup = (id) => setExpanded(e => ({...e, [id]: !e[id]}));
+  // Role-gated nav: employees see only dashboard and settings
+  const visibleTabs = TABS.filter(t => {
+    if (user?.role === "employee") return ["dashboard","settings"].includes(t.id);
+    if (user?.role === "accountant") return !["payroll"].includes(t.id);
+    return true; // owner and admin see everything
+  });
 
   const navBtn = (t, isChild=false) => {
     const active = tab === t.id;
@@ -8763,7 +9073,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
         </div>
         <nav style={{flex:1,padding:"12px 10px",overflowY:"auto"}}>
-          {TABS.map(t => {
+          {visibleTabs.map(t => {
             if (!t.children) return navBtn(t);
             const isOpen = expanded[t.id];
             const childActive = t.children.some(c => c.id === tab);
@@ -8789,7 +9099,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         </nav>
         <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`}}>
           <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{user?.firstName||"User"} {user?.lastName||""}</div>
-          <div style={{fontSize:10,color:C.inkDim,marginBottom:8}}>{user?.email||"user@company.co.za"}</div>
+          <div style={{fontSize:10,color:C.inkDim,marginBottom:4}}>{user?.email||"user@company.co.za"}</div>
+          {user?.role && user.role !== "owner" && <span style={{display:"inline-block",marginBottom:8,padding:"2px 8px",borderRadius:20,fontSize:9,fontWeight:700,color:"#00878A",background:"#E0F4F5"}}>{user.role.charAt(0).toUpperCase()+user.role.slice(1)}</span>}
           <button onClick={onLogout} style={{fontSize:11,color:C.inkDim,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit"}}>Sign out</button>
         </div>
       </div>
@@ -8805,6 +9116,9 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
 export default function App() {
   const [screen, setScreen] = useState("loading");
   const [user,   setUser]   = useState(null);
+  // Detect invite token from URL path /accept-invite/<token>
+  const _inviteMatch = window.location.pathname.match(/\/accept-invite\/([A-Za-z0-9_-]{20,})/);
+  const _inviteToken = _inviteMatch ? _inviteMatch[1] : null;
 
   // Keep Render free-tier backend alive — pings /health every 8 min while logged in
   useEffect(() => {
@@ -8815,6 +9129,7 @@ export default function App() {
 
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
+    if (_inviteToken) { setScreen("accept-invite"); return; }
     if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -8833,6 +9148,7 @@ export default function App() {
           plan:         {name: data.company.plan, id: data.company.plan},
           access_token: token,
           trialEnds:    data.company.trial_ends,
+          role:         data.user.role || "owner",
         });
         setScreen("app");
       })
@@ -8889,6 +9205,7 @@ export default function App() {
     </div>
   );
 
+  if (screen === "accept-invite") return <AcceptInvite token={_inviteToken} onLogin={handleLogin} onSignIn={()=>setScreen("login")}/>;
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
 

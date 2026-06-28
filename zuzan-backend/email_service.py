@@ -294,3 +294,43 @@ def send_po_email(supplier_email: str, supplier_name: str, po: dict, company_nam
       <p style="color:#888;font-size:12px;margin:24px 0 0;">Please reply to this email to confirm or raise any queries.</p>
     """
     send_email(supplier_email, f"Purchase Order {po['po_number']} from {company_name}", _wrap(body, supplier_email))
+
+
+def send_invite_email(invitee_email: str, company_name: str, inviter_name: str, role: str, token: str):
+    """Send a team invitation email with accept link."""
+    role_labels = {
+        "admin":      "Admin",
+        "accountant": "Accountant",
+        "employee":   "Employee",
+    }
+    role_label = role_labels.get(role, role.title())
+    accept_url = f"{FRONTEND_URL}/accept-invite/{token}"
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 4px;">You've been invited to join <strong>{company_name}</strong> on ZuZan</h2>
+      <p style="color:#888;margin:0 0 20px;font-size:13px;">Sent by {inviter_name}</p>
+      <p style="color:#555;margin:0 0 16px;">
+        <strong>{inviter_name}</strong> has invited you to collaborate on <strong>{company_name}</strong>
+        with the role of <strong>{role_label}</strong>.
+      </p>
+      <p style="color:#555;margin:0 0 8px;">Click the button below to create your account and get started:</p>
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{accept_url}"
+           style="background:#C8401A;color:#fff;padding:14px 36px;border-radius:8px;
+                  text-decoration:none;font-weight:bold;font-size:15px;display:inline-block;">
+          Accept Invitation
+        </a>
+      </div>
+      <p style="color:#888;font-size:12px;margin:0 0 4px;">
+        Or copy this link into your browser:<br>
+        <a href="{accept_url}" style="color:#C8401A;">{accept_url}</a>
+      </p>
+      <p style="color:#aaa;font-size:11px;margin:16px 0 0;">
+        This invitation expires in 48 hours. If you weren't expecting this, you can ignore it safely.
+      </p>
+    """
+    send_email(
+        invitee_email,
+        f"You've been invited to join {company_name} on ZuZan",
+        _wrap(body, invitee_email),
+        from_addr=FROM_SUPPORT_EMAIL,
+    )
