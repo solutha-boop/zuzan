@@ -78,6 +78,9 @@ class Company(Base):
     leave_requests=relationship("LeaveRequest",back_populates="company")
     leave_balances=relationship("LeaveBalance",back_populates="company")
     fixed_assets=relationship("FixedAsset",back_populates="company")
+    stitch_connection=relationship("StitchConnection",foreign_keys="StitchConnection.company_id",uselist=False)
+    stitch_bank_accounts=relationship("StitchBankAccount",foreign_keys="StitchBankAccount.company_id")
+    stitch_transactions=relationship("StitchTransaction",foreign_keys="StitchTransaction.company_id")
 
 class User(Base):
     __tablename__ = "users"
@@ -474,6 +477,66 @@ class AuditLog(Base):
     created_at  = Column(DateTime, default=datetime.utcnow)
     company     = relationship("Company", foreign_keys=[company_id])
 
+
+# ── PILLAR 3: STITCH BANK FEEDS ──────────────────────────────────────────────
+
+class StitchConnection(Base):
+    """Stitch OAuth tokens per company — one row per connected company."""
+    __tablename__ = "stitch_connections"
+    id            = Column(Integer, primary_key=True, index=True)
+    company_id    = Column(Integer, ForeignKey("companies.id"), unique=True, nullable=False)
+    stitch_user_id = Column(String, nullable=True)   # sub claim from id_token
+    access_token  = Column(Text, nullable=False)     # encrypted Fernet token
+    refresh_token = Column(Text, nullable=False)     # encrypted Fernet token
+    token_expiry  = Column(DateTime, nullable=False) # when access_token expires
+    scopes        = Column(String, nullable=True)    # granted OAuth scopes
+    connected_at  = Column(DateTime, default=datetime.utcnow)
+    last_synced   = Column(DateTime, nullable=True)
+    company       = relationship("Company", foreign_keys=[company_id])
+
+
+class StitchBankAccount(Base):
+    """A bank account linked via Stitch for a company."""
+    __tablename__ = "stitch_bank_accounts"
+    id                  = Column(Integer, primary_key=True, index=True)
+    company_id          = Column(Integer, ForeignKey("companies.id"))
+    stitch_account_id   = Column(String, nullable=False, unique=True)  # Stitch node ID
+    bank_id             = Column(String, nullable=True)   # e.g. "fnb", "absa"
+    account_number      = Column(String, nullable=True)   # encrypted
+    account_name        = Column(String, nullable=True)   # e.g. "Business Cheque"
+    account_type        = Column(String, nullable=True)   # e.g. "current"
+    current_balance     = Column(Float, nullable=True)
+    available_balance   = Column(Float, nullable=True)
+    currency            = Column(String, default="ZAR")
+    last_synced         = Column(DateTime, nullable=True)
+    is_active           = Column(Boolean, default=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    company             = relationship("Company", foreign_keys=[company_id])
+    transactions        = relationship("StitchTransaction", back_populates="bank_account", cascade="all, delete-orphan")
+
+
+class StitchTransaction(Base):
+    """A transaction synced from Stitch."""
+    __tablename__ = "stitch_transactions"
+    id                  = Column(Integer, primary_key=True, index=True)
+    company_id          = Column(Integer, ForeignKey("companies.id"))
+    bank_account_id     = Column(Integer, ForeignKey("stitch_bank_accounts.id"))
+    stitch_txn_id       = Column(String, nullable=False, unique=True)
+    amount              = Column(Float, nullable=False)    # positive=credit, negative=debit
+    description         = Column(Text, nullable=True)
+    reference           = Column(String, nullable=True)
+    txn_date            = Column(DateTime, nullable=False)
+    running_balance     = Column(Float, nullable=True)
+    # Matching
+    match_status        = Column(String, default="unmatched")  # unmatched|matched|excluded
+    matched_invoice_id  = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    matched_expense_id  = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    match_confidence    = Column(Float, nullable=True)   # 0.0–1.0
+    matched_at          = Column(DateTime, nullable=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    bank_account        = relationship("StitchBankAccount", back_populates="transactions")
+    company             = relationship("Company", foreign_keys=[company_id])
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
@@ -627,6 +690,50 @@ def init_db():
             "ALTER TABLE journal_entries ADD COLUMN is_reversal_of INTEGER",
             # ── Credit-term expenses (2026-06) ───────────────────────────────
             "ALTER TABLE expenses ADD COLUMN is_on_credit BOOLEAN DEFAULT FALSE",
+            # ── Pillar 3: Stitch Bank Feeds (2026-06) ────────────────────────
+            """CREATE TABLE IF NOT EXISTS stitch_connections (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER UNIQUE REFERENCES companies(id),
+                stitch_user_id VARCHAR,
+                access_token TEXT NOT NULL,
+                refresh_token TEXT NOT NULL,
+                token_expiry TIMESTAMP NOT NULL,
+                scopes VARCHAR,
+                connected_at TIMESTAMP DEFAULT NOW(),
+                last_synced TIMESTAMP
+            )""",
+            """CREATE TABLE IF NOT EXISTS stitch_bank_accounts (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                stitch_account_id VARCHAR NOT NULL UNIQUE,
+                bank_id VARCHAR,
+                account_number VARCHAR,
+                account_name VARCHAR,
+                account_type VARCHAR,
+                current_balance FLOAT,
+                available_balance FLOAT,
+                currency VARCHAR DEFAULT 'ZAR',
+                last_synced TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS stitch_transactions (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                bank_account_id INTEGER REFERENCES stitch_bank_accounts(id) ON DELETE CASCADE,
+                stitch_txn_id VARCHAR NOT NULL UNIQUE,
+                amount FLOAT NOT NULL,
+                description TEXT,
+                reference VARCHAR,
+                txn_date TIMESTAMP NOT NULL,
+                running_balance FLOAT,
+                match_status VARCHAR DEFAULT 'unmatched',
+                matched_invoice_id INTEGER REFERENCES invoices(id),
+                matched_expense_id INTEGER REFERENCES expenses(id),
+                match_confidence FLOAT,
+                matched_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
         ]:
             try:
                 conn.execute(text(sql))
