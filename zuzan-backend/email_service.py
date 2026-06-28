@@ -334,3 +334,75 @@ def send_invite_email(invitee_email: str, company_name: str, inviter_name: str, 
         _wrap(body, invitee_email),
         from_addr=FROM_SUPPORT_EMAIL,
     )
+
+
+def send_invoice_email(
+    client_email: str,
+    client_name: str,
+    company_name: str,
+    invoice_number: str,
+    description: str,
+    total_amount: float,
+    currency: str,
+    due_date: str,
+    portal_token: str,
+    portal_url_base: str = None,
+):
+    """Send a branded invoice email with a portal link and Pay Now button."""
+    import os as _os
+    base = portal_url_base or _os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
+    portal_url = f"{base}/portal/{portal_token}"
+
+    cur_sym = {"ZAR": "R", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, currency + " ")
+    due_str = due_date if due_date else "On receipt"
+
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 4px;">Invoice from <strong>{company_name}</strong></h2>
+      <p style="color:#888;margin:0 0 24px;font-size:13px;">{invoice_number}</p>
+
+      <table style="width:100%;border-collapse:collapse;margin:0 0 20px;font-size:14px;">
+        <tr>
+          <td style="padding:10px 0;color:#555;border-bottom:1px solid #eee;">Invoice Number</td>
+          <td style="padding:10px 0;text-align:right;font-weight:600;color:#1a1a1a;border-bottom:1px solid #eee;">{invoice_number}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 0;color:#555;border-bottom:1px solid #eee;">Description</td>
+          <td style="padding:10px 0;text-align:right;color:#1a1a1a;border-bottom:1px solid #eee;">{description or "-"}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 0;color:#555;border-bottom:1px solid #eee;">Amount Due</td>
+          <td style="padding:10px 0;text-align:right;font-weight:700;font-size:16px;color:#1a1a1a;border-bottom:1px solid #eee;">{cur_sym}{total_amount:,.2f}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 0;color:#555;">Due Date</td>
+          <td style="padding:10px 0;text-align:right;font-weight:600;color:#C8401A;">{due_str}</td>
+        </tr>
+      </table>
+
+      <p style="color:#555;margin:0 0 8px;">Dear {client_name},</p>
+      <p style="color:#555;margin:0 0 24px;">
+        Please find your invoice above. You can view the full invoice and pay securely online using the button below.
+      </p>
+
+      <div style="text-align:center;margin:32px 0;">
+        <a href="{portal_url}"
+           style="background:#C8401A;color:#fff;padding:14px 36px;border-radius:8px;
+                  text-decoration:none;font-weight:bold;font-size:15px;display:inline-block;">
+          View &amp; Pay Invoice
+        </a>
+      </div>
+
+      <p style="color:#888;font-size:12px;margin:0 0 4px;">
+        Or copy this link into your browser:<br>
+        <a href="{portal_url}" style="color:#C8401A;">{portal_url}</a>
+      </p>
+      <p style="color:#aaa;font-size:11px;margin:20px 0 0;">
+        If you have any questions about this invoice, please reply to this email.
+      </p>
+    """
+
+    send_email(
+        client_email,
+        f"Invoice {invoice_number} from {company_name} — {cur_sym}{total_amount:,.2f} due {due_str}",
+        _wrap(body, client_email),
+    )

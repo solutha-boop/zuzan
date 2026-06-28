@@ -105,6 +105,8 @@ class Invoice(Base):
     status=Column(Enum(InvoiceStatus),default=InvoiceStatus.draft)
     issue_date=Column(DateTime,default=datetime.utcnow); due_date=Column(DateTime)
     paid_date=Column(DateTime,nullable=True); paid_amount_zar=Column(Float,nullable=True); notes=Column(Text)
+    portal_token=Column(String,nullable=True,unique=True,index=True)   # UUID for public payment portal
+    portal_token_created_at=Column(DateTime,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="invoices")
 
@@ -633,6 +635,9 @@ def init_db():
                 conn.rollback()  # Reset connection so next statement starts fresh
 
 
+            # ── Pillar 2: Client Portal (2026-06) ────────────────────────────
+            "ALTER TABLE invoices ADD COLUMN portal_token VARCHAR UNIQUE",
+            "ALTER TABLE invoices ADD COLUMN portal_token_created_at TIMESTAMP",
             # ── Pillar 1: Multi-User & Roles (2026-06) ──────────────────────
             """CREATE TABLE IF NOT EXISTS invite_tokens (
                 id INTEGER PRIMARY KEY,
@@ -668,6 +673,21 @@ def init_db():
         except Exception:
             conn.rollback()
 
+
+        # Backfill: generate portal_token for any invoices missing one
+        try:
+            import uuid as _uuid
+            from database import Invoice as _Inv
+            _db2 = SessionLocal()
+            _missing = _db2.query(_Inv).filter(_Inv.portal_token == None).all()
+            for _inv in _missing:
+                _inv.portal_token = str(_uuid.uuid4()).replace("-", "")
+                _inv.portal_token_created_at = datetime.utcnow()
+            if _missing:
+                _db2.commit()
+            _db2.close()
+        except Exception:
+            pass
 
 def get_db():
     db = SessionLocal()

@@ -1139,7 +1139,7 @@ function DocumentTemplateSettings({template, onChange}) {
 function Invoicing({live = {}, user = {}, docTemplate}) {
   const liveInvoices = live.invoices;
   const [invoices, setInvoices] = useState(MOCK_INVOICES);
-  useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
+  useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, clientEmail: i.client_email || "", amount: i.total_amount || i.amount, portalToken: i.portal_token || null, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
 
   const [showNew,      setShowNew]      = useState(false);
   const [preview,      setPreview]      = useState(null);   // view modal
@@ -1260,12 +1260,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div id="invoice-preview-content">
               <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>
-            {user.payfastMerchantId && (
-              <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"12px 14px",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><div style={{fontSize:12,fontWeight:700,color:C.green}}>Online Payment</div><div style={{fontSize:11,color:C.inkMid}}>PayFast payment link</div></div>
-                <button onClick={()=>{const params=new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");}} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Pay →</button>
-              </div>
-            )}
+            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={true}/>
           </div>
           {/* Sticky action bar */}
           <div style={{flexShrink:0,background:C.surface,borderTop:`1px solid ${C.border}`,padding:"12px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -1287,15 +1282,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div id="invoice-preview-content">
             <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>
-            {user.payfastMerchantId && (
-              <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"12px 16px",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><div style={{fontSize:12,fontWeight:700,color:C.green}}>Online Payment</div><div style={{fontSize:11,color:C.inkMid}}>Send client a PayFast payment link</div></div>
-                <button onClick={()=>{const params=new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");}} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Open PayFast →</button>
-              </div>
-            )}
-            {!user.payfastMerchantId && (
-              <div style={{background:C.goldLt,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"10px 16px",marginTop:12,fontSize:11,color:C.inkMid}}>Add your PayFast Merchant ID in Settings to enable online payments.</div>
-            )}
+            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={false}/>
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={printInvoice} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
@@ -5543,6 +5530,212 @@ function BankImport({live = {}, onNavigate}) {
   );
 }
 
+
+// ── INVOICE PORTAL (public — no auth) ─────────────────────────────────────────
+function InvoicePortal({token}) {
+  const [inv,  setInv]  = useState(null);
+  const [err,  setErr]  = useState("");
+  const [busy, setBusy] = useState(false);
+  const [paid, setPaid] = useState(false);
+  const urlParams = new URLSearchParams(window.location.search);
+  const justPaid = urlParams.get("paid") === "1";
+
+  useEffect(() => {
+    if (!token) { setErr("Invalid payment link."); return; }
+    fetch(`${BASE_URL}/portal/invoice/${token}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(data => { setInv(data); if (data.status === "paid") setPaid(true); if (justPaid) setPaid(true); })
+      .catch(() => setErr("Invoice not found or link has expired."));
+  }, [token]);
+
+  const handlePay = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${BASE_URL}/portal/invoice/${token}/pay`, {method:"POST"});
+      if (!res.ok) { const d = await res.json(); setErr(d.detail || "Payment error"); setBusy(false); return; }
+      const data = await res.json();
+      // Build PayFast form and submit
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = data.payfast_url;
+      Object.entries(data.payfast_data).forEach(([k,v]) => {
+        const inp = document.createElement("input");
+        inp.type = "hidden"; inp.name = k; inp.value = v;
+        form.appendChild(inp);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    } catch(e) { setErr("Payment error — please try again."); setBusy(false); }
+  };
+
+  const C2 = {bg:"#FAF7F4",surface:"#fff",accent:"#C8401A",ink:"#1a1a1a",inkMid:"#666",border:"#e5e0d8",green:"#1a7a4a",greenLt:"#edf7f0",gold:"#B7791F",goldLt:"#FEF9E7"};
+
+  if (err) return (
+    <div style={{minHeight:"100vh",background:C2.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,sans-serif"}}>
+      <div style={{textAlign:"center",padding:40}}>
+        <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
+        <div style={{fontFamily:"serif",fontSize:24,color:C2.ink,marginBottom:8}}>Link Not Found</div>
+        <div style={{color:C2.inkMid,fontSize:14}}>{err}</div>
+      </div>
+    </div>
+  );
+
+  if (!inv) return (
+    <div style={{minHeight:"100vh",background:C2.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,sans-serif"}}>
+      <div style={{textAlign:"center"}}><div style={{fontFamily:"serif",fontSize:36,color:C2.ink}}><span style={{color:C2.accent}}>Zu</span>Zan</div><div style={{color:C2.inkMid,marginTop:8}}>Loading invoice...</div></div>
+    </div>
+  );
+
+  const curSym = ({ZAR:"R",USD:"$",EUR:"€",GBP:"£"})[inv.currency] || inv.currency + " ";
+  const isPaid = paid || inv.status === "paid";
+
+  return (
+    <div style={{minHeight:"100vh",background:C2.bg,fontFamily:"system-ui,sans-serif",padding:"24px 16px"}}>
+      <div style={{maxWidth:560,margin:"0 auto"}}>
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:32}}>
+          {inv.company_logo && <img src={inv.company_logo} alt="" style={{height:44,objectFit:"contain"}}/>}
+          <div>
+            <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C2.ink}}>{inv.company_name || <span><span style={{color:C2.accent}}>Zu</span>Zan</span>}</div>
+            {inv.company_email && <div style={{fontSize:12,color:C2.inkMid}}>{inv.company_email}</div>}
+          </div>
+        </div>
+
+        {/* Invoice card */}
+        <div style={{background:C2.surface,borderRadius:20,padding:32,boxShadow:"0 4px 24px rgba(0,0,0,0.06)",marginBottom:24}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+            <div>
+              <div style={{fontSize:11,fontWeight:700,color:C2.inkMid,textTransform:"uppercase",letterSpacing:1}}>Invoice</div>
+              <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C2.ink,marginTop:2}}>{inv.invoice_number}</div>
+            </div>
+            <div style={{background:isPaid?C2.greenLt:C2.goldLt,color:isPaid?C2.green:C2.gold,padding:"6px 14px",borderRadius:20,fontSize:12,fontWeight:700}}>
+              {isPaid ? "✓ PAID" : "PAYMENT DUE"}
+            </div>
+          </div>
+
+          <div style={{borderTop:`1px solid ${C2.border}`,paddingTop:20,marginBottom:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+              <span style={{color:C2.inkMid,fontSize:13}}>To</span>
+              <span style={{fontWeight:600,color:C2.ink,fontSize:13}}>{inv.client_name}</span>
+            </div>
+            {inv.description && (
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <span style={{color:C2.inkMid,fontSize:13}}>Description</span>
+                <span style={{color:C2.ink,fontSize:13,textAlign:"right",maxWidth:280}}>{inv.description}</span>
+              </div>
+            )}
+            {inv.due_date && (
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <span style={{color:C2.inkMid,fontSize:13}}>Due Date</span>
+                <span style={{fontWeight:600,color:isPaid?C2.green:C2.accent,fontSize:13}}>{new Date(inv.due_date).toLocaleDateString("en-ZA",{day:"numeric",month:"short",year:"numeric"})}</span>
+              </div>
+            )}
+            {inv.currency !== "ZAR" && (
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <span style={{color:C2.inkMid,fontSize:13}}>Currency</span>
+                <span style={{color:C2.ink,fontSize:13}}>{inv.currency} (Rate: {inv.exchange_rate})</span>
+              </div>
+            )}
+          </div>
+
+          <div style={{background:C2.bg,borderRadius:12,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,color:C2.inkMid,fontWeight:600}}>Total Due</span>
+            <span style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:isPaid?C2.green:C2.ink}}>{curSym}{(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          </div>
+          {inv.currency !== "ZAR" && (
+            <div style={{textAlign:"right",fontSize:11,color:C2.inkMid,marginTop:6}}>≈ R{(inv.zar_total||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} ZAR (charged via PayFast)</div>
+          )}
+        </div>
+
+        {/* Action area */}
+        {isPaid ? (
+          <div style={{background:C2.greenLt,border:`1px solid ${C2.green}30`,borderRadius:16,padding:24,textAlign:"center"}}>
+            <div style={{fontSize:40,marginBottom:8}}>✅</div>
+            <div style={{fontWeight:700,color:C2.green,fontSize:17}}>Payment Received</div>
+            <div style={{color:C2.inkMid,fontSize:13,marginTop:4}}>Thank you! This invoice has been paid.</div>
+          </div>
+        ) : (
+          <div style={{background:C2.surface,borderRadius:16,padding:24}}>
+            {err && <div style={{color:C2.accent,marginBottom:12,fontSize:13}}>{err}</div>}
+            <button onClick={handlePay} disabled={busy}
+              style={{width:"100%",background:C2.accent,color:"#fff",border:"none",borderRadius:12,padding:"16px",fontSize:16,fontWeight:700,cursor:busy?"not-allowed":"pointer",fontFamily:"inherit",opacity:busy?0.7:1}}>
+              {busy ? "Redirecting to PayFast..." : `Pay ${curSym}${(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} Securely`}
+            </button>
+            <div style={{textAlign:"center",marginTop:10,fontSize:11,color:C2.inkMid}}>🔒 Secured by PayFast — South Africa's trusted payment gateway</div>
+          </div>
+        )}
+
+        {inv.notes && (
+          <div style={{marginTop:16,background:C2.surface,borderRadius:12,padding:"16px 20px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C2.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Notes</div>
+            <div style={{fontSize:13,color:C2.inkMid}}>{inv.notes}</div>
+          </div>
+        )}
+
+        <div style={{textAlign:"center",marginTop:24,fontSize:11,color:C2.inkMid}}>
+          Powered by <a href="https://zuzan.co.za" style={{color:C2.accent,textDecoration:"none",fontWeight:700}}><span style={{color:C2.accent}}>Zu</span>Zan</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SEND INVOICE PANEL (inside invoice preview modal) ─────────────────────────
+function SendInvoicePanel({preview, onSent, isMobile}) {
+  const [sending,    setSending]    = useState(false);
+  const [portalUrl,  setPortalUrl]  = useState(preview?.portalToken ? `${window.location.origin}/portal/${preview.portalToken}` : null);
+  const [copied,     setCopied]     = useState(false);
+  const [sentMsg,    setSentMsg]    = useState("");
+
+  const handleSend = async () => {
+    if (!preview?._dbId) return;
+    setSending(true); setSentMsg("");
+    try {
+      const res = await fetch(`${BASE_URL}/invoices/${preview._dbId}/send`, {method:"POST", headers:{"Authorization":"Bearer "+localStorage.getItem("zuzan_token")}});
+      const data = await res.json();
+      if (res.ok) {
+        setPortalUrl(data.portal_url);
+        if (onSent) onSent(data.portal_token);
+        setSentMsg(data.email_sent ? "✓ Invoice emailed to client" : "✓ Portal link ready (no client email on file)");
+      } else {
+        setSentMsg(data.detail || "Error — please try again");
+      }
+    } catch(e) { setSentMsg("Network error"); }
+    setSending(false);
+  };
+
+  const handleCopy = () => {
+    if (!portalUrl) return;
+    navigator.clipboard.writeText(portalUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
+  const C2 = {accent:"#C8401A",green:"#1a7a4a",greenLt:"#edf7f0",gold:"#B7791F",goldLt:"#FEF9E7",inkMid:"#666",border:"#e5e0d8",surface:"#fff",bg:"#FAF7F4",blue:"#1a5fa8",blueLt:"#EBF3FF"};
+
+  return (
+    <div style={{background:C2.blueLt,border:`1px solid ${C2.blue}30`,borderRadius:12,padding:"14px 16px",marginTop:16}}>
+      <div style={{fontSize:12,fontWeight:700,color:C2.blue,marginBottom:8}}>📧 Send to Client</div>
+      {portalUrl ? (
+        <div>
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <input readOnly value={portalUrl} style={{flex:1,fontSize:11,padding:"7px 10px",border:`1px solid ${C2.border}`,borderRadius:8,background:C2.surface,color:C2.inkMid,fontFamily:"monospace",outline:"none"}}/>
+            <button onClick={handleCopy} style={{background:copied?C2.green:C2.blue,color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{copied?"✓ Copied":"Copy Link"}</button>
+          </div>
+          <button onClick={()=>window.open(portalUrl,"_blank")} style={{fontSize:11,color:C2.blue,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0,textDecoration:"underline"}}>Open portal page →</button>
+          {sentMsg && <div style={{fontSize:11,color:C2.green,marginTop:6}}>{sentMsg}</div>}
+        </div>
+      ) : (
+        <div>
+          <div style={{fontSize:11,color:C2.inkMid,marginBottom:10}}>Generate a secure payment link and optionally email it to the client.</div>
+          <button onClick={handleSend} disabled={sending} style={{background:C2.blue,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:sending?"not-allowed":"pointer",fontFamily:"inherit",opacity:sending?0.7:1}}>
+            {sending ? "Sending..." : "Send Invoice"}
+          </button>
+          {sentMsg && <div style={{fontSize:11,color:C2.accent,marginTop:6}}>{sentMsg}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ACCEPT INVITE ─────────────────────────────────────────────────────────────
 function AcceptInvite({token, onLogin, onSignIn}) {
   const [info,    setInfo]    = useState(null);
@@ -9119,6 +9312,9 @@ export default function App() {
   // Detect invite token from URL path /accept-invite/<token>
   const _inviteMatch = window.location.pathname.match(/\/accept-invite\/([A-Za-z0-9_-]{20,})/);
   const _inviteToken = _inviteMatch ? _inviteMatch[1] : null;
+  // Detect portal token from URL path /portal/<token>
+  const _portalMatch = window.location.pathname.match(/\/portal\/([A-Za-z0-9]{20,})/);
+  const _portalToken = _portalMatch ? _portalMatch[1] : null;
 
   // Keep Render free-tier backend alive — pings /health every 8 min while logged in
   useEffect(() => {
@@ -9129,6 +9325,7 @@ export default function App() {
 
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
+    if (_portalToken) { setScreen("portal"); return; }
     if (_inviteToken) { setScreen("accept-invite"); return; }
     if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
     const controller = new AbortController();
@@ -9205,6 +9402,7 @@ export default function App() {
     </div>
   );
 
+  if (screen === "portal")       return <InvoicePortal token={_portalToken}/>;
   if (screen === "accept-invite") return <AcceptInvite token={_inviteToken} onLogin={handleLogin} onSignIn={()=>setScreen("login")}/>;
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;

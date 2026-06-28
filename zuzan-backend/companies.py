@@ -299,6 +299,64 @@ async def delete_invoice(invoice_id: int, current_user: User = Depends(require_r
     return {"status": "deleted"}
 
 
+
+@invoices_router.post("/{invoice_id}/send")
+async def send_invoice(invoice_id: int, current_user: User = Depends(require_role("owner","admin","accountant")), db: Session = Depends(get_db)):
+    """Generate portal token (if needed), mark invoice as sent, and email the client."""
+    import uuid as _uuid
+    from datetime import datetime as _dt
+    from email_service import send_invoice_email
+
+    invoice = db.query(Invoice).filter(
+        Invoice.id == invoice_id,
+        Invoice.company_id == current_user.company_id
+    ).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status == InvoiceStatus.paid:
+        raise HTTPException(status_code=400, detail="Invoice is already paid.")
+
+    # Generate portal token if missing
+    if not invoice.portal_token:
+        invoice.portal_token = _uuid.uuid4().hex
+        invoice.portal_token_created_at = _dt.utcnow()
+
+    # Mark as sent
+    invoice.status = InvoiceStatus.sent
+    db.commit()
+    db.refresh(invoice)
+
+    portal_url = f"{os.environ.get('FRONTEND_URL','https://zuzan-app.onrender.com')}/portal/{invoice.portal_token}"
+
+    # Send email if client email is known
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    email_sent = False
+    client_email = getattr(invoice, "client_email", None) or ""
+    if client_email:
+        try:
+            send_invoice_email(
+                client_email=client_email,
+                client_name=invoice.client_name or "Client",
+                company_name=company.name if company else "ZuZan",
+                invoice_number=invoice.invoice_number,
+                description=invoice.description or "",
+                total_amount=invoice.total_amount or 0,
+                currency=invoice.currency or "ZAR",
+                due_date=invoice.due_date.strftime("%d %b %Y") if invoice.due_date else "",
+                portal_token=invoice.portal_token,
+            )
+            email_sent = True
+        except Exception as e:
+            logger.warning(f"Invoice email failed (non-fatal): {e}")
+
+    return {
+        "status":       "sent",
+        "portal_token": invoice.portal_token,
+        "portal_url":   portal_url,
+        "email_sent":   email_sent,
+    }
+
+
 # ── EXPENSES ──────────────────────────────────────────────────────────────────
 expenses_router = APIRouter()
 
