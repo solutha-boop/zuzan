@@ -134,9 +134,13 @@ class InvoiceCreate(BaseModel):
     cogs_amount:         Optional[float] = None  # If set, post DR Cost of Sales / CR Inventory for this amount
 
 class InvoiceUpdate(BaseModel):
-    status:          Optional[str] = None
-    paid_date:       Optional[str] = None
-    notes:           Optional[str] = None
+    client_name:     Optional[str]   = None
+    description:     Optional[str]   = None
+    amount:          Optional[float] = None   # excl. VAT
+    due_date:        Optional[str]   = None
+    status:          Optional[str]   = None
+    paid_date:       Optional[str]   = None
+    notes:           Optional[str]   = None
     paid_amount_zar: Optional[float] = None  # ZAR actually received on payment
 
 
@@ -227,6 +231,16 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     was_paid = invoice.status == InvoiceStatus.paid
+    if data.client_name:
+        invoice.client_name = data.client_name
+    if data.description:
+        invoice.description = data.description
+    if data.amount is not None:
+        invoice.amount       = data.amount
+        invoice.vat_amount   = round(data.amount * 0.15, 2)
+        invoice.total_amount = round(data.amount * 1.15, 2)
+    if data.due_date is not None:
+        invoice.due_date = datetime.fromisoformat(data.due_date) if data.due_date else None
     if data.status:
         invoice.status = InvoiceStatus(data.status)
     if data.paid_date:
