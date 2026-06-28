@@ -238,8 +238,9 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         invoice.notes = data.notes
     if data.paid_amount_zar is not None:
         invoice.paid_amount_zar = data.paid_amount_zar
-    db.commit()
-    # Post payment journal entry when invoice first marked as paid
+    # Post payment journal entry when invoice first marked as paid.
+    # Commit once only AFTER both the status update and the journal entry succeed —
+    # this keeps them atomic so a journal failure rolls back the invoice status too.
     if not was_paid and invoice.status == InvoiceStatus.paid:
         try:
             journal_engine.post_invoice_paid(invoice, db)
@@ -249,8 +250,10 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
             db.rollback()
             raise HTTPException(
                 status_code=500,
-                detail=f"Payment recorded but journal entry failed: {e}. Payment has been rolled back — please retry.",
+                detail=f"Payment recording failed — journal entry could not be posted: {e}. Please retry.",
             )
+    else:
+        db.commit()
     return invoice
 
 

@@ -673,12 +673,18 @@ async def balance_sheet(
     total_assets = round(cash_and_equivalents + trade_receivables + inventory_at_cost + vat_input_recoverable + fixed_assets_net, 2)
 
     # ── LIABILITIES ───────────────────────────────────────────────────────────
-    accounts_payable = bal("2000")
-    vat_payable      = bal("2100")
-    paye_payable     = bal("2200")
-    uif_payable      = bal("2210")
-    sdl_payable      = bal("2220")
-    total_liabilities = round(accounts_payable + vat_payable + paye_payable + uif_payable + sdl_payable, 2)
+    accounts_payable    = bal("2000")
+    vat_payable         = bal("2100")
+    paye_payable        = bal("2200")
+    uif_payable         = bal("2210")
+    sdl_payable         = bal("2220")
+    income_tax_payable  = bal("2126")   # Corporate income tax due to SARS
+    prov_tax_payable    = bal("2127")   # Provisional tax (IRP6) due to SARS
+    total_liabilities = round(
+        accounts_payable + vat_payable + paye_payable + uif_payable + sdl_payable
+        + income_tax_payable + prov_tax_payable,
+        2,
+    )
 
     # ── EQUITY ────────────────────────────────────────────────────────────────
     retained_income = bal("3000")
@@ -707,12 +713,14 @@ async def balance_sheet(
             "total":                 total_assets,
         },
         "liabilities": {
-            "accounts_payable": accounts_payable,
-            "vat_payable":      vat_payable,
-            "paye_payable":     paye_payable,
-            "uif_payable":      uif_payable,
-            "sdl_payable":      sdl_payable,
-            "total":            total_liabilities,
+            "accounts_payable":   accounts_payable,
+            "vat_payable":        vat_payable,
+            "paye_payable":       paye_payable,
+            "uif_payable":        uif_payable,
+            "sdl_payable":        sdl_payable,
+            "income_tax_payable": income_tax_payable,
+            "prov_tax_payable":   prov_tax_payable,
+            "total":              total_liabilities,
         },
         "equity": {
             "retained_income": retained_income,
@@ -943,7 +951,17 @@ async def cash_flow(
     payroll_disbursed = round(sum(p.net_pay for p in payslips_this_month), 2)
     sars_payments     = round(sum(p.paye + p.uif_employee + p.uif_employer + p.sdl for p in payslips_this_month), 2)
 
-    net_operating = round(cash_receipts - cash_payments - payroll_disbursed - sars_payments, 2)
+    # VAT remitted to SARS: output VAT collected on paid invoices minus input VAT on expenses.
+    # This is the net cash that must flow to SARS for the month and must appear in operating
+    # activities — omitting it overstates net operating cash flow.
+    output_vat_month = round(sum(i.vat_amount or 0 for i in paid_this_month), 2)
+    input_vat_month  = round(sum(e.vat_amount or 0 for e in expenses_this_month), 2)
+    net_vat_to_sars  = round(output_vat_month - input_vat_month, 2)  # positive = payable, negative = refund
+
+    net_operating = round(
+        cash_receipts - cash_payments - payroll_disbursed - sars_payments - net_vat_to_sars,
+        2,
+    )
 
     return {
         "period": now.strftime("%B %Y"),
@@ -952,6 +970,7 @@ async def cash_flow(
             "cash_paid_to_suppliers":       -cash_payments,
             "payroll_net_pay":              -payroll_disbursed,
             "sars_paye_uif_sdl":            -sars_payments,
+            "sars_vat_net":                 -net_vat_to_sars,
             "net_cash_from_operations":     net_operating,
         },
         "investing": {
@@ -1496,11 +1515,13 @@ async def vat201(
     due_date = datetime(end_year, end_month + 1 if end_month < 12 else 1, 25).strftime("%d %B %Y") if end_month < 12 else datetime(end_year + 1, 2, 25).strftime("%d %B %Y")
 
     # ── OUTPUT TAX ─────────────────────────────────────────────────────────────
-    # All invoices issued in the period (tax point = invoice date)
+    # All invoices issued in the period (tax point = invoice issue_date, not created_at).
+    # Using issue_date ensures backdated invoices and bulk-imported invoices land in the
+    # correct VAT period, consistent with SARS requirements.
     all_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.created_at >= start,
-        Invoice.created_at < end,
+        Invoice.issue_date >= start,
+        Invoice.issue_date < end,
     ).all()
 
     # Standard rated supplies (excl. VAT)

@@ -194,7 +194,7 @@ const Badge = ({label,color,bg}) => (
 const StatusBadge = ({status}) => {
   const m={
     paid:   [C.green,  C.greenLt,  "Paid"],
-    sent:   [C.blue,   C.blueLt,   "Sent"],
+    sent:   [C.gold,   C.goldLt,   "Pending"],
     pending:[C.gold,   C.goldLt,   "Pending"],
     draft:  [C.inkMid, C.border,   "Draft"],
     overdue:[C.red,    C.redLt,    "Overdue"],
@@ -1145,7 +1145,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
   const [preview,      setPreview]      = useState(null);   // view modal
   const [editInv,      setEditInv]      = useState(null);   // amend modal
   const [payModal,     setPayModal]     = useState(null);   // {inv, zarAmt, payDate, ref}
-  const [filterStatus, setFilterStatus] = useState(null);   // null | "paid" | "pending" | "overdue"
+  const [filterStatus, setFilterStatus] = useState(null);   // null | "paid" | "sent" | "overdue"
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true,currency:"ZAR",exchangeRate:"18.5",vatAmount:"0"});
   const [saving, setSaving] = useState(false);
   const [customers, setCustomers] = useState([]);
@@ -1153,7 +1153,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
 
   const toZar = i => (i.currency && i.currency !== "ZAR") ? (i.amount||0) * (i.exchange_rate||1) : (i.amount||0);
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
-  const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + toZar(i), 0);
+  const totalPending = invoices.filter(i => i.status === "sent").reduce((s,i) => s + toZar(i), 0);
   const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + toZar(i), 0);
   const displayedInvoices = filterStatus ? invoices.filter(i => i.status === filterStatus) : invoices;
   const toggleFilter = (status) => setFilterStatus(prev => prev === status ? null : status);
@@ -1213,7 +1213,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
       <SectionHeader title="Invoicing" sub="Manage your client invoices" action="+ New Invoice" onAction={() => setShowNew(true)}/>
       <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
         <KPI label="Paid"    value={fmt(totalPaid)}    color={C.green} icon="✅" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"}/>
-        <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("pending")} active={filterStatus==="pending"}/>
+        <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
       </div>
       {filterStatus && (
@@ -1306,9 +1306,10 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div style={{marginBottom:16}}>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Status</label>
               <select value={editInv.status} onChange={e=>setEditInv({...editInv,status:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
-                <option value="pending">Pending</option>
+                <option value="sent">Pending</option>
                 <option value="paid">Paid</option>
                 <option value="overdue">Overdue</option>
+                <option value="draft">Draft</option>
               </select>
             </div>
             <div style={{display:"flex",gap:8}}>

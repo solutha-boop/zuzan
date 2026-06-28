@@ -33,6 +33,8 @@ DEFAULT_ACCOUNTS = [
     {"code": "2200", "name": "PAYE Payable",                 "type": AccountType.liability},
     {"code": "2210", "name": "UIF Payable",                  "type": AccountType.liability},
     {"code": "2220", "name": "SDL Payable",                  "type": AccountType.liability},
+    {"code": "2126", "name": "Income Tax Payable",           "type": AccountType.liability},
+    {"code": "2127", "name": "Provisional Tax Payable",      "type": AccountType.liability},
     # Equity
     {"code": "3000", "name": "Retained Income",              "type": AccountType.equity},
     # Revenue
