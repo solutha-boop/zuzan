@@ -636,8 +636,16 @@ def init_db():
 
 
             # ── Pillar 2: Client Portal (2026-06) ────────────────────────────
-            "ALTER TABLE invoices ADD COLUMN portal_token VARCHAR UNIQUE",
-            "ALTER TABLE invoices ADD COLUMN portal_token_created_at TIMESTAMP",
+            # portal_token — use DO block for PostgreSQL compatibility (IF NOT EXISTS not available in PG ALTER TABLE < 9.6)
+            """DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='invoices' AND column_name='portal_token') THEN
+                    ALTER TABLE invoices ADD COLUMN portal_token VARCHAR;
+                    CREATE UNIQUE INDEX IF NOT EXISTS ix_invoices_portal_token ON invoices (portal_token) WHERE portal_token IS NOT NULL;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='invoices' AND column_name='portal_token_created_at') THEN
+                    ALTER TABLE invoices ADD COLUMN portal_token_created_at TIMESTAMP;
+                END IF;
+            END $$""",
             # ── Pillar 1: Multi-User & Roles (2026-06) ──────────────────────
             """CREATE TABLE IF NOT EXISTS invite_tokens (
                 id INTEGER PRIMARY KEY,

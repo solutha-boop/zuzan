@@ -163,8 +163,22 @@ def next_invoice_number(company_id: int, db: Session) -> str:
 
 @invoices_router.get("/")
 async def list_invoices(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    invoices = db.query(Invoice).filter(Invoice.company_id == current_user.company_id).order_by(Invoice.created_at.desc()).all()
-    return invoices
+    try:
+        invoices = db.query(Invoice).filter(Invoice.company_id == current_user.company_id).order_by(Invoice.created_at.desc()).all()
+        return invoices
+    except Exception as e:
+        # Fallback: column may not exist yet in production DB — query without new columns
+        logger.warning(f"Invoice ORM query failed ({e}), falling back to safe column list")
+        db.rollback()
+        from sqlalchemy import text as _text
+        rows = db.execute(_text(
+            "SELECT id, company_id, invoice_number, client_name, client_email, "
+            "description, amount, vat_amount, total_amount, currency, exchange_rate, "
+            "paid_amount_zar, due_date, notes, status, issue_date, paid_date, created_at "
+            "FROM invoices WHERE company_id = :cid ORDER BY created_at DESC"
+        ), {"cid": current_user.company_id})
+        cols = list(rows.keys())
+        return [dict(zip(cols, r)) for r in rows]
 
 
 @invoices_router.post("/")
