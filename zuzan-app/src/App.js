@@ -9329,7 +9329,7 @@ export default function App() {
     if (_inviteToken) { setScreen("accept-invite"); return; }
     if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), 45000); // 45s — Render free cold start can take 40s
     fetch("https://zuzan-backend.onrender.com/auth/me", {
       headers: {"Authorization": "Bearer " + token},
       signal: controller.signal
@@ -9357,7 +9357,10 @@ export default function App() {
   const handleRegistrationComplete = userData => {
     const savedToken = localStorage.getItem("zuzan_token");
     if (!savedToken || savedToken.startsWith("demo_")) {
-      localStorage.setItem("zuzan_token", "demo_" + Date.now());
+      // Backend was unreachable during registration — send to login so user can try again
+      localStorage.removeItem("zuzan_token");
+      setScreen("login");
+      return;
     }
     setUser(userData);
     setScreen("app");
@@ -9397,7 +9400,7 @@ export default function App() {
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
       <div style={{textAlign:"center"}}>
         <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:12}}><span style={{color:C.accent}}>Zu</span>Zan</div>
-        <div style={{fontSize:13,color:C.inkMid}}>Loading your account...</div>
+        <div style={{fontSize:13,color:C.inkMid}}>Loading your account... (may take up to 45s if server is waking up)</div>
       </div>
     </div>
   );
@@ -9409,3 +9412,4 @@ export default function App() {
 
   return <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>;
 }
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           

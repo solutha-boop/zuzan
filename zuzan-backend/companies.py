@@ -12,6 +12,7 @@ from auth import get_current_user, require_role, log_action, User
 from crypto import encrypt_field, decrypt_field
 from passlib.context import CryptContext
 import logging
+import os
 import journal as journal_engine
 
 _pin_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
