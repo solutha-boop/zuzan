@@ -695,6 +695,9 @@ def init_db():
             "ALTER TABLE expenses ADD COLUMN is_on_credit BOOLEAN DEFAULT FALSE",
             # ── On-credit expense payment tracking (2026-06) ─────────────────
             "ALTER TABLE expenses ADD COLUMN paid_at TIMESTAMP",
+            # ── Pillar 2: Client Portal columns (2026-06) ────────────────────
+            "ALTER TABLE invoices ADD COLUMN portal_token VARCHAR",
+            "ALTER TABLE invoices ADD COLUMN portal_token_created_at TIMESTAMP",
             # ── Pillar 3: Stitch Bank Feeds (2026-06) ────────────────────────
             """CREATE TABLE IF NOT EXISTS stitch_connections (
                 id SERIAL PRIMARY KEY,
