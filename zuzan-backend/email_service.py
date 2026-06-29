@@ -301,6 +301,7 @@ def send_invite_email(invitee_email: str, company_name: str, inviter_name: str, 
     role_labels = {
         "admin":      "Admin",
         "accountant": "Accountant",
+        "payroll":    "Payroll Manager",
         "employee":   "Employee",
     }
     role_label = role_labels.get(role, role.title())
@@ -332,7 +333,7 @@ def send_invite_email(invitee_email: str, company_name: str, inviter_name: str, 
         invitee_email,
         f"You've been invited to join {company_name} on ZuZan",
         _wrap(body, invitee_email),
-        from_addr=FROM_SUPPORT_EMAIL,
+        from_email=FROM_SUPPORT_EMAIL,
     )
 
 
