@@ -331,6 +331,35 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     return entry
 
 
+def post_expense_paid(expense, db: Session) -> JournalEntry:
+    """
+    On-credit expense paid (supplier invoice settled):
+      DR Accounts Payable (2000)   (expense.amount — total incl. VAT, clears the AP credit)
+      CR Bank / Cash (1000)        (expense.amount)
+
+    Call after setting expense.paid_at so that the description is accurate.
+    Mirrors post_po_paid for the expense workflow.
+    """
+    cid   = expense.company_id
+    total = round(expense.amount or 0, 2)
+
+    entry = _make_entry(cid, datetime.utcnow(),
+        f"Supplier payment — {expense.vendor}: {expense.description or ''}",
+        f"EXPPAY-{expense.id}", "expense_payment", expense.id, db)
+
+    ap   = get_account(cid, "2000", db)
+    bank = get_account(cid, "1000", db)
+
+    lines = [
+        _line(entry.id, ap,   debit=total,  description=f"Clear AP — {expense.vendor}"),
+        _line(entry.id, bank, credit=total, description="Cash paid"),
+    ]
+    _assert_balanced(lines)
+    for l in lines:
+        db.add(l)
+    return entry
+
+
 def post_po_received(po, db: Session) -> JournalEntry:
     """
     Purchase order received (goods/services delivered, not yet paid):
@@ -585,6 +614,19 @@ def backfill_company(company_id: int, db: Session) -> dict:
                 posted["payroll"] += 1
             except Exception as e:
                 posted["errors"].append(f"Payslip {ps.id}: {e}")
+
+    # On-credit expenses that have been paid — clear their AP balance
+    for exp in db.query(Expense).filter(
+        Expense.company_id == company_id,
+        Expense.is_on_credit == True,
+        Expense.paid_at.isnot(None),
+    ).all():
+        if ("expense_payment", exp.id) not in existing:
+            try:
+                post_expense_paid(exp, db)
+                posted["expenses"] += 1
+            except Exception as e:
+                posted["errors"].append(f"Expense payment {exp.id}: {e}")
 
     # Purchase orders received (received, partial, and paid — all had goods delivered)
     for po in db.query(PurchaseOrder).filter(

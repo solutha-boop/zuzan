@@ -518,6 +518,49 @@ async def update_expense(expense_id: int, data: ExpenseUpdate, current_user: Use
     return expense
 
 
+@expenses_router.post("/{expense_id}/pay")
+async def pay_expense(
+    expense_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Mark an on-credit expense as paid and clear the Accounts Payable balance.
+    Posts journal entry: DR Accounts Payable (2000) / CR Bank / Cash (1000).
+    Only valid for expenses recorded with is_on_credit=True that have not yet been paid.
+    """
+    expense = db.query(Expense).filter(
+        Expense.id == expense_id,
+        Expense.company_id == current_user.company_id,
+    ).first()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    if not expense.is_on_credit:
+        raise HTTPException(
+            status_code=400,
+            detail="This expense was not recorded on credit. Only on-credit expenses can be paid via this endpoint.",
+        )
+    if expense.paid_at:
+        raise HTTPException(status_code=400, detail="Expense has already been marked as paid.")
+
+    expense.paid_at = datetime.utcnow()
+    db.commit()
+    db.refresh(expense)
+
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.post_expense_paid(expense, db)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Journal post failed for expense payment {expense.id}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Payment recording failed — journal entry could not be posted: {e}. Please retry.",
+        )
+    return expense
+
+
 @expenses_router.delete("/{expense_id}")
 async def delete_expense(expense_id: int, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     expense = db.query(Expense).filter(Expense.id == expense_id, Expense.company_id == current_user.company_id).first()

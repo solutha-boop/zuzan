@@ -853,23 +853,40 @@ async def reconciliation(
                 "detail": f"AR journal balance R {ar_journal_bal:,.2f} differs from outstanding invoice total R {ar_raw_total:,.2f} by R {ar_diff:,.2f}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
                 "amount": ar_diff})
 
-    # ── RULE 7: AP control account — journal 2000 vs open PO totals ──────────
+    # ── RULE 7: AP control account — journal 2000 vs open POs + unpaid credit expenses ──
     ap_acct = db.query(Account).filter(Account.company_id == cid, Account.code == "2000").first()
     if ap_acct:
+        from database import Expense as _ExpenseModel
         ap_journal_bal = journal_engine.account_balance(ap_acct, db)
         open_po_list = db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial"])
         ).all()
-        ap_raw_total = round(sum(po.total_amount or 0 for po in open_po_list), 2)
+        open_po_total = round(sum(po.total_amount or 0 for po in open_po_list), 2)
+        # Unpaid on-credit expenses also sit in AP (2000) until POST /expenses/{id}/pay is called.
+        credit_exp_total = round(
+            sum(
+                (exp.amount or 0)
+                for exp in db.query(_ExpenseModel).filter(
+                    _ExpenseModel.company_id == cid,
+                    _ExpenseModel.is_on_credit == True,
+                    _ExpenseModel.paid_at == None,  # noqa: E711
+                ).all()
+            ),
+            2,
+        )
+        ap_raw_total = round(open_po_total + credit_exp_total, 2)
         ap_diff = round(ap_journal_bal - ap_raw_total, 2)
+        detail_breakdown = f"Open POs R {open_po_total:,.2f}"
+        if credit_exp_total:
+            detail_breakdown += f" + unpaid credit expenses R {credit_exp_total:,.2f}"
         if abs(ap_diff) < 1.0:
             checks.append({"rule": "AP Control Account (2000)", "status": "pass",
-                "detail": f"Journal AP balance R {ap_journal_bal:,.2f} reconciles with open PO total R {ap_raw_total:,.2f} ✓",
+                "detail": f"Journal AP balance R {ap_journal_bal:,.2f} reconciles with {detail_breakdown} = R {ap_raw_total:,.2f} ✓",
                 "amount": ap_journal_bal})
         else:
             checks.append({"rule": "AP Control Account (2000)", "status": "fail",
-                "detail": f"AP journal balance R {ap_journal_bal:,.2f} differs from open PO total R {ap_raw_total:,.2f} by R {ap_diff:,.2f}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
+                "detail": f"AP journal balance R {ap_journal_bal:,.2f} differs from {detail_breakdown} = R {ap_raw_total:,.2f} by R {ap_diff:,.2f}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
                 "amount": ap_diff})
 
     # ── RULE 8: Inventory valuation ───────────────────────────────────────────
@@ -1389,11 +1406,11 @@ async def creditors_aging(
     db: Session = Depends(get_db)
 ):
     """
-    Creditors book with aging — outstanding purchase orders (received/partial)
-    grouped by supplier, aged from due date (delivery_date + payment_terms days).
-    Fully paid POs are excluded.
+    Creditors book with aging — outstanding purchase orders (received/partial) and
+    unpaid on-credit expenses, grouped by vendor/supplier, aged from due date.
+    Fully paid POs and paid credit expenses are excluded.
     """
-    from database import Supplier as SupplierModel
+    from database import Supplier as SupplierModel, Expense as ExpenseModel
     from crypto import decrypt_field
     cid = current_user.company_id
     now = datetime.utcnow()
@@ -1459,6 +1476,56 @@ async def creditors_aging(
         vendor_map[vendor_name]["invoices"].append(entry)
         vendor_map[vendor_name]["total"] = round(
             vendor_map[vendor_name]["total"] + (po.total_amount or 0), 2
+        )
+
+    # On-credit expenses not yet paid — these create an AP liability identical to POs.
+    # Aged from expense_date + 30 days (expenses have no per-supplier payment_terms).
+    credit_expenses = db.query(ExpenseModel).filter(
+        ExpenseModel.company_id == cid,
+        ExpenseModel.is_on_credit == True,
+        ExpenseModel.paid_at == None,  # noqa: E711
+    ).all()
+
+    for exp in credit_expenses:
+        vendor_name = exp.vendor or "Unknown"
+        base_date = exp.expense_date or exp.created_at
+        exp_payment_terms = 30  # default — expenses don't have a supplier-level payment_terms
+        due_date = base_date + timedelta(days=exp_payment_terms) if base_date else None
+        days_overdue = (now - due_date).days if due_date else 0
+        bucket = (
+            "not_due" if days_overdue < 0
+            else "current" if days_overdue <= 30
+            else "31_60"   if days_overdue <= 60
+            else "61_90"   if days_overdue <= 90
+            else "over_90"
+        )
+
+        if vendor_name not in vendor_map:
+            vendor_map[vendor_name] = {
+                "vendor":        vendor_name,
+                "supplier_id":   None,
+                "bank_name":     None,
+                "account_number":None,
+                "branch_code":   None,
+                "account_type":  None,
+                "invoices": [],
+                "total": 0,
+            }
+
+        entry = {
+            "id":            f"EXP-{exp.id}",
+            "description":   exp.description or f"Expense — {exp.vendor}",
+            "status":        "on_credit",
+            "amount":        round(exp.amount or 0, 2),
+            "received_date": base_date.strftime("%Y-%m-%d") if base_date else None,
+            "due_date":      due_date.strftime("%Y-%m-%d") if due_date else None,
+            "days_overdue":  max(0, days_overdue),
+            "days_until_due":max(0, -days_overdue) if days_overdue < 0 else 0,
+            "bucket":        bucket,
+        }
+        vendor_map[vendor_name]["invoices"].append(entry)
+        vendor_map[vendor_name]["total"] = round(
+            vendor_map[vendor_name]["total"] + (exp.amount or 0), 2
         )
 
     vendors = sorted(vendor_map.values(), key=lambda x: x["total"], reverse=True)

@@ -123,6 +123,9 @@ class Expense(Base):
     # When True, the expense was purchased on credit (not yet cash-paid).
     # journal.post_expense will credit Accounts Payable (2000) instead of Bank (1000).
     is_on_credit=Column(Boolean,default=False)
+    # Set by POST /expenses/{id}/pay once the supplier invoice is settled.
+    # NULL means unpaid (still an open creditor). Non-NULL means AP cleared.
+    paid_at=Column(DateTime,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="expenses")
 
@@ -690,6 +693,8 @@ def init_db():
             "ALTER TABLE journal_entries ADD COLUMN is_reversal_of INTEGER",
             # ── Credit-term expenses (2026-06) ───────────────────────────────
             "ALTER TABLE expenses ADD COLUMN is_on_credit BOOLEAN DEFAULT FALSE",
+            # ── On-credit expense payment tracking (2026-06) ─────────────────
+            "ALTER TABLE expenses ADD COLUMN paid_at TIMESTAMP",
             # ── Pillar 3: Stitch Bank Feeds (2026-06) ────────────────────────
             """CREATE TABLE IF NOT EXISTS stitch_connections (
                 id SERIAL PRIMARY KEY,
