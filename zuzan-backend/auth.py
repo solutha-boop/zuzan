@@ -462,7 +462,7 @@ async def invite_member(
     import secrets as _secrets
 
     # Validate role
-    valid_roles = ["admin", "accountant", "employee"]
+    valid_roles = ["admin", "accountant", "payroll", "employee"]
     if data.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Role must be one of: {', '.join(valid_roles)}")
 
@@ -625,7 +625,7 @@ async def update_team_member(
     db: Session = Depends(get_db),
 ):
     """Change a team member's role (owner only)."""
-    valid_roles = ["admin", "accountant", "employee"]
+    valid_roles = ["admin", "accountant", "payroll", "employee"]
     if data.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Role must be one of: {', '.join(valid_roles)}")
 

@@ -6022,7 +6022,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
     </div>
   );
 
-  const roleLabels = {admin:"Admin", accountant:"Accountant", employee:"Employee"};
+  const roleLabels = {admin:"Admin", accountant:"Accountant", payroll:"Payroll Manager", employee:"Employee"};
 
   return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -6137,7 +6137,7 @@ function TeamSettings({user}) {
 
   const isOwnerOrAdmin = user?.role === "owner" || user?.role === "admin";
   const roleBadge = (role) => {
-    const map = {owner:["#1B3A6B","#E8EEF8"],admin:["#C8401A","#FBF0EC"],accountant:["#00878A","#E0F4F5"],employee:["#888","#F5F5F5"]};
+    const map = {owner:["#1B3A6B","#E8EEF8"],admin:["#C8401A","#FBF0EC"],accountant:["#00878A","#E0F4F5"],payroll:["#7B2D8B","#F5EAF8"],employee:["#888","#F5F5F5"]};
     const [fg, bg] = map[role] || ["#888","#F5F5F5"];
     return <span style={{padding:"2px 9px",borderRadius:20,fontSize:10,fontWeight:700,color:fg,background:bg}}>{role.charAt(0).toUpperCase()+role.slice(1)}</span>;
   };
@@ -6225,6 +6225,7 @@ function TeamSettings({user}) {
                 <select value={inviteForm.role} onChange={e=>setInviteForm(v=>({...v,role:e.target.value}))} style={{...inp,width:"100%"}}>
                   <option value="admin">Admin</option>
                   <option value="accountant">Accountant</option>
+                  <option value="payroll">Payroll Manager</option>
                   <option value="employee">Employee</option>
                 </select>
               </div>
@@ -9425,6 +9426,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
   // Role-gated nav: employees see only dashboard and settings
   const visibleTabs = TABS.filter(t => {
     if (user?.role === "employee") return ["dashboard","settings"].includes(t.id);
+    if (user?.role === "payroll") return ["dashboard","payroll","employees","settings"].includes(t.id);
     if (user?.role === "accountant") return !["payroll"].includes(t.id);
     return true; // owner and admin see everything
   });
