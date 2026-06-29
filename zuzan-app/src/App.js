@@ -9426,7 +9426,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
   // Role-gated nav: employees see only dashboard and settings
   const visibleTabs = TABS.filter(t => {
     if (user?.role === "employee") return ["dashboard","settings"].includes(t.id);
-    if (user?.role === "payroll") return ["dashboard","payroll","employees","settings"].includes(t.id);
+    if (user?.role === "payroll") return ["payroll"].includes(t.id);
     if (user?.role === "accountant") return !["payroll"].includes(t.id);
     return true; // owner and admin see everything
   });
