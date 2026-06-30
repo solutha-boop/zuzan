@@ -520,7 +520,7 @@ function Dashboard({live = {}}) {
           rows: allRows.map(r=>r.cols)});
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
-        const rows = invs.filter(i => ["pending","sent","overdue"].includes(i.status))
+        const rows = invs.filter(i => ["sent","overdue"].includes(i.status))
           .sort((a,b) => new Date(a.due_date||0)-new Date(b.due_date||0));
         const today = new Date();
         setDrill({type, title:"Outstanding — Pending & Overdue", color:C.gold,
@@ -4803,12 +4803,12 @@ function Creditors({live = {}}) {
     api("/reports/creditors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
   }, []);
 
-  // Refresh when a PO is received or paid
+  // Refresh when a PO is received or paid, or when an on-credit expense is paid
   useEffect(() => {
-    if (live.purchaseOrders) {
+    if (live.purchaseOrders || live.expenses) {
       api("/reports/creditors-aging").then(setData).catch(()=>null);
     }
-  }, [live.purchaseOrders]); // eslint-disable-line
+  }, [live.purchaseOrders, live.expenses]); // eslint-disable-line
 
   const BUCKETS = [
     {key:"not_due",  label:"Not Yet Due",   color:C.blue},

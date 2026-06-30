@@ -492,8 +492,12 @@ async def dashboard(
     net_profit   = gross_profit - total_payroll
     tax_provision = max(0, net_profit * 0.27)
 
-    # VAT position — all-time output vs input VAT
-    all_invoices_vat = db.query(Invoice).filter(Invoice.company_id == cid).all()
+    # VAT position — all-time output vs input VAT.
+    # Exclude draft invoices: VAT liability only arises on issued (sent/overdue/paid) invoices.
+    all_invoices_vat = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+    ).all()
     output_vat = round(sum(i.vat_amount or 0 for i in all_invoices_vat), 2)
     input_vat  = round(sum(e.vat_amount or 0 for e in expenses), 2)
     net_vat_payable = round(output_vat - input_vat, 2)
@@ -775,7 +779,11 @@ async def reconciliation(
                        "days": (now - i.due_date).days} for i in overdue_90]})
 
     # ── RULE 3: VAT control reconciliation ────────────────────────────────────
-    all_invoices = db.query(Invoice).filter(Invoice.company_id==cid).all()
+    # Exclude draft invoices from output VAT — consistent with /reports/dashboard fix.
+    all_invoices = db.query(Invoice).filter(
+        Invoice.company_id==cid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+    ).all()
     all_expenses = db.query(Expense).filter(Expense.company_id==cid).all()
     vat_output   = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
     vat_input    = round(sum(e.vat_amount or 0 for e in all_expenses), 2)
