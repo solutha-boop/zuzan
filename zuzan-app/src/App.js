@@ -5125,27 +5125,20 @@ const SA_BANKS = [
 ];
 
 function BankFeeds() {
-  const [seStatus,   setSeStatus]  = useState(null);   // Salt Edge status
-  const [stStatus,   setStStatus]  = useState(null);   // Stitch status
+  const [status,     setStatus]    = useState(null);
   const [accounts,   setAccounts]  = useState([]);
   const [txns,       setTxns]      = useState([]);
   const [txnTab,     setTxnTab]    = useState("unmatched");
   const [syncing,    setSyncing]   = useState(false);
-  const [connecting, setConnecting]= useState(null);  // null|"saltedge"|"stitch"
+  const [connecting, setConnecting]= useState(false);
   const [banner,     setBanner]    = useState(null);  // "success"|"error"|"syncing"|null
   const [matchModal, setMatchModal]= useState(null);
   const [invoices,   setInvoices]  = useState([]);
   const [expenses,   setExpenses]  = useState([]);
 
-  // Which provider is active (Salt Edge takes priority)
-  const activeProvider = seStatus?.connected ? "saltedge" : stStatus?.connected ? "stitch" : null;
-  const activeStatus   = activeProvider === "saltedge" ? seStatus : stStatus;
-  const pfx = activeProvider === "saltedge" ? "/banking/saltedge" : "/banking/stitch";
-
-  // Detect callbacks from redirects
+  // Detect Salt Edge callback redirect (?saltedge=callback&connection_id=XXX)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    // Salt Edge returns ?saltedge=callback&connection_id=XXX
     if (params.get("saltedge") === "callback") {
       const connId = params.get("connection_id");
       window.history.replaceState({}, "", window.location.pathname + "#bankfeeds");
@@ -5153,24 +5146,15 @@ function BankFeeds() {
       const url = connId ? `/banking/saltedge/callback?connection_id=${connId}` : "/banking/saltedge/callback";
       api(url).then(() => { setBanner("success"); loadAll(); }).catch(() => setBanner("error"));
     }
-    // Stitch returns ?stitch=connected or ?stitch=error
-    if (params.get("stitch") === "connected") { setBanner("success"); window.history.replaceState({}, "", window.location.pathname); loadAll(); }
-    if (params.get("stitch") === "error")     { setBanner("error");   window.history.replaceState({}, "", window.location.pathname); }
   }, []); // eslint-disable-line
 
   const loadAll = async () => {
-    const [se, st] = await Promise.all([
-      api("/banking/saltedge/status").catch(() => ({connected: false})),
-      api("/banking/stitch/status").catch(()  => ({connected: false})),
-    ]);
-    setSeStatus(se);
-    setStStatus(st);
-    const prov = se.connected ? "saltedge" : st.connected ? "stitch" : null;
-    if (prov) {
-      const base = prov === "saltedge" ? "/banking/saltedge" : "/banking/stitch";
+    const se = await api("/banking/saltedge/status").catch(() => ({connected: false}));
+    setStatus(se);
+    if (se.connected) {
       const [accts, t] = await Promise.all([
-        api(`${base}/accounts`),
-        api(`${base}/transactions?match_status=unmatched&limit=200`),
+        api("/banking/saltedge/accounts"),
+        api(`/banking/saltedge/transactions?match_status=unmatched&limit=200`),
       ]);
       setAccounts(accts);
       setTxns(t);
@@ -5180,27 +5164,22 @@ function BankFeeds() {
   useEffect(() => { loadAll(); }, []); // eslint-disable-line
 
   useEffect(() => {
-    if (!activeProvider) return;
-    api(`${pfx}/transactions?match_status=${txnTab}&limit=200`).then(setTxns).catch(()=>{});
-  }, [txnTab, activeProvider]); // eslint-disable-line
+    if (!status?.connected) return;
+    api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`).then(setTxns).catch(()=>{});
+  }, [txnTab, status?.connected]); // eslint-disable-line
 
-  const handleConnect = async (provider) => {
-    setConnecting(provider);
+  const handleConnect = async () => {
+    setConnecting(true);
     try {
-      if (provider === "saltedge") {
-        const res = await api("/banking/saltedge/connect");
-        window.location.href = res.connect_url;
-      } else {
-        const res = await api("/banking/stitch/connect");
-        window.location.href = res.auth_url;
-      }
-    } catch(e) { alert("Could not initiate bank connection: " + e.message); setConnecting(null); }
+      const res = await api("/banking/saltedge/connect");
+      window.location.href = res.connect_url;
+    } catch(e) { alert("Could not initiate bank connection: " + e.message); setConnecting(false); }
   };
 
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await api(`${pfx}/sync`, {method:"POST"});
+      const res = await api("/banking/saltedge/sync", {method:"POST"});
       await loadAll();
       alert(`Synced ${res.accounts_synced} account(s), ${res.transactions_new} new transaction(s).`);
     } catch(e) { alert("Sync failed: " + e.message); }
@@ -5210,8 +5189,8 @@ function BankFeeds() {
   const handleDisconnect = async () => {
     if (!window.confirm("Disconnect your bank? Transaction history will be kept.")) return;
     try {
-      await api(`${pfx}/disconnect`, {method:"DELETE"});
-      setSeStatus({connected:false}); setStStatus({connected:false}); setAccounts([]); setTxns([]);
+      await api("/banking/saltedge/disconnect", {method:"DELETE"});
+      setStatus({connected:false}); setAccounts([]); setTxns([]);
     } catch(e) { alert("Disconnect failed: " + e.message); }
   };
 
@@ -5224,27 +5203,27 @@ function BankFeeds() {
 
   const handleMatch = async (txn, invoiceId, expenseId) => {
     try {
-      await api(`${pfx}/transactions/${txn.id}/match`, {
+      await api(`/banking/saltedge/transactions/${txn.id}/match`, {
         method:"POST", body: JSON.stringify({invoice_id: invoiceId||null, expense_id: expenseId||null}),
       });
       setMatchModal(null);
-      const t = await api(`${pfx}/transactions?match_status=${txnTab}&limit=200`);
+      const t = await api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`);
       setTxns(t);
     } catch(e) { alert("Match failed: " + e.message); }
   };
 
   const handleExclude = async (txn) => {
     try {
-      await api(`${pfx}/transactions/${txn.id}/exclude`, {method:"POST"});
-      const t = await api(`${pfx}/transactions?match_status=${txnTab}&limit=200`);
+      await api(`/banking/saltedge/transactions/${txn.id}/exclude`, {method:"POST"});
+      const t = await api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`);
       setTxns(t);
     } catch(e) { alert(e.message); }
   };
 
   const handleUnmatch = async (txn) => {
     try {
-      await api(`${pfx}/transactions/${txn.id}/unmatch`, {method:"POST"});
-      const t = await api(`${pfx}/transactions?match_status=${txnTab}&limit=200`);
+      await api(`/banking/saltedge/transactions/${txn.id}/unmatch`, {method:"POST"});
+      const t = await api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`);
       setTxns(t);
     } catch(e) { alert(e.message); }
   };
@@ -5262,7 +5241,7 @@ function BankFeeds() {
     return <span style={{background:bg,color:col,borderRadius:4,padding:"1px 6px",fontSize:10,fontWeight:700}}>{pct}%</span>;
   };
 
-  if (seStatus === null && stStatus === null) return <div style={{padding:32,color:C.inkMid,fontSize:13}}>Loading bank connection…</div>;
+  if (status === null) return <div style={{padding:32,color:C.inkMid,fontSize:13}}>Loading bank connection…</div>;
 
   const txnDate = (t) => (t.made_on || t.txn_date || t.date || "").slice(0,10);
 
@@ -5292,12 +5271,12 @@ function BankFeeds() {
         <div>
           <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Live Bank Feeds</div>
           <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>
-            {activeProvider
-              ? `Connected via ${activeProvider === "saltedge" ? "Salt Edge" : "Stitch"} · ${activeStatus?.accounts_count ?? accounts.length} account(s) · Last synced: ${activeStatus?.last_synced ? activeStatus.last_synced.slice(0,16).replace("T"," ") : "never"}`
+            {status?.connected
+              ? `Connected · ${status?.accounts_count ?? accounts.length} account(s) · Last synced: ${status?.last_synced ? status.last_synced.slice(0,16).replace("T"," ") : "never"}`
               : "Connect your SA bank for automatic transaction imports"}
           </div>
         </div>
-        {activeProvider && (
+        {status?.connected && (
           <div style={{display:"flex",gap:8}}>
             <button onClick={handleSync} disabled={syncing} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"9px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:syncing?0.6:1}}>
               {syncing ? "Syncing…" : "↻ Sync Now"}
@@ -5309,32 +5288,20 @@ function BankFeeds() {
         )}
       </div>
 
-      {!activeProvider ? (
-        /* Not connected — show both provider options */
+      {!status?.connected ? (
+        /* Not connected */
         <div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
-            {/* Salt Edge — primary */}
-            <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:14,padding:24,textAlign:"center"}}>
-              <div style={{fontSize:28,marginBottom:8}}>🔵</div>
-              <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:4}}>Salt Edge</div>
-              <div style={{fontSize:11,color:C.inkMid,lineHeight:1.6,marginBottom:16}}>
-                Connect FNB, ABSA, Standard Bank, Nedbank, Capitec & more via Salt Edge open banking.
-              </div>
-              <button onClick={()=>handleConnect("saltedge")} disabled={!!connecting} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",opacity:connecting?"saltedge"===connecting?0.6:0.4:1}}>
-                {connecting==="saltedge" ? "Redirecting…" : "🔗 Connect via Salt Edge"}
-              </button>
+          <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:14,padding:32,textAlign:"center",marginBottom:20}}>
+            <div style={{fontSize:32,marginBottom:12}}>🏦</div>
+            <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:8}}>Connect your SA bank account</div>
+            <div style={{fontSize:12,color:C.inkMid,lineHeight:1.7,maxWidth:420,margin:"0 auto"}}>
+              ZuZan uses <strong>Salt Edge</strong> to securely connect to FNB, ABSA, Standard Bank, Nedbank, Capitec, and Investec.
+              Your credentials go directly to your bank — ZuZan never sees your banking password.
+              Transactions sync automatically and are matched to your invoices and expenses.
             </div>
-            {/* Stitch — secondary */}
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:24,textAlign:"center",opacity:0.7}}>
-              <div style={{fontSize:28,marginBottom:8}}>🟠</div>
-              <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:4}}>Stitch Money</div>
-              <div style={{fontSize:11,color:C.inkMid,lineHeight:1.6,marginBottom:16}}>
-                Alternative open banking provider for SA banks. Pending approval.
-              </div>
-              <button onClick={()=>handleConnect("stitch")} disabled={!!connecting} style={{background:C.surface,color:C.ink,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 20px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",width:"100%",opacity:connecting==="stitch"?0.6:1}}>
-                {connecting==="stitch" ? "Redirecting…" : "Connect via Stitch"}
-              </button>
-            </div>
+            <button onClick={handleConnect} disabled={connecting} style={{marginTop:20,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 28px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:connecting?0.6:1}}>
+              {connecting ? "Redirecting…" : "🔗 Connect Bank Account"}
+            </button>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
             {["🟢 FNB","🔴 ABSA","🔵 Standard Bank","🟩 Nedbank","💜 Capitec","⬛ Investec"].map(b=>(
