@@ -221,7 +221,7 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
 
     # Map received quantities to items
     received_map = {r.item_id: r.quantity_received for r in data.items}
-    received_total = 0.0
+    received_total = 0.0   # ex-VAT amount received in THIS call
     all_received = True
 
     for item in po.items:
@@ -231,12 +231,19 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
         received_value = round(qty_recv * item.unit_price, 2)
         received_total += received_value
 
+    received_total = round(received_total, 2)
+
+    # Proportional VAT: apply the same VAT rate as the PO (15% if VAT-applicable, 0 otherwise)
+    vat_rate = (po.vat_amount / po.subtotal) if (po.subtotal and po.vat_amount) else 0.0
+    received_vat   = round(received_total * vat_rate, 2)
+    received_total_with_vat = round(received_total + received_vat, 2)
+
     # Update PO status
     po.status = "received" if all_received else "partial"
     po.received_date = datetime.utcnow()
 
     # NOTE: We use the double-entry journal (post_po_received) as the single
-    # source of truth — DR Inventory / CR Accounts Payable.
+    # source of truth — DR Cost of Sales / CR Accounts Payable.
     # Creating a separate Expense record would double-count the cost, so we
     # ignore data.create_expense here; the journal entry IS the cost record.
     expense_id = None
@@ -246,7 +253,18 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
 
     try:
         journal_engine.init_accounts(current_user.company_id, db)
-        journal_engine.post_po_received(po, db)
+
+        # Post a journal entry for the amount received in THIS call.
+        # Each call (first receive or subsequent partial delivery) posts its own
+        # incremental entry, so the AP and COGS accounts accumulate correctly.
+        # Zero-value deliveries are skipped — they have no financial impact.
+        if received_total_with_vat > 0:
+            journal_engine.post_po_received(
+                po, db,
+                received_net=received_total,
+                received_vat=received_vat,
+            )
+
         db.commit()
     except Exception as e:
         logger.error(f"Journal post failed for PO {po.po_number}: {e}")
@@ -311,7 +329,36 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
 
     try:
         journal_engine.init_accounts(current_user.company_id, db)
-        journal_engine.post_po_paid(po, db)
+
+        # Determine the actual AP balance to clear.
+        # For full receipts this equals po.total_amount.
+        # For partial POs the AP balance is the sum of incremental delivery credits
+        # posted to account 2000 by each post_po_received call — which may be less
+        # than po.total_amount.  Paying po.total_amount would over-debit AP and
+        # mis-state the bank balance.
+        from database import Account as _Acct, JournalEntry as _JE, JournalLine as _JL
+        ap_acct = db.query(_Acct).filter(
+            _Acct.company_id == current_user.company_id,
+            _Acct.code == "2000",
+        ).first()
+        ap_balance = None
+        if ap_acct:
+            ap_lines = (
+                db.query(_JL)
+                .join(_JE, _JL.entry_id == _JE.id)
+                .filter(
+                    _JE.company_id == current_user.company_id,
+                    _JE.source == "purchase_order",
+                    _JE.source_id == po.id,
+                    _JL.account_id == ap_acct.id,
+                )
+                .all()
+            )
+            total_ap_credits = sum(l.credit for l in ap_lines)
+            if total_ap_credits > 0:
+                ap_balance = round(total_ap_credits, 2)
+
+        journal_engine.post_po_paid(po, db, paid_amount=ap_balance)
         db.commit()
     except Exception as e:
         logger.error(f"Journal post failed for PO payment {po.po_number}: {e}")

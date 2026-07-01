@@ -1418,7 +1418,7 @@ async def creditors_aging(
     unpaid on-credit expenses, grouped by vendor/supplier, aged from due date.
     Fully paid POs and paid credit expenses are excluded.
     """
-    from database import Supplier as SupplierModel, Expense as ExpenseModel
+    from database import Supplier as SupplierModel, Expense as ExpenseModel, Account as _Account, JournalEntry as _JE, JournalLine as _JL
     from crypto import decrypt_field
     cid = current_user.company_id
     now = datetime.utcnow()
@@ -1428,6 +1428,28 @@ async def creditors_aging(
         PurchaseOrder.company_id == cid,
         PurchaseOrder.status.in_(["received", "partial"]),
     ).order_by(PurchaseOrder.received_date.desc()).all()
+
+    # For partial POs, the true AP balance is the sum of AP credits posted to account 2000
+    # by each individual delivery (post_po_received), not po.total_amount.
+    # We pre-build this lookup so the per-PO loop is O(1).
+    ap_acct = db.query(_Account).filter(_Account.company_id == cid, _Account.code == "2000").first()
+    po_ap_amounts: dict = {}  # po.id -> actual AP credits outstanding (excl. any partial payment)
+    if ap_acct and open_pos:
+        po_ids = [po.id for po in open_pos]
+        rows = (
+            db.query(_JE.source_id, func.sum(_JL.credit))
+            .join(_JL, _JL.entry_id == _JE.id)
+            .filter(
+                _JE.company_id == cid,
+                _JE.source == "purchase_order",
+                _JE.source_id.in_(po_ids),
+                _JL.account_id == ap_acct.id,
+            )
+            .group_by(_JE.source_id)
+            .all()
+        )
+        for po_id, total_credit in rows:
+            po_ap_amounts[po_id] = round(total_credit or 0, 2)
 
     # Build a supplier lookup for payment terms and bank details
     supplier_cache: dict = {}
@@ -1470,11 +1492,17 @@ async def creditors_aging(
                 "total": 0,
             }
 
+        # Use the journal AP balance for this PO as the creditor amount.
+        # For partial POs this reflects only what was actually delivered; for full
+        # receipts it equals po.total_amount.  Fall back to po.total_amount when
+        # no journal entry exists yet (e.g. immediately after a failed journal post).
+        po_amount = po_ap_amounts.get(po.id, round(po.total_amount or 0, 2))
+
         entry = {
             "id":           po.po_number,
             "description":  po.notes or f"Purchase order {po.po_number}",
             "status":       po.status,
-            "amount":       round(po.total_amount or 0, 2),
+            "amount":       po_amount,
             "received_date":base_date.strftime("%Y-%m-%d") if base_date else None,
             "due_date":     due_date.strftime("%Y-%m-%d") if due_date else None,
             "days_overdue": max(0, days_overdue),
@@ -1483,7 +1511,7 @@ async def creditors_aging(
         }
         vendor_map[vendor_name]["invoices"].append(entry)
         vendor_map[vendor_name]["total"] = round(
-            vendor_map[vendor_name]["total"] + (po.total_amount or 0), 2
+            vendor_map[vendor_name]["total"] + po_amount, 2
         )
 
     # On-credit expenses not yet paid — these create an AP liability identical to POs.

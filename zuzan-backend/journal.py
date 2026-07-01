@@ -360,7 +360,12 @@ def post_expense_paid(expense, db: Session) -> JournalEntry:
     return entry
 
 
-def post_po_received(po, db: Session) -> JournalEntry:
+def post_po_received(
+    po,
+    db: Session,
+    received_net: float = None,
+    received_vat: float = None,
+) -> JournalEntry:
     """
     Purchase order received (goods/services delivered, not yet paid):
       DR Cost of Sales (5000)      (amount excl VAT)
@@ -372,11 +377,22 @@ def post_po_received(po, db: Session) -> JournalEntry:
     Inventory (1200). Physical stock levels are tracked separately via the
     InventoryItem table. This keeps the journal P&L consistent with the
     dashboard figures shown to users.
+
+    received_net / received_vat: when provided (partial receipts), the journal
+    posts these amounts rather than the full po.total_amount.  The caller is
+    responsible for computing them as the ex-VAT and VAT amounts actually
+    received in this delivery.  Omit (or pass None) for full-quantity receipts.
     """
     cid = po.company_id
-    total = round(po.total_amount or 0, 2)
-    vat   = round(po.vat_amount   or 0, 2)
-    net   = round(total - vat, 2)
+    if received_net is not None:
+        # Partial receipt — post only what was actually delivered
+        net   = round(received_net, 2)
+        vat   = round(received_vat or 0, 2)
+        total = round(net + vat, 2)
+    else:
+        total = round(po.total_amount or 0, 2)
+        vat   = round(po.vat_amount   or 0, 2)
+        net   = round(total - vat, 2)
 
     entry = _make_entry(cid, po.received_date or datetime.utcnow(),
         f"PO received — {po.supplier_name or 'Supplier'}",
@@ -396,14 +412,18 @@ def post_po_received(po, db: Session) -> JournalEntry:
     return entry
 
 
-def post_po_paid(po, db: Session) -> JournalEntry:
+def post_po_paid(po, db: Session, paid_amount: float = None) -> JournalEntry:
     """
     Supplier invoice paid:
-      DR Accounts Payable   (total_amount)
-      CR Bank / Cash        (total_amount)
+      DR Accounts Payable   (paid_amount or po.total_amount)
+      CR Bank / Cash        (paid_amount or po.total_amount)
+
+    paid_amount: when provided, only this amount is cleared from AP (used for
+    partial POs where the AP balance equals the sum of delivered amounts, which
+    may be less than po.total_amount).  Omit for full-quantity POs.
     """
     cid = po.company_id
-    total = round(po.total_amount or 0, 2)
+    total = round(paid_amount if paid_amount is not None else (po.total_amount or 0), 2)
     entry = _make_entry(cid, datetime.utcnow(),
         f"Supplier payment — {po.supplier_name or 'Supplier'}",
         po.po_number, "po_payment", po.id, db)
