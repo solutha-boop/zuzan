@@ -171,6 +171,7 @@ from leave import router as leave_router
 from fixed_assets import router as fixed_assets_router
 from portal import portal_router
 from stitch import stitch_router
+from saltedge import saltedge_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -193,6 +194,7 @@ app.include_router(leave_router,        prefix="/leave",           tags=["Leave"
 app.include_router(fixed_assets_router, prefix="/fixed-assets",    tags=["Fixed Assets"])
 app.include_router(portal_router,        prefix="/portal",           tags=["Portal"])
 app.include_router(stitch_router,        prefix="/banking/stitch",   tags=["Bank Feeds"])
+app.include_router(saltedge_router,      prefix="/banking/saltedge", tags=["Bank Feeds"])
 
 
 @app.get("/")

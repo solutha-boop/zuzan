@@ -540,6 +540,56 @@ class StitchTransaction(Base):
     bank_account        = relationship("StitchBankAccount", back_populates="transactions")
     company             = relationship("Company", foreign_keys=[company_id])
 
+class SaltEdgeConnection(Base):
+    """Salt Edge connection for a company (one per company)."""
+    __tablename__ = "saltedge_connections"
+    id                      = Column(Integer, primary_key=True, index=True)
+    company_id              = Column(Integer, ForeignKey("companies.id"), unique=True, nullable=False)
+    saltedge_customer_id    = Column(String, nullable=True)   # Salt Edge customer id
+    saltedge_connection_id  = Column(String, nullable=True, unique=True)  # connection id
+    provider_name           = Column(String, nullable=True)   # e.g. "FNB", "ABSA"
+    status                  = Column(String, default="active")  # active|inactive|error
+    connected_at            = Column(DateTime, default=datetime.utcnow)
+    last_synced             = Column(DateTime, nullable=True)
+    company                 = relationship("Company", foreign_keys=[company_id])
+
+class SaltEdgeBankAccount(Base):
+    """A bank account synced from Salt Edge."""
+    __tablename__ = "saltedge_bank_accounts"
+    id                      = Column(Integer, primary_key=True, index=True)
+    company_id              = Column(Integer, ForeignKey("companies.id"))
+    connection_id           = Column(Integer, ForeignKey("saltedge_connections.id"))
+    saltedge_account_id     = Column(String, nullable=False, unique=True)
+    name                    = Column(String, nullable=True)
+    nature                  = Column(String, nullable=True)   # card, account, savings, etc.
+    balance                 = Column(Float, nullable=True)
+    currency_code           = Column(String, default="ZAR")
+    is_active               = Column(Boolean, default=True)
+    last_synced             = Column(DateTime, nullable=True)
+    created_at              = Column(DateTime, default=datetime.utcnow)
+    company                 = relationship("Company", foreign_keys=[company_id])
+    transactions            = relationship("SaltEdgeTransaction", back_populates="bank_account", cascade="all, delete-orphan")
+
+class SaltEdgeTransaction(Base):
+    """A transaction synced from Salt Edge."""
+    __tablename__ = "saltedge_transactions"
+    id                  = Column(Integer, primary_key=True, index=True)
+    company_id          = Column(Integer, ForeignKey("companies.id"))
+    bank_account_id     = Column(Integer, ForeignKey("saltedge_bank_accounts.id"))
+    saltedge_txn_id     = Column(String, nullable=False, unique=True)
+    amount              = Column(Float, nullable=False)    # positive=credit, negative=debit
+    description         = Column(Text, nullable=True)
+    made_on             = Column(DateTime, nullable=False)
+    status              = Column(String, nullable=True)    # posted|pending
+    match_status        = Column(String, default="unmatched")  # unmatched|matched|excluded
+    matched_invoice_id  = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    matched_expense_id  = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    match_confidence    = Column(Float, nullable=True)
+    matched_at          = Column(DateTime, nullable=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    bank_account        = relationship("SaltEdgeBankAccount", back_populates="transactions")
+    company             = relationship("Company", foreign_keys=[company_id])
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
@@ -735,6 +785,46 @@ def init_db():
                 reference VARCHAR,
                 txn_date TIMESTAMP NOT NULL,
                 running_balance FLOAT,
+                match_status VARCHAR DEFAULT 'unmatched',
+                matched_invoice_id INTEGER REFERENCES invoices(id),
+                matched_expense_id INTEGER REFERENCES expenses(id),
+                match_confidence FLOAT,
+                matched_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            # ── Salt Edge Bank Feeds (2026-07) ───────────────────────────────
+            """CREATE TABLE IF NOT EXISTS saltedge_connections (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER UNIQUE REFERENCES companies(id),
+                saltedge_customer_id VARCHAR,
+                saltedge_connection_id VARCHAR UNIQUE,
+                provider_name VARCHAR,
+                status VARCHAR DEFAULT 'active',
+                connected_at TIMESTAMP DEFAULT NOW(),
+                last_synced TIMESTAMP
+            )""",
+            """CREATE TABLE IF NOT EXISTS saltedge_bank_accounts (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                connection_id INTEGER REFERENCES saltedge_connections(id),
+                saltedge_account_id VARCHAR NOT NULL UNIQUE,
+                name VARCHAR,
+                nature VARCHAR,
+                balance FLOAT,
+                currency_code VARCHAR DEFAULT 'ZAR',
+                is_active BOOLEAN DEFAULT TRUE,
+                last_synced TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            """CREATE TABLE IF NOT EXISTS saltedge_transactions (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                bank_account_id INTEGER REFERENCES saltedge_bank_accounts(id) ON DELETE CASCADE,
+                saltedge_txn_id VARCHAR NOT NULL UNIQUE,
+                amount FLOAT NOT NULL,
+                description TEXT,
+                made_on TIMESTAMP NOT NULL,
+                status VARCHAR,
                 match_status VARCHAR DEFAULT 'unmatched',
                 matched_invoice_id INTEGER REFERENCES invoices(id),
                 matched_expense_id INTEGER REFERENCES expenses(id),
