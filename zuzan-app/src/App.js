@@ -5256,18 +5256,6 @@ function BankFeedPanel({ bank }) {
 
   if (status === null) return <div style={{padding:20,color:C.inkMid,fontSize:12}}>Loading {bankLabel} connection…</div>;
 
-  // Not configured yet (no client credentials)
-  if (!status.configured) return (
-    <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:12,padding:24,textAlign:"center"}}>
-      <div style={{fontSize:22,marginBottom:8}}>{bankIcon}</div>
-      <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>{bankLabel} Direct Feed — Coming Soon</div>
-      <div style={{fontSize:11,color:C.inkMid,lineHeight:1.7,maxWidth:380,margin:"0 auto"}}>
-        Partnership application submitted. Once credentials are approved by {bankLabel},
-        your clients will be able to link their {bankLabel} accounts directly — no password sharing required.
-      </div>
-    </div>
-  );
-
   return (
     <div>
       {/* Banners */}
