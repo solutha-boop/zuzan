@@ -54,6 +54,7 @@ def to_dict(po):
         "notes": po.notes,
         "received_date": po.received_date.strftime("%Y-%m-%d") if getattr(po, "received_date", None) else None,
         "items": [{"id": i.id, "description": i.description, "quantity": i.quantity,
+                   "quantity_received": i.quantity_received or 0,
                    "unit_price": i.unit_price, "total": i.total} for i in po.items],
         "created_at": po.created_at.isoformat(),
     }
@@ -114,6 +115,11 @@ async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get
     if data.delivery_date is not None:
         po.delivery_date = datetime.strptime(data.delivery_date, "%Y-%m-%d")
     if data.items is not None:
+        # Block item edits once goods have been received (audit fix 2026-07-02):
+        # replacing items would wipe quantity_received tracking and desync the
+        # journal entries already posted for prior deliveries.
+        if po.status in ("received", "partial", "paid"):
+            raise HTTPException(400, f"Cannot edit items on a PO with status '{po.status}' — journal entries exist for received goods")
         for old in po.items: db.delete(old)
         db.flush()
         vat_applicable = data.vat_applicable if data.vat_applicable is not None else (po.vat_amount > 0)
@@ -216,21 +222,41 @@ class POReceive(BaseModel):
 async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id, PurchaseOrder.company_id == current_user.company_id).first()
     if not po: raise HTTPException(404, "Purchase order not found")
-    if po.status in ("received", "cancelled"):
+    # "paid" is blocked too (audit fix 2026-07-02): receiving after payment would flip the
+    # status back to partial/received, re-opening a settled creditor. Deliveries after
+    # payment must be recorded on a new PO.
+    if po.status in ("received", "paid", "cancelled"):
         raise HTTPException(400, f"Cannot receive a PO with status '{po.status}'")
 
-    # Map received quantities to items
+    # Map received quantities to items.
+    # Cumulative tracking (audit fix 2026-07-02): each item accumulates quantity_received
+    # across deliveries, so multi-delivery POs eventually reach "received" and a delivery
+    # exceeding the remaining ordered quantity is rejected instead of double-posting.
     received_map = {r.item_id: r.quantity_received for r in data.items}
     received_total = 0.0   # ex-VAT amount received in THIS call
-    all_received = True
+    EPS = 1e-6             # float tolerance for quantity comparisons
 
     for item in po.items:
         qty_recv = received_map.get(item.id, 0)
-        if qty_recv < item.quantity:
-            all_received = False
-        received_value = round(qty_recv * item.unit_price, 2)
-        received_total += received_value
+        if qty_recv < 0:
+            raise HTTPException(400, f"Received quantity for '{item.description}' cannot be negative")
+        already = item.quantity_received or 0
+        remaining = (item.quantity or 0) - already
+        if qty_recv > remaining + EPS:
+            raise HTTPException(
+                400,
+                f"Cannot receive {qty_recv:g} of '{item.description}' — "
+                f"{already:g} of {item.quantity:g} already received "
+                f"(only {max(0, remaining):g} outstanding). "
+                f"Enter this delivery's quantity only, not the full order."
+            )
+        item.quantity_received = round(already + qty_recv, 6)
+        received_total += round(qty_recv * item.unit_price, 2)
 
+    all_received = all(
+        (item.quantity_received or 0) >= (item.quantity or 0) - EPS
+        for item in po.items
+    )
     received_total = round(received_total, 2)
 
     # Proportional VAT: apply the same VAT rate as the PO (15% if VAT-applicable, 0 otherwise)
@@ -240,7 +266,10 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
 
     # Update PO status
     po.status = "received" if all_received else "partial"
-    po.received_date = datetime.utcnow()
+    # Keep the FIRST delivery date (audit fix 2026-07-02): overwriting on each partial
+    # delivery shifted the PO's COGS into the latest delivery month in trend reports.
+    if not po.received_date:
+        po.received_date = datetime.utcnow()
 
     # NOTE: We use the double-entry journal (post_po_received) as the single
     # source of truth — DR Cost of Sales / CR Accounts Payable.

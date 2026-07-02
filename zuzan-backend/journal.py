@@ -655,7 +655,23 @@ def backfill_company(company_id: int, db: Session) -> dict:
     ).all():
         if ("purchase_order", po.id) not in existing:
             try:
-                post_po_received(po, db)
+                # Partial POs: post only the delivered value (audit fix 2026-07-02),
+                # derived from per-item quantity_received. Legacy partial POs with no
+                # tracking data (all zero) fall back to the full amount — consistent
+                # with _po_delivered_net in the P&L reports.
+                kwargs = {}
+                if po.status == "partial":
+                    delivered_net = round(sum(
+                        (i.quantity_received or 0) * (i.unit_price or 0)
+                        for i in po.items
+                    ), 2)
+                    if delivered_net > 0:
+                        vat_rate = (po.vat_amount / po.subtotal) if (po.subtotal and po.vat_amount) else 0.0
+                        kwargs = {
+                            "received_net": delivered_net,
+                            "received_vat": round(delivered_net * vat_rate, 2),
+                        }
+                post_po_received(po, db, **kwargs)
                 posted["purchase_orders"] += 1
             except Exception as e:
                 posted["errors"].append(f"PO {po.po_number} receive: {e}")

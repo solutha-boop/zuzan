@@ -23,6 +23,31 @@ def _to_zar(inv) -> float:
         return (inv.total_amount or 0) * (inv.exchange_rate or 1.0)
     return inv.total_amount or 0
 
+
+def _po_delivered_net(po) -> float:
+    """Ex-VAT value of goods actually delivered on a purchase order.
+
+    Full subtotal for received/paid POs. For partial POs, sums per-item
+    quantity_received × unit_price so the P&L matches the incremental journal
+    postings (audit fix 2026-07-02). Legacy partial POs with no receipt
+    tracking (all quantity_received = 0) fall back to the full subtotal —
+    consistent with the full-amount journal entry their backfill posted."""
+    net_full = (po.total_amount or 0) - (po.vat_amount or 0)
+    if po.status != "partial":
+        return round(net_full, 2)
+    delivered = sum((i.quantity_received or 0) * (i.unit_price or 0) for i in po.items)
+    if delivered > 0:
+        return round(delivered, 2)
+    return round(net_full, 2)  # legacy partial PO — no tracking data
+
+
+def _po_delivered_total(po) -> float:
+    """VAT-inclusive value of goods actually delivered (net + proportional VAT)."""
+    net = _po_delivered_net(po)
+    vat_rate = (po.vat_amount / po.subtotal) if (po.subtotal and po.vat_amount) else 0.0
+    return round(net * (1 + vat_rate), 2)
+
+
 logger = logging.getLogger("zuzan.payroll")
 
 # SA TAX TABLES — Multi-year for audit history
@@ -454,9 +479,11 @@ async def dashboard(
     ).all()
     total_expenses = sum(e.amount - (e.vat_amount or 0) for e in expenses)
 
-    # Include PO COGS: all received purchase orders — ex-VAT to match expense treatment
+    # Include PO COGS: all received purchase orders — ex-VAT to match expense treatment.
+    # Delivered value only (audit fix 2026-07-02): partial POs count what was actually
+    # received, matching the incremental journal postings.
     po_cogs = sum(
-        (po.total_amount or 0) - (po.vat_amount or 0)
+        _po_delivered_net(po)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
@@ -609,9 +636,10 @@ async def monthly_trend(
                 Expense.expense_date < end
             ).all()
         )
-        # Add PO COGS for POs received/partial/paid in this month — ex-VAT
+        # Add PO COGS for POs received/partial/paid in this month — ex-VAT,
+        # delivered value only for partial POs (audit fix 2026-07-02)
         po_cogs = sum(
-            (po.total_amount or 0) - (po.vat_amount or 0)
+            _po_delivered_net(po)
             for po in db.query(PurchaseOrder).filter(
                 PurchaseOrder.company_id == cid,
                 PurchaseOrder.status.in_(["received", "partial", "paid"]),
@@ -824,11 +852,12 @@ async def reconciliation(
             "amount": payroll_liab})
 
     # ── RULE 5: Accounts payable — open POs received but not cleared ──────────
+    # Delivered value only for partial POs (audit fix 2026-07-02)
     open_pos = db.query(PurchaseOrder).filter(
         PurchaseOrder.company_id==cid,
         PurchaseOrder.status.in_(["received","partial"])
     ).all()
-    ap_total = round(sum(po.total_amount or 0 for po in open_pos), 2)
+    ap_total = round(sum(_po_delivered_total(po) for po in open_pos), 2)
     if not open_pos:
         checks.append({"rule": "Accounts Payable", "status": "pass",
             "detail": "No received purchase orders awaiting payment.", "amount": None, "items": []})
@@ -837,7 +866,7 @@ async def reconciliation(
             "detail": f"{len(open_pos)} received PO(s) totalling R {ap_total:,.2f} recorded as accounts payable.",
             "amount": ap_total,
             "items": [{"id": po.po_number, "supplier": po.supplier_name,
-                       "amount": po.total_amount, "status": po.status} for po in open_pos]})
+                       "amount": _po_delivered_total(po), "status": po.status} for po in open_pos]})
 
     # ── RULE 6: AR control account — journal 1100 vs outstanding invoices ────
     from database import Account, JournalLine
@@ -864,13 +893,37 @@ async def reconciliation(
     # ── RULE 7: AP control account — journal 2000 vs open POs + unpaid credit expenses ──
     ap_acct = db.query(Account).filter(Account.company_id == cid, Account.code == "2000").first()
     if ap_acct:
-        from database import Expense as _ExpenseModel
+        from database import Expense as _ExpenseModel, JournalEntry as _JE
         ap_journal_bal = journal_engine.account_balance(ap_acct, db)
         open_po_list = db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial"])
         ).all()
-        open_po_total = round(sum(po.total_amount or 0 for po in open_po_list), 2)
+        # Per-PO expected AP = sum of AP credits posted by each delivery (audit fix
+        # 2026-07-02) — same lookup as /reports/creditors-aging. Using po.total_amount
+        # here false-failed this check whenever a partially delivered PO existed,
+        # because the journal correctly carries only the delivered amount.
+        # Fallback to po.total_amount when no journal entry exists yet.
+        po_ap_credit_map: dict = {}
+        if open_po_list:
+            _rows = (
+                db.query(_JE.source_id, func.sum(JournalLine.credit))
+                .join(JournalLine, JournalLine.entry_id == _JE.id)
+                .filter(
+                    _JE.company_id == cid,
+                    _JE.source == "purchase_order",
+                    _JE.source_id.in_([po.id for po in open_po_list]),
+                    JournalLine.account_id == ap_acct.id,
+                )
+                .group_by(_JE.source_id)
+                .all()
+            )
+            for _po_id, _credit in _rows:
+                po_ap_credit_map[_po_id] = round(_credit or 0, 2)
+        open_po_total = round(sum(
+            po_ap_credit_map.get(po.id, round(po.total_amount or 0, 2))
+            for po in open_po_list
+        ), 2)
         # Unpaid on-credit expenses also sit in AP (2000) until POST /expenses/{id}/pay is called.
         credit_exp_total = round(
             sum(
@@ -1118,7 +1171,8 @@ async def management_accounts(
         PurchaseOrder.received_date >= period_start,
         PurchaseOrder.received_date < period_end,
     ).all()
-    po_cogs = round(sum((po.total_amount or 0) - (po.vat_amount or 0) for po in po_cogs_items), 2)
+    # Delivered value only for partial POs (audit fix 2026-07-02)
+    po_cogs = round(sum(_po_delivered_net(po) for po in po_cogs_items), 2)
     if po_cogs:
         total_expenses = round(total_expenses + po_cogs, 2)
         expense_by_cat["Cost of Sales (POs)"] = round(
@@ -1188,7 +1242,7 @@ async def management_accounts(
             Expense.company_id == cid,
             Expense.expense_date >= start, Expense.expense_date < end).all()
         exp = round(sum(ex.amount - (ex.vat_amount or 0) for ex in exp_rows), 2)
-        po_c = round(sum((po.total_amount or 0) - (po.vat_amount or 0) for po in db.query(PurchaseOrder).filter(
+        po_c = round(sum(_po_delivered_net(po) for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
             PurchaseOrder.received_date >= start,

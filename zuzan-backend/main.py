@@ -172,6 +172,7 @@ from fixed_assets import router as fixed_assets_router
 from portal import portal_router
 from stitch import stitch_router
 from saltedge import saltedge_router
+from financial_statements import router as fin_stmts_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -195,6 +196,7 @@ app.include_router(fixed_assets_router, prefix="/fixed-assets",    tags=["Fixed 
 app.include_router(portal_router,        prefix="/portal",           tags=["Portal"])
 app.include_router(stitch_router,        prefix="/banking/stitch",   tags=["Bank Feeds"])
 app.include_router(saltedge_router,      prefix="/banking/saltedge", tags=["Bank Feeds"])
+app.include_router(fin_stmts_router,     prefix="/financial-statements", tags=["Financial Statements"])
 
 
 @app.get("/")
@@ -251,7 +253,7 @@ async def api_list_employees(auth=Depends(require_api_key)):
 @app.get("/v1/summary", tags=["Public API"])
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
-    from payroll import _to_zar
+    from payroll import _to_zar, _po_delivered_net
     from database import InvoiceStatus, PurchaseOrder, Payslip, DepreciationEntry
     paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.paid).all()
     out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
@@ -259,9 +261,11 @@ async def api_summary(auth=Depends(require_api_key)):
     # Expenses ex-VAT
     exp_rows = db.query(Expense).filter(Expense.company_id==company.id).all()
     total_expenses = sum(e.amount - (e.vat_amount or 0) for e in exp_rows)
-    # Add PO COGS (received/partial/paid purchase orders) — ex-VAT
+    # Add PO COGS (received/partial/paid purchase orders) — ex-VAT.
+    # Delivered value only for partial POs (audit fix 2026-07-02) — consistent
+    # with /reports/dashboard and the incremental journal postings.
     po_cogs = sum(
-        (po.total_amount or 0) - (po.vat_amount or 0)
+        _po_delivered_net(po)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id==company.id,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),

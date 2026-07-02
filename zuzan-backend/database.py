@@ -247,6 +247,9 @@ class PurchaseOrderItem(Base):
     purchase_order_id=Column(Integer,ForeignKey("purchase_orders.id"))
     description=Column(String,nullable=False)
     quantity=Column(Float,default=1); unit_price=Column(Float,default=0); total=Column(Float,default=0)
+    # Cumulative quantity received across all deliveries (audit fix 2026-07-02:
+    # enables multi-delivery POs to reach "received" and blocks over-receipt double-posting)
+    quantity_received=Column(Float,default=0)
     purchase_order=relationship("PurchaseOrder",back_populates="items")
 
 class Quote(Base):
@@ -792,6 +795,14 @@ def init_db():
                 matched_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT NOW()
             )""",
+            # ── PO cumulative receipt tracking (audit fix 2026-07-02) ────────
+            # Added WITHOUT a SQL default so pre-migration rows are NULL and can be
+            # backfilled: items on fully received/paid POs were fully delivered.
+            # Remaining NULLs (draft/sent/partial POs) become 0. All three statements
+            # are idempotent — safe to run on every startup.
+            "ALTER TABLE purchase_order_items ADD COLUMN quantity_received FLOAT",
+            "UPDATE purchase_order_items SET quantity_received = quantity WHERE quantity_received IS NULL AND purchase_order_id IN (SELECT id FROM purchase_orders WHERE status IN ('received','paid'))",
+            "UPDATE purchase_order_items SET quantity_received = 0 WHERE quantity_received IS NULL",
             # ── Salt Edge Bank Feeds (2026-07) ───────────────────────────────
             """CREATE TABLE IF NOT EXISTS saltedge_connections (
                 id SERIAL PRIMARY KEY,

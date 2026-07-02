@@ -7804,13 +7804,16 @@ function PurchaseOrders() {
               <div style={{fontWeight:700,fontSize:16,color:C.ink,marginTop:4}}>Total: R{viewing.total_amount.toFixed(2)}</div>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              {!["received","partial","paid","cancelled"].includes(viewing.status) && (
+              {!["received","paid","cancelled"].includes(viewing.status) && (
                 <button onClick={()=>{
+                  // Default each line to the REMAINING quantity (audit fix 2026-07-02):
+                  // partial POs can now take further deliveries, and the backend rejects
+                  // receipts exceeding the outstanding quantity.
                   const init = {};
-                  viewing.items.forEach(it=>{ init[it.id]=it.quantity; });
+                  viewing.items.forEach(it=>{ init[it.id]=Math.max(0,(it.quantity||0)-(it.quantity_received||0)); });
                   setRecvQtys(init); setReceiving(viewing);
                 }} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
-                  📦 Receive Goods
+                  📦 {viewing.status==="partial" ? "Receive Remaining Goods" : "Receive Goods"}
                 </button>
               )}
               {["received","partial"].includes(viewing.status) && (
@@ -7857,28 +7860,33 @@ function PurchaseOrders() {
 
             {/* Line items with received qty */}
             <div style={{background:C.bg,borderRadius:10,padding:14,marginBottom:16}}>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",gap:8,marginBottom:8}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 65px 65px 80px",gap:8,marginBottom:8}}>
                 <div style={{fontSize:11,fontWeight:600,color:C.inkMid}}>Description</div>
                 <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Ordered</div>
-                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Received</div>
+                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Prior</div>
+                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>This delivery</div>
               </div>
-              {receiving.items.map(it=>(
-                <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",gap:8,marginBottom:8,alignItems:"center"}}>
+              {receiving.items.map(it=>{
+                const remaining = Math.max(0, (it.quantity||0) - (it.quantity_received||0));
+                return (
+                <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 65px 65px 80px",gap:8,marginBottom:8,alignItems:"center"}}>
                   <div style={{fontSize:13,color:C.ink}}>{it.description}</div>
                   <div style={{fontSize:13,color:C.inkMid,textAlign:"right"}}>{it.quantity}</div>
+                  <div style={{fontSize:13,color:(it.quantity_received||0)>0?C.green:C.inkDim,textAlign:"right"}}>{it.quantity_received||0}</div>
                   <input
-                    type="number" min="0" max={it.quantity} step="0.01"
-                    value={recvQtys[it.id]??it.quantity}
-                    onChange={e=>setRecvQtys(q=>({...q,[it.id]:parseFloat(e.target.value)||0}))}
+                    type="number" min="0" max={remaining} step="0.01"
+                    value={recvQtys[it.id]??remaining}
+                    onChange={e=>setRecvQtys(q=>({...q,[it.id]:Math.min(remaining,Math.max(0,parseFloat(e.target.value)||0))}))}
                     style={{padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontFamily:"inherit",fontSize:13,textAlign:"right",background:C.surface}}
                   />
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Received total */}
             {(()=>{
-              const recvTotal = receiving.items.reduce((s,it)=>s+(recvQtys[it.id]??it.quantity)*it.unit_price,0);
+              const recvTotal = receiving.items.reduce((s,it)=>s+(recvQtys[it.id]??Math.max(0,(it.quantity||0)-(it.quantity_received||0)))*it.unit_price,0);
               const vatAmt = receiving.vat_amount>0 ? recvTotal*0.15 : 0;
               return (
                 <div style={{background:C.greenLt,borderRadius:8,padding:14,marginBottom:16,textAlign:"right",fontSize:13}}>
@@ -7908,7 +7916,7 @@ function PurchaseOrders() {
               <button onClick={async ()=>{
                 try {
                   const payload = {
-                    items: receiving.items.map(it=>({item_id:it.id, quantity_received: recvQtys[it.id]??it.quantity})),
+                    items: receiving.items.map(it=>({item_id:it.id, quantity_received: recvQtys[it.id]??Math.max(0,(it.quantity||0)-(it.quantity_received||0))})),
                     create_expense: true,
                     expense_category: recvCategory,
                   };
@@ -9378,6 +9386,321 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
   );
 }
 
+// ── ANNUAL FINANCIAL STATEMENTS ───────────────────────────────────────────────
+function FinancialStatements() {
+  const now   = new Date();
+  const defFY = now.getMonth() >= 2 ? now.getFullYear() : now.getFullYear() - 1;
+  const [year, setYear]   = useState(defFY);
+  const [data, setData]   = useState(null);
+  const [tab,  setATab]   = useState("is");   // is | bs | cf | notes
+  const [loading, setL]   = useState(false);
+  const [err,  setErr]    = useState(null);
+  const token = localStorage.getItem("zuzan_token");
+
+  const years = Array.from({length:6},(_,i)=>defFY-i);
+
+  useEffect(() => { load(); }, [year]);
+
+  async function load() {
+    setL(true); setErr(null);
+    try {
+      const r = await fetch(`${BASE_URL}/financial-statements/annual?year=${year}`,
+        {headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error((await r.json()).detail || "Failed");
+      setData(await r.json());
+    } catch(e) { setErr(e.message); }
+    finally { setL(false); }
+  }
+
+  const fmt = v => "R " + (v||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const pct = v => (v||0).toFixed(1) + "%";
+  const neg = v => v < 0;
+
+  const Row = ({label, value, bold, indent, hr, sub}) => (
+    <>
+      {hr && <tr><td colSpan={2}><div style={{borderTop:`1px solid ${C.border}`,margin:"4px 0"}}/></td></tr>}
+      <tr style={{background:bold?"#fdf9f7":"transparent"}}>
+        <td style={{padding:"5px 8px",paddingLeft: indent?32:8,fontSize:sub?11:13,color:sub?C.inkMid:C.ink,fontWeight:bold?700:400}}>{label}</td>
+        <td style={{padding:"5px 8px",textAlign:"right",fontSize:sub?11:13,fontWeight:bold?700:400,
+          color:neg(value)?"#C8401A":bold?"#1a1a1a":C.ink,fontFamily:"monospace",whiteSpace:"nowrap"}}>
+          {value !== undefined ? fmt(value) : ""}
+        </td>
+      </tr>
+    </>
+  );
+
+  function renderIS() {
+    if (!data) return null;
+    const is = data.income_statement;
+    return (
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <tbody>
+          <Row label="REVENUE" bold/>
+          {is.revenue_lines.map(l=><Row key={l.code} label={`${l.name}`} value={l.amount} indent sub/>)}
+          <Row label="Total Revenue" value={is.total_revenue} bold hr/>
+          <Row label="COST OF GOODS SOLD" bold/>
+          {is.cogs_lines.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total COGS" value={is.total_cogs} bold hr/>
+          <Row label="Gross Profit" value={is.gross_profit} bold hr/>
+          <tr><td style={{padding:"3px 8px",fontSize:11,color:C.inkMid,fontStyle:"italic"}} colSpan={2}>
+            Gross Margin: {pct(is.gross_margin_pct)}</td></tr>
+          <Row label="OPERATING EXPENSES" bold/>
+          {is.opex_lines.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          {is.depreciation>0 && <Row label="Depreciation" value={is.depreciation} indent sub/>}
+          <Row label="Total Operating Expenses" value={is.total_opex} bold hr/>
+          <Row label="Operating Profit (EBIT)" value={is.ebit} bold hr/>
+          <Row label="Income Tax (27%)" value={is.tax_expense} indent/>
+          <Row label="NET PROFIT FOR THE YEAR" value={is.net_profit} bold hr/>
+        </tbody>
+      </table>
+    );
+  }
+
+  function renderBS() {
+    if (!data) return null;
+    const bs = data.balance_sheet;
+    return (
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <tbody>
+          <Row label="ASSETS" bold/>
+          <Row label="Non-Current Assets" bold sub/>
+          {bs.assets.non_current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total Non-Current Assets" value={bs.assets.total_non_current} bold hr/>
+          <Row label="Current Assets" bold sub/>
+          {bs.assets.current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total Current Assets" value={bs.assets.total_current} bold hr/>
+          <Row label="TOTAL ASSETS" value={bs.assets.total} bold hr/>
+
+          <tr><td colSpan={2} style={{height:12}}/></tr>
+          <Row label="EQUITY AND LIABILITIES" bold/>
+          <Row label="Equity" bold sub/>
+          {bs.equity.lines.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Retained Earnings" value={bs.equity.retained_earnings} indent sub/>
+          <Row label="Total Equity" value={bs.equity.total} bold hr/>
+
+          <Row label="Non-Current Liabilities" bold sub/>
+          {bs.liabilities.non_current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          {!bs.liabilities.non_current.length && <Row label="No non-current liabilities" indent sub/>}
+          <Row label="Total Non-Current Liabilities" value={bs.liabilities.total_non_current} bold hr/>
+
+          <Row label="Current Liabilities" bold sub/>
+          {bs.liabilities.current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total Current Liabilities" value={bs.liabilities.total_current} bold hr/>
+
+          <Row label="TOTAL EQUITY AND LIABILITIES" value={bs.total_equity_and_liabilities} bold hr/>
+          {bs.balanced
+            ? <tr><td colSpan={2} style={{padding:"6px 8px",fontSize:11,color:"#28a745",fontStyle:"italic"}}>✓ Balance sheet balances</td></tr>
+            : <tr><td colSpan={2} style={{padding:"6px 8px",fontSize:11,color:"#C8401A",fontStyle:"italic"}}>⚠ Difference: {fmt(Math.abs(bs.assets.total-bs.total_equity_and_liabilities))} — post journal entries to correct.</td></tr>
+          }
+        </tbody>
+      </table>
+    );
+  }
+
+  function renderCF() {
+    if (!data) return null;
+    const cf = data.cash_flow;
+    return (
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <tbody>
+          <Row label="OPERATING ACTIVITIES" bold/>
+          <Row label="Net profit for the year"         value={cf.operating.net_profit}           indent/>
+          <Row label="Adjustments:"                                                                indent sub/>
+          <Row label="  Add: Depreciation"             value={cf.operating.add_depreciation}     indent sub/>
+          <Row label="Changes in working capital:"                                                 indent sub/>
+          <Row label="  (Increase)/Decrease in trade receivables" value={cf.operating.change_in_ar}      indent sub/>
+          <Row label="  Increase/(Decrease) in trade payables"    value={cf.operating.change_in_ap}      indent sub/>
+          <Row label="  (Increase)/Decrease in inventory"         value={cf.operating.change_in_inventory} indent sub/>
+          <Row label="Net Cash from Operating Activities"         value={cf.operating.total}     bold hr/>
+
+          <tr><td colSpan={2} style={{height:8}}/></tr>
+          <Row label="INVESTING ACTIVITIES" bold/>
+          <Row label="Purchase of property, plant & equipment" value={cf.investing.purchase_of_fa} indent/>
+          {cf.investing.disposal_proceeds!==0 && <Row label="Proceeds from disposal of assets" value={cf.investing.disposal_proceeds} indent/>}
+          <Row label="Net Cash from Investing Activities" value={cf.investing.total} bold hr/>
+
+          <tr><td colSpan={2} style={{height:8}}/></tr>
+          <Row label="FINANCING ACTIVITIES" bold/>
+          <Row label="Proceeds from / repayment of loans" value={0} indent sub/>
+          <Row label="Net Cash from Financing Activities" value={0} bold hr/>
+
+          <tr><td colSpan={2} style={{height:8}}/></tr>
+          <Row label="Net Increase / (Decrease) in Cash" value={cf.net_change} bold hr/>
+          <Row label="Cash at beginning of period"       value={cf.opening_cash} indent/>
+          <Row label="Cash at end of period"             value={cf.closing_cash} bold/>
+        </tbody>
+      </table>
+    );
+  }
+
+  function renderNotes() {
+    if (!data) return null;
+    const n = data.notes;
+    const p = n.accounting_policies;
+    return (
+      <div>
+        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>1. Accounting Policies</p>
+        {Object.entries(p).map(([k,v])=>(
+          <div key={k} style={{marginBottom:10}}>
+            <p style={{fontSize:12,fontWeight:600,color:C.ink,textTransform:"capitalize",marginBottom:2}}>{k.replace(/_/g," ")}</p>
+            <p style={{fontSize:12,color:C.inkMid,lineHeight:1.6}}>{v}</p>
+          </div>
+        ))}
+
+        <div style={{borderTop:`1px solid ${C.border}`,margin:"20px 0"}}/>
+        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>2. Property, Plant and Equipment</p>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:"#f8f5f2"}}>
+                {["Number","Name","Category","Cost","Accum. Dep","Carrying Value","Method","Life","Status"].map(h=>(
+                  <th key={h} style={{padding:"6px 8px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {n.fixed_assets.length === 0
+                ? <tr><td colSpan={9} style={{padding:16,textAlign:"center",color:C.inkMid}}>No fixed assets</td></tr>
+                : n.fixed_assets.map(fa=>(
+                <tr key={fa.number} style={{borderBottom:`1px solid ${C.border}`}}>
+                  <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.number}</td>
+                  <td style={{padding:"5px 8px"}}>{fa.name}</td>
+                  <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.category}</td>
+                  <td style={{padding:"5px 8px",fontFamily:"monospace"}}>{fmt(fa.cost)}</td>
+                  <td style={{padding:"5px 8px",fontFamily:"monospace"}}>{fmt(fa.accum_dep)}</td>
+                  <td style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700}}>{fmt(fa.carrying)}</td>
+                  <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.dep_method}</td>
+                  <td style={{padding:"5px 8px",color:C.inkMid,textAlign:"right"}}>{fa.useful_life} mo</td>
+                  <td style={{padding:"5px 8px"}}><span style={{padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,
+                    background:fa.status==="active"?"#d4edda":"#f8d7da",
+                    color:fa.status==="active"?"#155724":"#721c24"}}>{fa.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{borderTop:`1px solid ${C.border}`,margin:"20px 0"}}/>
+        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>3. Trade Receivables</p>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <tbody>
+            <tr><td style={{padding:"5px 8px"}}>Current (not yet overdue)</td><td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{fmt(n.receivables_aging.current)}</td></tr>
+            <tr><td style={{padding:"5px 8px"}}>Overdue</td><td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#C8401A"}}>{fmt(n.receivables_aging.overdue)}</td></tr>
+            <tr style={{fontWeight:700,borderTop:`1px solid ${C.border}`}}><td style={{padding:"5px 8px"}}>Total Trade Receivables</td><td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{fmt(n.receivables_aging.total)}</td></tr>
+          </tbody>
+        </table>
+
+        <div style={{borderTop:`1px solid ${C.border}`,margin:"20px 0"}}/>
+        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>4. Other Disclosures</p>
+        <p style={{fontSize:12,color:C.inkMid,marginBottom:6}}>Inventory value (at cost): <strong>{fmt(n.inventory_value)}</strong></p>
+        <p style={{fontSize:12,color:C.inkMid}}>Number of employees at reporting date: <strong>{n.headcount}</strong></p>
+      </div>
+    );
+  }
+
+  const STABS = [
+    {id:"is",    label:"Income Statement"},
+    {id:"bs",    label:"Balance Sheet"},
+    {id:"cf",    label:"Cash Flow Statement"},
+    {id:"notes", label:"Notes"},
+  ];
+
+  const meta = data?.meta;
+
+  return (
+    <div>
+      <style>{`@media print {
+        .afs-no-print { display:none!important; }
+        .afs-paper { box-shadow:none!important; border:none!important; }
+      }`}</style>
+
+      {/* Header row */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
+        <div>
+          <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:0}}>Annual Financial Statements</h2>
+          <p style={{fontSize:12,color:C.inkMid,margin:0}}>IFRS for SMEs — SA Financial Year (1 March – 28/29 February)</p>
+        </div>
+        <div style={{marginLeft:"auto",display:"flex",gap:10,alignItems:"center"}} className="afs-no-print">
+          <select value={year} onChange={e=>setYear(Number(e.target.value))}
+            style={{padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.surface,color:C.ink}}>
+            {years.map(y=><option key={y} value={y}>FY {y} (1 Mar {y-1} – 28 Feb {y})</option>)}
+          </select>
+          {data && (
+            <button onClick={()=>window.print()}
+              style={{padding:"8px 16px",background:C.accent,color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+              🖨 Print / PDF
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading && <div style={{textAlign:"center",padding:60,color:C.inkMid}}>Loading financial statements…</div>}
+      {err    && <div style={{textAlign:"center",padding:40,color:"#C8401A",fontSize:14}}>⚠ {err}</div>}
+
+      {data && (
+        <div className="afs-paper" style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          {/* Company header */}
+          <div style={{padding:"28px 32px",borderBottom:`1px solid ${C.border}`,textAlign:"center"}}>
+            <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:C.ink,marginBottom:4}}>{meta.company_name}</div>
+            {meta.reg_number && <div style={{fontSize:11,color:C.inkMid}}>Registration No: {meta.reg_number}</div>}
+            {meta.vat_number && <div style={{fontSize:11,color:C.inkMid}}>VAT No: {meta.vat_number}</div>}
+            <div style={{fontSize:12,fontWeight:600,color:C.ink,marginTop:8}}>Financial Statements for the year ended {meta.period_end}</div>
+            <div style={{fontSize:11,color:C.inkMid}}>Prepared in accordance with {meta.basis} | Currency: {meta.currency}</div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,overflowX:"auto"}} className="afs-no-print">
+            {STABS.map(t=>(
+              <button key={t.id} onClick={()=>setATab(t.id)} style={{
+                flex:1,padding:"12px 8px",border:"none",cursor:"pointer",fontFamily:"inherit",
+                fontSize:12,fontWeight:tab===t.id?700:400,
+                background:tab===t.id?C.bg:"transparent",
+                color:tab===t.id?C.accent:C.inkMid,
+                borderBottom:tab===t.id?`2px solid ${C.accent}`:"2px solid transparent",
+                whiteSpace:"nowrap",
+              }}>{t.label}</button>
+            ))}
+          </div>
+
+          {/* Statement body */}
+          <div style={{padding:"28px 32px"}}>
+            {/* Print shows all 4 sections */}
+            <div className="afs-no-print">
+              {tab==="is"    && renderIS()}
+              {tab==="bs"    && renderBS()}
+              {tab==="cf"    && renderCF()}
+              {tab==="notes" && renderNotes()}
+            </div>
+            {/* Print version — all statements */}
+            <div style={{display:"none"}} className="afs-print-all">
+              <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Income Statement</p>
+              {renderIS()}
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Balance Sheet</p>
+                {renderBS()}
+              </div>
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Cash Flow Statement</p>
+                {renderCF()}
+              </div>
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Notes to the Financial Statements</p>
+                {renderNotes()}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div style={{padding:"16px 32px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.inkMid,display:"flex",justifyContent:"space-between"}}>
+            <span>Generated by ZuZan on {new Date(meta.generated_at).toLocaleDateString("en-ZA")}</span>
+            <span>These financial statements have not been independently audited or reviewed.</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
@@ -9411,7 +9734,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"creditors",  label:"Creditors",   icon:"📤"},
     {id:"coa",        label:"Accounts",    icon:"📒"},
     {id:"inventory",    label:"Inventory",   icon:"📦"},
-    {id:"fixed_assets", label:"Fixed Assets", icon:"🏭"},
+    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭"},
+    {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
     {id:"banking",    label:"Banking",     icon:"🏦", children:[
       {id:"bankimport", label:"Manual Update",   icon:"📄"},
       {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
@@ -9463,6 +9787,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     coa:        <ChartOfAccounts/>,
     inventory:       <Inventory/>,
     fixed_assets:    <FixedAssets/>,
+    fin_statements:  <FinancialStatements/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
     purchase_orders: <PurchaseOrders/>,
