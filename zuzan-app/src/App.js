@@ -9571,65 +9571,260 @@ function FinancialStatements() {
 
   function renderNotes() {
     if (!data) return null;
-    const n = data.notes;
-    const p = n.accounting_policies;
+    const n  = data.notes;
+    const p  = n.accounting_policies;
+    const hr = <div style={{borderTop:`1px solid ${C.border}`,margin:"24px 0"}}/>;
+    const NH = ({num, title}) => (
+      <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12,marginTop:0}}>{num}. {title}</p>
+    );
+    const TH = ({cols}) => (
+      <thead><tr style={{background:"#f8f5f2"}}>
+        {cols.map(h=><th key={h} style={{padding:"6px 8px",textAlign:"left",color:C.inkMid,fontWeight:600,fontSize:11,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>)}
+      </tr></thead>
+    );
+    const mono = {fontFamily:"monospace",textAlign:"right"};
+    const nil  = <span style={{color:C.inkMid,fontStyle:"italic"}}>Nil</span>;
+
     return (
-      <div>
-        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>1. Accounting Policies</p>
+      <div style={{fontSize:12,lineHeight:1.7}}>
+
+        {/* ── NOTE 1: ACCOUNTING POLICIES ─────────────────────────── */}
+        <NH num={1} title="Accounting Policies"/>
         {Object.entries(p).map(([k,v])=>(
           <div key={k} style={{marginBottom:10}}>
-            <p style={{fontSize:12,fontWeight:600,color:C.ink,textTransform:"capitalize",marginBottom:2}}>{k.replace(/_/g," ")}</p>
-            <p style={{fontSize:12,color:C.inkMid,lineHeight:1.6}}>{v}</p>
+            <span style={{fontWeight:600,color:C.ink,textTransform:"capitalize"}}>{k.replace(/_/g," ")}: </span>
+            <span style={{color:C.inkMid}}>{v}</span>
           </div>
         ))}
 
-        <div style={{borderTop:`1px solid ${C.border}`,margin:"20px 0"}}/>
-        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>2. Property, Plant and Equipment</p>
+        {hr}
+
+        {/* ── NOTE 2: PROPERTY, PLANT AND EQUIPMENT ───────────────── */}
+        <NH num={2} title="Property, Plant and Equipment"/>
         <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-            <thead>
-              <tr style={{background:"#f8f5f2"}}>
-                {["Number","Name","Category","Cost","Accum. Dep","Carrying Value","Method","Life","Status"].map(h=>(
-                  <th key={h} style={{padding:"6px 8px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>{h}</th>
-                ))}
-              </tr>
-            </thead>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <TH cols={["No.","Description","Category","Cost","Accum. Dep.","Carrying Value","Method","Life","Status"]}/>
             <tbody>
               {n.fixed_assets.length === 0
-                ? <tr><td colSpan={9} style={{padding:16,textAlign:"center",color:C.inkMid}}>No fixed assets</td></tr>
+                ? <tr><td colSpan={9} style={{padding:16,textAlign:"center",color:C.inkMid}}>No fixed assets registered.</td></tr>
                 : n.fixed_assets.map(fa=>(
-                <tr key={fa.number} style={{borderBottom:`1px solid ${C.border}`}}>
-                  <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.number}</td>
-                  <td style={{padding:"5px 8px"}}>{fa.name}</td>
-                  <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.category}</td>
-                  <td style={{padding:"5px 8px",fontFamily:"monospace"}}>{fmt(fa.cost)}</td>
-                  <td style={{padding:"5px 8px",fontFamily:"monospace"}}>{fmt(fa.accum_dep)}</td>
-                  <td style={{padding:"5px 8px",fontFamily:"monospace",fontWeight:700}}>{fmt(fa.carrying)}</td>
-                  <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.dep_method}</td>
-                  <td style={{padding:"5px 8px",color:C.inkMid,textAlign:"right"}}>{fa.useful_life} mo</td>
-                  <td style={{padding:"5px 8px"}}><span style={{padding:"2px 8px",borderRadius:20,fontSize:10,fontWeight:700,
-                    background:fa.status==="active"?"#d4edda":"#f8d7da",
-                    color:fa.status==="active"?"#155724":"#721c24"}}>{fa.status}</span></td>
-                </tr>
-              ))}
+                  <tr key={fa.number} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.number}</td>
+                    <td style={{padding:"5px 8px",fontWeight:600}}>{fa.name}</td>
+                    <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.category}</td>
+                    <td style={{padding:"5px 8px",...mono}}>{fmt(fa.cost)}</td>
+                    <td style={{padding:"5px 8px",...mono,color:"#C8401A"}}>{fmt(fa.accum_dep)}</td>
+                    <td style={{padding:"5px 8px",...mono,fontWeight:700}}>{fmt(fa.carrying)}</td>
+                    <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.dep_method}</td>
+                    <td style={{padding:"5px 8px",color:C.inkMid,textAlign:"right"}}>{fa.useful_life} mo</td>
+                    <td style={{padding:"5px 8px"}}>
+                      <span style={{padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700,
+                        background:fa.status==="active"?"#d4edda":"#f8d7da",
+                        color:fa.status==="active"?"#155724":"#721c24"}}>{fa.status}</span>
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
 
-        <div style={{borderTop:`1px solid ${C.border}`,margin:"20px 0"}}/>
-        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>3. Trade Receivables</p>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        {hr}
+
+        {/* ── NOTE 3: TRADE RECEIVABLES ───────────────────────────── */}
+        <NH num={3} title="Trade and Other Receivables"/>
+        <p style={{color:C.inkMid,marginBottom:8}}>
+          At the reporting date, {n.receivables_aging.count} invoice(s) remained outstanding totalling {fmt(n.receivables_aging.total)}.
+          Aging analysis:
+        </p>
+        <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
           <tbody>
-            <tr><td style={{padding:"5px 8px"}}>Current (not yet overdue)</td><td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{fmt(n.receivables_aging.current)}</td></tr>
-            <tr><td style={{padding:"5px 8px"}}>Overdue</td><td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace",color:"#C8401A"}}>{fmt(n.receivables_aging.overdue)}</td></tr>
-            <tr style={{fontWeight:700,borderTop:`1px solid ${C.border}`}}><td style={{padding:"5px 8px"}}>Total Trade Receivables</td><td style={{padding:"5px 8px",textAlign:"right",fontFamily:"monospace"}}>{fmt(n.receivables_aging.total)}</td></tr>
+            {[
+              ["Not yet due (current)", n.receivables_aging.current, false],
+              ["1 – 30 days overdue",   n.receivables_aging.days_1_30,  true],
+              ["31 – 60 days overdue",  n.receivables_aging.days_31_60, true],
+              ["61 – 90 days overdue",  n.receivables_aging.days_61_90, true],
+              ["Over 90 days overdue",  n.receivables_aging.days_90plus, true],
+            ].map(([label, val, red])=>(
+              <tr key={label}>
+                <td style={{padding:"4px 8px",color:C.ink}}>{label}</td>
+                <td style={{padding:"4px 8px",...mono,color:red&&val>0?"#C8401A":C.ink}}>{val > 0 ? fmt(val) : nil}</td>
+              </tr>
+            ))}
+            <tr style={{borderTop:`2px solid ${C.border}`,fontWeight:700}}>
+              <td style={{padding:"5px 8px"}}>Total Trade Receivables</td>
+              <td style={{padding:"5px 8px",...mono}}>{fmt(n.receivables_aging.total)}</td>
+            </tr>
           </tbody>
         </table>
 
-        <div style={{borderTop:`1px solid ${C.border}`,margin:"20px 0"}}/>
-        <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>4. Other Disclosures</p>
-        <p style={{fontSize:12,color:C.inkMid,marginBottom:6}}>Inventory value (at cost): <strong>{fmt(n.inventory_value)}</strong></p>
-        <p style={{fontSize:12,color:C.inkMid}}>Number of employees at reporting date: <strong>{n.headcount}</strong></p>
+        {hr}
+
+        {/* ── NOTE 4: REVENUE BY CUSTOMER ─────────────────────────── */}
+        <NH num={4} title="Revenue Analysis"/>
+        {n.revenue_by_customer.length === 0
+          ? <p style={{color:C.inkMid}}>No revenue recorded for this financial year.</p>
+          : <>
+            <p style={{color:C.inkMid,marginBottom:8}}>Revenue recognised from the following customers during the year:</p>
+            <table style={{borderCollapse:"collapse",fontSize:12,minWidth:300}}>
+              <TH cols={["Customer","Revenue (ZAR)"]}/>
+              <tbody>
+                {n.revenue_by_customer.map(r=>(
+                  <tr key={r.client} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"5px 8px"}}>{r.client}</td>
+                    <td style={{padding:"5px 8px",...mono}}>{fmt(r.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        }
+
+        {hr}
+
+        {/* ── NOTE 5: EXPENSE ANALYSIS ────────────────────────────── */}
+        <NH num={5} title="Operating Expenses by Category"/>
+        <p style={{color:C.inkMid,marginBottom:8}}>
+          Total expenses for the year (excluding VAT): <strong>{fmt(n.total_expenses_ex_vat)}</strong>
+        </p>
+        {n.expense_by_category.length === 0
+          ? <p style={{color:C.inkMid}}>No expenses recorded for this financial year.</p>
+          : <table style={{borderCollapse:"collapse",fontSize:12,minWidth:300}}>
+              <TH cols={["Category","Total (excl. VAT)"]}/>
+              <tbody>
+                {n.expense_by_category.map(e=>(
+                  <tr key={e.category} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"5px 8px"}}>{e.category}</td>
+                    <td style={{padding:"5px 8px",...mono}}>{fmt(e.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+        }
+
+        {hr}
+
+        {/* ── NOTE 6: EMPLOYEE BENEFITS ───────────────────────────── */}
+        <NH num={6} title="Employee Benefits"/>
+        {n.payroll_summary.periods_count === 0
+          ? <p style={{color:C.inkMid}}>No payroll runs recorded for this financial year.</p>
+          : <>
+            <p style={{color:C.inkMid,marginBottom:8}}>
+              {n.payroll_summary.headcount} employee(s) at reporting date.
+              Payroll processed over {n.payroll_summary.periods_count} period(s) during the year.
+            </p>
+            <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
+              <tbody>
+                {[
+                  ["Gross salaries and wages",   n.payroll_summary.gross_pay],
+                  ["Less: PAYE withheld",        -n.payroll_summary.paye],
+                  ["Less: UIF (employee)",       -n.payroll_summary.uif_employee],
+                  ["Net pay to employees",        n.payroll_summary.net_pay],
+                  ["Employer contributions — UIF", n.payroll_summary.uif_employer],
+                  ["Employer contributions — SDL", n.payroll_summary.sdl],
+                  ["Total employment cost",       n.payroll_summary.total_cost],
+                ].map(([label, val])=>(
+                  <tr key={label} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"4px 8px",color:C.ink}}>{label}</td>
+                    <td style={{padding:"4px 8px",...mono,color:val<0?"#C8401A":C.ink}}>{fmt(Math.abs(val))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        }
+
+        {hr}
+
+        {/* ── NOTE 7: TRADE PAYABLES ──────────────────────────────── */}
+        <NH num={7} title="Trade and Other Payables"/>
+        <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
+          <tbody>
+            <tr>
+              <td style={{padding:"4px 8px"}}>Outstanding purchase orders ({n.payables_summary.open_pos_count})</td>
+              <td style={{padding:"4px 8px",...mono}}>{n.payables_summary.open_pos > 0 ? fmt(n.payables_summary.open_pos) : nil}</td>
+            </tr>
+            <tr>
+              <td style={{padding:"4px 8px"}}>Unpaid credit expenses</td>
+              <td style={{padding:"4px 8px",...mono}}>{n.payables_summary.unpaid_credit_expenses > 0 ? fmt(n.payables_summary.unpaid_credit_expenses) : nil}</td>
+            </tr>
+            <tr style={{borderTop:`2px solid ${C.border}`,fontWeight:700}}>
+              <td style={{padding:"5px 8px"}}>Total Trade Payables</td>
+              <td style={{padding:"5px 8px",...mono}}>{fmt(n.payables_summary.total_payables)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {hr}
+
+        {/* ── NOTE 8: INVENTORIES ─────────────────────────────────── */}
+        <NH num={8} title="Inventories"/>
+        {n.inventory.item_count === 0
+          ? <p style={{color:C.inkMid}}>No inventory items on hand at the reporting date.</p>
+          : <>
+            <p style={{color:C.inkMid,marginBottom:8}}>
+              Inventories are carried at cost on a FIFO basis.
+              Total inventory value at reporting date: <strong>{fmt(n.inventory.total_value)}</strong> ({n.inventory.item_count} SKU(s)).
+            </p>
+            <table style={{borderCollapse:"collapse",fontSize:11,width:"100%"}}>
+              <TH cols={["SKU","Description","Qty","Unit Cost","Total Value"]}/>
+              <tbody>
+                {n.inventory.items.map(i=>(
+                  <tr key={i.sku||i.name} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"4px 8px",color:C.inkMid}}>{i.sku||"—"}</td>
+                    <td style={{padding:"4px 8px"}}>{i.name}</td>
+                    <td style={{padding:"4px 8px",textAlign:"right"}}>{i.qty}</td>
+                    <td style={{padding:"4px 8px",...mono}}>{fmt(i.unit_cost)}</td>
+                    <td style={{padding:"4px 8px",...mono,fontWeight:600}}>{fmt(i.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        }
+
+        {hr}
+
+        {/* ── NOTE 9: TAXATION ────────────────────────────────────── */}
+        <NH num={9} title="Taxation"/>
+        <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
+          <tbody>
+            <tr><td style={{padding:"4px 8px"}}>Profit before tax</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.profit_before_tax)}</td></tr>
+            <tr><td style={{padding:"4px 8px"}}>Tax at standard rate ({n.tax_note.tax_rate_pct}%)</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.current_tax)}</td></tr>
+            <tr><td style={{padding:"4px 8px",color:C.inkMid}}>Deferred tax</td><td style={{padding:"4px 8px",...mono,color:C.inkMid}}>Nil</td></tr>
+            <tr style={{borderTop:`2px solid ${C.border}`,fontWeight:700}}>
+              <td style={{padding:"5px 8px"}}>Total income tax expense</td>
+              <td style={{padding:"5px 8px",...mono}}>{fmt(n.tax_note.total_tax)}</td>
+            </tr>
+            <tr><td style={{padding:"4px 8px",color:C.inkMid,fontStyle:"italic"}} colSpan={2}>
+              Effective tax rate: {n.tax_note.effective_rate_pct}%
+            </td></tr>
+          </tbody>
+        </table>
+        <p style={{color:C.inkMid,marginTop:8}}>
+          No formal tax assessment has been issued. These amounts represent management's best estimate
+          of the income tax liability for the period. Provisional tax payments should be made in
+          accordance with SARS IRP6 deadlines.
+        </p>
+
+        {hr}
+
+        {/* ── NOTE 10: EVENTS AFTER REPORTING DATE ────────────────── */}
+        <NH num={10} title="Events after the Reporting Date"/>
+        <p style={{color:C.inkMid}}>
+          The directors are not aware of any material events that occurred after the reporting date
+          that require adjustment to or disclosure in these financial statements.
+        </p>
+
+        {hr}
+
+        {/* ── NOTE 11: GOING CONCERN ──────────────────────────────── */}
+        <NH num={11} title="Going Concern"/>
+        <p style={{color:C.inkMid}}>
+          The financial statements have been prepared on the going concern basis. The directors have
+          considered the financial position of the entity and are satisfied that the entity has
+          adequate resources to continue in operational existence for the foreseeable future.
+        </p>
+
       </div>
     );
   }

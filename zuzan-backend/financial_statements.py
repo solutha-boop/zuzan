@@ -206,7 +206,8 @@ def annual_financial_statements(
     closing_cash    = _r(opening_cash + net_cash_change)
 
     # ── NOTES ────────────────────────────────────────────────────────────────
-    # Fixed asset schedule
+
+    # Note 2 — Property, Plant and Equipment schedule (all-time, not period-filtered)
     all_fa = db.query(FixedAsset).filter(FixedAsset.company_id == cid).all()
     fa_schedule = [
         {
@@ -223,27 +224,135 @@ def annual_financial_statements(
         for fa in all_fa
     ]
 
-    # Trade receivables aging (as at period end)
+    # Note 3 — Trade receivables aging (as at period end)
     open_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
         Invoice.issue_date <= end,
     ).all()
+    # Break into aging buckets (0-30, 31-60, 61-90, 90+) based on days past due_date
+    today = datetime.utcnow()
+    def _days_overdue(inv):
+        ref = inv.due_date or inv.issue_date
+        return max(0, (today - ref).days) if ref else 0
+    ar_current = _r(sum(i.total_amount for i in open_invoices if _days_overdue(i) == 0))
+    ar_0_30    = _r(sum(i.total_amount for i in open_invoices if 1  <= _days_overdue(i) <= 30))
+    ar_31_60   = _r(sum(i.total_amount for i in open_invoices if 31 <= _days_overdue(i) <= 60))
+    ar_61_90   = _r(sum(i.total_amount for i in open_invoices if 61 <= _days_overdue(i) <= 90))
+    ar_90plus  = _r(sum(i.total_amount for i in open_invoices if _days_overdue(i) > 90))
     receivables_aging = {
-        "current":       _r(sum(i.total_amount for i in open_invoices if i.status == InvoiceStatus.sent)),
-        "overdue":       _r(sum(i.total_amount for i in open_invoices if i.status == InvoiceStatus.overdue)),
-        "total":         _r(sum(i.total_amount for i in open_invoices)),
+        "current":   ar_current,
+        "days_1_30": ar_0_30,
+        "days_31_60": ar_31_60,
+        "days_61_90": ar_61_90,
+        "days_90plus": ar_90plus,
+        "total":     _r(sum(i.total_amount for i in open_invoices)),
+        "count":     len(open_invoices),
     }
 
-    # Employee headcount
-    headcount = db.query(Employee).filter(
-        Employee.company_id == cid,
-        Employee.is_active == True,
-    ).count()
+    # Note 4 — Revenue by customer (top 10, period)
+    paid_invoices = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status == InvoiceStatus.paid,
+        Invoice.issue_date >= start,
+        Invoice.issue_date <= end,
+    ).all()
+    client_rev: dict = {}
+    for inv in paid_invoices:
+        k = inv.client_name or "Unknown"
+        client_rev[k] = client_rev.get(k, 0) + (inv.paid_amount or inv.total_amount or 0)
+    revenue_by_customer = sorted(
+        [{"client": k, "revenue": _r(v)} for k, v in client_rev.items()],
+        key=lambda x: x["revenue"], reverse=True
+    )[:10]
 
-    # Inventory value
+    # Note 5 — Expense analysis by category (period)
+    period_expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.expense_date >= start,
+        Expense.expense_date <= end,
+    ).all()
+    cat_totals: dict = {}
+    for exp in period_expenses:
+        k = exp.category or "Uncategorised"
+        cat_totals[k] = cat_totals.get(k, 0) + (exp.amount or 0)
+    expense_by_category = sorted(
+        [{"category": k, "total": _r(v)} for k, v in cat_totals.items()],
+        key=lambda x: x["total"], reverse=True
+    )
+    total_expenses_ex_vat = _r(sum(exp.amount or 0 for exp in period_expenses))
+
+    # Note 6 — Employee benefits / payroll summary (period)
+    # Payslip.period is stored as "YYYY-MM", so filter by year range
+    period_months = set()
+    d = start.replace(day=1)
+    while d <= end:
+        period_months.add(d.strftime("%Y-%m"))
+        if d.month == 12:
+            d = d.replace(year=d.year + 1, month=1)
+        else:
+            d = d.replace(month=d.month + 1)
+
+    all_payslips = db.query(Payslip).join(Employee).filter(
+        Employee.company_id == cid
+    ).all()
+    period_payslips = [p for p in all_payslips if p.period in period_months]
+    payroll_summary = {
+        "gross_pay":      _r(sum(p.gross_salary   or 0 for p in period_payslips)),
+        "paye":           _r(sum(p.paye            or 0 for p in period_payslips)),
+        "uif_employee":   _r(sum(p.uif_employee    or 0 for p in period_payslips)),
+        "uif_employer":   _r(sum(p.uif_employer    or 0 for p in period_payslips)),
+        "sdl":            _r(sum(p.sdl             or 0 for p in period_payslips)),
+        "net_pay":        _r(sum(p.net_pay         or 0 for p in period_payslips)),
+        "total_cost":     _r(sum(p.total_cost      or 0 for p in period_payslips)),
+        "periods_count":  len(set(p.period for p in period_payslips)),
+        "headcount":      db.query(Employee).filter(Employee.company_id == cid, Employee.is_active == True).count(),
+    }
+
+    # Note 7 — Trade payables (as at period end)
+    # Open POs (received/partial, not yet fully paid) + unpaid credit expenses
+    open_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial"]),
+    ).all()
+    unpaid_credit_expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.is_on_credit == True,
+        Expense.paid_at == None,
+        Expense.expense_date <= end,
+    ).all()
+    payables_summary = {
+        "open_pos":               _r(sum(po.total_amount or 0 for po in open_pos)),
+        "open_pos_count":         len(open_pos),
+        "unpaid_credit_expenses": _r(sum(e.amount or 0 for e in unpaid_credit_expenses)),
+        "total_payables":         _r(
+            sum(po.total_amount or 0 for po in open_pos) +
+            sum(e.amount or 0 for e in unpaid_credit_expenses)
+        ),
+    }
+
+    # Note 8 — Inventory detail
     inv_items = db.query(InventoryItem).filter(InventoryItem.company_id == cid, InventoryItem.is_active == True).all()
-    inventory_value = _r(sum(i.unit_cost * i.quantity_on_hand for i in inv_items))
+    inventory_note = {
+        "total_value": _r(sum(i.unit_cost * i.quantity_on_hand for i in inv_items)),
+        "item_count":  len(inv_items),
+        "items": sorted(
+            [{"name": i.name, "sku": i.sku, "qty": i.quantity_on_hand,
+              "unit_cost": _r(i.unit_cost), "total": _r(i.unit_cost * i.quantity_on_hand)}
+             for i in inv_items],
+            key=lambda x: x["total"], reverse=True
+        )[:20],
+    }
+
+    # Note 9 — Taxation
+    tax_note = {
+        "profit_before_tax": _r(ebit),
+        "tax_rate_pct":      27.0,
+        "current_tax":       _r(tax_expense),
+        "deferred_tax":      0.0,
+        "total_tax":         _r(tax_expense),
+        "effective_rate_pct": round(tax_expense / ebit * 100, 1) if ebit > 0 else 0.0,
+    }
 
     return {
         "meta": {
@@ -323,8 +432,13 @@ def annual_financial_statements(
         "notes": {
             "fixed_assets":          fa_schedule,
             "receivables_aging":     receivables_aging,
-            "inventory_value":       inventory_value,
-            "headcount":             headcount,
+            "revenue_by_customer":   revenue_by_customer,
+            "expense_by_category":   expense_by_category,
+            "total_expenses_ex_vat": total_expenses_ex_vat,
+            "payroll_summary":       payroll_summary,
+            "payables_summary":      payables_summary,
+            "inventory":             inventory_note,
+            "tax_note":              tax_note,
             "accounting_policies": {
                 "basis_of_preparation":
                     "These financial statements have been prepared in accordance with the International "
