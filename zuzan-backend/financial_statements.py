@@ -58,7 +58,7 @@ def _r(v): return round(v, 2)
 def annual_financial_statements(
     year: int = Query(..., description="Financial year end, e.g. 2025 = 1 Mar 2024 – 28 Feb 2025"),
     db: Session = Depends(get_db),
-    current_user=Depends(require_role(["owner", "admin", "accountant"])),
+    current_user=Depends(require_role("owner", "admin", "accountant")),
 ):
     cid   = current_user.company_id
     start, end = fy_dates(year)
