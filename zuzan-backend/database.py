@@ -593,6 +593,112 @@ class SaltEdgeTransaction(Base):
     bank_account        = relationship("SaltEdgeBankAccount", back_populates="transactions")
     company             = relationship("Company", foreign_keys=[company_id])
 
+# ── ABSA Direct Feed Models ───────────────────────────────────────────────────
+
+class AbsaConnection(Base):
+    """ABSA OAuth connection per company."""
+    __tablename__ = "absa_connections"
+    id            = Column(Integer, primary_key=True, index=True)
+    company_id    = Column(Integer, ForeignKey("companies.id"), unique=True, nullable=False)
+    access_token  = Column(Text, nullable=True)      # encrypted
+    refresh_token = Column(Text, nullable=True)      # encrypted
+    token_expiry  = Column(DateTime, nullable=True)
+    scopes        = Column(String, nullable=True)
+    connected_at  = Column(DateTime, default=datetime.utcnow)
+    last_synced   = Column(DateTime, nullable=True)
+    company       = relationship("Company", foreign_keys=[company_id])
+
+class AbsaBankAccount(Base):
+    """A bank account linked via ABSA for a company."""
+    __tablename__ = "absa_bank_accounts"
+    id              = Column(Integer, primary_key=True, index=True)
+    company_id      = Column(Integer, ForeignKey("companies.id"))
+    absa_account_id = Column(String, nullable=False, unique=True)
+    account_number  = Column(String, nullable=True)   # encrypted
+    account_name    = Column(String, nullable=True)
+    account_type    = Column(String, nullable=True)
+    current_balance = Column(Float, nullable=True)
+    currency        = Column(String, default="ZAR")
+    last_synced     = Column(DateTime, nullable=True)
+    is_active       = Column(Boolean, default=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    company         = relationship("Company", foreign_keys=[company_id])
+    transactions    = relationship("AbsaTransaction", back_populates="bank_account", cascade="all, delete-orphan")
+
+class AbsaTransaction(Base):
+    """A transaction synced from ABSA."""
+    __tablename__ = "absa_transactions"
+    id                 = Column(Integer, primary_key=True, index=True)
+    company_id         = Column(Integer, ForeignKey("companies.id"))
+    bank_account_id    = Column(Integer, ForeignKey("absa_bank_accounts.id"))
+    absa_txn_id        = Column(String, nullable=False, unique=True)
+    amount             = Column(Float, nullable=False)
+    description        = Column(Text, nullable=True)
+    reference          = Column(String, nullable=True)
+    txn_date           = Column(DateTime, nullable=False)
+    running_balance    = Column(Float, nullable=True)
+    match_status       = Column(String, default="unmatched")
+    matched_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    matched_expense_id = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    match_confidence   = Column(Float, nullable=True)
+    matched_at         = Column(DateTime, nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
+    bank_account       = relationship("AbsaBankAccount", back_populates="transactions")
+    company            = relationship("Company", foreign_keys=[company_id])
+
+# ── Nedbank Direct Feed Models ────────────────────────────────────────────────
+
+class NedbankConnection(Base):
+    """Nedbank OAuth connection per company."""
+    __tablename__ = "nedbank_connections"
+    id            = Column(Integer, primary_key=True, index=True)
+    company_id    = Column(Integer, ForeignKey("companies.id"), unique=True, nullable=False)
+    access_token  = Column(Text, nullable=True)      # encrypted
+    refresh_token = Column(Text, nullable=True)      # encrypted
+    token_expiry  = Column(DateTime, nullable=True)
+    scopes        = Column(String, nullable=True)
+    connected_at  = Column(DateTime, default=datetime.utcnow)
+    last_synced   = Column(DateTime, nullable=True)
+    company       = relationship("Company", foreign_keys=[company_id])
+
+class NedbankBankAccount(Base):
+    """A bank account linked via Nedbank for a company."""
+    __tablename__ = "nedbank_bank_accounts"
+    id                  = Column(Integer, primary_key=True, index=True)
+    company_id          = Column(Integer, ForeignKey("companies.id"))
+    nedbank_account_id  = Column(String, nullable=False, unique=True)
+    account_number      = Column(String, nullable=True)   # encrypted
+    account_name        = Column(String, nullable=True)
+    account_type        = Column(String, nullable=True)
+    current_balance     = Column(Float, nullable=True)
+    currency            = Column(String, default="ZAR")
+    last_synced         = Column(DateTime, nullable=True)
+    is_active           = Column(Boolean, default=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    company             = relationship("Company", foreign_keys=[company_id])
+    transactions        = relationship("NedbankTransaction", back_populates="bank_account", cascade="all, delete-orphan")
+
+class NedbankTransaction(Base):
+    """A transaction synced from Nedbank."""
+    __tablename__ = "nedbank_transactions"
+    id                 = Column(Integer, primary_key=True, index=True)
+    company_id         = Column(Integer, ForeignKey("companies.id"))
+    bank_account_id    = Column(Integer, ForeignKey("nedbank_bank_accounts.id"))
+    nedbank_txn_id     = Column(String, nullable=False, unique=True)
+    amount             = Column(Float, nullable=False)
+    description        = Column(Text, nullable=True)
+    reference          = Column(String, nullable=True)
+    txn_date           = Column(DateTime, nullable=False)
+    running_balance    = Column(Float, nullable=True)
+    match_status       = Column(String, default="unmatched")
+    matched_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    matched_expense_id = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    match_confidence   = Column(Float, nullable=True)
+    matched_at         = Column(DateTime, nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
+    bank_account       = relationship("NedbankBankAccount", back_populates="transactions")
+    company            = relationship("Company", foreign_keys=[company_id])
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).

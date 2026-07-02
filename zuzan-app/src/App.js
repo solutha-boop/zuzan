@@ -5124,40 +5124,45 @@ const SA_BANKS = [
   {id:"tymebank",     name:"TymeBank",      logo:"🩵",color:"#00B4D8"},
 ];
 
-function BankFeeds() {
+// ── Shared sub-component: BankFeedPanel ──────────────────────────────────────
+// Renders accounts + transactions for one bank (absa | nedbank)
+function BankFeedPanel({ bank }) {
+  const prefix  = `/banking/${bank}`;
   const [status,     setStatus]    = useState(null);
   const [accounts,   setAccounts]  = useState([]);
   const [txns,       setTxns]      = useState([]);
   const [txnTab,     setTxnTab]    = useState("unmatched");
   const [syncing,    setSyncing]   = useState(false);
   const [connecting, setConnecting]= useState(false);
-  const [banner,     setBanner]    = useState(null);  // "success"|"error"|"syncing"|null
+  const [banner,     setBanner]    = useState(null);
   const [matchModal, setMatchModal]= useState(null);
   const [invoices,   setInvoices]  = useState([]);
   const [expenses,   setExpenses]  = useState([]);
 
-  // Detect Salt Edge callback redirect (?saltedge=callback&connection_id=XXX)
+  const bankLabel = bank === "absa" ? "ABSA" : "Nedbank";
+  const bankColor = bank === "absa" ? "#CC0000" : "#009A44";
+  const bankIcon  = bank === "absa" ? "🔴" : "🟩";
+
+  // Detect OAuth callback redirect (?absa=callback or ?nedbank=callback)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("saltedge") === "callback") {
-      const connId = params.get("connection_id");
-      window.history.replaceState({}, "", window.location.pathname + "#bankfeeds");
-      setBanner("syncing");
-      const url = connId ? `/banking/saltedge/callback?connection_id=${connId}` : "/banking/saltedge/callback";
-      api(url).then(() => { setBanner("success"); loadAll(); }).catch(() => setBanner("error"));
+    if (params.get(bank) === "callback") {
+      window.history.replaceState({}, "", window.location.pathname + "#banking");
+      if (params.get("success")) { setBanner("success"); loadAll(); }
+      else { setBanner("error"); }
     }
   }, []); // eslint-disable-line
 
   const loadAll = async () => {
-    const se = await api("/banking/saltedge/status").catch(() => ({connected: false}));
-    setStatus(se);
-    if (se.connected) {
+    const st = await api(`${prefix}/status`).catch(() => ({connected: false, configured: false}));
+    setStatus(st);
+    if (st.connected) {
       const [accts, t] = await Promise.all([
-        api("/banking/saltedge/accounts"),
-        api(`/banking/saltedge/transactions?match_status=unmatched&limit=200`),
+        api(`${prefix}/accounts`),
+        api(`${prefix}/transactions?match_status=unmatched&limit=200`),
       ]);
-      setAccounts(accts);
-      setTxns(t);
+      setAccounts(accts || []);
+      setTxns(t || []);
     }
   };
 
@@ -5165,21 +5170,21 @@ function BankFeeds() {
 
   useEffect(() => {
     if (!status?.connected) return;
-    api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`).then(setTxns).catch(()=>{});
+    api(`${prefix}/transactions?match_status=${txnTab}&limit=200`).then(t=>setTxns(t||[])).catch(()=>{});
   }, [txnTab, status?.connected]); // eslint-disable-line
 
   const handleConnect = async () => {
     setConnecting(true);
     try {
-      const res = await api("/banking/saltedge/connect");
+      const res = await api(`${prefix}/connect`);
       window.location.href = res.connect_url;
-    } catch(e) { alert("Could not initiate bank connection: " + e.message); setConnecting(false); }
+    } catch(e) { alert(`Could not initiate ${bankLabel} connection: ${e.message}`); setConnecting(false); }
   };
 
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await api("/banking/saltedge/sync", {method:"POST"});
+      const res = await api(`${prefix}/sync`, {method:"POST"});
       await loadAll();
       alert(`Synced ${res.accounts_synced} account(s), ${res.transactions_new} new transaction(s).`);
     } catch(e) { alert("Sync failed: " + e.message); }
@@ -5187,10 +5192,10 @@ function BankFeeds() {
   };
 
   const handleDisconnect = async () => {
-    if (!window.confirm("Disconnect your bank? Transaction history will be kept.")) return;
+    if (!window.confirm(`Disconnect ${bankLabel}? Transaction history will be kept.`)) return;
     try {
-      await api("/banking/saltedge/disconnect", {method:"DELETE"});
-      setStatus({connected:false}); setAccounts([]); setTxns([]);
+      await api(`${prefix}/disconnect`, {method:"DELETE"});
+      setStatus({connected:false, configured:status?.configured}); setAccounts([]); setTxns([]);
     } catch(e) { alert("Disconnect failed: " + e.message); }
   };
 
@@ -5203,28 +5208,28 @@ function BankFeeds() {
 
   const handleMatch = async (txn, invoiceId, expenseId) => {
     try {
-      await api(`/banking/saltedge/transactions/${txn.id}/match`, {
+      await api(`${prefix}/transactions/${txn.id}/match`, {
         method:"POST", body: JSON.stringify({invoice_id: invoiceId||null, expense_id: expenseId||null}),
       });
       setMatchModal(null);
-      const t = await api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`);
-      setTxns(t);
+      const t = await api(`${prefix}/transactions?match_status=${txnTab}&limit=200`);
+      setTxns(t || []);
     } catch(e) { alert("Match failed: " + e.message); }
   };
 
   const handleExclude = async (txn) => {
     try {
-      await api(`/banking/saltedge/transactions/${txn.id}/exclude`, {method:"POST"});
-      const t = await api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`);
-      setTxns(t);
+      await api(`${prefix}/transactions/${txn.id}/exclude`, {method:"POST"});
+      const t = await api(`${prefix}/transactions?match_status=${txnTab}&limit=200`);
+      setTxns(t || []);
     } catch(e) { alert(e.message); }
   };
 
   const handleUnmatch = async (txn) => {
     try {
-      await api(`/banking/saltedge/transactions/${txn.id}/unmatch`, {method:"POST"});
-      const t = await api(`/banking/saltedge/transactions?match_status=${txnTab}&limit=200`);
-      setTxns(t);
+      await api(`${prefix}/transactions/${txn.id}/unmatch`, {method:"POST"});
+      const t = await api(`${prefix}/transactions?match_status=${txnTab}&limit=200`);
+      setTxns(t || []);
     } catch(e) { alert(e.message); }
   };
 
@@ -5241,47 +5246,54 @@ function BankFeeds() {
     return <span style={{background:bg,color:col,borderRadius:4,padding:"1px 6px",fontSize:10,fontWeight:700}}>{pct}%</span>;
   };
 
-  if (status === null) return <div style={{padding:32,color:C.inkMid,fontSize:13}}>Loading bank connection…</div>;
+  const txnDate = (t) => (t.txn_date || t.date || "").slice(0,10);
 
-  const txnDate = (t) => (t.made_on || t.txn_date || t.date || "").slice(0,10);
+  if (status === null) return <div style={{padding:20,color:C.inkMid,fontSize:12}}>Loading {bankLabel} connection…</div>;
+
+  // Not configured yet (no client credentials)
+  if (!status.configured) return (
+    <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:12,padding:24,textAlign:"center"}}>
+      <div style={{fontSize:22,marginBottom:8}}>{bankIcon}</div>
+      <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>{bankLabel} Direct Feed — Coming Soon</div>
+      <div style={{fontSize:11,color:C.inkMid,lineHeight:1.7,maxWidth:380,margin:"0 auto"}}>
+        Partnership application submitted. Once credentials are approved by {bankLabel},
+        your clients will be able to link their {bankLabel} accounts directly — no password sharing required.
+      </div>
+    </div>
+  );
 
   return (
     <div>
       {/* Banners */}
-      {banner === "syncing" && (
-        <div style={{background:"#EEF2FF",border:"1px solid #6366F1",borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#4338CA",fontWeight:700}}>
-          ⏳ Importing your transactions… please wait.
-        </div>
-      )}
       {banner === "success" && (
-        <div style={{background:C.greenLt,border:`1px solid ${C.green}`,borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{color:C.green,fontWeight:700,fontSize:13}}>✓ Bank connected! Transactions imported and matched.</span>
+        <div style={{background:C.greenLt,border:`1px solid ${C.green}`,borderRadius:10,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{color:C.green,fontWeight:700,fontSize:13}}>✓ {bankLabel} connected! Transactions imported and matched.</span>
           <button onClick={()=>setBanner(null)} style={{background:"transparent",border:"none",cursor:"pointer",color:C.inkMid,fontSize:16}}>×</button>
         </div>
       )}
       {banner === "error" && (
-        <div style={{background:C.redLt,border:`1px solid ${C.red}`,borderRadius:10,padding:"12px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{color:C.red,fontWeight:700,fontSize:13}}>Bank connection failed. Please try again.</span>
+        <div style={{background:C.redLt,border:`1px solid ${C.red}`,borderRadius:10,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{color:C.red,fontWeight:700,fontSize:13}}>{bankLabel} connection failed. Please try again.</span>
           <button onClick={()=>setBanner(null)} style={{background:"transparent",border:"none",cursor:"pointer",color:C.inkMid,fontSize:16}}>×</button>
         </div>
       )}
 
       {/* Header */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
         <div>
-          <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Live Bank Feeds</div>
-          <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.ink}}>{bankIcon} {bankLabel} Live Feed</div>
+          <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>
             {status?.connected
-              ? `Connected · ${status?.accounts_count ?? accounts.length} account(s) · Last synced: ${status?.last_synced ? status.last_synced.slice(0,16).replace("T"," ") : "never"}`
-              : "Connect your SA bank for automatic transaction imports"}
+              ? `${status.account_count ?? accounts.length} account(s) · Last synced: ${status.last_synced ? status.last_synced.slice(0,16).replace("T"," ") : "never"}`
+              : "Connect your " + bankLabel + " account for automatic transaction imports"}
           </div>
         </div>
         {status?.connected && (
           <div style={{display:"flex",gap:8}}>
-            <button onClick={handleSync} disabled={syncing} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"9px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:syncing?0.6:1}}>
+            <button onClick={handleSync} disabled={syncing} style={{background:bankColor,color:"#fff",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:syncing?0.6:1}}>
               {syncing ? "Syncing…" : "↻ Sync Now"}
             </button>
-            <button onClick={handleDisconnect} style={{background:C.redLt,color:C.red,border:`1px solid ${C.red}40`,borderRadius:10,padding:"9px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            <button onClick={handleDisconnect} style={{background:C.redLt,color:C.red,border:`1px solid ${C.red}40`,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
               Disconnect
             </button>
           </div>
@@ -5289,67 +5301,57 @@ function BankFeeds() {
       </div>
 
       {!status?.connected ? (
-        /* Not connected */
-        <div>
-          <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:14,padding:32,textAlign:"center",marginBottom:20}}>
-            <div style={{fontSize:32,marginBottom:12}}>🏦</div>
-            <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:8}}>Connect your SA bank account</div>
-            <div style={{fontSize:12,color:C.inkMid,lineHeight:1.7,maxWidth:420,margin:"0 auto"}}>
-              ZuZan uses <strong>Salt Edge</strong> to securely connect to FNB, ABSA, Standard Bank, Nedbank, Capitec, and Investec.
-              Your credentials go directly to your bank — ZuZan never sees your banking password.
-              Transactions sync automatically and are matched to your invoices and expenses.
-            </div>
-            <button onClick={handleConnect} disabled={connecting} style={{marginTop:20,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 28px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:connecting?0.6:1}}>
-              {connecting ? "Redirecting…" : "🔗 Connect Bank Account"}
-            </button>
+        <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:12,padding:28,textAlign:"center"}}>
+          <div style={{fontSize:28,marginBottom:10}}>{bankIcon}</div>
+          <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>Connect your {bankLabel} account</div>
+          <div style={{fontSize:11,color:C.inkMid,lineHeight:1.7,maxWidth:380,margin:"0 auto 16px"}}>
+            You'll be redirected to <strong>{bankLabel}'s secure login page</strong> to authorise ZuZan.
+            ZuZan never sees your banking password — only read-only transaction data is shared.
           </div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"center"}}>
-            {["🟢 FNB","🔴 ABSA","🔵 Standard Bank","🟩 Nedbank","💜 Capitec","⬛ Investec"].map(b=>(
-              <div key={b} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"6px 12px",fontSize:11,color:C.inkMid,fontWeight:600}}>{b}</div>
-            ))}
-          </div>
+          <button onClick={handleConnect} disabled={connecting} style={{background:bankColor,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:connecting?0.6:1}}>
+            {connecting ? "Redirecting to " + bankLabel + "…" : "🔗 Connect " + bankLabel}
+          </button>
         </div>
       ) : (
-        /* Connected — accounts + transactions */
         <div>
           {accounts.length > 0 && (
-            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:20}}>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
               {accounts.map(a=>(
-                <div key={a.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",minWidth:200,flex:"0 0 auto"}}>
-                  <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
-                    <span style={{fontSize:20}}>🏦</span>
+                <div key={a.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",minWidth:180,flex:"0 0 auto"}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:18}}>{bankIcon}</span>
                     <div>
-                      <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{a.account_name || a.name || "Account"}</div>
-                      <div style={{fontSize:10,color:C.inkMid}}>{a.nature || a.account_type || a.currency_code || "ZAR"}</div>
+                      <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{a.account_name || "Account"}</div>
+                      <div style={{fontSize:10,color:C.inkMid}}>{a.account_type || a.currency || "ZAR"}</div>
                     </div>
                   </div>
                   <div style={{fontSize:13,fontWeight:700,color:C.ink}}>
-                    R {((a.current_balance ?? a.balance) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,",")}
+                    R {((a.current_balance) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,",")}
                   </div>
                 </div>
               ))}
             </div>
           )}
 
-          <div style={{display:"flex",borderBottom:`2px solid ${C.border}`,marginBottom:14}}>
+          <div style={{display:"flex",borderBottom:`2px solid ${C.border}`,marginBottom:12}}>
             {[["unmatched","Unmatched"],["matched","Matched"],["excluded","Excluded"]].map(([id,label])=>(
               <button key={id} onClick={()=>setTxnTab(id)} style={{
-                padding:"8px 18px",fontSize:12,fontWeight:txnTab===id?700:400,cursor:"pointer",
+                padding:"7px 16px",fontSize:12,fontWeight:txnTab===id?700:400,cursor:"pointer",
                 border:"none",background:"none",fontFamily:"inherit",
-                color:txnTab===id?C.accent:C.inkMid,
-                borderBottom:`3px solid ${txnTab===id?C.accent:"transparent"}`,marginBottom:-2,
+                color:txnTab===id?bankColor:C.inkMid,
+                borderBottom:`3px solid ${txnTab===id?bankColor:"transparent"}`,marginBottom:-2,
               }}>{label}</button>
             ))}
           </div>
 
           {txns.length === 0 ? (
-            <div style={{padding:32,textAlign:"center",color:C.inkMid,fontSize:13,background:C.surface,borderRadius:12,border:`1px dashed ${C.border}`}}>
+            <div style={{padding:24,textAlign:"center",color:C.inkMid,fontSize:12,background:C.surface,borderRadius:12,border:`1px dashed ${C.border}`}}>
               {txnTab === "unmatched" ? "All transactions matched — great work!" : `No ${txnTab} transactions.`}
             </div>
           ) : (
-            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
               {txns.map(t=>(
-                <div key={t.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+                <div key={t.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
                       <span style={{fontSize:12,fontWeight:700,color:t.amount>=0?C.green:C.red}}>{fmtAmt(t.amount)}</span>
@@ -5357,16 +5359,11 @@ function BankFeeds() {
                       {t.match_confidence && txnTab==="matched" && confBadge(t.match_confidence)}
                     </div>
                     <div style={{fontSize:12,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t.description || t.reference || "—"}</div>
-                    {(t.matched_invoice || t.matched_expense) && (
-                      <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>
-                        → {t.matched_invoice ? `INV #${t.matched_invoice.invoice_number}` : t.matched_expense?.description || "Expense"}
-                      </div>
-                    )}
                   </div>
-                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  <div style={{display:"flex",gap:5,flexShrink:0}}>
                     {txnTab === "unmatched" && (
                       <>
-                        <button onClick={()=>openMatchModal(t)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Match</button>
+                        <button onClick={()=>openMatchModal(t)} style={{background:bankColor,color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Match</button>
                         <button onClick={()=>handleExclude(t)} style={{background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Ignore</button>
                       </>
                     )}
@@ -5424,6 +5421,42 @@ function BankFeeds() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function BankFeeds() {
+  const [bankTab, setBankTab] = useState("absa");  // "absa" | "nedbank"
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Live Bank Feeds</div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Direct OAuth connection — your bank credentials never touch ZuZan</div>
+        </div>
+      </div>
+
+      {/* Bank selector tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+        {[["absa","🔴 ABSA"],["nedbank","🟩 Nedbank"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setBankTab(id)} style={{
+            padding:"9px 20px",fontSize:12,fontWeight:bankTab===id?700:500,cursor:"pointer",
+            border:`2px solid ${bankTab===id?(id==="absa"?"#CC0000":"#009A44"):C.border}`,
+            borderRadius:10,background:bankTab===id?(id==="absa"?"#CC000010":"#009A4410"):C.surface,
+            fontFamily:"inherit",color:bankTab===id?(id==="absa"?"#CC0000":"#009A44"):C.inkMid,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <BankFeedPanel key={bankTab} bank={bankTab} />
+
+      {/* Info footer */}
+      <div style={{marginTop:24,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",fontSize:11,color:C.inkMid,lineHeight:1.7}}>
+        <strong style={{color:C.ink}}>How it works:</strong> When you click "Connect", you are redirected to your bank's own secure login.
+        You authorise ZuZan for read-only access. The bank sends transactions directly to ZuZan — your banking password is never shared.
+        ZuZan automatically matches transactions to your open invoices and expenses.
+      </div>
     </div>
   );
 }
