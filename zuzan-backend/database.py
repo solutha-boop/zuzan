@@ -699,6 +699,110 @@ class NedbankTransaction(Base):
     bank_account       = relationship("NedbankBankAccount", back_populates="transactions")
     company            = relationship("Company", foreign_keys=[company_id])
 
+# ── Investec Direct Feed ──────────────────────────────────────────────────────
+class InvestecConnection(Base):
+    """OAuth token + metadata for a company's Investec connection."""
+    __tablename__ = "investec_connections"
+    id            = Column(Integer, primary_key=True, index=True)
+    company_id    = Column(Integer, ForeignKey("companies.id"), unique=True)
+    access_token  = Column(Text, nullable=True)    # Fernet-encrypted
+    refresh_token = Column(Text, nullable=True)    # Fernet-encrypted
+    token_expiry  = Column(DateTime, nullable=True)
+    scopes        = Column(String, nullable=True)
+    connected_at  = Column(DateTime, nullable=True)
+    last_synced   = Column(DateTime, nullable=True)
+    company       = relationship("Company", foreign_keys=[company_id])
+
+class InvestecBankAccount(Base):
+    """A bank account linked via Investec."""
+    __tablename__ = "investec_bank_accounts"
+    id                   = Column(Integer, primary_key=True, index=True)
+    company_id           = Column(Integer, ForeignKey("companies.id"))
+    investec_account_id  = Column(String, unique=True, nullable=False)
+    account_number       = Column(Text, nullable=True)   # Fernet-encrypted
+    account_name         = Column(String, nullable=True)
+    account_type         = Column(String, nullable=True)
+    current_balance      = Column(Float, nullable=True)
+    currency             = Column(String, default="ZAR")
+    last_synced          = Column(DateTime, nullable=True)
+    is_active            = Column(Boolean, default=True)
+    created_at           = Column(DateTime, default=datetime.utcnow)
+    company              = relationship("Company", foreign_keys=[company_id])
+    transactions         = relationship("InvestecTransaction", back_populates="bank_account", cascade="all, delete-orphan")
+
+class InvestecTransaction(Base):
+    """A transaction synced from Investec."""
+    __tablename__ = "investec_transactions"
+    id                 = Column(Integer, primary_key=True, index=True)
+    company_id         = Column(Integer, ForeignKey("companies.id"))
+    bank_account_id    = Column(Integer, ForeignKey("investec_bank_accounts.id"))
+    investec_txn_id    = Column(String, nullable=False, unique=True)
+    amount             = Column(Float, nullable=False)   # negative = debit
+    description        = Column(Text, nullable=True)
+    reference          = Column(String, nullable=True)
+    txn_date           = Column(DateTime, nullable=False)
+    running_balance    = Column(Float, nullable=True)
+    match_status       = Column(String, default="unmatched")
+    matched_invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    matched_expense_id = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    match_confidence   = Column(Float, nullable=True)
+    matched_at         = Column(DateTime, nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
+    bank_account       = relationship("InvestecBankAccount", back_populates="transactions")
+    company            = relationship("Company", foreign_keys=[company_id])
+
+# ── Standard Bank Direct Feed ─────────────────────────────────────────────────
+class StandardBankConnection(Base):
+    """OAuth token + metadata for a company's Standard Bank connection."""
+    __tablename__ = "standardbank_connections"
+    id            = Column(Integer, primary_key=True, index=True)
+    company_id    = Column(Integer, ForeignKey("companies.id"), unique=True)
+    access_token  = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    token_expiry  = Column(DateTime, nullable=True)
+    scopes        = Column(String, nullable=True)
+    connected_at  = Column(DateTime, nullable=True)
+    last_synced   = Column(DateTime, nullable=True)
+    company       = relationship("Company", foreign_keys=[company_id])
+
+class StandardBankBankAccount(Base):
+    """A bank account linked via Standard Bank."""
+    __tablename__ = "standardbank_bank_accounts"
+    id                      = Column(Integer, primary_key=True, index=True)
+    company_id              = Column(Integer, ForeignKey("companies.id"))
+    standardbank_account_id = Column(String, unique=True, nullable=False)
+    account_number          = Column(Text, nullable=True)
+    account_name            = Column(String, nullable=True)
+    account_type            = Column(String, nullable=True)
+    current_balance         = Column(Float, nullable=True)
+    currency                = Column(String, default="ZAR")
+    last_synced             = Column(DateTime, nullable=True)
+    is_active               = Column(Boolean, default=True)
+    created_at              = Column(DateTime, default=datetime.utcnow)
+    company                 = relationship("Company", foreign_keys=[company_id])
+    transactions            = relationship("StandardBankTransaction", back_populates="bank_account", cascade="all, delete-orphan")
+
+class StandardBankTransaction(Base):
+    """A transaction synced from Standard Bank."""
+    __tablename__ = "standardbank_transactions"
+    id                      = Column(Integer, primary_key=True, index=True)
+    company_id              = Column(Integer, ForeignKey("companies.id"))
+    bank_account_id         = Column(Integer, ForeignKey("standardbank_bank_accounts.id"))
+    standardbank_txn_id     = Column(String, nullable=False, unique=True)
+    amount                  = Column(Float, nullable=False)
+    description             = Column(Text, nullable=True)
+    reference               = Column(String, nullable=True)
+    txn_date                = Column(DateTime, nullable=False)
+    running_balance         = Column(Float, nullable=True)
+    match_status            = Column(String, default="unmatched")
+    matched_invoice_id      = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    matched_expense_id      = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    match_confidence        = Column(Float, nullable=True)
+    matched_at              = Column(DateTime, nullable=True)
+    created_at              = Column(DateTime, default=datetime.utcnow)
+    bank_account            = relationship("StandardBankBankAccount", back_populates="transactions")
+    company                 = relationship("Company", foreign_keys=[company_id])
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).

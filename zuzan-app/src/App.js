@@ -5139,9 +5139,15 @@ function BankFeedPanel({ bank }) {
   const [invoices,   setInvoices]  = useState([]);
   const [expenses,   setExpenses]  = useState([]);
 
-  const bankLabel = bank === "absa" ? "ABSA" : "Nedbank";
-  const bankColor = bank === "absa" ? "#CC0000" : "#009A44";
-  const bankIcon  = bank === "absa" ? "🔴" : "🟩";
+  const BANK_META = {
+    absa:         {label:"ABSA",          color:"#CC0000", icon:"🔴"},
+    nedbank:      {label:"Nedbank",        color:"#009A44", icon:"🟩"},
+    investec:     {label:"Investec",       color:"#1A1A1A", icon:"⬛"},
+    standardbank: {label:"Standard Bank",  color:"#0033A0", icon:"🔵"},
+  };
+  const bankLabel = BANK_META[bank]?.label || bank;
+  const bankColor = BANK_META[bank]?.color || C.accent;
+  const bankIcon  = BANK_META[bank]?.icon  || "🏦";
 
   // Detect OAuth callback redirect (?absa=callback or ?nedbank=callback)
   useEffect(() => {
@@ -5426,7 +5432,16 @@ function BankFeedPanel({ bank }) {
 }
 
 function BankFeeds() {
-  const [bankTab, setBankTab] = useState("absa");  // "absa" | "nedbank"
+  const [bankTab, setBankTab] = useState("absa");
+
+  const BANKS = [
+    {id:"absa",         label:"🔴 ABSA",          color:"#CC0000"},
+    {id:"nedbank",      label:"🟩 Nedbank",        color:"#009A44"},
+    {id:"investec",     label:"⬛ Investec",        color:"#1A1A1A"},
+    {id:"standardbank", label:"🔵 Standard Bank",  color:"#0033A0"},
+  ];
+
+  const active = BANKS.find(b=>b.id===bankTab);
 
   return (
     <div>
@@ -5439,12 +5454,12 @@ function BankFeeds() {
 
       {/* Bank selector tabs */}
       <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
-        {[["absa","🔴 ABSA"],["nedbank","🟩 Nedbank"]].map(([id,label])=>(
+        {BANKS.map(({id,label,color})=>(
           <button key={id} onClick={()=>setBankTab(id)} style={{
-            padding:"9px 20px",fontSize:12,fontWeight:bankTab===id?700:500,cursor:"pointer",
-            border:`2px solid ${bankTab===id?(id==="absa"?"#CC0000":"#009A44"):C.border}`,
-            borderRadius:10,background:bankTab===id?(id==="absa"?"#CC000010":"#009A4410"):C.surface,
-            fontFamily:"inherit",color:bankTab===id?(id==="absa"?"#CC0000":"#009A44"):C.inkMid,
+            padding:"9px 18px",fontSize:12,fontWeight:bankTab===id?700:500,cursor:"pointer",
+            border:`2px solid ${bankTab===id?color:C.border}`,
+            borderRadius:10,background:bankTab===id?`${color}12`:C.surface,
+            fontFamily:"inherit",color:bankTab===id?color:C.inkMid,
           }}>{label}</button>
         ))}
       </div>

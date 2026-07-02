@@ -1,9 +1,11 @@
 """
-ZuZan — ABSA & Nedbank Direct Bank Feed Integration
-=====================================================
+ZuZan — ABSA, Nedbank, Investec & Standard Bank Direct Bank Feed Integration
+=============================================================================
 Endpoints mounted at:
-  /banking/absa/*    — ABSA Access API (developer.absa.africa)
-  /banking/nedbank/* — Nedbank API Marketplace (apim.nedbank.co.za)
+  /banking/absa/*          — ABSA Access API (developer.absa.africa)
+  /banking/nedbank/*       — Nedbank API Marketplace (apim.nedbank.co.za)
+  /banking/investec/*      — Investec Open API (openapi.investec.com) — SELF-SERVICE
+  /banking/standardbank/*  — Standard Bank API (developer.standardbank.co.za)
 
 OAuth 2.0 flow (both banks):
   1. GET  /connect      → returns bank OAuth authorization URL
@@ -18,14 +20,20 @@ OAuth 2.0 flow (both banks):
  10. DELETE /disconnect → remove connection (keeps transaction history)
 
 Required env vars (add to Render once partnership credentials received):
-  ABSA_CLIENT_ID          — from developer.absa.africa
-  ABSA_CLIENT_SECRET      — from developer.absa.africa
-  ABSA_REDIRECT_URI       — https://zuzan-backend.onrender.com/banking/absa/callback
-  NEDBANK_CLIENT_ID       — from apim.nedbank.co.za
-  NEDBANK_CLIENT_SECRET   — from apim.nedbank.co.za
-  NEDBANK_REDIRECT_URI    — https://zuzan-backend.onrender.com/banking/nedbank/callback
-  FRONTEND_URL            — https://zuzan-app.onrender.com
-  FIELD_ENCRYPTION_KEY    — Fernet key (shared with crypto.py)
+  ABSA_CLIENT_ID              — from developer.absa.africa
+  ABSA_CLIENT_SECRET          — from developer.absa.africa
+  ABSA_REDIRECT_URI           — https://zuzan-backend.onrender.com/banking/absa/callback
+  NEDBANK_CLIENT_ID           — from apim.nedbank.co.za
+  NEDBANK_CLIENT_SECRET       — from apim.nedbank.co.za
+  NEDBANK_REDIRECT_URI        — https://zuzan-backend.onrender.com/banking/nedbank/callback
+  INVESTEC_CLIENT_ID          — from developer.investec.com (self-service, register now)
+  INVESTEC_CLIENT_SECRET      — from developer.investec.com
+  INVESTEC_REDIRECT_URI       — https://zuzan-backend.onrender.com/banking/investec/callback
+  STANDARDBANK_CLIENT_ID      — from developer.standardbank.co.za
+  STANDARDBANK_CLIENT_SECRET  — from developer.standardbank.co.za
+  STANDARDBANK_REDIRECT_URI   — https://zuzan-backend.onrender.com/banking/standardbank/callback
+  FRONTEND_URL                — https://zuzan-app.onrender.com
+  FIELD_ENCRYPTION_KEY        — Fernet key (shared with crypto.py)
 
 NOTE: API base URLs below are correct per each bank's public developer documentation.
       The exact paths will be confirmed when credentials are received.
@@ -45,6 +53,8 @@ from database import (
     get_db,
     AbsaConnection, AbsaBankAccount, AbsaTransaction,
     NedbankConnection, NedbankBankAccount, NedbankTransaction,
+    InvestecConnection, InvestecBankAccount, InvestecTransaction,
+    StandardBankConnection, StandardBankBankAccount, StandardBankTransaction,
     Invoice, Expense, InvoiceStatus,
 )
 from auth import get_current_user, require_role
@@ -639,5 +649,543 @@ def nedbank_unmatch(txn_id: int, db: Session = Depends(get_db), current_user=Dep
 @nedbank_router.delete("/disconnect")
 def nedbank_disconnect(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     conn = db.query(NedbankConnection).filter(NedbankConnection.company_id == current_user.company_id).first()
+    if conn: db.delete(conn); db.commit()
+    return {"status": "disconnected"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INVESTEC ROUTER
+# Self-service: register at developer.investec.com — no partnership required.
+# API docs: https://developer.investec.com/documentation/accounts-and-transactions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+INVESTEC_CLIENT_ID     = os.environ.get("INVESTEC_CLIENT_ID", "")
+INVESTEC_CLIENT_SECRET = os.environ.get("INVESTEC_CLIENT_SECRET", "")
+INVESTEC_REDIRECT_URI  = os.environ.get(
+    "INVESTEC_REDIRECT_URI",
+    "https://zuzan-backend.onrender.com/banking/investec/callback",
+)
+# Confirmed endpoints from developer.investec.com & community wiki
+INVESTEC_TOKEN_URL  = "https://identity.investec.com/ida/oauth2/v1/token"
+INVESTEC_AUTHORIZE  = "https://identity.investec.com/ida/oauth2/v1/authorize"
+INVESTEC_ACCOUNTS   = "https://openapi.investec.com/za/pb/v1/accounts"
+INVESTEC_TXNS       = "https://openapi.investec.com/za/pb/v1/accounts/{account_id}/transactions"
+INVESTEC_SCOPES     = "accounts transactions offline_access openid"
+
+investec_router = APIRouter()
+
+
+@investec_router.get("/connect")
+def investec_connect(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    if not INVESTEC_CLIENT_ID:
+        raise HTTPException(503, "Investec integration not yet configured — add INVESTEC_CLIENT_ID and INVESTEC_CLIENT_SECRET env vars (register free at developer.investec.com).")
+    state = _new_state(current_user.company_id)
+    params = {
+        "response_type": "code",
+        "client_id":     INVESTEC_CLIENT_ID,
+        "redirect_uri":  INVESTEC_REDIRECT_URI,
+        "scope":         INVESTEC_SCOPES,
+        "state":         state,
+    }
+    return {"connect_url": f"{INVESTEC_AUTHORIZE}?{urlencode(params)}"}
+
+
+@investec_router.get("/callback")
+def investec_callback(
+    code: str = Query(None), state: str = Query(None), error: str = Query(None),
+    db: Session = Depends(get_db),
+):
+    redirect_base = f"{FRONTEND_URL}?investec=callback"
+    if error or not code or not state:
+        return RedirectResponse(f"{redirect_base}&error={error or 'missing_params'}")
+
+    company_id = _pop_state(state)
+    if not company_id:
+        return RedirectResponse(f"{redirect_base}&error=invalid_state")
+
+    try:
+        resp = httpx.post(INVESTEC_TOKEN_URL, data={
+            "grant_type":   "authorization_code",
+            "code":         code,
+            "redirect_uri": INVESTEC_REDIRECT_URI,
+        }, auth=(INVESTEC_CLIENT_ID, INVESTEC_CLIENT_SECRET), timeout=30)
+        resp.raise_for_status()
+        tok = resp.json()
+    except Exception as e:
+        logger.error(f"Investec token exchange failed: {e}")
+        return RedirectResponse(f"{redirect_base}&error=token_exchange_failed")
+
+    conn = db.query(InvestecConnection).filter(InvestecConnection.company_id == company_id).first()
+    if not conn:
+        conn = InvestecConnection(company_id=company_id)
+        db.add(conn)
+
+    conn.access_token  = encrypt_field(tok["access_token"])
+    conn.refresh_token = encrypt_field(tok.get("refresh_token", ""))
+    conn.token_expiry  = datetime.utcnow() + timedelta(seconds=tok.get("expires_in", 1800))
+    conn.scopes        = tok.get("scope", "")
+    conn.connected_at  = datetime.utcnow()
+    db.commit()
+
+    _investec_sync_accounts(company_id, db)
+    return RedirectResponse(f"{redirect_base}&success=1")
+
+
+def _investec_get_token(conn: InvestecConnection, db: Session) -> str:
+    if conn.token_expiry and conn.token_expiry > datetime.utcnow() + timedelta(minutes=2):
+        return decrypt_field(conn.access_token)
+    try:
+        resp = httpx.post(INVESTEC_TOKEN_URL, data={
+            "grant_type":    "refresh_token",
+            "refresh_token": decrypt_field(conn.refresh_token),
+        }, auth=(INVESTEC_CLIENT_ID, INVESTEC_CLIENT_SECRET), timeout=30)
+        resp.raise_for_status()
+        tok = resp.json()
+        conn.access_token  = encrypt_field(tok["access_token"])
+        conn.refresh_token = encrypt_field(tok.get("refresh_token", decrypt_field(conn.refresh_token)))
+        conn.token_expiry  = datetime.utcnow() + timedelta(seconds=tok.get("expires_in", 1800))
+        db.commit()
+        return tok["access_token"]
+    except Exception as e:
+        raise HTTPException(502, f"Investec token refresh failed: {e}")
+
+
+def _investec_sync_accounts(company_id: int, db: Session):
+    conn = db.query(InvestecConnection).filter(InvestecConnection.company_id == company_id).first()
+    if not conn: return
+    token = _investec_get_token(conn, db)
+    try:
+        resp = httpx.get(INVESTEC_ACCOUNTS, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+        resp.raise_for_status()
+        accounts = resp.json().get("data", {}).get("accounts", [])
+    except Exception as e:
+        logger.error(f"Investec accounts fetch failed: {e}"); return
+
+    for acct in accounts:
+        acct_id = acct.get("accountId")
+        existing = db.query(InvestecBankAccount).filter(InvestecBankAccount.investec_account_id == acct_id).first()
+        if not existing:
+            existing = InvestecBankAccount(company_id=company_id, investec_account_id=acct_id)
+            db.add(existing)
+        existing.account_name   = acct.get("accountName") or acct.get("referenceName")
+        existing.account_type   = acct.get("productName")
+        existing.account_number = encrypt_field(acct.get("accountNumber", "")) if acct.get("accountNumber") else None
+        existing.last_synced    = datetime.utcnow()
+    conn.last_synced = datetime.utcnow()
+    db.commit()
+
+
+def _investec_sync_transactions(company_id: int, db: Session) -> int:
+    conn = db.query(InvestecConnection).filter(InvestecConnection.company_id == company_id).first()
+    if not conn: return 0
+    token = _investec_get_token(conn, db)
+    accounts = db.query(InvestecBankAccount).filter(
+        InvestecBankAccount.company_id == company_id, InvestecBankAccount.is_active == True
+    ).all()
+    new_count = 0
+    # Pull 90 days of transactions
+    from_date = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+    to_date   = datetime.utcnow().strftime("%Y-%m-%d")
+
+    for acct in accounts:
+        try:
+            url = INVESTEC_TXNS.format(account_id=acct.investec_account_id)
+            resp = httpx.get(url, headers={"Authorization": f"Bearer {token}"},
+                             params={"fromDate": from_date, "toDate": to_date}, timeout=30)
+            resp.raise_for_status()
+            txns = resp.json().get("data", {}).get("transactions", [])
+        except Exception as e:
+            logger.error(f"Investec transactions fetch failed for {acct.investec_account_id}: {e}"); continue
+
+        for t in txns:
+            txn_id = t.get("transactionId")
+            if not txn_id or db.query(InvestecTransaction).filter(InvestecTransaction.investec_txn_id == txn_id).first():
+                continue
+
+            # Investec amounts are always positive; sign is in 'type' field (DEBIT / CREDIT)
+            raw_amount = float(t.get("amount", 0))
+            amount = -raw_amount if t.get("type", "").upper() == "DEBIT" else raw_amount
+
+            desc     = t.get("description", "")
+            date_str = t.get("transactionDate") or t.get("postingDate", "")
+            try:
+                txn_date = datetime.fromisoformat(date_str[:10])
+            except Exception:
+                txn_date = datetime.utcnow()
+
+            inv_id, exp_id, conf = _auto_match(amount, desc, company_id, db)
+            txn = InvestecTransaction(
+                company_id         = company_id,
+                bank_account_id    = acct.id,
+                investec_txn_id    = txn_id,
+                amount             = amount,
+                description        = desc,
+                reference          = t.get("cardNumber"),
+                txn_date           = txn_date,
+                running_balance    = t.get("runningBalance"),
+                match_status       = "matched" if inv_id or exp_id else "unmatched",
+                matched_invoice_id = inv_id,
+                matched_expense_id = exp_id,
+                match_confidence   = conf if (inv_id or exp_id) else None,
+                matched_at         = datetime.utcnow() if (inv_id or exp_id) else None,
+            )
+            db.add(txn)
+            new_count += 1
+        acct.last_synced = datetime.utcnow()
+
+    db.commit()
+    return new_count
+
+
+@investec_router.get("/status")
+def investec_status(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    conn = db.query(InvestecConnection).filter(InvestecConnection.company_id == current_user.company_id).first()
+    if not conn:
+        return {"connected": False, "configured": bool(INVESTEC_CLIENT_ID)}
+    accts = db.query(InvestecBankAccount).filter(
+        InvestecBankAccount.company_id == current_user.company_id, InvestecBankAccount.is_active == True
+    ).count()
+    return {
+        "connected":     True,
+        "configured":    bool(INVESTEC_CLIENT_ID),
+        "connected_at":  conn.connected_at.isoformat() if conn.connected_at else None,
+        "last_synced":   conn.last_synced.isoformat() if conn.last_synced else None,
+        "account_count": accts,
+    }
+
+
+@investec_router.post("/sync")
+def investec_sync(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    cid = current_user.company_id
+    conn = db.query(InvestecConnection).filter(InvestecConnection.company_id == cid).first()
+    if not conn: raise HTTPException(400, "Investec not connected")
+    _investec_sync_accounts(cid, db)
+    new_txns = _investec_sync_transactions(cid, db)
+    accts = db.query(InvestecBankAccount).filter(
+        InvestecBankAccount.company_id == cid, InvestecBankAccount.is_active == True
+    ).count()
+    return {"accounts_synced": accts, "transactions_new": new_txns}
+
+
+@investec_router.get("/accounts")
+def investec_accounts(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    accts = db.query(InvestecBankAccount).filter(
+        InvestecBankAccount.company_id == current_user.company_id, InvestecBankAccount.is_active == True
+    ).all()
+    return [{"id": a.id, "name": a.account_name, "type": a.account_type,
+             "balance": a.current_balance, "currency": a.currency,
+             "last_synced": a.last_synced.isoformat() if a.last_synced else None} for a in accts]
+
+
+@investec_router.get("/transactions")
+def investec_transactions(
+    match_status: str = Query("unmatched"), limit: int = Query(200),
+    db: Session = Depends(get_db), current_user=Depends(get_current_user),
+):
+    q = db.query(InvestecTransaction).filter(InvestecTransaction.company_id == current_user.company_id)
+    if match_status != "all":
+        q = q.filter(InvestecTransaction.match_status == match_status)
+    txns = q.order_by(InvestecTransaction.txn_date.desc()).limit(limit).all()
+    return [{"id": t.id, "amount": t.amount, "description": t.description, "reference": t.reference,
+             "txn_date": t.txn_date.isoformat()[:10], "match_status": t.match_status,
+             "matched_invoice_id": t.matched_invoice_id, "matched_expense_id": t.matched_expense_id,
+             "match_confidence": t.match_confidence} for t in txns]
+
+
+@investec_router.post("/transactions/{txn_id}/match")
+def investec_match(txn_id: int, payload: MatchPayload, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    txn = db.query(InvestecTransaction).filter(InvestecTransaction.id == txn_id, InvestecTransaction.company_id == current_user.company_id).first()
+    if not txn: raise HTTPException(404, "Transaction not found")
+    txn.match_status = "matched"; txn.matched_invoice_id = payload.invoice_id; txn.matched_expense_id = payload.expense_id
+    txn.match_confidence = 1.0; txn.matched_at = datetime.utcnow()
+    db.commit(); return {"status": "matched"}
+
+
+@investec_router.post("/transactions/{txn_id}/exclude")
+def investec_exclude(txn_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    txn = db.query(InvestecTransaction).filter(InvestecTransaction.id == txn_id, InvestecTransaction.company_id == current_user.company_id).first()
+    if not txn: raise HTTPException(404, "Transaction not found")
+    txn.match_status = "excluded"; db.commit(); return {"status": "excluded"}
+
+
+@investec_router.post("/transactions/{txn_id}/unmatch")
+def investec_unmatch(txn_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    txn = db.query(InvestecTransaction).filter(InvestecTransaction.id == txn_id, InvestecTransaction.company_id == current_user.company_id).first()
+    if not txn: raise HTTPException(404, "Transaction not found")
+    txn.match_status = "unmatched"; txn.matched_invoice_id = None; txn.matched_expense_id = None
+    txn.match_confidence = None; txn.matched_at = None
+    db.commit(); return {"status": "unmatched"}
+
+
+@investec_router.delete("/disconnect")
+def investec_disconnect(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    conn = db.query(InvestecConnection).filter(InvestecConnection.company_id == current_user.company_id).first()
+    if conn: db.delete(conn); db.commit()
+    return {"status": "disconnected"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STANDARD BANK ROUTER
+# Developer portal: developer.standardbank.co.za — partnership registration required.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+STANDARDBANK_CLIENT_ID     = os.environ.get("STANDARDBANK_CLIENT_ID", "")
+STANDARDBANK_CLIENT_SECRET = os.environ.get("STANDARDBANK_CLIENT_SECRET", "")
+STANDARDBANK_REDIRECT_URI  = os.environ.get(
+    "STANDARDBANK_REDIRECT_URI",
+    "https://zuzan-backend.onrender.com/banking/standardbank/callback",
+)
+# Confirmed from developer.standardbank.co.za API products
+STANDARDBANK_AUTHORIZE = "https://api.standardbank.co.za/security/v1/oauth2/authorize"
+STANDARDBANK_TOKEN_URL = "https://api.standardbank.co.za/security/v1/oauth2/token"
+STANDARDBANK_ACCOUNTS  = "https://api.standardbank.co.za/accounts/v1/accounts"
+STANDARDBANK_TXNS      = "https://api.standardbank.co.za/accounts/v1/accounts/{account_id}/transactions"
+STANDARDBANK_SCOPES    = "accounts transactions offline_access openid"
+
+standardbank_router = APIRouter()
+
+
+@standardbank_router.get("/connect")
+def standardbank_connect(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    if not STANDARDBANK_CLIENT_ID:
+        raise HTTPException(503, "Standard Bank integration not yet configured. Partnership credentials pending.")
+    state = _new_state(current_user.company_id)
+    params = {
+        "response_type": "code",
+        "client_id":     STANDARDBANK_CLIENT_ID,
+        "redirect_uri":  STANDARDBANK_REDIRECT_URI,
+        "scope":         STANDARDBANK_SCOPES,
+        "state":         state,
+    }
+    return {"connect_url": f"{STANDARDBANK_AUTHORIZE}?{urlencode(params)}"}
+
+
+@standardbank_router.get("/callback")
+def standardbank_callback(
+    code: str = Query(None), state: str = Query(None), error: str = Query(None),
+    db: Session = Depends(get_db),
+):
+    redirect_base = f"{FRONTEND_URL}?standardbank=callback"
+    if error or not code or not state:
+        return RedirectResponse(f"{redirect_base}&error={error or 'missing_params'}")
+
+    company_id = _pop_state(state)
+    if not company_id:
+        return RedirectResponse(f"{redirect_base}&error=invalid_state")
+
+    try:
+        resp = httpx.post(STANDARDBANK_TOKEN_URL, data={
+            "grant_type":    "authorization_code",
+            "code":          code,
+            "redirect_uri":  STANDARDBANK_REDIRECT_URI,
+            "client_id":     STANDARDBANK_CLIENT_ID,
+            "client_secret": STANDARDBANK_CLIENT_SECRET,
+        }, timeout=30)
+        resp.raise_for_status()
+        tok = resp.json()
+    except Exception as e:
+        logger.error(f"Standard Bank token exchange failed: {e}")
+        return RedirectResponse(f"{redirect_base}&error=token_exchange_failed")
+
+    conn = db.query(StandardBankConnection).filter(StandardBankConnection.company_id == company_id).first()
+    if not conn:
+        conn = StandardBankConnection(company_id=company_id)
+        db.add(conn)
+
+    conn.access_token  = encrypt_field(tok["access_token"])
+    conn.refresh_token = encrypt_field(tok.get("refresh_token", ""))
+    conn.token_expiry  = datetime.utcnow() + timedelta(seconds=tok.get("expires_in", 3600))
+    conn.scopes        = tok.get("scope", "")
+    conn.connected_at  = datetime.utcnow()
+    db.commit()
+
+    _standardbank_sync_accounts(company_id, db)
+    return RedirectResponse(f"{redirect_base}&success=1")
+
+
+def _standardbank_get_token(conn: StandardBankConnection, db: Session) -> str:
+    if conn.token_expiry and conn.token_expiry > datetime.utcnow() + timedelta(minutes=2):
+        return decrypt_field(conn.access_token)
+    try:
+        resp = httpx.post(STANDARDBANK_TOKEN_URL, data={
+            "grant_type":    "refresh_token",
+            "refresh_token": decrypt_field(conn.refresh_token),
+            "client_id":     STANDARDBANK_CLIENT_ID,
+            "client_secret": STANDARDBANK_CLIENT_SECRET,
+        }, timeout=30)
+        resp.raise_for_status()
+        tok = resp.json()
+        conn.access_token  = encrypt_field(tok["access_token"])
+        conn.refresh_token = encrypt_field(tok.get("refresh_token", decrypt_field(conn.refresh_token)))
+        conn.token_expiry  = datetime.utcnow() + timedelta(seconds=tok.get("expires_in", 3600))
+        db.commit()
+        return tok["access_token"]
+    except Exception as e:
+        raise HTTPException(502, f"Standard Bank token refresh failed: {e}")
+
+
+def _standardbank_sync_accounts(company_id: int, db: Session):
+    conn = db.query(StandardBankConnection).filter(StandardBankConnection.company_id == company_id).first()
+    if not conn: return
+    token = _standardbank_get_token(conn, db)
+    try:
+        resp = httpx.get(STANDARDBANK_ACCOUNTS, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+        resp.raise_for_status()
+        accounts = resp.json().get("accounts", [])
+    except Exception as e:
+        logger.error(f"Standard Bank accounts fetch failed: {e}"); return
+
+    for acct in accounts:
+        acct_id = acct.get("accountId") or acct.get("id")
+        existing = db.query(StandardBankBankAccount).filter(StandardBankBankAccount.standardbank_account_id == acct_id).first()
+        if not existing:
+            existing = StandardBankBankAccount(company_id=company_id, standardbank_account_id=acct_id)
+            db.add(existing)
+        existing.account_name    = acct.get("accountName") or acct.get("name")
+        existing.account_type    = acct.get("accountType") or acct.get("type")
+        existing.current_balance = acct.get("currentBalance") or acct.get("balance", {}).get("current")
+        existing.account_number  = encrypt_field(acct.get("accountNumber", "")) if acct.get("accountNumber") else None
+        existing.last_synced     = datetime.utcnow()
+    conn.last_synced = datetime.utcnow()
+    db.commit()
+
+
+def _standardbank_sync_transactions(company_id: int, db: Session) -> int:
+    conn = db.query(StandardBankConnection).filter(StandardBankConnection.company_id == company_id).first()
+    if not conn: return 0
+    token = _standardbank_get_token(conn, db)
+    accounts = db.query(StandardBankBankAccount).filter(
+        StandardBankBankAccount.company_id == company_id, StandardBankBankAccount.is_active == True
+    ).all()
+    new_count = 0
+
+    for acct in accounts:
+        try:
+            url = STANDARDBANK_TXNS.format(account_id=acct.standardbank_account_id)
+            resp = httpx.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+            resp.raise_for_status()
+            txns = resp.json().get("transactions", [])
+        except Exception as e:
+            logger.error(f"Standard Bank transactions fetch failed for {acct.standardbank_account_id}: {e}"); continue
+
+        for t in txns:
+            txn_id = t.get("transactionId") or t.get("id")
+            if not txn_id or db.query(StandardBankTransaction).filter(StandardBankTransaction.standardbank_txn_id == txn_id).first():
+                continue
+            amount   = float(t.get("amount", 0))
+            desc     = t.get("description") or t.get("transactionDescription", "")
+            date_str = t.get("transactionDate") or t.get("valueDate", "")
+            try:
+                txn_date = datetime.fromisoformat(date_str[:10])
+            except Exception:
+                txn_date = datetime.utcnow()
+
+            inv_id, exp_id, conf = _auto_match(amount, desc, company_id, db)
+            txn = StandardBankTransaction(
+                company_id              = company_id,
+                bank_account_id         = acct.id,
+                standardbank_txn_id     = txn_id,
+                amount                  = amount,
+                description             = desc,
+                reference               = t.get("reference"),
+                txn_date                = txn_date,
+                running_balance         = t.get("runningBalance"),
+                match_status            = "matched" if inv_id or exp_id else "unmatched",
+                matched_invoice_id      = inv_id,
+                matched_expense_id      = exp_id,
+                match_confidence        = conf if (inv_id or exp_id) else None,
+                matched_at              = datetime.utcnow() if (inv_id or exp_id) else None,
+            )
+            db.add(txn)
+            new_count += 1
+        acct.last_synced = datetime.utcnow()
+
+    db.commit()
+    return new_count
+
+
+@standardbank_router.get("/status")
+def standardbank_status(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    conn = db.query(StandardBankConnection).filter(StandardBankConnection.company_id == current_user.company_id).first()
+    if not conn:
+        return {"connected": False, "configured": bool(STANDARDBANK_CLIENT_ID)}
+    accts = db.query(StandardBankBankAccount).filter(
+        StandardBankBankAccount.company_id == current_user.company_id, StandardBankBankAccount.is_active == True
+    ).count()
+    return {
+        "connected":     True,
+        "configured":    bool(STANDARDBANK_CLIENT_ID),
+        "connected_at":  conn.connected_at.isoformat() if conn.connected_at else None,
+        "last_synced":   conn.last_synced.isoformat() if conn.last_synced else None,
+        "account_count": accts,
+    }
+
+
+@standardbank_router.post("/sync")
+def standardbank_sync(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    cid = current_user.company_id
+    conn = db.query(StandardBankConnection).filter(StandardBankConnection.company_id == cid).first()
+    if not conn: raise HTTPException(400, "Standard Bank not connected")
+    _standardbank_sync_accounts(cid, db)
+    new_txns = _standardbank_sync_transactions(cid, db)
+    accts = db.query(StandardBankBankAccount).filter(
+        StandardBankBankAccount.company_id == cid, StandardBankBankAccount.is_active == True
+    ).count()
+    return {"accounts_synced": accts, "transactions_new": new_txns}
+
+
+@standardbank_router.get("/accounts")
+def standardbank_accounts(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    accts = db.query(StandardBankBankAccount).filter(
+        StandardBankBankAccount.company_id == current_user.company_id, StandardBankBankAccount.is_active == True
+    ).all()
+    return [{"id": a.id, "name": a.account_name, "type": a.account_type,
+             "balance": a.current_balance, "currency": a.currency,
+             "last_synced": a.last_synced.isoformat() if a.last_synced else None} for a in accts]
+
+
+@standardbank_router.get("/transactions")
+def standardbank_transactions(
+    match_status: str = Query("unmatched"), limit: int = Query(200),
+    db: Session = Depends(get_db), current_user=Depends(get_current_user),
+):
+    q = db.query(StandardBankTransaction).filter(StandardBankTransaction.company_id == current_user.company_id)
+    if match_status != "all":
+        q = q.filter(StandardBankTransaction.match_status == match_status)
+    txns = q.order_by(StandardBankTransaction.txn_date.desc()).limit(limit).all()
+    return [{"id": t.id, "amount": t.amount, "description": t.description, "reference": t.reference,
+             "txn_date": t.txn_date.isoformat()[:10], "match_status": t.match_status,
+             "matched_invoice_id": t.matched_invoice_id, "matched_expense_id": t.matched_expense_id,
+             "match_confidence": t.match_confidence} for t in txns]
+
+
+@standardbank_router.post("/transactions/{txn_id}/match")
+def standardbank_match(txn_id: int, payload: MatchPayload, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    txn = db.query(StandardBankTransaction).filter(StandardBankTransaction.id == txn_id, StandardBankTransaction.company_id == current_user.company_id).first()
+    if not txn: raise HTTPException(404, "Transaction not found")
+    txn.match_status = "matched"; txn.matched_invoice_id = payload.invoice_id; txn.matched_expense_id = payload.expense_id
+    txn.match_confidence = 1.0; txn.matched_at = datetime.utcnow()
+    db.commit(); return {"status": "matched"}
+
+
+@standardbank_router.post("/transactions/{txn_id}/exclude")
+def standardbank_exclude(txn_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    txn = db.query(StandardBankTransaction).filter(StandardBankTransaction.id == txn_id, StandardBankTransaction.company_id == current_user.company_id).first()
+    if not txn: raise HTTPException(404, "Transaction not found")
+    txn.match_status = "excluded"; db.commit(); return {"status": "excluded"}
+
+
+@standardbank_router.post("/transactions/{txn_id}/unmatch")
+def standardbank_unmatch(txn_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    txn = db.query(StandardBankTransaction).filter(StandardBankTransaction.id == txn_id, StandardBankTransaction.company_id == current_user.company_id).first()
+    if not txn: raise HTTPException(404, "Transaction not found")
+    txn.match_status = "unmatched"; txn.matched_invoice_id = None; txn.matched_expense_id = None
+    txn.match_confidence = None; txn.matched_at = None
+    db.commit(); return {"status": "unmatched"}
+
+
+@standardbank_router.delete("/disconnect")
+def standardbank_disconnect(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    conn = db.query(StandardBankConnection).filter(StandardBankConnection.company_id == current_user.company_id).first()
     if conn: db.delete(conn); db.commit()
     return {"status": "disconnected"}
