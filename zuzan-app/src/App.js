@@ -376,8 +376,16 @@ const BANK_FORMATS = {
   tymebank:     {name:"TymeBank",      logo:"🩵", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
 };
 
-function autoCategory(desc) {
+function autoCategory(desc, type) {
   const d = desc.toLowerCase();
+  if (type === "credit") {
+    // Income category auto-detection
+    if (d.includes("interest")) return "Interest Income";
+    if (d.includes("refund") || d.includes("reversal")) return "Other Income";
+    if (d.includes("rental") || d.includes("rent receive")) return "Rental Income";
+    return "Sales Revenue";  // default income account
+  }
+  // Expense category auto-detection
   if (d.includes("interest")) return "Interest Income";
   if (d.includes("eskom") || d.includes("electric") || d.includes("water")) return "Utilities";
   if (d.includes("telkom") || d.includes("vodacom") || d.includes("mtn") || d.includes("fibre")) return "Telecoms";
@@ -5580,12 +5588,12 @@ function BankImport({live = {}, onNavigate}) {
             }
             const desc = (r[descCol] || "").trim() || "Unknown";
             return {id:i+1, date:parseDt(r[dateCol]), description:desc, amount:amt, type,
-                    category:autoCategory(desc), hasVat:false, vatAmount:0};
+                    category:autoCategory(desc, type), hasVat:false, vatAmount:0};
           })
           .filter(t => t && t.amount > 0);
         if (!parsed.length) { setError("No transactions found. Check you selected the correct bank."); return; }
         setTxns(parsed);
-        setSelected(new Set(parsed.filter(t => t.type === "debit").map(t => t.id)));
+        setSelected(new Set(parsed.map(t => t.id)));  // pre-select all (expenses + income)
         setStep("preview");
       } catch(err) { setError("Could not read file. Check it is a valid CSV bank statement."); }
     };
@@ -5799,67 +5807,96 @@ function BankImport({live = {}, onNavigate}) {
           </div>
         </div>
       )}
-      {step === "categorise" && (
-        <div>
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:6}}>Review Categories</div>
-            <div style={{fontSize:12,color:C.inkMid,marginBottom:18}}>Adjust any categories before importing into ZuZan.</div>
-            <div style={{maxHeight:360,overflowY:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead style={{position:"sticky",top:0}}>
-                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-                    {["Date","Description","Amount","Account","VAT","VAT Amt"].map(h => <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedTxns.filter(t => t.type === "debit").map(t => (
-                    <tr key={t.id} style={{borderBottom:`1px solid ${C.border}20`}}>
-                      <td style={{padding:"10px 14px",color:C.inkMid,fontSize:11,fontFamily:"monospace"}}>{t.date}</td>
-                      <td style={{padding:"10px 14px",color:C.ink}}>{t.description}</td>
-                      <td style={{padding:"10px 14px",fontWeight:700,color:C.red}}>-{fmt(t.amount)}</td>
-                      <td style={{padding:"10px 14px"}}>
-                        <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:180}}>
-                          <option value="">-- Select Account --</option>
-                          {COA_GROUPS.map(group => (
-                            <optgroup key={group} label={group}>
-                              {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
-                                <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                      </td>
-                      <td style={{padding:"10px 14px",textAlign:"center"}}>
-                        <input type="checkbox" checked={t.hasVat||false} title="Includes VAT at 15%"
-                          onChange={e => setTxns(prev => prev.map(tx => tx.id === t.id ? {...tx,hasVat:e.target.checked,vatAmount:e.target.checked?Math.round((t.amount/115)*15*100)/100:0} : tx))}
-                          style={{cursor:"pointer",width:16,height:16}}/>
-                      </td>
-                      <td style={{padding:"10px 14px",fontSize:11,color:t.hasVat?C.accent:C.inkDim,fontWeight:t.hasVat?700:400}}>
-                        {t.hasVat ? fmt(t.vatAmount||0) : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      {step === "categorise" && (() => {
+        const debits  = selectedTxns.filter(t => t.type === "debit");
+        const credits = selectedTxns.filter(t => t.type === "credit");
+        const totalCredits = credits.reduce((s,t) => s + t.amount, 0);
+        const TH = h => <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>;
+        const vatToggle = t => e => setTxns(prev => prev.map(tx => tx.id === t.id ? {...tx, hasVat:e.target.checked, vatAmount:e.target.checked ? Math.round((t.amount/1.15)*0.15*100)/100 : 0} : tx));
+        const renderRow = (t, isDebit) => (
+          <tr key={t.id} style={{borderBottom:`1px solid ${C.border}20`}}>
+            <td style={{padding:"10px 14px",color:C.inkMid,fontSize:11,fontFamily:"monospace"}}>{t.date}</td>
+            <td style={{padding:"10px 14px",color:C.ink}}>{t.description}</td>
+            <td style={{padding:"10px 14px",fontWeight:700,color:isDebit?C.red:C.green}}>{isDebit?"-":"+"}  {fmt(t.amount)}</td>
+            <td style={{padding:"10px 14px"}}>
+              <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:180}}>
+                <option value="">-- Select Account --</option>
+                {isDebit ? (
+                  COA_GROUPS.map(group => (
+                    <optgroup key={group} label={group}>
+                      {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
+                        <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
+                      ))}
+                    </optgroup>
+                  ))
+                ) : (
+                  <optgroup label="Revenue">
+                    {DEFAULT_COA.filter(a => a.group === "Revenue" && a.type === "Detail").map(a => (
+                      <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </td>
+            <td style={{padding:"10px 14px",textAlign:"center"}}>
+              <input type="checkbox" checked={t.hasVat||false} title="Includes VAT at 15%" onChange={vatToggle(t)} style={{cursor:"pointer",width:16,height:16}}/>
+            </td>
+            <td style={{padding:"10px 14px",fontSize:11,color:t.hasVat?C.accent:C.inkDim,fontWeight:t.hasVat?700:400}}>
+              {t.hasVat ? fmt(t.vatAmount||0) : "-"}
+            </td>
+          </tr>
+        );
+        return (
+          <div>
+            {/* EXPENSES section */}
+            {debits.length > 0 && (
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:12}}>📤 Expenses ({debits.length})</div>
+                <div style={{maxHeight:300,overflowY:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead style={{position:"sticky",top:0}}><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Account","VAT","VAT Amt"].map(TH)}</tr></thead>
+                    <tbody>{debits.map(t => renderRow(t, true))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {/* INCOME section */}
+            {credits.length > 0 && (
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>📥 Income ({credits.length})</div>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>These will be posted as journal entries (DR Bank / CR Revenue). Choose the income account for each.</div>
+                <div style={{maxHeight:300,overflowY:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead style={{position:"sticky",top:0}}><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Income Account","VAT","VAT Amt"].map(TH)}</tr></thead>
+                    <tbody>{credits.map(t => renderRow(t, false))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {error && <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.red}}>Warning: {error}</div>}
+            <div style={{background:C.ink,borderRadius:14,padding:"18px 24px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>IMPORT SUMMARY</div>
+                <div style={{fontSize:14,color:"#fff",fontWeight:600}}>
+                  {debits.length > 0 && <span>{debits.length} expenses {fmt(totalDebits)}</span>}
+                  {debits.length > 0 && credits.length > 0 && <span style={{color:"rgba(255,255,255,0.4)"}}> · </span>}
+                  {credits.length > 0 && <span style={{color:C.greenLt||"#86efac"}}>{credits.length} income {fmt(totalCredits)}</span>}
+                </div>
+              </div>
+              <button onClick={handleImport} disabled={importing} style={{background:importing?C.inkDim:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontSize:13,fontWeight:700,cursor:importing?"wait":"pointer",fontFamily:"inherit"}}>{importing ? "Importing..." : "Import to ZuZan"}</button>
             </div>
+            <button onClick={() => setStep("preview")} style={{padding:"10px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
           </div>
-          {error && <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.red}}>Warning: {error}</div>}
-          <div style={{background:C.ink,borderRadius:14,padding:"18px 24px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>IMPORT SUMMARY</div>
-              <div style={{fontSize:14,color:"#fff",fontWeight:600}}>{selectedTxns.filter(t=>t.type==="debit").length} expenses - {fmt(totalDebits)}</div>
-            </div>
-            <button onClick={handleImport} disabled={importing} style={{background:importing?C.inkDim:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontSize:13,fontWeight:700,cursor:importing?"wait":"pointer",fontFamily:"inherit"}}>{importing ? "Importing..." : "Import to ZuZan"}</button>
-          </div>
-          <button onClick={() => setStep("preview")} style={{padding:"10px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-        </div>
-      )}
+        );
+      })()}
       {step === "done" && (
         <div style={{textAlign:"center",maxWidth:520,margin:"40px auto"}}>
           <div style={{fontSize:64,marginBottom:16}}>🎉</div>
           <h2 style={{fontFamily:"serif",fontSize:30,color:C.ink,marginBottom:12}}>Import Complete!</h2>
           <p style={{color:C.inkMid,fontSize:14,lineHeight:1.7,marginBottom:28}}>
-            Successfully imported <strong style={{color:C.ink}}>{result ? result.expenses_created : 0} expenses</strong> totalling <strong style={{color:C.red}}>{fmt(totalDebits)}</strong> into ZuZan.
+            {result && result.expenses_created > 0 && <span>Imported <strong style={{color:C.ink}}>{result.expenses_created} expenses</strong> ({fmt(totalDebits)}). </span>}
+            {result && result.credits_recorded > 0 && <span>Recorded <strong style={{color:C.green}}>{result.credits_recorded} income entries</strong> to your P&amp;L. </span>}
+            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0)) && <span>Nothing new was imported (all transactions already exist).</span>}
           </p>
           <div style={{display:"flex",gap:10,justifyContent:"center"}}>
             <button onClick={reset} style={{padding:"11px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Upload Another</button>

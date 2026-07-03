@@ -64,6 +64,15 @@ DEFAULT_ACCOUNTS = [
     {"code": "6800", "name": "Loss on Disposal of Assets",   "type": AccountType.expense},
 ]
 
+# Maps income categories to revenue account codes (all map to Sales Revenue 4000 for now)
+INCOME_TO_CODE = {
+    "Sales Revenue":    "4000",
+    "Service Revenue":  "4000",
+    "Interest Income":  "4000",
+    "Rental Income":    "4000",
+    "Other Income":     "4000",
+}
+
 # Maps expense categories to account codes
 CATEGORY_TO_CODE = {
     "Cost of Sales":    "5000",
@@ -124,6 +133,15 @@ def expense_account(company_id: int, category: str, db: Session) -> Account:
     acct = db.query(Account).filter(Account.company_id==company_id, Account.code==code).first()
     if not acct:
         acct = get_account(company_id, "5900", db)
+    return acct
+
+
+def revenue_account(company_id: int, category: str, db: Session) -> Account:
+    """Resolve income category → revenue account, falling back to Sales Revenue (4000)."""
+    code = INCOME_TO_CODE.get(category or "", "4000")
+    acct = db.query(Account).filter(Account.company_id==company_id, Account.code==code).first()
+    if not acct:
+        acct = get_account(company_id, "4000", db)
     return acct
 
 
@@ -291,6 +309,46 @@ def post_expense(expense, db: Session) -> JournalEntry:
 
     _assert_balanced(lines)
     for l in lines: db.add(l)
+    return entry
+
+
+def post_bank_income(company_id: int, txn, db: Session) -> JournalEntry:
+    """
+    Bank import credit (money received, not from a tracked invoice):
+      DR Bank / Cash (1000)      (total amount incl VAT)
+      CR Revenue account (4000)  (amount excl VAT — or full amount if no VAT)
+      CR VAT Output (2100)       (vat_amount — only if has_vat / vat_applicable)
+
+    txn is a BankTransaction Pydantic model with:
+      .date, .description, .amount, .category, .has_vat, .vat_amount
+    """
+    from datetime import date as _date
+    total = round(float(txn.amount or 0), 2)
+    has_v = getattr(txn, "has_vat", False) or getattr(txn, "vat_applicable", False)
+    vat   = round(float(getattr(txn, "vat_amount", 0) or 0), 2) if has_v else 0.0
+    net   = round(total - vat, 2) if vat > 0 else total
+
+    try:
+        txn_date = _date.fromisoformat(txn.date)
+    except Exception:
+        txn_date = datetime.utcnow().date()
+
+    entry = _make_entry(company_id, txn_date,
+        f"Bank income — {txn.description}",
+        "BANKIN", "bank_import_income", None, db)
+
+    bank    = get_account(company_id, "1000", db)
+    rev     = revenue_account(company_id, txn.category, db)
+    vat_out = get_account(company_id, "2100", db) if vat > 0 else None
+
+    lines = [_line(entry.id, bank, debit=total, description="Money received")]
+    lines.append(_line(entry.id, rev, credit=net, description=txn.category or "Income"))
+    if vat > 0 and vat_out:
+        lines.append(_line(entry.id, vat_out, credit=vat, description="VAT output"))
+
+    _assert_balanced(lines)
+    for l in lines:
+        db.add(l)
     return entry
 
 

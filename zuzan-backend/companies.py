@@ -757,10 +757,12 @@ bank_router = APIRouter()
 class BankTransaction(BaseModel):
     date:           str
     description:    str
-    amount:         float   # VAT-inclusive amount as it appears on the bank statement
-    type:           str     # debit or credit
+    amount:         float           # VAT-inclusive amount as it appears on the bank statement
+    type:           str             # debit or credit
     category:       Optional[str] = "Other"
-    vat_applicable: bool = False  # set True to split out 15% VAT input on import
+    vat_applicable: bool  = False   # legacy field — kept for backwards compat
+    has_vat:        bool  = False   # set True to split out VAT (15%) on import
+    vat_amount:     float = 0.0     # pre-calculated VAT amount from frontend
 
 class BankImportRequest(BaseModel):
     bank:         str
@@ -774,12 +776,13 @@ async def import_bank_statement(
 ):
     """
     Import bank statement transactions into ZuZan.
-    Debits are saved as expenses.
-    Credits are saved as invoice payments if matched.
+    Debits  → saved as Expense records + journal entry (DR Expense / CR Bank).
+    Credits → journal entry (DR Bank / CR Revenue) so income flows to P&L.
     """
     expenses_created  = 0
     expenses_skipped  = 0
     credits_recorded  = 0
+    credits_skipped   = 0
 
     for txn in data.transactions:
         if txn.type == "debit":
@@ -822,7 +825,15 @@ async def import_bank_statement(
             expenses_created += 1
 
         elif txn.type == "credit":
-            credits_recorded += 1
+            # Post a journal entry so income flows into P&L and the balance sheet
+            try:
+                import journal as journal_engine
+                journal_engine.init_accounts(current_user.company_id, db)
+                journal_engine.post_bank_income(current_user.company_id, txn, db)
+                credits_recorded += 1
+            except Exception as je:
+                logger.warning(f"Journal post failed for bank import income: {je}")
+                credits_skipped += 1
 
     db.commit()
 
@@ -832,6 +843,7 @@ async def import_bank_statement(
         "expenses_created": expenses_created,
         "expenses_skipped": expenses_skipped,
         "credits_recorded": credits_recorded,
+        "credits_skipped":  credits_skipped,
         "total_processed":  len(data.transactions),
-        "message":          f"Imported {expenses_created} expenses and {credits_recorded} credits from {len(data.transactions)} transactions.",
+        "message":          f"Imported {expenses_created} expenses and {credits_recorded} income entries from {len(data.transactions)} transactions.",
     }
