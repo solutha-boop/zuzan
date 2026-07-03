@@ -352,14 +352,16 @@ const DEFAULT_COA = [
 ];
 
 const BANK_FORMATS = {
-  fnb:          {name:"FNB",           logo:"🟢",skipRows:4,dateCol:0,descCol:2,amtCol:4},
-  absa:         {name:"ABSA",          logo:"🔴",skipRows:1,dateCol:0,descCol:1,amtCol:3},
-  standardbank: {name:"Standard Bank", logo:"🔵",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  nedbank:      {name:"Nedbank",       logo:"🟩",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  capitec:      {name:"Capitec",       logo:"🟦",skipRows:1,dateCol:0,descCol:2,amtCol:3},
-  discovery:    {name:"Discovery Bank",logo:"🟣",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  investec:     {name:"Investec",      logo:"🔷",skipRows:1,dateCol:0,descCol:1,amtCol:3},
-  tymebank:     {name:"TymeBank",      logo:"🩵",skipRows:1,dateCol:0,descCol:1,amtCol:2},
+  // skipRows = fallback only; parser auto-detects the first real data row by date pattern
+  // dateCol/amtCol/descCol are 0-based indices within the data row
+  fnb:          {name:"FNB",           logo:"🟢",skipRows:5,dateCol:0,amtCol:1,descCol:3},
+  absa:         {name:"ABSA",          logo:"🔴",skipRows:1,dateCol:0,amtCol:3,descCol:1},
+  standardbank: {name:"Standard Bank", logo:"🔵",skipRows:1,dateCol:0,amtCol:2,descCol:1},
+  nedbank:      {name:"Nedbank",       logo:"🟩",skipRows:1,dateCol:0,amtCol:2,descCol:1},
+  capitec:      {name:"Capitec",       logo:"🟦",skipRows:1,dateCol:0,amtCol:3,descCol:2},
+  discovery:    {name:"Discovery Bank",logo:"🟣",skipRows:1,dateCol:0,amtCol:2,descCol:1},
+  investec:     {name:"Investec",      logo:"🔷",skipRows:1,dateCol:0,amtCol:3,descCol:1},
+  tymebank:     {name:"TymeBank",      logo:"🩵",skipRows:1,dateCol:0,amtCol:2,descCol:1},
 };
 
 function autoCategory(desc) {
@@ -5487,7 +5489,16 @@ function BankImport({live = {}, onNavigate}) {
     reader.onload = e => {
       try {
         const rows = e.target.result.split("\n").filter(l => l.trim()).map(l => parseCSVLine(l));
-        const data = rows.slice(bfmt.skipRows);
+        // Auto-detect first real data row: col[0] must look like a date (YYYY/MM/DD or DD/MM/YYYY etc.)
+        const dateRx = /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$|^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
+        let dataStart = bfmt.skipRows; // fallback to configured value
+        for (let i = 0; i < Math.min(rows.length, 25); i++) {
+          if (rows[i] && rows[i][0] && dateRx.test(rows[i][0].trim())) {
+            dataStart = i;
+            break;
+          }
+        }
+        const data = rows.slice(dataStart);
         const parsed = data
           .filter(r => r.length > Math.max(bfmt.dateCol, bfmt.descCol, bfmt.amtCol))
           .map((r,i) => {
