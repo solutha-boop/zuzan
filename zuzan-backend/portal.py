@@ -181,14 +181,25 @@ async def portal_payfast_notify(
     )
     db.commit()
 
-    # Post journal entry for payment received (non-fatal)
+    # Post journal entry for payment received: DR Bank / CR Accounts Receivable.
+    # Audit fix 2026-07-03: the previous code called a nonexistent function
+    # (post_invoice_payment) with an id instead of the Invoice object, on a
+    # throwaway session that was never committed — so portal payments never
+    # reached the journal and the AR control account (1100) failed to reconcile.
+    # Non-fatal by design: the invoice is already marked paid above, and a PayFast
+    # IPN retry would hit the "already paid" guard and skip this block, so we
+    # log loudly and rely on /journal/backfill as the repair path.
     try:
         import journal as journal_engine
-        db2 = SessionLocal()
-        journal_engine.post_invoice_payment(inv.id, db2)
-        db2.close()
+        journal_engine.init_accounts(inv.company_id, db)
+        journal_engine.post_invoice_paid(inv, db)
+        db.commit()
     except Exception as e:
-        logger.warning(f"Portal IPN: journal post failed (non-fatal): {e}")
+        db.rollback()
+        logger.error(
+            f"Portal IPN: journal post FAILED for invoice {inv.invoice_number}: {e}. "
+            f"AR control (1100) will not reconcile — run /journal/backfill to repair."
+        )
 
     logger.info(f"Portal IPN: invoice {inv.invoice_number} marked paid — R{inv.paid_amount_zar:.2f}")
     return JSONResponse(content={"status": "ok"})

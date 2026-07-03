@@ -1053,26 +1053,24 @@ def init_db():
                 matched_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT NOW()
             )""",
-        ]:
-            try:
-                conn.execute(text(sql))
-                conn.commit()
-            except Exception:
-                conn.rollback()  # Reset connection so next statement starts fresh
-
-
             # ── Pillar 2: Client Portal (2026-06) ────────────────────────────
-            # portal_token — use DO block for PostgreSQL compatibility (IF NOT EXISTS not available in PG ALTER TABLE < 9.6)
+            # portal_token unique index — DO block for PostgreSQL (plain ALTERs for
+            # the columns already run above; SQLite fails this harmlessly via the
+            # loop's try/except). Moved INTO the list on 2026-07-03: these four
+            # statements previously sat after the loop body as bare string
+            # expressions and never executed (dead migration code pitfall).
             """DO $$ BEGIN
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='invoices' AND column_name='portal_token') THEN
                     ALTER TABLE invoices ADD COLUMN portal_token VARCHAR;
-                    CREATE UNIQUE INDEX IF NOT EXISTS ix_invoices_portal_token ON invoices (portal_token) WHERE portal_token IS NOT NULL;
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='invoices' AND column_name='portal_token_created_at') THEN
                     ALTER TABLE invoices ADD COLUMN portal_token_created_at TIMESTAMP;
                 END IF;
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_invoices_portal_token ON invoices (portal_token) WHERE portal_token IS NOT NULL;
             END $$""",
             # ── Pillar 1: Multi-User & Roles (2026-06) ──────────────────────
+            # invite_tokens / audit_log are also ORM models (create_all covers new
+            # installs); kept here for databases created before the models existed.
             """CREATE TABLE IF NOT EXISTS invite_tokens (
                 id INTEGER PRIMARY KEY,
                 company_id INTEGER NOT NULL REFERENCES companies(id),
@@ -1095,7 +1093,15 @@ def init_db():
                 detail TEXT,
                 created_at TIMESTAMP DEFAULT NOW()
             )""",
+            # Role backfill — idempotent, safe to run on every startup
             "UPDATE users SET role = 'owner' WHERE role IS NULL OR role = ''",
+        ]:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                conn.rollback()  # Reset connection so next statement starts fresh
+
         # Backfill: paid invoices missing paid_date get created_at as fallback.
         # Fixes revenue gap between dashboard and management/income-statement endpoints.
         try:

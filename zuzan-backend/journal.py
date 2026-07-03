@@ -655,12 +655,16 @@ def backfill_company(company_id: int, db: Session) -> dict:
     ).all():
         if ("purchase_order", po.id) not in existing:
             try:
-                # Partial POs: post only the delivered value (audit fix 2026-07-02),
-                # derived from per-item quantity_received. Legacy partial POs with no
-                # tracking data (all zero) fall back to the full amount — consistent
-                # with _po_delivered_net in the P&L reports.
+                # Partial AND paid POs: post only the delivered value (audit fixes
+                # 2026-07-02 / 2026-07-03), derived from per-item quantity_received.
+                # "paid" is included because pay_po accepts partially delivered POs —
+                # a paid-formerly-partial PO must not be backfilled at full value.
+                # For fully received/paid POs the delivered sum equals the subtotal,
+                # so the outcome is unchanged. Legacy POs with no tracking data
+                # (all zero) fall back to the full amount — consistent with
+                # _po_delivered_net in the P&L reports.
                 kwargs = {}
-                if po.status == "partial":
+                if po.status in ("partial", "paid"):
                     delivered_net = round(sum(
                         (i.quantity_received or 0) * (i.unit_price or 0)
                         for i in po.items
@@ -676,14 +680,39 @@ def backfill_company(company_id: int, db: Session) -> dict:
             except Exception as e:
                 posted["errors"].append(f"PO {po.po_number} receive: {e}")
 
-    # Purchase orders paid — post the AP clearance entry for fully paid POs
+    # Purchase orders paid — post the AP clearance entry for paid POs.
+    # Clear only the actual AP credits posted for each PO (audit fix 2026-07-03):
+    # for a paid-formerly-partial PO the AP balance is the sum of delivered-value
+    # credits, which may be less than po.total_amount. Clearing the full amount
+    # would over-debit AP and misstate the bank balance — mirror pay_po instead.
+    # The AP-credit query autoflushes any receive entries posted above in this
+    # same backfill run, so the lookup sees them. Falls back to po.total_amount
+    # when no AP credits exist (pre-journal legacy data).
+    ap_backfill_acct = db.query(Account).filter(
+        Account.company_id == company_id, Account.code == "2000"
+    ).first()
     for po in db.query(PurchaseOrder).filter(
         PurchaseOrder.company_id == company_id,
         PurchaseOrder.status == "paid"
     ).all():
         if ("po_payment", po.id) not in existing:
             try:
-                post_po_paid(po, db)
+                paid_amount = None
+                if ap_backfill_acct:
+                    ap_credits = (
+                        db.query(func.sum(JournalLine.credit))
+                        .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+                        .filter(
+                            JournalEntry.company_id == company_id,
+                            JournalEntry.source == "purchase_order",
+                            JournalEntry.source_id == po.id,
+                            JournalLine.account_id == ap_backfill_acct.id,
+                        )
+                        .scalar()
+                    )
+                    if ap_credits and ap_credits > 0:
+                        paid_amount = round(ap_credits, 2)
+                post_po_paid(po, db, paid_amount=paid_amount)
                 posted["purchase_orders"] += 1
             except Exception as e:
                 posted["errors"].append(f"PO {po.po_number} payment: {e}")

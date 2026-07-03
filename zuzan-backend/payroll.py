@@ -27,18 +27,23 @@ def _to_zar(inv) -> float:
 def _po_delivered_net(po) -> float:
     """Ex-VAT value of goods actually delivered on a purchase order.
 
-    Full subtotal for received/paid POs. For partial POs, sums per-item
+    Full subtotal for received POs. For partial AND paid POs, sums per-item
     quantity_received × unit_price so the P&L matches the incremental journal
-    postings (audit fix 2026-07-02). Legacy partial POs with no receipt
+    postings (audit fixes 2026-07-02 / 2026-07-03). "paid" is included because
+    pay_po accepts partially delivered POs: paying one flips its status to
+    "paid" and would otherwise revert its COGS to the full subtotal while the
+    journal carries only the delivered amount. Legacy POs with no receipt
     tracking (all quantity_received = 0) fall back to the full subtotal —
-    consistent with the full-amount journal entry their backfill posted."""
+    consistent with the full-amount journal entry their backfill posted.
+    (Fully received/paid POs are unaffected: their delivered sum equals the
+    subtotal, and the migration backfilled their quantity_received in full.)"""
     net_full = (po.total_amount or 0) - (po.vat_amount or 0)
-    if po.status != "partial":
+    if po.status not in ("partial", "paid"):
         return round(net_full, 2)
     delivered = sum((i.quantity_received or 0) * (i.unit_price or 0) for i in po.items)
     if delivered > 0:
         return round(delivered, 2)
-    return round(net_full, 2)  # legacy partial PO — no tracking data
+    return round(net_full, 2)  # legacy PO — no tracking data
 
 
 def _po_delivered_total(po) -> float:

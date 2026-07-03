@@ -110,7 +110,23 @@ async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get
     if not po: raise HTTPException(404, "Purchase order not found")
     if data.supplier_id is not None: po.supplier_id = data.supplier_id
     if data.supplier_name is not None: po.supplier_name = data.supplier_name
-    if data.status is not None: po.status = data.status
+    if data.status is not None and data.status != po.status:
+        # Whitelist status transitions (audit fix 2026-07-03): financial statuses
+        # (received/partial/paid) must be reached via /receive and /pay, which post
+        # the required journal entries and receipt tracking. Setting them directly
+        # would bypass the journal and misstate COGS and the AP control account.
+        ALLOWED_TRANSITIONS = {
+            "draft":     {"sent", "cancelled"},
+            "sent":      {"draft", "cancelled"},
+            "cancelled": {"draft"},
+        }
+        if data.status not in ALLOWED_TRANSITIONS.get(po.status, set()):
+            raise HTTPException(
+                400,
+                f"Cannot change status from '{po.status}' to '{data.status}' via update. "
+                f"Use POST /purchase-orders/{po.id}/receive or /pay so journal entries are posted correctly."
+            )
+        po.status = data.status
     if data.notes is not None: po.notes = data.notes
     if data.delivery_date is not None:
         po.delivery_date = datetime.strptime(data.delivery_date, "%Y-%m-%d")
