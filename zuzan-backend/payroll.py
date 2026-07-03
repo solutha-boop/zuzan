@@ -1388,6 +1388,8 @@ async def provisional_tax(
         Invoice.paid_date >= year_start
     ).all()
     ytd_revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
+    # Add bank-import income (journal entries, not invoices) — avoids double-counting
+    ytd_revenue = round(ytd_revenue + _bank_import_income(db, cid, year_start), 2)
 
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
