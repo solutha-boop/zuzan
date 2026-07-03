@@ -9,7 +9,7 @@ from sqlalchemy import func
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timedelta
-from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry
+from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine
 from auth import get_current_user, User
 import hashlib
 import logging
@@ -54,6 +54,32 @@ def _po_delivered_total(po) -> float:
 
 
 logger = logging.getLogger("zuzan.payroll")
+
+
+def _bank_import_income(db: Session, company_id: int, date_from=None, date_to=None) -> float:
+    """
+    Sum net revenue credits from bank-import journal entries (source == 'bank_import_income').
+    Scoped to revenue accounts only so that Bank (asset) lines are excluded.
+    date_from / date_to are datetime objects; both optional.
+
+    This is intentionally separate from invoice-based revenue to avoid double-counting.
+    Invoice revenue is read from the Invoice table. Bank import income is read from here.
+    """
+    q = (
+        db.query(func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0))
+        .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+        .join(Account, JournalLine.account_id == Account.id)
+        .filter(
+            Account.company_id == company_id,
+            Account.type == AccountType.revenue,
+            JournalEntry.source == "bank_import_income",
+        )
+    )
+    if date_from:
+        q = q.filter(JournalEntry.date >= date_from)
+    if date_to:
+        q = q.filter(JournalEntry.date < date_to)
+    return float(q.scalar() or 0)
 
 # SA TAX TABLES — Multi-year for audit history
 TAX_YEARS = {
@@ -471,6 +497,8 @@ async def dashboard(
         Invoice.status == InvoiceStatus.paid,
     ).all()
     total_revenue = sum(_to_zar(i) for i in paid_invoices)
+    # Add bank-import income (posted as journal entries, not invoices)
+    total_revenue += _bank_import_income(db, cid)
 
     outstanding_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
@@ -633,6 +661,8 @@ async def monthly_trend(
                 Invoice.paid_date < end
             ).all()
         )
+        # Add bank-import income for this month
+        revenue += _bank_import_income(db, cid, start, end)
         # Expenses ex-VAT for P&L
         expenses = sum(
             (exp.amount - (exp.vat_amount or 0)) for exp in db.query(Expense).filter(
@@ -1155,6 +1185,8 @@ async def management_accounts(
         Invoice.paid_date < period_end,
     ).all()
     revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
+    # Add bank-import income in the same date range
+    revenue = round(revenue + _bank_import_income(db, cid, period_start, period_end), 2)
 
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,

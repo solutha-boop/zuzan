@@ -262,11 +262,12 @@ async def api_list_employees(auth=Depends(require_api_key)):
 @app.get("/v1/summary", tags=["Public API"])
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
-    from payroll import _to_zar, _po_delivered_net
+    from payroll import _to_zar, _po_delivered_net, _bank_import_income
     from database import InvoiceStatus, PurchaseOrder, Payslip, DepreciationEntry
     paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.paid).all()
     out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
     total_revenue  = sum(_to_zar(i) for i in paid_invs)
+    total_revenue += _bank_import_income(db, company.id)
     # Expenses ex-VAT
     exp_rows = db.query(Expense).filter(Expense.company_id==company.id).all()
     total_expenses = sum(e.amount - (e.vat_amount or 0) for e in exp_rows)
