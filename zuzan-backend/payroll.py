@@ -1043,41 +1043,69 @@ async def reconciliation(
 
 @reports_router.get("/cash-flow")
 async def cash_flow(
+    date_from: Optional[str] = None,
+    date_to:   Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     cid = current_user.company_id
     now = datetime.utcnow()
-    month_start = datetime(now.year, now.month, 1)
 
-    paid_this_month = db.query(Invoice).filter(
+    # Resolve date range — honour the caller's date_from/date_to; default to current month.
+    if date_from:
+        period_start = datetime.strptime(date_from, "%Y-%m-%d")
+    else:
+        period_start = datetime(now.year, now.month, 1)
+
+    if date_to:
+        # date_to is inclusive (e.g. "2026-06-30"); add 1 day for open-ended DB filter
+        period_end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+    else:
+        period_end = None   # no upper bound
+
+    # Human-readable period label
+    end_label = (period_end - timedelta(days=1)).strftime("%d %b %Y") if period_end else "present"
+    period_label = f"{period_start.strftime('%d %b %Y')} – {end_label}"
+
+    # ── Receipts ──────────────────────────────────────────────────────────────
+    inv_q = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
-        Invoice.paid_date >= month_start
-    ).all()
-    cash_receipts = round(sum(_to_zar(i) for i in paid_this_month), 2)
-    # Add bank-import income received this month (direct credits posted as journal entries)
-    cash_receipts = round(cash_receipts + _bank_import_income(db, cid, month_start), 2)
+        Invoice.paid_date >= period_start,
+    )
+    if period_end:
+        inv_q = inv_q.filter(Invoice.paid_date < period_end)
+    paid_in_period = inv_q.all()
+    cash_receipts  = round(sum(_to_zar(i) for i in paid_in_period), 2)
+    # Add bank-import income (posted as journal entries, not invoices)
+    cash_receipts  = round(cash_receipts + _bank_import_income(db, cid, period_start, period_end), 2)
 
-    expenses_this_month = db.query(Expense).filter(
+    # ── Payments ──────────────────────────────────────────────────────────────
+    exp_q = db.query(Expense).filter(
         Expense.company_id == cid,
-        Expense.expense_date >= month_start
-    ).all()
-    cash_payments = round(sum(e.amount for e in expenses_this_month), 2)
+        Expense.expense_date >= period_start,
+    )
+    if period_end:
+        exp_q = exp_q.filter(Expense.expense_date < period_end)
+    expenses_in_period = exp_q.all()
+    cash_payments = round(sum(e.amount for e in expenses_in_period), 2)
 
-    payslips_this_month = db.query(Payslip).join(Employee).filter(
+    # ── Payroll ───────────────────────────────────────────────────────────────
+    pay_q = db.query(Payslip).join(Employee).filter(
         Employee.company_id == cid,
-        Payslip.generated_at >= month_start
-    ).all()
-    payroll_disbursed = round(sum(p.net_pay for p in payslips_this_month), 2)
-    sars_payments     = round(sum(p.paye + p.uif_employee + p.uif_employer + p.sdl for p in payslips_this_month), 2)
+        Payslip.generated_at >= period_start,
+    )
+    if period_end:
+        pay_q = pay_q.filter(Payslip.generated_at < period_end)
+    payslips_in_period = pay_q.all()
+    payroll_disbursed  = round(sum(p.net_pay for p in payslips_in_period), 2)
+    sars_payments      = round(sum(p.paye + p.uif_employee + p.uif_employer + p.sdl for p in payslips_in_period), 2)
 
-    # VAT remitted to SARS: output VAT collected on paid invoices minus input VAT on expenses.
-    # This is the net cash that must flow to SARS for the month and must appear in operating
-    # activities — omitting it overstates net operating cash flow.
-    output_vat_month = round(sum(i.vat_amount or 0 for i in paid_this_month), 2)
-    input_vat_month  = round(sum(e.vat_amount or 0 for e in expenses_this_month), 2)
-    net_vat_to_sars  = round(output_vat_month - input_vat_month, 2)  # positive = payable, negative = refund
+    # ── VAT net-to-SARS ──────────────────────────────────────────────────────
+    # Output VAT collected on paid invoices minus input VAT on expenses.
+    output_vat = round(sum(i.vat_amount or 0 for i in paid_in_period), 2)
+    input_vat  = round(sum(e.vat_amount or 0 for e in expenses_in_period), 2)
+    net_vat_to_sars = round(output_vat - input_vat, 2)
 
     net_operating = round(
         cash_receipts - cash_payments - payroll_disbursed - sars_payments - net_vat_to_sars,
@@ -1085,7 +1113,7 @@ async def cash_flow(
     )
 
     return {
-        "period": now.strftime("%B %Y"),
+        "period": period_label,
         "operating": {
             "cash_receipts_from_customers": cash_receipts,
             "cash_paid_to_suppliers":       -cash_payments,

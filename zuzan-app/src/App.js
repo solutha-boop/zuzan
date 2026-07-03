@@ -3565,7 +3565,7 @@ function Reports({live = {}}) {
     return (
       <div>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
-          <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Cash Flow Statement</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the month ended {cf.period}</div></div>
+          <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Cash Flow Statement</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the period {cf.period}</div></div>
           <ExcelBtn filename="cash-flow.csv" data={[{Item:"Cash Receipts",Amount:op.cash_receipts_from_customers},{Item:"Cash Paid",Amount:op.cash_paid_to_suppliers},{Item:"Payroll",Amount:op.payroll_net_pay},{Item:"SARS",Amount:op.sars_paye_uif_sdl},{Item:"Net Operating",Amount:op.net_cash_from_operations},{Item:"Net Investing",Amount:cf.investing.net_cash_from_investing},{Item:"Net Financing",Amount:cf.financing.net_cash_from_financing},{Item:"Net Change",Amount:cf.net_increase_in_cash}]}/>
         </div>
         <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Operating Activities</div>
