@@ -9549,7 +9549,9 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
 // ── ANNUAL FINANCIAL STATEMENTS ───────────────────────────────────────────────
 function FinancialStatements() {
   const now   = new Date();
-  const defFY = now.getMonth() >= 2 ? now.getFullYear() : now.getFullYear() - 1;
+  // SA FY label = the February the year ends in.
+  // Mar–Dec → next Feb → FY = current year + 1.  Jan–Feb → this Feb → FY = current year.
+  const defFY = now.getMonth() >= 2 ? now.getFullYear() + 1 : now.getFullYear();
   const [year, setYear]   = useState(defFY);
   const [data, setData]   = useState(null);
   const [tab,  setATab]   = useState("is");   // is | bs | cf | notes

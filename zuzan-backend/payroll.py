@@ -754,9 +754,15 @@ async def balance_sheet(
     )
 
     # ── EQUITY ────────────────────────────────────────────────────────────────
-    retained_income = bal("3000")
-    # Always use the journal balance for retained income (audit fix: removed Revenue−Expenses
-    # derivation fallback that could mask manual equity journal adjustments)
+    # ZuZan does not post year-end closing entries, so account 3000 stays at zero
+    # unless the owner manually journals equity (e.g. share capital, drawings).
+    # Retained income = explicit equity balance (3000) + cumulative P&L derived
+    # from all revenue and expense journal accounts — identical approach to AFS.
+    rev_accounts = db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.revenue).all()
+    exp_accounts = db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.expense).all()
+    cum_revenue  = sum(journal_engine.account_balance(a, db) for a in rev_accounts)
+    cum_expenses = sum(journal_engine.account_balance(a, db) for a in exp_accounts)
+    retained_income = round(bal("3000") + cum_revenue - cum_expenses, 2)
     total_equity = retained_income
 
     # ── BALANCE CHECK ─────────────────────────────────────────────────────────
@@ -1050,6 +1056,8 @@ async def cash_flow(
         Invoice.paid_date >= month_start
     ).all()
     cash_receipts = round(sum(_to_zar(i) for i in paid_this_month), 2)
+    # Add bank-import income received this month (direct credits posted as journal entries)
+    cash_receipts = round(cash_receipts + _bank_import_income(db, cid, month_start), 2)
 
     expenses_this_month = db.query(Expense).filter(
         Expense.company_id == cid,
