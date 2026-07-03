@@ -1326,6 +1326,8 @@ async def management_accounts(
         rev = round(sum(_to_zar(inv) for inv in db.query(Invoice).filter(
             Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
             Invoice.paid_date >= start, Invoice.paid_date < end).all()), 2)
+        # Add bank-import income — same fix as the P&L revenue above
+        rev = round(rev + _bank_import_income(db, cid, start, end), 2)
         exp_rows = db.query(Expense).filter(
             Expense.company_id == cid,
             Expense.expense_date >= start, Expense.expense_date < end).all()
