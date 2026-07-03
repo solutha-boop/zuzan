@@ -351,17 +351,29 @@ const DEFAULT_COA = [
   {code:"7600",name:"Donations",type:"Detail",group:"Expenses",normal:"Debit",description:"Charitable donations Section 18A"},
 ];
 
+// BANK_FORMATS — these are now FALLBACK values only.
+// The parser first auto-detects the data start row via date-pattern scan,
+// then auto-detects column layout from the header row's text.
+// Values here kick in only when header detection fails (e.g. headerless exports).
+//
+// Known SA bank header formats (for reference):
+//  FNB Business:   Date | Amount | Balance | Description            → single Amount col
+//  ABSA:           Date | Description | Debit | Credit | Balance    → separate Debit/Credit
+//  Standard Bank:  Date | Description | Debit | Credit | Balance    → separate Debit/Credit
+//  Nedbank:        Date | Transaction Description | Debit Amount | Credit Amount | Balance
+//  Capitec:        Date | Transaction Description | Amount | Running Balance
+//  Discovery Bank: Date | Description | Debit | Credit | Balance    → separate Debit/Credit
+//  Investec:       Date | Transaction Description | Debit | Credit | Balance
+//  TymeBank:       Date | Description | Amount | Balance
 const BANK_FORMATS = {
-  // skipRows = fallback only; parser auto-detects the first real data row by date pattern
-  // dateCol/amtCol/descCol are 0-based indices within the data row
-  fnb:          {name:"FNB",           logo:"🟢",skipRows:5,dateCol:0,amtCol:1,descCol:3},
-  absa:         {name:"ABSA",          logo:"🔴",skipRows:1,dateCol:0,amtCol:3,descCol:1},
-  standardbank: {name:"Standard Bank", logo:"🔵",skipRows:1,dateCol:0,amtCol:2,descCol:1},
-  nedbank:      {name:"Nedbank",       logo:"🟩",skipRows:1,dateCol:0,amtCol:2,descCol:1},
-  capitec:      {name:"Capitec",       logo:"🟦",skipRows:1,dateCol:0,amtCol:3,descCol:2},
-  discovery:    {name:"Discovery Bank",logo:"🟣",skipRows:1,dateCol:0,amtCol:2,descCol:1},
-  investec:     {name:"Investec",      logo:"🔷",skipRows:1,dateCol:0,amtCol:3,descCol:1},
-  tymebank:     {name:"TymeBank",      logo:"🩵",skipRows:1,dateCol:0,amtCol:2,descCol:1},
+  fnb:          {name:"FNB",           logo:"🟢", skipRows:5, dateCol:0, amtCol:1,  descCol:3},
+  absa:         {name:"ABSA",          logo:"🔴", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  standardbank: {name:"Standard Bank", logo:"🔵", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  nedbank:      {name:"Nedbank",       logo:"🟩", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  capitec:      {name:"Capitec",       logo:"🟦", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  discovery:    {name:"Discovery Bank",logo:"🟣", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  investec:     {name:"Investec",      logo:"🔷", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  tymebank:     {name:"TymeBank",      logo:"🩵", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
 };
 
 function autoCategory(desc) {
@@ -395,17 +407,38 @@ function parseCSVLine(line) {
 }
 
 function parseAmt(str) {
-  if (!str) return 0;
-  return parseFloat(str.replace(/[R,\s]/g,"").replace("(","-").replace(")","")) || 0;
+  if (!str || !str.trim()) return 0;
+  let s = str.trim()
+    .replace(/^R\s*/i, "")        // strip leading R / r
+    .replace(/ /g, "")       // non-breaking space
+    .replace(/\s/g, "")           // all remaining whitespace (thousand-sep spaces)
+    .replace(/[€$£]/g, "");       // other currency symbols
+  // Parentheses = negative: (1234.56) → -1234.56
+  if (s.startsWith("(") && s.endsWith(")")) s = "-" + s.slice(1, -1);
+  // Handle European format: 1.234,56 → 1234.56
+  if (/^\-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, "").replace(",", ".");
+  // Remove thousands commas: 1,234.56 → 1234.56
+  else s = s.replace(/,/g, "");
+  return parseFloat(s) || 0;
 }
 
 function parseDt(str) {
-  if (!str) return new Date().toISOString().slice(0,10);
-  const m1 = str.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
-  const m2 = str.trim().match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
-  if (m2) return `${m2[1]}-${m2[2]}-${m2[3]}`;
-  return new Date().toISOString().slice(0,10);
+  if (!str || !str.trim()) return new Date().toISOString().slice(0, 10);
+  const s = str.trim();
+  const MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  // YYYY/MM/DD or YYYY-MM-DD
+  let m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  // DD/MM/YYYY or DD-MM-YYYY
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  // DD Mon YYYY  or  DD Month YYYY
+  m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/);
+  if (m) { const mo = MON[m[2].slice(0,3).toLowerCase()]; if (mo) return `${m[3]}-${String(mo).padStart(2,"0")}-${m[1].padStart(2,"0")}`; }
+  // YYYYMMDD
+  m = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return new Date().toISOString().slice(0, 10);
 }
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function CIPCBanner({cipc, poDupWarning}) {
@@ -5498,15 +5531,58 @@ function BankImport({live = {}, onNavigate}) {
             break;
           }
         }
+        // ── Column auto-detection from the header row (row just before data start) ──
+        // Falls back to bank-specific config if header names aren't recognised.
+        let dateCol  = bfmt.dateCol;
+        let amtCol   = bfmt.amtCol;
+        let descCol  = bfmt.descCol;
+        let debitCol  = -1;   // Standard Bank / Nedbank: separate Debit column
+        let creditCol = -1;   // Standard Bank / Nedbank: separate Credit column
+
+        if (dataStart > 0) {
+          const hdr = rows[dataStart - 1].map(h => (h || "").trim().toLowerCase());
+          // Date column
+          const di = hdr.findIndex(h => /^date$|trans.*date|value.*date|^datum$/.test(h));
+          if (di >= 0) dateCol = di;
+          // Description column
+          const xi = hdr.findIndex(h => /descr|narrat|particular|reference|^details?$|^memo$|^remarks?$|^information$/.test(h));
+          if (xi >= 0) descCol = xi;
+          // Single signed-amount column (FNB Business, Capitec, TymeBank, etc.)
+          const ai = hdr.findIndex(h => /^amount$|^amt$|^bedrag$/.test(h));
+          if (ai >= 0) amtCol = ai;
+          // Separate debit + credit columns (Standard Bank, Nedbank, ABSA, Investec)
+          const dbi = hdr.findIndex(h => /^debit$|^debit.*amount|^withdrawals?$/.test(h));
+          const cri = hdr.findIndex(h => /^credit$|^credit.*amount|^deposits?$/.test(h));
+          if (dbi >= 0 && cri >= 0) { debitCol = dbi; creditCol = cri; }
+        }
+
+        const minCols = debitCol >= 0
+          ? Math.max(dateCol, descCol, debitCol, creditCol) + 1
+          : Math.max(dateCol, descCol, amtCol) + 1;
+
         const data = rows.slice(dataStart);
         const parsed = data
-          .filter(r => r.length > Math.max(bfmt.dateCol, bfmt.descCol, bfmt.amtCol))
-          .map((r,i) => {
-            const amt = parseAmt(r[bfmt.amtCol]);
-            const desc = r[bfmt.descCol] || "Unknown";
-            return {id:i+1,date:parseDt(r[bfmt.dateCol]),description:desc,amount:Math.abs(amt),type:amt < 0 ? "debit" : "credit",category:autoCategory(desc),hasVat:false,vatAmount:0};
+          .filter(r => r.length >= minCols)
+          .map((r, i) => {
+            let amt, type;
+            if (debitCol >= 0) {
+              // Banks that export separate Debit / Credit columns (Standard Bank, Nedbank, ABSA, Investec)
+              const dv = parseAmt(r[debitCol]);
+              const cv = parseAmt(r[creditCol]);
+              if (dv > 0)      { amt = dv; type = "debit"; }
+              else if (cv > 0) { amt = cv; type = "credit"; }
+              else return null; // empty row (e.g. running balance summary line)
+            } else {
+              // Banks that export a single signed Amount column (FNB, Capitec, TymeBank, etc.)
+              amt = parseAmt(r[amtCol]);
+              type = amt < 0 ? "debit" : "credit";
+              amt = Math.abs(amt);
+            }
+            const desc = (r[descCol] || "").trim() || "Unknown";
+            return {id:i+1, date:parseDt(r[dateCol]), description:desc, amount:amt, type,
+                    category:autoCategory(desc), hasVat:false, vatAmount:0};
           })
-          .filter(t => t.amount > 0);
+          .filter(t => t && t.amount > 0);
         if (!parsed.length) { setError("No transactions found. Check you selected the correct bank."); return; }
         setTxns(parsed);
         setSelected(new Set(parsed.filter(t => t.type === "debit").map(t => t.id)));
