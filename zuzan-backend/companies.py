@@ -162,20 +162,34 @@ def next_invoice_number(company_id: int, db: Session) -> str:
 
 
 @invoices_router.get("/")
-async def list_invoices(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def list_invoices(
+    limit: Optional[int] = None,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # limit/offset are optional (scale fix 2026-07-03): omitted = return all rows,
+    # exactly as before, so existing frontend calls are unaffected.
     try:
-        invoices = db.query(Invoice).filter(Invoice.company_id == current_user.company_id).order_by(Invoice.created_at.desc()).all()
-        return invoices
+        q = db.query(Invoice).filter(Invoice.company_id == current_user.company_id).order_by(Invoice.created_at.desc())
+        if offset:
+            q = q.offset(offset)
+        if limit is not None:
+            q = q.limit(limit)
+        return q.all()
     except Exception as e:
         # Fallback: column may not exist yet in production DB — query without new columns
         logger.warning(f"Invoice ORM query failed ({e}), falling back to safe column list")
         db.rollback()
         from sqlalchemy import text as _text
+        page_sql = ""
+        if limit is not None:
+            page_sql = f" LIMIT {int(limit)} OFFSET {int(offset or 0)}"
         rows = db.execute(_text(
             "SELECT id, company_id, invoice_number, client_name, client_email, "
             "description, amount, vat_amount, total_amount, currency, exchange_rate, "
             "paid_amount_zar, due_date, notes, status, issue_date, paid_date, created_at "
-            "FROM invoices WHERE company_id = :cid ORDER BY created_at DESC"
+            "FROM invoices WHERE company_id = :cid ORDER BY created_at DESC" + page_sql
         ), {"cid": current_user.company_id})
         cols = list(rows.keys())
         return [dict(zip(cols, r)) for r in rows]
@@ -394,8 +408,19 @@ class ExpenseUpdate(BaseModel):
 
 
 @expenses_router.get("/")
-async def list_expenses(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(Expense).filter(Expense.company_id == current_user.company_id).order_by(Expense.created_at.desc()).all()
+async def list_expenses(
+    limit: Optional[int] = None,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Optional pagination (scale fix 2026-07-03) — omitted params return all rows as before.
+    q = db.query(Expense).filter(Expense.company_id == current_user.company_id).order_by(Expense.created_at.desc())
+    if offset:
+        q = q.offset(offset)
+    if limit is not None:
+        q = q.limit(limit)
+    return q.all()
 
 
 @expenses_router.post("/")
@@ -671,10 +696,22 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
     if not company.payroll_enabled:
         raise HTTPException(status_code=403, detail="Payroll module not enabled. Add it from Settings.")
 
-    count = db.query(Employee).filter(Employee.company_id == current_user.company_id).count()
+    # Max-id seeded with collision check (scale fix 2026-07-03): count()+1
+    # produced duplicate employee numbers after any employee was deleted.
+    from sqlalchemy import func as _func
+    _last = db.query(_func.max(Employee.id)).filter(Employee.company_id == current_user.company_id).scalar() or 0
+    _existing = {
+        row[0] for row in
+        db.query(Employee.employee_number).filter(Employee.company_id == current_user.company_id).all()
+    }
+    _n = _last + 1
+    _candidate = f"EMP-{str(_n).zfill(3)}"
+    while _candidate in _existing:
+        _n += 1
+        _candidate = f"EMP-{str(_n).zfill(3)}"
     emp = Employee(
         company_id=current_user.company_id,
-        employee_number=data.employee_number or f"EMP-{str(count + 1).zfill(3)}",
+        employee_number=data.employee_number or _candidate,
         first_name=data.first_name,
         last_name=data.last_name,
         id_number=data.id_number,

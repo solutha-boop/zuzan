@@ -1113,6 +1113,27 @@ def init_db():
             )""",
             # Role backfill — idempotent, safe to run on every startup
             "UPDATE users SET role = 'owner' WHERE role IS NULL OR role = ''",
+            # ── Performance indexes (2026-07-03) ─────────────────────────────
+            # Every report endpoint filters on company_id (+ status/date), and the
+            # journal lookups filter on (source, source_id) and account_id. Without
+            # these, each dashboard load is a full table scan per table, which
+            # degrades linearly as more companies share one database.
+            # CREATE INDEX IF NOT EXISTS works on both SQLite and PostgreSQL 9.5+.
+            "CREATE INDEX IF NOT EXISTS ix_invoices_company_status ON invoices (company_id, status)",
+            "CREATE INDEX IF NOT EXISTS ix_invoices_company_paid_date ON invoices (company_id, paid_date)",
+            "CREATE INDEX IF NOT EXISTS ix_expenses_company_date ON expenses (company_id, expense_date)",
+            "CREATE INDEX IF NOT EXISTS ix_pos_company_status ON purchase_orders (company_id, status)",
+            "CREATE INDEX IF NOT EXISTS ix_po_items_po ON purchase_order_items (purchase_order_id)",
+            "CREATE INDEX IF NOT EXISTS ix_journal_entries_company_source ON journal_entries (company_id, source, source_id)",
+            "CREATE INDEX IF NOT EXISTS ix_journal_lines_entry ON journal_lines (entry_id)",
+            "CREATE INDEX IF NOT EXISTS ix_journal_lines_account ON journal_lines (account_id)",
+            "CREATE INDEX IF NOT EXISTS ix_accounts_company_code ON accounts (company_id, code)",
+            "CREATE INDEX IF NOT EXISTS ix_payslips_employee ON payslips (employee_id)",
+            "CREATE INDEX IF NOT EXISTS ix_employees_company ON employees (company_id)",
+            "CREATE INDEX IF NOT EXISTS ix_customers_company ON customers (company_id)",
+            "CREATE INDEX IF NOT EXISTS ix_suppliers_company ON suppliers (company_id)",
+            "CREATE INDEX IF NOT EXISTS ix_quotes_company ON quotes (company_id)",
+            "CREATE INDEX IF NOT EXISTS ix_depreciation_company_period ON depreciation_entries (company_id, period)",
         ]:
             try:
                 conn.execute(text(sql))

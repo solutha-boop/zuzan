@@ -74,9 +74,19 @@ def to_dict(q):
     }
 
 @router.get("/")
-async def list_quotes(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    items = db.query(Quote).filter(Quote.company_id == current_user.company_id).order_by(Quote.created_at.desc()).all()
-    return [to_dict(q) for q in items]
+async def list_quotes(
+    limit: Optional[int] = None,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Optional pagination (scale fix 2026-07-03) — omitted params return all rows as before.
+    q = db.query(Quote).filter(Quote.company_id == current_user.company_id).order_by(Quote.created_at.desc())
+    if offset:
+        q = q.offset(offset)
+    if limit is not None:
+        q = q.limit(limit)
+    return [to_dict(x) for x in q.all()]
 
 @router.post("/")
 async def create_quote(data: QuoteCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

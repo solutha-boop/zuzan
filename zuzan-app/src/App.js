@@ -10023,6 +10023,301 @@ function FinancialStatements() {
   );
 }
 
+// ── DATA IMPORT ───────────────────────────────────────────────────────────────
+function DataImport() {
+  const token = localStorage.getItem("zuzan_token");
+  const [tab,       setTab]       = useState("customers");
+  const [file,      setFile]      = useState(null);
+  const [preview,   setPreview]   = useState(null);   // {headers, rows}
+  const [result,    setResult]    = useState(null);   // {imported, skipped, errors, total_rows}
+  const [importing, setImporting] = useState(false);
+  const [err,       setErr]       = useState(null);
+  const fileRef = useRef(null);
+
+  const ITABS = [
+    {id:"customers", label:"Customers",  icon:"👥"},
+    {id:"suppliers", label:"Suppliers",  icon:"🏭"},
+    {id:"invoices",  label:"Invoices",   icon:"🧾"},
+    {id:"expenses",  label:"Expenses",   icon:"💳"},
+  ];
+
+  // CSV templates — column headers users should use (or what Xero/QBO exports)
+  const TEMPLATES = {
+    customers: ["Name","Email","Phone","Address","VAT Number","Payment Terms","Notes"],
+    suppliers: ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
+    invoices:  ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
+    expenses:  ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
+  };
+
+  const REQUIRED = {
+    customers: "Name*",
+    suppliers: "Name*",
+    invoices:  "Client Name*",
+    expenses:  "Amount*",
+  };
+
+  // Xero / QBO aliases shown as hints
+  const HINTS = {
+    customers: "Xero: Contact Name · QBO: Customer / Display Name",
+    suppliers: "Xero: Contact Name · QBO: Vendor",
+    invoices:  "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
+    expenses:  "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
+  };
+
+  function switchTab(id) {
+    setTab(id); setFile(null); setPreview(null); setResult(null); setErr(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function downloadTemplate() {
+    const cols    = TEMPLATES[tab];
+    const content = cols.join(",") + "\n";
+    const blob    = new Blob([content], {type:"text/csv"});
+    const url     = URL.createObjectURL(blob);
+    const a       = document.createElement("a");
+    a.href = url; a.download = `zuzan_${tab}_import_template.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Client-side CSV parse for preview only (simple, no quoted-field support needed)
+  function handleFileChange(e) {
+    const f = e.target.files[0];
+    if (!f) { setFile(null); setPreview(null); setResult(null); return; }
+    setFile(f); setResult(null); setErr(null);
+
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const text  = ev.target.result.replace(/^﻿/, ""); // strip BOM
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (!lines.length) { setPreview(null); return; }
+
+      // Detect delimiter
+      const first = lines[0];
+      const delim = (first.split(",").length >= first.split(";").length &&
+                     first.split(",").length >= first.split("\t").length) ? ","
+                  : first.split(";").length >= first.split("\t").length   ? ";"
+                  : "\t";
+
+      const parseLine = l => l.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
+      const headers   = parseLine(lines[0]);
+      const rows      = lines.slice(1, 6).map(parseLine);
+      setPreview({headers, rows, total: lines.length - 1});
+    };
+    reader.readAsText(f);
+  }
+
+  async function handleImport() {
+    if (!file) return;
+    setImporting(true); setErr(null); setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`${BASE_URL}/import/${tab}`, {
+        method: "POST",
+        headers: {Authorization: "Bearer " + token},
+        body: fd,
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || "Import failed");
+      }
+      setResult(await r.json());
+    } catch(e) { setErr(e.message); }
+    finally   { setImporting(false); }
+  }
+
+  function reset() {
+    setFile(null); setPreview(null); setResult(null); setErr(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  const cardSt = {background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:20,marginBottom:20};
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{marginBottom:24}}>
+        <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:"0 0 4px"}}>Import Data</h2>
+        <p style={{fontSize:12,color:C.inkMid,margin:0}}>
+          Migrate history from Xero, QuickBooks, or any CSV export. Duplicate entries are skipped automatically.
+        </p>
+      </div>
+
+      {/* Entity tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:24,flexWrap:"wrap"}}>
+        {ITABS.map(t => (
+          <button key={t.id} onClick={()=>switchTab(t.id)} style={{
+            padding:"8px 18px",borderRadius:20,border:`1px solid ${tab===t.id?C.accent:C.border}`,
+            fontSize:13,cursor:"pointer",fontFamily:"inherit",
+            background:tab===t.id?C.accentLt:"transparent",
+            color:tab===t.id?C.accent:C.inkMid,
+            fontWeight:tab===t.id?700:400,
+          }}>
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* How-to card */}
+      <div style={{...cardSt,background:"#f8f5f2"}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
+          <div>
+            <p style={{margin:"0 0 6px",fontSize:13,fontWeight:600,color:C.ink}}>
+              Step 1 — Prepare your CSV
+            </p>
+            <p style={{margin:"0 0 4px",fontSize:12,color:C.inkMid}}>
+              Column names are detected automatically from Xero and QuickBooks exports.<br/>
+              <em>{HINTS[tab]}</em>
+            </p>
+            <p style={{margin:"6px 0 0",fontSize:12,color:C.inkMid}}>
+              Required column: <strong style={{color:C.ink}}>{REQUIRED[tab]}</strong>.
+              All other columns are optional.
+            </p>
+          </div>
+          <button onClick={downloadTemplate} style={{
+            padding:"7px 16px",border:`1px solid ${C.accent}`,borderRadius:8,
+            fontSize:12,cursor:"pointer",color:C.accent,background:"transparent",
+            fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,flexShrink:0,
+          }}>
+            Download Template
+          </button>
+        </div>
+      </div>
+
+      {/* Upload section */}
+      <div style={cardSt}>
+        <p style={{margin:"0 0 12px",fontSize:13,fontWeight:600,color:C.ink}}>
+          Step 2 — Upload your CSV file
+        </p>
+        <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <input ref={fileRef} type="file" accept=".csv,.tsv,.txt"
+            onChange={handleFileChange}
+            style={{fontSize:13,fontFamily:"inherit",flex:1,minWidth:200}}/>
+          {file && (
+            <button onClick={reset} style={{padding:"5px 12px",border:`1px solid ${C.border}`,
+              borderRadius:6,fontSize:12,cursor:"pointer",color:C.inkMid,background:"transparent",fontFamily:"inherit"}}>
+              Clear
+            </button>
+          )}
+        </div>
+        {file && (
+          <p style={{margin:"8px 0 0",fontSize:11,color:C.inkMid}}>
+            {file.name} &mdash; {(file.size/1024).toFixed(1)} KB
+          </p>
+        )}
+      </div>
+
+      {/* Preview */}
+      {preview && (
+        <div style={cardSt}>
+          <p style={{margin:"0 0 12px",fontSize:13,fontWeight:600,color:C.ink}}>
+            Step 3 — Preview ({preview.total.toLocaleString()} data rows detected, showing first 5)
+          </p>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{background:"#f8f5f2"}}>
+                  {preview.headers.map((h,i) => (
+                    <th key={i} style={{padding:"6px 10px",textAlign:"left",
+                      color:C.inkMid,fontWeight:600,fontSize:11,
+                      borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {preview.rows.map((row,ri) => (
+                  <tr key={ri} style={{borderBottom:`1px solid ${C.border}`}}>
+                    {row.map((cell,ci) => (
+                      <td key={ci} style={{padding:"5px 10px",color:C.ink,
+                        maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {cell}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+            <button onClick={handleImport} disabled={importing} style={{
+              padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
+              border:"none",borderRadius:8,fontSize:13,fontWeight:600,
+              cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+            }}>
+              {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
+            </button>
+            {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
+      {result && (
+        <div style={{...cardSt,borderColor: result.errors.filter(e=>!e.message.includes("already exists")).length ? "#C8401A" : "#28a745"}}>
+          <p style={{margin:"0 0 16px",fontSize:14,fontWeight:700,color:C.ink}}>
+            Import Complete
+          </p>
+
+          {/* KPI row */}
+          <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
+            {[
+              {label:"Rows in file",    value:result.total_rows,             color:C.inkMid},
+              {label:"Successfully imported", value:result.imported,          color:"#28a745"},
+              {label:"Skipped (duplicate)",   value:result.skipped||0,       color:C.inkMid},
+              {label:"Errors",                value:result.errors.filter(e=>!e.message.includes("already exists")).length, color:"#C8401A"},
+            ].map(k => (
+              <div key={k.label} style={{flex:1,minWidth:120,background:"#f8f5f2",
+                borderRadius:10,padding:"12px 16px",textAlign:"center"}}>
+                <div style={{fontSize:24,fontWeight:700,color:k.color}}>{k.value}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{k.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Error list */}
+          {result.errors.length > 0 && (
+            <div>
+              <p style={{fontSize:12,fontWeight:600,color:C.ink,margin:"0 0 8px"}}>
+                Row notes ({result.errors.length}):
+              </p>
+              <div style={{maxHeight:220,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:"#f8f5f2",position:"sticky",top:0}}>
+                      <th style={{padding:"6px 10px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`,width:60}}>Row</th>
+                      <th style={{padding:"6px 10px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.errors.map((e,i) => (
+                      <tr key={i} style={{borderBottom:`1px solid ${C.border}`,
+                        background:e.message.includes("already exists")?"transparent":"#fff0ee"}}>
+                        <td style={{padding:"5px 10px",fontFamily:"monospace",color:C.inkMid}}>{e.row}</td>
+                        <td style={{padding:"5px 10px",color:e.message.includes("already exists")?C.inkMid:"#C8401A"}}>{e.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <button onClick={reset} style={{
+            marginTop:16,padding:"7px 18px",border:`1px solid ${C.border}`,
+            borderRadius:8,fontSize:13,cursor:"pointer",color:C.ink,
+            background:"transparent",fontFamily:"inherit",
+          }}>
+            Import another file
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── DOCUMENT REPOSITORY ───────────────────────────────────────────────────────
 function DocumentRepository() {
   const token = localStorage.getItem("zuzan_token");
@@ -10324,6 +10619,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭"},
     {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
     {id:"documents",       label:"Documents",    icon:"📁"},
+    {id:"data_import",     label:"Import Data",  icon:"⬆️"},
     {id:"banking",    label:"Banking",     icon:"🏦", children:[
       {id:"bankimport", label:"Manual Update",   icon:"📄"},
       {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
@@ -10377,6 +10673,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     fixed_assets:    <FixedAssets/>,
     fin_statements:  <FinancialStatements/>,
     documents:       <DocumentRepository/>,
+    data_import:     <DataImport/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
     purchase_orders: <PurchaseOrders/>,

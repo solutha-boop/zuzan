@@ -205,8 +205,20 @@ class DisposalData(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _next_asset_number(company_id: int, db: Session) -> str:
-    count = db.query(FixedAsset).filter(FixedAsset.company_id == company_id).count()
-    return f"FA-{str(count + 1).zfill(3)}"
+    # Max-id seeded with collision check (scale fix 2026-07-03): count()+1
+    # produced duplicate numbers after any asset was deleted.
+    from sqlalchemy import func as _func
+    last = db.query(_func.max(FixedAsset.id)).filter(FixedAsset.company_id == company_id).scalar() or 0
+    existing = {
+        row[0] for row in
+        db.query(FixedAsset.asset_number).filter(FixedAsset.company_id == company_id).all()
+    }
+    n = last + 1
+    candidate = f"FA-{str(n).zfill(3)}"
+    while candidate in existing:
+        n += 1
+        candidate = f"FA-{str(n).zfill(3)}"
+    return candidate
 
 
 def _calc_monthly_depreciation(asset: FixedAsset) -> float:

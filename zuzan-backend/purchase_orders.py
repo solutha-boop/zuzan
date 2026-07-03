@@ -35,8 +35,21 @@ class POUpdate(BaseModel):
     items:         Optional[List[POItem]] = None
 
 def next_po_number(db, company_id):
-    count = db.query(PurchaseOrder).filter(PurchaseOrder.company_id == company_id).count()
-    return f"PO-{str(count + 1).zfill(4)}"
+    # Max-id seeded with collision check (scale fix 2026-07-03), matching
+    # next_invoice_number/next_quote_number: the previous count()+1 scheme
+    # produced duplicate numbers after any PO was deleted.
+    from sqlalchemy import func as _func
+    last = db.query(_func.max(PurchaseOrder.id)).filter(PurchaseOrder.company_id == company_id).scalar() or 0
+    existing_numbers = {
+        row[0] for row in
+        db.query(PurchaseOrder.po_number).filter(PurchaseOrder.company_id == company_id).all()
+    }
+    n = last + 1
+    candidate = f"PO-{str(n).zfill(4)}"
+    while candidate in existing_numbers:
+        n += 1
+        candidate = f"PO-{str(n).zfill(4)}"
+    return candidate
 
 def calc_totals(items, vat_applicable):
     subtotal = sum(i.quantity * i.unit_price for i in items)
@@ -60,15 +73,25 @@ def to_dict(po):
     }
 
 @router.get("/")
-async def list_pos(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def list_pos(
+    limit: Optional[int] = None,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Optional pagination (scale fix 2026-07-03) — omitted params return all rows as before.
     try:
-        pos = (
+        q = (
             db.query(PurchaseOrder)
             .options(joinedload(PurchaseOrder.items))
             .filter(PurchaseOrder.company_id == current_user.company_id)
             .order_by(PurchaseOrder.created_at.desc())
-            .all()
         )
+        if offset:
+            q = q.offset(offset)
+        if limit is not None:
+            q = q.limit(limit)
+        pos = q.all()
         return [to_dict(p) for p in pos]
     except Exception as e:
         logger.error(f"list_pos error: {e}")
