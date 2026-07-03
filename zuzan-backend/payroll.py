@@ -59,27 +59,42 @@ logger = logging.getLogger("zuzan.payroll")
 def _bank_import_income(db: Session, company_id: int, date_from=None, date_to=None) -> float:
     """
     Sum net revenue credits from bank-import journal entries (source == 'bank_import_income').
-    Scoped to revenue accounts only so that Bank (asset) lines are excluded.
-    date_from / date_to are datetime objects; both optional.
+    Uses three simple queries instead of a multi-table JOIN to avoid SQLAlchemy ambiguity.
 
     This is intentionally separate from invoice-based revenue to avoid double-counting.
-    Invoice revenue is read from the Invoice table. Bank import income is read from here.
+    Invoice revenue is read from the Invoice table; bank import income is read from here.
     """
-    q = (
-        db.query(func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0))
-        .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
-        .join(Account, JournalLine.account_id == Account.id)
-        .filter(
+    # 1. Revenue account IDs for this company
+    rev_ids = [
+        a.id for a in db.query(Account).filter(
             Account.company_id == company_id,
             Account.type == AccountType.revenue,
-            JournalEntry.source == "bank_import_income",
-        )
+        ).all()
+    ]
+    if not rev_ids:
+        return 0.0
+
+    # 2. Bank-import journal entry IDs, filtered by company and optional date range
+    eq = db.query(JournalEntry.id).filter(
+        JournalEntry.company_id == company_id,
+        JournalEntry.source == "bank_import_income",
     )
     if date_from:
-        q = q.filter(JournalEntry.date >= date_from)
+        eq = eq.filter(JournalEntry.date >= date_from)
     if date_to:
-        q = q.filter(JournalEntry.date < date_to)
-    return float(q.scalar() or 0)
+        eq = eq.filter(JournalEntry.date < date_to)
+    entry_ids = [r[0] for r in eq.all()]
+    if not entry_ids:
+        return 0.0
+
+    # 3. Sum credit − debit for revenue lines in those entries
+    total = db.query(
+        func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0)
+    ).filter(
+        JournalLine.entry_id.in_(entry_ids),
+        JournalLine.account_id.in_(rev_ids),
+    ).scalar()
+    return float(total or 0)
 
 # SA TAX TABLES — Multi-year for audit history
 TAX_YEARS = {
