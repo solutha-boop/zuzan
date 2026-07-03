@@ -9569,6 +9569,91 @@ function FinancialStatements() {
     );
   }
 
+  function renderSCE() {
+    if (!data || !data.changes_in_equity) return null;
+    const ce   = data.changes_in_equity;
+    const fmtV = v => v === 0 ? "—" : ("R " + Math.abs(v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2}));
+    const fmtN = v => v < 0 ? `(${fmtV(v)})` : (v === 0 ? "—" : fmtV(v));
+    const thSt = {padding:"8px 12px",textAlign:"right",fontSize:12,fontWeight:700,color:C.inkMid,borderBottom:`2px solid ${C.accent}`,background:"#f8f5f2"};
+    const td   = (v, bold, color) => <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",fontSize:13,fontWeight:bold?700:400,color:color||(v<0?"#C8401A":C.ink),whiteSpace:"nowrap"}}>{fmtN(v)}</td>;
+    const drwSt = {padding:"7px 12px",textAlign:"right",fontFamily:"monospace",fontSize:13,color:"#C8401A",whiteSpace:"nowrap"};
+    const sep  = <tr><td colSpan={4}><div style={{borderTop:`1px solid ${C.border}`,margin:"2px 0"}}/></td></tr>;
+    const dbl  = <tr><td colSpan={4}><div style={{borderTop:`3px double ${C.ink}`,margin:"2px 0"}}/></td></tr>;
+
+    return (
+      <div>
+        <p style={{fontSize:11,color:C.inkMid,marginBottom:16}}>
+          Statement of Changes in Equity for the year ended {data.meta.period_end} — amounts in ZAR
+        </p>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr>
+                <th style={{...thSt,textAlign:"left",width:"40%"}}>Description</th>
+                <th style={thSt}>Share Capital</th>
+                <th style={thSt}>Retained Earnings</th>
+                <th style={{...thSt,color:C.ink}}>Total Equity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* Opening balance */}
+              <tr style={{background:"#fdf9f7"}}>
+                <td style={{padding:"7px 12px",fontWeight:700,fontSize:13,color:C.ink}}>Balance at {data.meta.period_start}</td>
+                {td(ce.opening_share_capital, true)}
+                {td(ce.opening_retained, true)}
+                {td(ce.opening_total, true, C.accent)}
+              </tr>
+              {sep}
+
+              {/* Net profit */}
+              <tr>
+                <td style={{padding:"7px 12px 7px 24px",color:C.ink}}>Net profit for the year</td>
+                <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:C.inkMid}}>—</td>
+                {td(ce.net_profit)}
+                {td(ce.net_profit)}
+              </tr>
+
+              {/* Contributions */}
+              {ce.contributions > 0 && <tr>
+                <td style={{padding:"7px 12px 7px 24px",color:C.ink}}>Capital contributions by owners</td>
+                {td(ce.contributions)}
+                <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:C.inkMid}}>—</td>
+                {td(ce.contributions)}
+              </tr>}
+
+              {/* Drawings */}
+              {ce.drawings > 0 && <tr>
+                <td style={{padding:"7px 12px 7px 24px",color:C.ink}}>Drawings by owners</td>
+                <td style={drwSt}>({fmtV(ce.drawings)})</td>
+                <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:C.inkMid}}>—</td>
+                <td style={drwSt}>({fmtV(ce.drawings)})</td>
+              </tr>}
+
+              {sep}
+
+              {/* Closing balance */}
+              <tr style={{background:"#fdf9f7"}}>
+                <td style={{padding:"7px 12px",fontWeight:700,fontSize:13,color:C.ink}}>Balance at {data.meta.period_end}</td>
+                {td(ce.closing_share_capital, true)}
+                {td(ce.closing_retained, true)}
+                {td(ce.closing_total, true, C.accent)}
+              </tr>
+              {dbl}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Reconciliation note */}
+        <div style={{marginTop:20,padding:14,background:"#f8f5f2",borderRadius:8,fontSize:12,color:C.inkMid,lineHeight:1.7}}>
+          <strong style={{color:C.ink}}>Note on equity components:</strong>{" "}
+          Share capital represents the net credit balance on equity accounts (code 3xxx).
+          Retained earnings represent the cumulative net profit since inception, not yet distributed.
+          Together these equal total equity as reported in the Balance Sheet.
+        </div>
+      </div>
+    );
+  }
+
   function renderNotes() {
     if (!data) return null;
     const n  = data.notes;
@@ -9833,6 +9918,7 @@ function FinancialStatements() {
     {id:"is",    label:"Income Statement"},
     {id:"bs",    label:"Balance Sheet"},
     {id:"cf",    label:"Cash Flow Statement"},
+    {id:"sce",   label:"Changes in Equity"},
     {id:"notes", label:"Notes"},
   ];
 
@@ -9900,6 +9986,7 @@ function FinancialStatements() {
               {tab==="is"    && renderIS()}
               {tab==="bs"    && renderBS()}
               {tab==="cf"    && renderCF()}
+              {tab==="sce"   && renderSCE()}
               {tab==="notes" && renderNotes()}
             </div>
             {/* Print version — all statements */}
@@ -9915,6 +10002,10 @@ function FinancialStatements() {
                 {renderCF()}
               </div>
               <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Statement of Changes in Equity</p>
+                {renderSCE()}
+              </div>
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
                 <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Notes to the Financial Statements</p>
                 {renderNotes()}
               </div>
@@ -9928,6 +10019,271 @@ function FinancialStatements() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── DOCUMENT REPOSITORY ───────────────────────────────────────────────────────
+function DocumentRepository() {
+  const token = localStorage.getItem("zuzan_token");
+  const [docs,     setDocs]    = useState([]);
+  const [loading,  setLoading] = useState(false);
+  const [err,      setErr]     = useState(null);
+  const [catFilter,setCatFilter]= useState("All");
+  const [uploading,setUploading]= useState(false);
+  const [uploadErr,setUploadErr]= useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const fileRef = useRef(null);
+
+  // Upload form state
+  const [uName,    setUName]    = useState("");
+  const [uCat,     setUCat]     = useState("General");
+  const [uDesc,    setUDesc]    = useState("");
+  const [uFile,    setUFile]    = useState(null);
+
+  const CATEGORIES = [
+    "All",
+    "CIPC & Registration",
+    "Tax Documents",
+    "Contracts",
+    "Annual Financial Statements",
+    "Payroll Records",
+    "Insurance",
+    "Banking",
+    "General",
+  ];
+
+  const CAT_ICONS = {
+    "CIPC & Registration":           "🏛",
+    "Tax Documents":                 "📋",
+    "Contracts":                     "📝",
+    "Annual Financial Statements":   "📑",
+    "Payroll Records":               "👥",
+    "Insurance":                     "🛡",
+    "Banking":                       "🏦",
+    "General":                       "📁",
+  };
+
+  useEffect(() => { fetchDocs(); }, [catFilter]);
+
+  async function fetchDocs() {
+    setLoading(true); setErr(null);
+    try {
+      const url = catFilter === "All"
+        ? `${BASE_URL}/documents/`
+        : `${BASE_URL}/documents/?category=${encodeURIComponent(catFilter)}`;
+      const r = await fetch(url, {headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error((await r.json()).detail || "Load failed");
+      setDocs(await r.json());
+    } catch(e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  async function handleUpload(e) {
+    e.preventDefault();
+    if (!uFile) { setUploadErr("Please select a file."); return; }
+    setUploading(true); setUploadErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("name",        uName || uFile.name);
+      fd.append("category",    uCat);
+      fd.append("description", uDesc);
+      fd.append("file",        uFile);
+      const r = await fetch(`${BASE_URL}/documents/upload`, {
+        method:"POST", headers:{Authorization:"Bearer "+token}, body: fd,
+      });
+      if (!r.ok) throw new Error((await r.json()).detail || "Upload failed");
+      setShowForm(false); setUName(""); setUCat("General"); setUDesc(""); setUFile(null);
+      if (fileRef.current) fileRef.current.value = "";
+      fetchDocs();
+    } catch(e) { setUploadErr(e.message); }
+    finally { setUploading(false); }
+  }
+
+  async function handleDownload(doc) {
+    try {
+      const r = await fetch(`${BASE_URL}/documents/${doc.id}/download`,
+        {headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error("Download failed");
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url; a.download = doc.file_name; a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) { alert("Download failed: " + e.message); }
+  }
+
+  async function handleDelete(doc) {
+    if (!window.confirm(`Delete "${doc.name}"? This cannot be undone.`)) return;
+    setDeleting(doc.id);
+    try {
+      const r = await fetch(`${BASE_URL}/documents/${doc.id}`,
+        {method:"DELETE", headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error((await r.json()).detail || "Delete failed");
+      setDocs(prev => prev.filter(d => d.id !== doc.id));
+    } catch(e) { alert("Delete failed: " + e.message); }
+    finally { setDeleting(null); }
+  }
+
+  const fmtSize = (bytes) => {
+    if (!bytes) return "—";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
+    return (bytes/1024/1024).toFixed(1) + " MB";
+  };
+
+  const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString("en-ZA") : "—";
+
+  const filtered = catFilter === "All" ? docs : docs.filter(d => d.category === catFilter);
+
+  // Group by category for the "All" view
+  const grouped = {};
+  filtered.forEach(d => {
+    const cat = d.category || "General";
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(d);
+  });
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
+        <div>
+          <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:0}}>Document Repository</h2>
+          <p style={{fontSize:12,color:C.inkMid,margin:0}}>Store and access important company documents securely</p>
+        </div>
+        <button onClick={()=>{setShowForm(true);setUploadErr(null);}}
+          style={{marginLeft:"auto",padding:"8px 18px",background:C.accent,color:"#fff",border:"none",
+            borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+          + Upload Document
+        </button>
+      </div>
+
+      {/* Upload form modal */}
+      {showForm && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:C.surface,borderRadius:16,padding:28,width:480,maxWidth:"94vw",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
+            <h3 style={{margin:"0 0 20px",fontSize:16,fontWeight:700,color:C.ink}}>Upload Document</h3>
+            <form onSubmit={handleUpload}>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>Document Name</label>
+                <input value={uName} onChange={e=>setUName(e.target.value)} placeholder="e.g. Tax Clearance Certificate 2024"
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>Category</label>
+                <select value={uCat} onChange={e=>setUCat(e.target.value)}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",boxSizing:"border-box",background:C.surface}}>
+                  {CATEGORIES.filter(c=>c!=="All").map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>Description (optional)</label>
+                <input value={uDesc} onChange={e=>setUDesc(e.target.value)} placeholder="Brief description…"
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{marginBottom:18}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>File <span style={{color:C.inkMid,fontWeight:400}}>(max 10 MB)</span></label>
+                <input ref={fileRef} type="file" onChange={e=>setUFile(e.target.files[0]||null)}
+                  style={{width:"100%",padding:"6px 0",fontSize:13,fontFamily:"inherit"}}/>
+              </div>
+              {uploadErr && <p style={{color:"#C8401A",fontSize:12,margin:"0 0 12px"}}>{uploadErr}</p>}
+              <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                <button type="button" onClick={()=>{setShowForm(false);setUFile(null);if(fileRef.current)fileRef.current.value="";}}
+                  style={{padding:"8px 18px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,cursor:"pointer",background:C.surface,color:C.ink}}>
+                  Cancel
+                </button>
+                <button type="submit" disabled={uploading}
+                  style={{padding:"8px 20px",background:uploading?"#ccc":C.accent,color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:uploading?"not-allowed":"pointer"}}>
+                  {uploading ? "Uploading…" : "Upload"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Category filter pills */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:20}}>
+        {CATEGORIES.map(c=>(
+          <button key={c} onClick={()=>setCatFilter(c)}
+            style={{padding:"5px 14px",borderRadius:20,border:`1px solid ${catFilter===c?C.accent:C.border}`,
+              fontSize:12,cursor:"pointer",fontFamily:"inherit",
+              background:catFilter===c?C.accentLt:"transparent",color:catFilter===c?C.accent:C.inkMid,
+              fontWeight:catFilter===c?700:400}}>
+            {c !== "All" && (CAT_ICONS[c]||"📁") + " "}{c}
+          </button>
+        ))}
+      </div>
+
+      {err    && <div style={{padding:16,background:"#fff0ee",borderRadius:8,color:"#C8401A",fontSize:13,marginBottom:16}}>{err}</div>}
+      {loading && <div style={{padding:60,textAlign:"center",color:C.inkMid}}>Loading documents…</div>}
+
+      {!loading && filtered.length === 0 && (
+        <div style={{padding:48,textAlign:"center",color:C.inkMid,border:`1px dashed ${C.border}`,borderRadius:12}}>
+          <div style={{fontSize:40,marginBottom:12}}>📂</div>
+          <div style={{fontSize:14,marginBottom:8}}>No documents yet{catFilter !== "All" ? ` in "${catFilter}"` : ""}</div>
+          <div style={{fontSize:12}}>Click <strong>Upload Document</strong> to add your first file.</div>
+        </div>
+      )}
+
+      {/* Document list — grouped by category */}
+      {!loading && Object.entries(grouped).map(([cat, items]) => (
+        <div key={cat} style={{marginBottom:28}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+            <span style={{fontSize:18}}>{CAT_ICONS[cat]||"📁"}</span>
+            <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.ink}}>{cat}</h3>
+            <span style={{fontSize:11,color:C.inkMid}}>({items.length})</span>
+          </div>
+          <div style={{border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{background:"#f8f5f2"}}>
+                  <th style={{padding:"10px 14px",textAlign:"left",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Document</th>
+                  <th style={{padding:"10px 14px",textAlign:"left",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>File</th>
+                  <th style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Size</th>
+                  <th style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Uploaded</th>
+                  <th style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((doc,i) => (
+                  <tr key={doc.id} style={{background:i%2===0?"transparent":"#fdf9f7",borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"10px 14px"}}>
+                      <div style={{fontWeight:600,color:C.ink}}>{doc.name}</div>
+                      {doc.description && <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{doc.description}</div>}
+                    </td>
+                    <td style={{padding:"10px 14px",color:C.inkMid,fontSize:12,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {doc.file_name}
+                    </td>
+                    <td style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontFamily:"monospace",fontSize:12}}>
+                      {fmtSize(doc.file_size)}
+                    </td>
+                    <td style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontSize:12}}>
+                      {fmtDate(doc.uploaded_at)}
+                    </td>
+                    <td style={{padding:"10px 14px",textAlign:"right",whiteSpace:"nowrap"}}>
+                      <button onClick={()=>handleDownload(doc)}
+                        style={{padding:"4px 12px",marginRight:6,border:`1px solid ${C.accent}`,borderRadius:6,
+                          fontSize:12,cursor:"pointer",color:C.accent,background:"transparent",fontFamily:"inherit"}}>
+                        Download
+                      </button>
+                      <button onClick={()=>handleDelete(doc)} disabled={deleting===doc.id}
+                        style={{padding:"4px 12px",border:"1px solid #C8401A",borderRadius:6,
+                          fontSize:12,cursor:deleting===doc.id?"not-allowed":"pointer",
+                          color:"#C8401A",background:"transparent",fontFamily:"inherit",
+                          opacity:deleting===doc.id?0.5:1}}>
+                        {deleting===doc.id?"…":"Delete"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -9967,6 +10323,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"inventory",    label:"Inventory",   icon:"📦"},
     {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭"},
     {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
+    {id:"documents",       label:"Documents",    icon:"📁"},
     {id:"banking",    label:"Banking",     icon:"🏦", children:[
       {id:"bankimport", label:"Manual Update",   icon:"📄"},
       {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
@@ -10019,6 +10376,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     inventory:       <Inventory/>,
     fixed_assets:    <FixedAssets/>,
     fin_statements:  <FinancialStatements/>,
+    documents:       <DocumentRepository/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
     purchase_orders: <PurchaseOrders/>,

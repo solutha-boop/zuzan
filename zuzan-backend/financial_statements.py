@@ -148,6 +148,25 @@ def annual_financial_statements(
     total_equity      = _r(equity_capital + retained_earnings)
     total_equity_and_liabilities = _r(total_liabilities + total_equity)
 
+    # ── STATEMENT OF CHANGES IN EQUITY ────────────────────────────────────────
+    # Opening equity capital (equity account balances at start of period)
+    open_eq_rows         = _acct_lines(db, cid, AccountType.equity, date_to=start)
+    opening_equity_cap   = _r(sum(cr - dr for _, _, dr, cr in open_eq_rows))
+
+    # Opening retained earnings (all-time cumulative P&L up to start)
+    open_rev             = _acct_lines(db, cid, AccountType.revenue, date_to=start)
+    open_exp             = _acct_lines(db, cid, AccountType.expense, date_to=start)
+    opening_retained     = _r(
+        sum(cr - dr for _, _, dr, cr in open_rev) -
+        sum(dr - cr for _, _, dr, cr in open_exp)
+    )
+    opening_total_equity = _r(opening_equity_cap + opening_retained)
+
+    # Equity movements during the period (e.g. owner contributions and drawings)
+    eq_period_rows       = _acct_lines(db, cid, AccountType.equity, date_from=start, date_to=end)
+    period_contributions = _r(sum(max(0.0, cr - dr) for _, _, dr, cr in eq_period_rows))
+    period_drawings      = _r(sum(max(0.0, dr - cr) for _, _, dr, cr in eq_period_rows))
+
     # ── CASH FLOW (Indirect Method) ───────────────────────────────────────────
     # Operating
     # Changes in AR (1100) between start-1 and end
@@ -407,6 +426,17 @@ def annual_financial_statements(
             },
             "total_equity_and_liabilities": total_equity_and_liabilities,
             "balanced":  abs(total_assets - total_equity_and_liabilities) < 0.10,
+        },
+        "changes_in_equity": {
+            "opening_share_capital":  opening_equity_cap,
+            "opening_retained":       opening_retained,
+            "opening_total":          opening_total_equity,
+            "net_profit":             net_profit,
+            "contributions":          period_contributions,
+            "drawings":               period_drawings,
+            "closing_share_capital":  equity_capital,
+            "closing_retained":       retained_earnings,
+            "closing_total":          total_equity,
         },
         "cash_flow": {
             "operating": {

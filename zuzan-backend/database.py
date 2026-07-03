@@ -78,6 +78,7 @@ class Company(Base):
     leave_requests=relationship("LeaveRequest",back_populates="company")
     leave_balances=relationship("LeaveBalance",back_populates="company")
     fixed_assets=relationship("FixedAsset",back_populates="company")
+    documents=relationship("CompanyDocument",back_populates="company")
     stitch_connection=relationship("StitchConnection",foreign_keys="StitchConnection.company_id",uselist=False)
     stitch_bank_accounts=relationship("StitchBankAccount",foreign_keys="StitchBankAccount.company_id")
     stitch_transactions=relationship("StitchTransaction",foreign_keys="StitchTransaction.company_id")
@@ -482,6 +483,23 @@ class AuditLog(Base):
     detail      = Column(Text, nullable=True)     # JSON string for extra context
     created_at  = Column(DateTime, default=datetime.utcnow)
     company     = relationship("Company", foreign_keys=[company_id])
+
+
+class CompanyDocument(Base):
+    """Document vault — stores company docs (PDF, DOCX, etc.) as base64 in the DB."""
+    __tablename__ = "company_documents"
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    name        = Column(String, nullable=False)          # user-given display name
+    category    = Column(String, default="General")      # CIPC, Tax, Contracts, AFS, Payroll, Insurance, General
+    description = Column(Text, nullable=True)
+    file_name   = Column(String, nullable=False)          # original filename
+    file_type   = Column(String, nullable=False)          # MIME type
+    file_size   = Column(Integer, default=0)             # bytes
+    file_data   = Column(Text, nullable=False)            # base64-encoded binary
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    company     = relationship("Company", back_populates="documents")
 
 
 # ── PILLAR 3: STITCH BANK FEEDS ──────────────────────────────────────────────
