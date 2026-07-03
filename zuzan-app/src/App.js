@@ -401,6 +401,19 @@ function autoCategory(desc, type) {
   return "Other";
 }
 
+// Checks company-learned rules first, then falls back to built-in patterns.
+// `rules` is the array fetched from /category-rules/ (sorted by match_count desc).
+function smartCategory(desc, type, rules) {
+  if (rules && rules.length) {
+    const d = desc.toLowerCase();
+    const match = rules.find(r =>
+      (r.txn_type === "any" || r.txn_type === type) && d.includes(r.keyword)
+    );
+    if (match) return match.category;
+  }
+  return autoCategory(desc, type);
+}
+
 function parseCSVLine(line) {
   const result = [];
   let current = "";
@@ -5519,7 +5532,31 @@ function BankImport({live = {}, onNavigate}) {
   const [result, setResult] = useState(null);
   const [search, setSearch] = useState("");
   const [filterType, setFilter] = useState("all");
+  const [companyRules, setCompanyRules] = useState([]);
   const fileRef = useRef(null);
+
+  // Fetch learned category rules from the backend on mount
+  useEffect(() => {
+    const token = localStorage.getItem("zuzan_token");
+    if (!token || token.startsWith("demo_")) return;
+    fetch(`${BASE_URL}/category-rules/`, {
+      headers: {"Authorization": `Bearer ${token}`}
+    }).then(r => r.ok ? r.json() : []).then(data => {
+      if (Array.isArray(data)) setCompanyRules(data);
+    }).catch(() => {});
+  }, []);
+
+  // Re-apply learned rules to parsed transactions when rules load after the file
+  useEffect(() => {
+    if (!companyRules.length || !txns.length) return;
+    setTxns(prev => prev.map(t => {
+      const d = t.description.toLowerCase();
+      const match = companyRules.find(r =>
+        (r.txn_type === "any" || r.txn_type === t.type) && d.includes(r.keyword)
+      );
+      return match ? {...t, category: match.category} : t;
+    }));
+  }, [companyRules]); // eslint-disable-line
 
   const processFile = f => {
     if (!bank) { setError("Please select your bank first."); return; }
@@ -5588,7 +5625,7 @@ function BankImport({live = {}, onNavigate}) {
             }
             const desc = (r[descCol] || "").trim() || "Unknown";
             return {id:i+1, date:parseDt(r[dateCol]), description:desc, amount:amt, type,
-                    category:autoCategory(desc, type), hasVat:false, vatAmount:0};
+                    category:smartCategory(desc, type, companyRules), hasVat:false, vatAmount:0};
           })
           .filter(t => t && t.amount > 0);
         if (!parsed.length) { setError("No transactions found. Check you selected the correct bank."); return; }
@@ -5601,7 +5638,33 @@ function BankImport({live = {}, onNavigate}) {
   };
 
   const toggleRow = id => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const updateCat = (id,cat) => setTxns(prev => prev.map(t => t.id === id ? {...t,category:cat} : t));
+  const updateCat = (id, cat) => {
+    const txn = txns.find(t => t.id === id);
+    setTxns(prev => prev.map(t => t.id === id ? {...t, category: cat} : t));
+    // Persist the correction as a learned rule so future imports auto-apply it
+    if (txn && cat) {
+      const token = localStorage.getItem("zuzan_token");
+      if (token && !token.startsWith("demo_")) {
+        fetch(`${BASE_URL}/category-rules/`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "Authorization": `Bearer ${token}`},
+          body: JSON.stringify({
+            keyword: txn.description.toLowerCase().trim().slice(0, 100),
+            category: cat,
+            txn_type: txn.type,
+          }),
+        }).then(r => r.ok ? r.json() : null).then(rule => {
+          if (rule && rule.id) {
+            setCompanyRules(prev => {
+              const idx = prev.findIndex(r => r.id === rule.id);
+              if (idx >= 0) { const u = [...prev]; u[idx] = rule; return u; }
+              return [rule, ...prev];
+            });
+          }
+        }).catch(() => {});
+      }
+    }
+  };
   const filtered = txns.filter(t => t.description.toLowerCase().includes(search.toLowerCase()) && (filterType === "all" || t.type === filterType));
   const selectedTxns = txns.filter(t => selected.has(t.id));
   const totalDebits = selectedTxns.filter(t => t.type === "debit").reduce((s,t) => s + t.amount, 0);

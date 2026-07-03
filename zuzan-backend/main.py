@@ -176,6 +176,7 @@ from financial_statements import router as fin_stmts_router
 from bank_direct_feeds import absa_router, nedbank_router, investec_router, standardbank_router
 from documents import router as documents_router
 from csv_import import router as csv_import_router
+from category_rules import router as category_rules_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -206,6 +207,7 @@ app.include_router(standardbank_router,  prefix="/banking/standardbank", tags=["
 app.include_router(fin_stmts_router,     prefix="/financial-statements", tags=["Financial Statements"])
 app.include_router(documents_router,     prefix="/documents",            tags=["Documents"])
 app.include_router(csv_import_router,    prefix="/import",               tags=["CSV Import"])
+app.include_router(category_rules_router,                                tags=["Category Rules"])
 
 
 @app.get("/")

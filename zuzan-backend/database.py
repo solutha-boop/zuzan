@@ -78,6 +78,7 @@ class Company(Base):
     leave_requests=relationship("LeaveRequest",back_populates="company")
     leave_balances=relationship("LeaveBalance",back_populates="company")
     fixed_assets=relationship("FixedAsset",back_populates="company")
+    category_rules=relationship("CategoryRule",back_populates="company")
     documents=relationship("CompanyDocument",back_populates="company")
     stitch_connection=relationship("StitchConnection",foreign_keys="StitchConnection.company_id",uselist=False)
     stitch_bank_accounts=relationship("StitchBankAccount",foreign_keys="StitchBankAccount.company_id")
@@ -821,6 +822,19 @@ class StandardBankTransaction(Base):
     bank_account            = relationship("StandardBankBankAccount", back_populates="transactions")
     company                 = relationship("Company", foreign_keys=[company_id])
 
+class CategoryRule(Base):
+    """Learned categorisation rules for bank CSV imports."""
+    __tablename__ = "category_rules"
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    keyword     = Column(String(100), nullable=False)   # lowercased, trimmed
+    category    = Column(String, nullable=False)
+    txn_type    = Column(String, default="any")         # "credit" | "debit" | "any"
+    match_count = Column(Integer, default=1)            # how many times rule was confirmed
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    company     = relationship("Company", back_populates="category_rules")
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
@@ -1134,6 +1148,19 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS ix_suppliers_company ON suppliers (company_id)",
             "CREATE INDEX IF NOT EXISTS ix_quotes_company ON quotes (company_id)",
             "CREATE INDEX IF NOT EXISTS ix_depreciation_company_period ON depreciation_entries (company_id, period)",
+            # ── Auto-categorisation learning (2026-07-03) ─────────────────────
+            """CREATE TABLE IF NOT EXISTS category_rules (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER NOT NULL REFERENCES companies(id),
+                keyword VARCHAR(100) NOT NULL,
+                category VARCHAR NOT NULL,
+                txn_type VARCHAR DEFAULT 'any',
+                match_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_category_rules_company_keyword_type ON category_rules (company_id, keyword, txn_type)",
+            "CREATE INDEX IF NOT EXISTS ix_category_rules_company ON category_rules (company_id)",
         ]:
             try:
                 conn.execute(text(sql))
