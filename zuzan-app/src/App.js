@@ -6218,7 +6218,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
           email: data.user.email, companyName: data.company.name,
           logoUrl: data.company.logo_url||"", plan:{name:data.company.plan,id:data.company.plan},
           access_token: data.access_token, trialEnds: data.company.trial_ends,
-          role: data.user.role||"accountant",
+          role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false,
         });
       }, 1200);
     } catch(e) { setError(e.message); }
@@ -6614,9 +6614,20 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           </div>
           <Badge label="Trial Active" color={C.gold} bg={C.goldLt}/>
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           <button onClick={()=>setShowUpgrade(true)} style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
           <button onClick={()=>setShowBilling(true)} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
+          {!user?.payrollEnabled && (
+            <button onClick={async()=>{
+              try {
+                await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});
+                if(onUserUpdate) onUserUpdate({...user, payrollEnabled:true});
+                alert("✓ Payroll activated! Head to the Payroll tab to get started.");
+              } catch(e){ alert("Could not activate payroll. Please try again."); }
+            }} style={{padding:"9px 18px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              + Add Payroll
+            </button>
+          )}
         </div>
       </div>
 
@@ -6850,7 +6861,7 @@ function Login({onLogin, onRegister}) {
       }
       localStorage.setItem("zuzan_token", data.access_token);
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, role:data.user.role||"owner"});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -10856,7 +10867,18 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     invoicing:  <Invoicing  live={live} user={user} docTemplate={docTemplate}/>,
     quotes:     <Quotes     live={live} user={user} onNavigate={setTab} docTemplate={docTemplate}/>,
     expenses:   <Expenses   live={live}/>,
-    payroll:    <Payroll    live={live} user={user}/>,
+    payroll:    user?.payrollEnabled
+      ? <Payroll live={live} user={user}/>
+      : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
+          <div style={{fontSize:48,marginBottom:16}}>🔒</div>
+          <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Payroll not activated</h2>
+          <p style={{fontSize:14,color:C.inkMid,maxWidth:380,lineHeight:1.6,margin:"0 0 28px"}}>
+            Your current plan does not include payroll. Add payroll to run PAYE, UIF &amp; SDL calculations, generate payslips, and submit EMP201 reports.
+          </p>
+          <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Add Payroll in Settings →
+          </button>
+        </div>,
     reports:    <Reports    live={live}/>,
     budgeting:  <Budgeting  live={live}/>,
     debtors:    <Debtors    live={live}/>,
@@ -10966,10 +10988,11 @@ export default function App() {
           email:        data.user.email,
           companyName:  data.company.name,
           logoUrl:      data.company.logo_url || "",
-          plan:         {name: data.company.plan, id: data.company.plan},
-          access_token: token,
-          trialEnds:    data.company.trial_ends,
-          role:         data.user.role || "owner",
+          plan:           {name: data.company.plan, id: data.company.plan},
+          access_token:   token,
+          trialEnds:      data.company.trial_ends,
+          role:           data.user.role || "owner",
+          payrollEnabled: data.company.payroll_enabled || false,
         });
         setScreen("app");
       })
