@@ -5743,31 +5743,12 @@ function BankImport({live = {}, onNavigate}) {
     }
   }, [step]); // eslint-disable-line
 
-  const [bankMode, setBankMode] = useState("csv");
-
   return (
     <div>
-      {/* Header + mode selector */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-        <div>
-          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank</h2>
-          <p style={{fontSize:12,color:C.inkMid,marginTop:3,margin:"3px 0 0"}}>Manage your banking transactions</p>
-        </div>
-        <select
-          value={bankMode}
-          onChange={e => setBankMode(e.target.value)}
-          style={{padding:"9px 16px",border:`2px solid ${C.accent}`,borderRadius:10,fontSize:13,fontWeight:600,fontFamily:"inherit",background:C.surface,color:C.accent,cursor:"pointer",outline:"none"}}
-        >
-          <option value="csv">📂 Manual CSV Import</option>
-          <option value="connect">🔗 Connect to Bank</option>
-        </select>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank Import</h2>
+        <p style={{fontSize:12,color:C.inkMid,marginTop:3,margin:"3px 0 0"}}>Upload and categorise your bank statement</p>
       </div>
-
-      {/* CONNECT TO BANK mode */}
-      {bankMode === "connect" && <BankFeeds/>}
-
-      {/* CSV IMPORT mode */}
-      {bankMode === "csv" && (
       <div>
       {/* Step progress bar */}
       <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",width:"fit-content",marginBottom:20}}>
@@ -5985,7 +5966,6 @@ function BankImport({live = {}, onNavigate}) {
         </div>
       )}
       </div>
-      )}
     </div>
   );
 }
@@ -10802,7 +10782,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     setDocTemplate(tmpl);
     try { localStorage.setItem("zuzan_doc_template", JSON.stringify(tmpl)); } catch {}
   };
-  const [expanded, setExpanded] = useState({sales: true, procurement: false, banking: false});
+  const [expanded, setExpanded] = useState({sales: false, procurement: false, banking: false});
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
   const TABS = [
