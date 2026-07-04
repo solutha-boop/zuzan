@@ -5984,7 +5984,7 @@ function BankImport({live = {}, onNavigate}) {
           </div>
         </div>
       )}
-      </div> {/* end csv mode wrapper */}
+      </div>
       )}
     </div>
   );
