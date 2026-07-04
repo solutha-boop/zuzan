@@ -1313,10 +1313,14 @@ async def management_accounts(
     total_outstanding = round(sum(_to_zar(i) for i in outstanding), 2)
     overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue)
 
+    # Anchor the 6-month window to period_end so that when the user filters to a
+    # historical range (e.g. FY2026), the trend bars cover that actual period
+    # rather than always ending at today.
+    trend_anchor = min(period_end, now + timedelta(days=1))
     trend = []
     for i in range(5, -1, -1):
-        m = now.month - i
-        y = now.year
+        m = trend_anchor.month - i
+        y = trend_anchor.year
         while m <= 0:
             m += 12
             y -= 1
@@ -1326,7 +1330,7 @@ async def management_accounts(
         rev = round(sum(_to_zar(inv) for inv in db.query(Invoice).filter(
             Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
             Invoice.paid_date >= start, Invoice.paid_date < end).all()), 2)
-        # Add bank-import income — same fix as the P&L revenue above
+        # Bank-import income + any non-invoice revenue for this month
         rev = round(rev + _bank_import_income(db, cid, start, end), 2)
         exp_rows = db.query(Expense).filter(
             Expense.company_id == cid,

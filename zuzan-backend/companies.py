@@ -786,20 +786,33 @@ async def import_bank_statement(
 
     for txn in data.transactions:
         if txn.type == "debit":
-            # Check for duplicate — same vendor, amount and date
+            # Check for duplicate — same vendor, amount and date.
+            # Audit fix 2026-07-04: the previous filter compared txn.description against
+            # Expense.description, but imported expenses store the bank narrative in
+            # `vendor` and a fixed "Imported from ..." string in `description` — so the
+            # dedupe never matched and re-importing a statement duplicated every expense.
             existing = db.query(Expense).filter(
                 Expense.company_id   == current_user.company_id,
+                Expense.vendor       == txn.description[:100],
                 Expense.amount       == txn.amount,
-                Expense.description  == txn.description,
+                Expense.expense_date == datetime.fromisoformat(txn.date),
             ).first()
 
             if existing:
                 expenses_skipped += 1
                 continue
 
-            # Calculate VAT split if applicable (bank amount is VAT-inclusive)
-            if txn.vat_applicable:
-                imp_vat   = round(txn.amount * 0.15 / 1.15, 2)  # back-calculate from incl-VAT
+            # Calculate VAT split if applicable (bank amount is VAT-inclusive).
+            # Audit fix 2026-07-04: the frontend sends `has_vat` + a precomputed
+            # `vat_amount` (never the legacy `vat_applicable`), so checking only
+            # vat_applicable dropped the VAT split on every imported expense —
+            # overstating P&L expenses and understating input VAT. Mirror the
+            # credit branch (journal.post_bank_income): honor either flag, prefer
+            # the provided vat_amount, and fall back to 15/115 back-calculation.
+            if txn.has_vat or txn.vat_applicable:
+                imp_vat   = round(float(txn.vat_amount or 0), 2)
+                if imp_vat <= 0:
+                    imp_vat = round(txn.amount * 0.15 / 1.15, 2)  # back-calculate from incl-VAT
                 imp_total = txn.amount                            # store as-is (VAT-inclusive)
             else:
                 imp_vat   = 0.0
@@ -825,6 +838,31 @@ async def import_bank_statement(
             expenses_created += 1
 
         elif txn.type == "credit":
+            # Duplicate check (audit fix 2026-07-04): credits previously had NO dedupe,
+            # so re-importing a statement re-posted the income journal entry and
+            # double-counted revenue in every report. Match on the exact fields
+            # post_bank_income writes: source, date, description, and the bank-debit
+            # line amount. The query autoflushes entries posted earlier in this same
+            # batch, so within-file duplicates are caught too. (Two genuinely identical
+            # credits — same day, description and amount — must be imported manually.)
+            from database import JournalEntry, JournalLine
+            from datetime import date as _date
+            dup_q = db.query(JournalEntry.id).join(
+                JournalLine, JournalLine.entry_id == JournalEntry.id
+            ).filter(
+                JournalEntry.company_id  == current_user.company_id,
+                JournalEntry.source      == "bank_import_income",
+                JournalEntry.description == f"Bank income — {txn.description}",
+                JournalLine.debit        == round(float(txn.amount or 0), 2),
+            )
+            try:
+                dup_q = dup_q.filter(JournalEntry.date == _date.fromisoformat(txn.date))
+            except Exception:
+                pass  # unparseable date — post_bank_income falls back to today; match on description+amount only
+            if dup_q.first():
+                credits_skipped += 1
+                continue
+
             # Post a journal entry so income flows into P&L and the balance sheet
             try:
                 import journal as journal_engine

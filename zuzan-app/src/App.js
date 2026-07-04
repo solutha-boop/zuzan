@@ -5743,23 +5743,39 @@ function BankImport({live = {}, onNavigate}) {
     }
   }, [step]); // eslint-disable-line
 
+  const [bankMode, setBankMode] = useState("csv");
+
   return (
     <div>
-      <div style={{marginBottom:24}}>
-        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank</h2>
-        <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Connect your bank or import a CSV statement</p>
+      {/* Header + mode selector */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank</h2>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3,margin:"3px 0 0"}}>Manage your banking transactions</p>
+        </div>
+        <select
+          value={bankMode}
+          onChange={e => setBankMode(e.target.value)}
+          style={{padding:"9px 16px",border:`2px solid ${C.accent}`,borderRadius:10,fontSize:13,fontWeight:600,fontFamily:"inherit",background:C.surface,color:C.accent,cursor:"pointer",outline:"none"}}
+        >
+          <option value="csv">📂 Manual CSV Import</option>
+          <option value="connect">🔗 Connect to Bank</option>
+        </select>
       </div>
-      <BankFeeds/>
-      <div style={{borderTop:`2px solid ${C.border}`,paddingTop:20,marginBottom:20}}>
-        <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:4}}>CSV Statement Import</div>
-        <div style={{fontSize:12,color:C.inkMid}}>Upload a bank statement CSV to import transactions manually</div>
-      </div>
-      <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",width:"fit-content",marginBottom:24}}>
+
+      {/* CONNECT TO BANK mode */}
+      {bankMode === "connect" && <BankFeeds/>}
+
+      {/* CSV IMPORT mode */}
+      {bankMode === "csv" && (
+      <div>
+      {/* Step progress bar */}
+      <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",width:"fit-content",marginBottom:20}}>
         {[["select","1. Select Bank"],["preview","2. Preview"],["categorise","3. Categorise"],["done","4. Done"]].map(([id,label],i) => {
           const steps = ["select","preview","categorise","done"];
           const done = steps.indexOf(id) < steps.indexOf(step);
           const active = id === step;
-          return <div key={id} style={{padding:"10px 18px",fontSize:12,fontWeight:active?700:400,color:active?C.accent:done?C.green:C.inkDim,background:active?C.accentLt:"transparent",borderRight:i<3?`1px solid ${C.border}`:"none"}}>{done ? "done " : ""}{label}</div>;
+          return <div key={id} style={{padding:"10px 18px",fontSize:12,fontWeight:active?700:400,color:active?C.accent:done?C.green:C.inkDim,background:active?C.accentLt:"transparent",borderRight:i<3?`1px solid ${C.border}`:"none"}}>{done ? "✓ " : ""}{label}</div>;
         })}
       </div>
       {step === "select" && (
@@ -5840,7 +5856,7 @@ function BankImport({live = {}, onNavigate}) {
                     <td style={{padding:"10px 14px"}}><Badge label={t.type==="debit"?"Expense":"Income"} color={t.type==="debit"?C.red:C.green} bg={t.type==="debit"?C.redLt:C.greenLt}/></td>
                     <td style={{padding:"10px 14px",fontWeight:700,color:t.type==="debit"?C.red:C.green}}>{t.type==="debit"?"-":"+"}{fmt(t.amount)}</td>
                     <td style={{padding:"10px 14px"}}>
-                      <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"4px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:180}}>
+                      <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"4px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,minWidth:220,maxWidth:"100%"}}>
                         <option value="">-- Select Account --</option>
                         {COA_GROUPS.map(group => (
                           <optgroup key={group} label={group}>
@@ -5882,7 +5898,7 @@ function BankImport({live = {}, onNavigate}) {
             <td style={{padding:"10px 14px",color:C.ink}}>{t.description}</td>
             <td style={{padding:"10px 14px",fontWeight:700,color:isDebit?C.red:C.green}}>{isDebit?"-":"+"}  {fmt(t.amount)}</td>
             <td style={{padding:"10px 14px"}}>
-              <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:180}}>
+              <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,minWidth:220,maxWidth:"100%"}}>
                 <option value="">-- Select Account --</option>
                 {isDebit ? (
                   COA_GROUPS.map(group => (
@@ -5915,9 +5931,9 @@ function BankImport({live = {}, onNavigate}) {
             {debits.length > 0 && (
               <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
                 <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:12}}>📤 Expenses ({debits.length})</div>
-                <div style={{maxHeight:300,overflowY:"auto"}}>
+                <div style={{overflowX:"auto"}}>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                    <thead style={{position:"sticky",top:0}}><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Account","VAT","VAT Amt"].map(TH)}</tr></thead>
+                    <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Account","VAT","VAT Amt"].map(TH)}</tr></thead>
                     <tbody>{debits.map(t => renderRow(t, true))}</tbody>
                   </table>
                 </div>
@@ -5927,10 +5943,10 @@ function BankImport({live = {}, onNavigate}) {
             {credits.length > 0 && (
               <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
                 <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>📥 Income ({credits.length})</div>
-                <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>These will be posted as journal entries (DR Bank / CR Revenue). Choose the income account for each.</div>
-                <div style={{maxHeight:300,overflowY:"auto"}}>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>Posted as DR Bank / CR Revenue — select the income account for each.</div>
+                <div style={{overflowX:"auto"}}>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                    <thead style={{position:"sticky",top:0}}><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Income Account","VAT","VAT Amt"].map(TH)}</tr></thead>
+                    <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Income Account","VAT","VAT Amt"].map(TH)}</tr></thead>
                     <tbody>{credits.map(t => renderRow(t, false))}</tbody>
                   </table>
                 </div>
@@ -5959,6 +5975,7 @@ function BankImport({live = {}, onNavigate}) {
           <p style={{color:C.inkMid,fontSize:14,lineHeight:1.7,marginBottom:28}}>
             {result && result.expenses_created > 0 && <span>Imported <strong style={{color:C.ink}}>{result.expenses_created} expenses</strong> ({fmt(totalDebits)}). </span>}
             {result && result.credits_recorded > 0 && <span>Recorded <strong style={{color:C.green}}>{result.credits_recorded} income entries</strong> to your P&amp;L. </span>}
+            {result && result.credits_skipped > 0 && <span style={{color:C.gold}}>⚠ {result.credits_skipped} income entries could not be recorded. </span>}
             {(!result || (result.expenses_created === 0 && result.credits_recorded === 0)) && <span>Nothing new was imported (all transactions already exist).</span>}
           </p>
           <div style={{display:"flex",gap:10,justifyContent:"center"}}>
@@ -5966,6 +5983,8 @@ function BankImport({live = {}, onNavigate}) {
             <button onClick={() => { if (typeof onNavigate === "function") onNavigate("expenses"); }} style={{padding:"11px 24px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>View Expenses</button>
           </div>
         </div>
+      )}
+      </div> {/* end csv mode wrapper */}
       )}
     </div>
   );
