@@ -4425,64 +4425,69 @@ function Budgeting({live = {}}) {
             </button>}
         </div>
         <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:900}}>
+          <table style={{borderCollapse:"collapse",fontSize:12,tableLayout:"fixed",width:"1139px"}}>
+            <colgroup>
+              <col style={{width:155}}/>
+              {MONTHS.map((_,i)=><col key={i} style={{width:72}}/>)}
+              <col style={{width:95}}/>
+            </colgroup>
             <thead>
               <tr style={{background:C.surface}}>
-                <th style={{padding:"8px 12px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1}}>Category</th>
-                {MONTHS.map((m,i)=><th key={i} style={{padding:"8px 8px",textAlign:"center",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,minWidth:80}}>{m}</th>)}
-                <th style={{padding:"8px 8px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Total</th>
+                <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1,whiteSpace:"nowrap"}}>Category</th>
+                {MONTHS.map((m,i)=><th key={i} style={{padding:"8px 4px",textAlign:"center",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{m}</th>)}
+                <th style={{padding:"8px 6px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>Total</th>
               </tr>
             </thead>
             <tbody>
               {/* Income section */}
-              <tr><td colSpan={14} style={{background:C.greenLt,padding:"6px 12px",fontSize:11,fontWeight:700,color:C.green,letterSpacing:0.5,textTransform:"uppercase"}}>Income</td></tr>
+              <tr><td colSpan={14} style={{background:C.greenLt,padding:"5px 10px",fontSize:11,fontWeight:700,color:C.green,letterSpacing:0.5,textTransform:"uppercase"}}>Income</td></tr>
               {INCOME_CATS.map(cat=>(
                 <tr key={cat}>
-                  <td style={{padding:"6px 12px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1}}>{cat}</td>
+                  <td style={{padding:"4px 10px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{cat}</td>
                   {MONTHS.map((_,i)=>{
-                    const m=i+1; const key=`${cat}-${m}-income`;
+                    const m=i+1;
                     const cur=getCellVal(cat,m,"income");
-                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"2px 4px",textAlign:"right"}}>
+                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"1px 2px"}}>
                       <input type="number" value={cur} placeholder="0"
                         onChange={e=>setPending(cat,m,"income",e.target.value)}
-                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:12,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 2px"}}/>
+                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:11,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 3px",boxSizing:"border-box"}}/>
                     </td>;
                   })}
-                  <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",fontWeight:600,color:C.green}}>
+                  <td style={{border:`1px solid ${C.border}`,padding:"4px 6px",textAlign:"right",fontWeight:600,color:C.green,fontSize:11,whiteSpace:"nowrap"}}>
                     {fmtR(MONTHS.reduce((s,_,i)=>s+(parseFloat(getCellVal(cat,i+1,"income"))||0),0))}
                   </td>
                 </tr>
               ))}
               {/* Expense section */}
-              <tr><td colSpan={14} style={{background:"#FFF3F3",padding:"6px 12px",fontSize:11,fontWeight:700,color:C.red,letterSpacing:0.5,textTransform:"uppercase"}}>Expenses</td></tr>
+              <tr><td colSpan={14} style={{background:"#FFF3F3",padding:"5px 10px",fontSize:11,fontWeight:700,color:C.red,letterSpacing:0.5,textTransform:"uppercase"}}>Expenses</td></tr>
               {EXPENSE_CATS.map(cat=>(
                 <tr key={cat}>
-                  <td style={{padding:"6px 12px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1}}>{cat}</td>
+                  <td style={{padding:"4px 10px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{cat}</td>
                   {MONTHS.map((_,i)=>{
-                    const m=i+1; const key=`${cat}-${m}-expense`;
+                    const m=i+1;
                     const cur=getCellVal(cat,m,"expense");
-                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"2px 4px",textAlign:"right"}}>
+                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"1px 2px"}}>
                       <input type="number" value={cur} placeholder="0"
                         onChange={e=>setPending(cat,m,"expense",e.target.value)}
-                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:12,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 2px"}}/>
+                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:11,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 3px",boxSizing:"border-box"}}/>
                     </td>;
                   })}
-                  <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",fontWeight:600,color:C.red}}>
+                  <td style={{border:`1px solid ${C.border}`,padding:"4px 6px",textAlign:"right",fontWeight:600,color:C.red,fontSize:11,whiteSpace:"nowrap"}}>
                     {fmtR(MONTHS.reduce((s,_,i)=>s+(parseFloat(getCellVal(cat,i+1,"expense"))||0),0))}
                   </td>
                 </tr>
               ))}
               {/* Net row */}
               <tr style={{background:C.surface,fontWeight:700}}>
-                <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1}}>Net (Income − Expenses)</td>
+                <td style={{padding:"6px 10px",border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1,whiteSpace:"nowrap",fontSize:11}}>Net (Income − Expenses)</td>
                 {MONTHS.map((_,i)=>{
                   const m=i+1;
                   const inc=(parseFloat(getCellVal("Revenue",m,"income"))||0);
                   const exp=EXPENSE_CATS.reduce((s,c)=>s+(parseFloat(getCellVal(c,m,"expense"))||0),0);
                   const net=inc-exp;
-                  return <td key={m} style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:net>=0?C.green:C.red}}>{net?fmtR(net):""}</td>;
+                  return <td key={m} style={{border:`1px solid ${C.border}`,padding:"6px 4px",textAlign:"right",fontSize:11,color:net>=0?C.green:C.red,whiteSpace:"nowrap"}}>{net?fmtR(net):""}</td>;
                 })}
-                <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:C.ink}}>
+                <td style={{border:`1px solid ${C.border}`,padding:"6px 6px",textAlign:"right",color:C.ink,fontSize:11,whiteSpace:"nowrap"}}>
                   {fmtR(MONTHS.reduce((s,_,i)=>{
                     const m=i+1;
                     const inc=(parseFloat(getCellVal("Revenue",m,"income"))||0);
