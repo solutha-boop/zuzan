@@ -4,7 +4,7 @@ from sqlalchemy import func, extract
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from database import get_db, Budget, Expense, Invoice
+from database import get_db, Budget, Expense, Invoice, JournalEntry, JournalLine, PurchaseOrder
 from auth import get_current_user, User
 
 router = APIRouter()
@@ -112,54 +112,88 @@ async def get_actuals(
     db: Session = Depends(get_db),
 ):
     year = year or datetime.utcnow().year
+    cid  = current_user.company_id
 
-    # Actual expenses grouped by category + month
-    expense_rows = (
+    # Aggregate into a single dict keyed by (type, category, month) so multiple
+    # income sources (invoices + bank imports) collapse into one "Revenue" row per month.
+    totals: dict = {}
+
+    def add(type_: str, category: str, month: int, amount: float):
+        key = (type_, category, int(month))
+        totals[key] = totals.get(key, 0.0) + float(amount or 0)
+
+    # 1. Expenses (logged via Expense tab)
+    for row in (
         db.query(
             Expense.category,
             extract("month", Expense.expense_date).label("month"),
             func.sum(Expense.amount).label("total"),
         )
         .filter(
-            Expense.company_id == current_user.company_id,
+            Expense.company_id == cid,
             extract("year", Expense.expense_date) == year,
         )
         .group_by(Expense.category, extract("month", Expense.expense_date))
         .all()
-    )
+    ):
+        add("expense", row.category or "Other", row.month, row.total)
 
-    # Actual revenue (paid invoices) grouped by month
-    invoice_rows = (
+    # 2. Revenue from paid invoices
+    for row in (
         db.query(
             extract("month", Invoice.paid_date).label("month"),
             func.sum(Invoice.amount).label("total"),
         )
         .filter(
-            Invoice.company_id == current_user.company_id,
+            Invoice.company_id == cid,
             Invoice.status == "paid",
             extract("year", Invoice.paid_date) == year,
         )
         .group_by(extract("month", Invoice.paid_date))
         .all()
-    )
+    ):
+        add("income", "Revenue", row.month, row.total)
 
-    actuals = []
-    for row in expense_rows:
-        actuals.append({
-            "type":     "expense",
-            "category": row.category or "Other",
-            "month":    int(row.month),
-            "actual":   round(float(row.total), 2),
-        })
-    for row in invoice_rows:
-        actuals.append({
-            "type":     "income",
-            "category": "Revenue",
-            "month":    int(row.month),
-            "actual":   round(float(row.total), 2),
-        })
+    # 3. Revenue from bank CSV imports (journal entries with source="bank_import_income")
+    for row in (
+        db.query(
+            extract("month", JournalEntry.date).label("month"),
+            func.sum(JournalLine.credit).label("total"),
+        )
+        .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+        .filter(
+            JournalEntry.company_id == cid,
+            JournalEntry.source == "bank_import_income",
+            extract("year", JournalEntry.date) == year,
+            JournalLine.credit > 0,
+        )
+        .group_by(extract("month", JournalEntry.date))
+        .all()
+    ):
+        if row.total:
+            add("income", "Revenue", row.month, row.total)
 
-    return actuals
+    # 4. Cost of Sales from received purchase orders
+    for row in (
+        db.query(
+            extract("month", PurchaseOrder.received_date).label("month"),
+            func.sum(PurchaseOrder.subtotal).label("total"),
+        )
+        .filter(
+            PurchaseOrder.company_id == cid,
+            PurchaseOrder.status.in_(["received", "partial"]),
+            PurchaseOrder.received_date.isnot(None),
+            extract("year", PurchaseOrder.received_date) == year,
+        )
+        .group_by(extract("month", PurchaseOrder.received_date))
+        .all()
+    ):
+        add("expense", "Cost of Sales", row.month, row.total)
+
+    return [
+        {"type": k[0], "category": k[1], "month": k[2], "actual": round(v, 2)}
+        for k, v in totals.items()
+    ]
 
 
 # ── SUMMARY: budget vs actuals rolled up per month (for cash flow) ────────────
