@@ -65,7 +65,31 @@ PLAN_DETAILS = {
 }
 
 # ── Shared CSS / layout ────────────────────────────────────────────────────────
-def _wrap(body: str, footer_email: str = "") -> str:
+def _opt_out_line(footer_email: str, transactional: bool = False) -> str:
+    """Return an ECTA-compliant opt-out footer line."""
+    if not footer_email:
+        return ""
+    import urllib.parse
+    subject = urllib.parse.quote(f"Opt out of Zuzan emails: {footer_email}")
+    unsubscribe_url = f"mailto:{SUPPORT_EMAIL}?subject={subject}"
+    if transactional:
+        return (
+            f"<p style='color:#bbb;font-size:11px;margin:8px 0 0;'>"
+            f"This is a service email sent because an action was performed on your account or on your behalf. "
+            f"To stop receiving service emails, "
+            f"<a href='{unsubscribe_url}' style='color:#C8401A;'>opt out here</a>."
+            f"</p>"
+        )
+    return (
+        f"<p style='color:#bbb;font-size:11px;margin:8px 0 0;'>"
+        f"You received this email because you signed up for Zuzan or a Zuzan user added your address. "
+        f"To opt out of future emails, "
+        f"<a href='{unsubscribe_url}' style='color:#C8401A;'>click here</a>."
+        f"</p>"
+    )
+
+
+def _wrap(body: str, footer_email: str = "", transactional: bool = False) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -88,6 +112,7 @@ def _wrap(body: str, footer_email: str = "") -> str:
         Need help? Chat with the <strong>AI Assistant</strong> in the app or email
         <a href="mailto:{SUPPORT_EMAIL}" style="color:#C8401A;">{SUPPORT_EMAIL}</a>
       </p>
+      {_opt_out_line(footer_email, transactional)}
     </div>
   </div>
 </body>
@@ -138,7 +163,7 @@ def send_verification_email(first_name: str, email: str, token: str):
         If you didn't create a ZuZan account, you can safely ignore this email.
       </p>
     """
-    send_email(email, "Verify your ZuZan email address", _wrap(body, email))
+    send_email(email, "Verify your ZuZan email address", _wrap(body, email, transactional=True))
 
 
 # ── 2. Welcome / subscription confirmation ─────────────────────────────────────
@@ -197,7 +222,7 @@ def send_welcome_email(
     send_email(
         email,
         f"Welcome to ZuZan — Your {info['name']} plan is active",
-        _wrap(body, email),
+        _wrap(body, email),  # welcome = marketing, no transactional flag
         from_email=FROM_SUPPORT_EMAIL,
     )
 
@@ -250,7 +275,7 @@ def send_password_reset_email(first_name: str, email: str, reset_code: str):
         If you didn't request a reset, you can safely ignore this email.
       </p>
     """
-    send_email(email, "Your ZuZan password reset code", _wrap(body, email))
+    send_email(email, "Your ZuZan password reset code", _wrap(body, email, transactional=True))
 
 
 # ── 5. Purchase Order to supplier ─────────────────────────────────────────────
@@ -293,7 +318,7 @@ def send_po_email(supplier_email: str, supplier_name: str, po: dict, company_nam
       {notes}
       <p style="color:#888;font-size:12px;margin:24px 0 0;">Please reply to this email to confirm or raise any queries.</p>
     """
-    send_email(supplier_email, f"Purchase Order {po['po_number']} from {company_name}", _wrap(body, supplier_email))
+    send_email(supplier_email, f"Purchase Order {po['po_number']} from {company_name}", _wrap(body, supplier_email, transactional=True))
 
 
 def send_invite_email(invitee_email: str, company_name: str, inviter_name: str, role: str, token: str):
@@ -332,7 +357,7 @@ def send_invite_email(invitee_email: str, company_name: str, inviter_name: str, 
     send_email(
         invitee_email,
         f"You've been invited to join {company_name} on ZuZan",
-        _wrap(body, invitee_email),
+        _wrap(body, invitee_email, transactional=True),
         from_email=FROM_SUPPORT_EMAIL,
     )
 
@@ -405,5 +430,5 @@ def send_invoice_email(
     send_email(
         client_email,
         f"Invoice {invoice_number} from {company_name} — {cur_sym}{total_amount:,.2f} due {due_str}",
-        _wrap(body, client_email),
+        _wrap(body, client_email, transactional=True),
     )

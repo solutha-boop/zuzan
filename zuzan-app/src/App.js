@@ -7171,6 +7171,7 @@ function Registration({onComplete, onLogin}) {
   const [payment, setPayment] = useState({cardNumber:"",expiry:"",cvv:"",cardName:""});
   const [processing, setProcessing] = useState(false);
   const [complete, setComplete] = useState(false);
+  const [tcAccepted, setTcAccepted] = useState(false);
 
   const planPrice = selectedPlan ? (billing === "monthly" ? selectedPlan.monthly : Math.round(selectedPlan.annual / 12)) : 0;
   const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 17.50)) : 0;
@@ -7407,10 +7408,24 @@ function Registration({onComplete, onLogin}) {
                 </div>
               ))}
             </div>
-            <div style={{fontSize:11,color:C.inkDim,marginBottom:20,lineHeight:1.7}}>By starting your trial you agree to ZuZan's Terms of Service and Privacy Policy. Cancel anytime before trial ends.</div>
+            {/* Cooling-off disclosure */}
+            <div style={{background:"#FFF8E1",border:"1px solid #F59E0B",borderRadius:12,padding:"14px 16px",marginBottom:16,fontSize:12,color:"#78350F",lineHeight:1.7}}>
+              <strong>Cooling-off right (CPA s16):</strong> After your 14-day free trial ends and your first payment is processed, you have <strong>7 business days</strong> to cancel and receive a full refund of that payment, no questions asked. To exercise this right email <a href="mailto:support@solutha.co.za" style={{color:"#92400E"}}>support@solutha.co.za</a>.
+            </div>
+            {/* T&C + Privacy Policy acceptance */}
+            <label style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:20,cursor:"pointer",padding:"14px 16px",background:C.surface,border:`1.5px solid ${tcAccepted?C.accent:C.border}`,borderRadius:12}}>
+              <input type="checkbox" checked={tcAccepted} onChange={e=>setTcAccepted(e.target.checked)} style={{marginTop:2,width:16,height:16,accentColor:C.accent,flexShrink:0}}/>
+              <span style={{fontSize:12,color:C.inkMid,lineHeight:1.7}}>
+                I have read and agree to Zuzan's{" "}
+                <a href="https://zuzan.co.za/terms" target="_blank" rel="noreferrer" style={{color:C.accent,fontWeight:600}}>Terms &amp; Conditions</a>
+                {" "}and{" "}
+                <a href="https://zuzan.co.za/privacy" target="_blank" rel="noreferrer" style={{color:C.accent,fontWeight:600}}>Privacy Policy</a>.
+                I understand my subscription will auto-renew monthly (or annually) after the free trial and I can cancel anytime from Settings.
+              </span>
+            </label>
             <div style={{display:"flex",gap:12}}>
               <button onClick={() => setStep(3)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-              <button onClick={handlePayment} disabled={processing} style={{flex:2,padding:"15px",border:"none",borderRadius:10,background:processing?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:processing?"wait":"pointer",fontFamily:"inherit"}}>{processing ? "Processing..." : "Start Free Trial"}</button>
+              <button onClick={handlePayment} disabled={processing||!tcAccepted} title={!tcAccepted?"Please accept the Terms & Conditions to continue":""} style={{flex:2,padding:"15px",border:"none",borderRadius:10,background:(processing||!tcAccepted)?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:(processing||!tcAccepted)?"not-allowed":"pointer",fontFamily:"inherit"}}>{processing ? "Processing..." : "Start Free Trial"}</button>
             </div>
           </div>
         )}
