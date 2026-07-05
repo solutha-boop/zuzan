@@ -6617,28 +6617,60 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           <button onClick={()=>setShowUpgrade(true)} style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
           <button onClick={()=>setShowBilling(true)} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
-          {!user?.payrollEnabled && (
-            <button onClick={async()=>{
-              try {
-                await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});
-                if(onUserUpdate) onUserUpdate({...user, payrollEnabled:true});
-                alert("✓ Payroll activated! Head to the Payroll tab to get started.");
-              } catch(e){ alert("Could not activate payroll. Please try again."); }
-            }} style={{padding:"9px 18px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              + Add Payroll
-            </button>
-          )}
-          {!user?.afsEnabled && (
-            <button onClick={async()=>{
-              try {
-                await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});
-                if(onUserUpdate) onUserUpdate({...user, afsEnabled:true});
-                alert("✓ Annual AFS activated! Head to the Annual AFS tab to get started.");
-              } catch(e){ alert("Could not activate AFS. Please try again."); }
-            }} style={{padding:"9px 18px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              + Add Annual AFS — R1,999/yr
-            </button>
-          )}
+        </div>
+      </div>
+
+      {/* Add-ons */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Add-ons</div>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+
+          {/* Payroll add-on */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",border:`1px solid ${user?.payrollEnabled ? C.green : C.border}`,borderRadius:12,background:user?.payrollEnabled ? C.greenLt : C.bg}}>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{fontSize:28}}>👥</div>
+              <div>
+                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Payroll</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>PAYE, UIF &amp; SDL calculations · Payslips · EMP201 reports</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>From <strong style={{color:C.ink}}>R99/month</strong> (R17.50 per employee)</div>
+              </div>
+            </div>
+            {user?.payrollEnabled
+              ? <span style={{padding:"6px 14px",background:C.green,color:"#fff",borderRadius:8,fontSize:12,fontWeight:700}}>✓ Active</span>
+              : <button onClick={async()=>{
+                  try {
+                    await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});
+                    if(onUserUpdate) onUserUpdate({...user, payrollEnabled:true});
+                  } catch(e){ alert("Could not activate. Please try again."); }
+                }} style={{padding:"8px 18px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  + Add Payroll
+                </button>
+            }
+          </div>
+
+          {/* Annual AFS add-on */}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",border:`1px solid ${user?.afsEnabled ? "#7C3AED" : C.border}`,borderRadius:12,background:user?.afsEnabled ? "#F5F3FF" : C.bg}}>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{fontSize:28}}>📑</div>
+              <div>
+                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Annual Financial Statements</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Income Statement · Balance Sheet · Cash Flow · Changes in Equity</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}><strong style={{color:C.ink}}>R1,999/year</strong> — IFRS-compliant, ready for your accountant</div>
+              </div>
+            </div>
+            {user?.afsEnabled
+              ? <span style={{padding:"6px 14px",background:"#7C3AED",color:"#fff",borderRadius:8,fontSize:12,fontWeight:700}}>✓ Active</span>
+              : <button onClick={async()=>{
+                  try {
+                    await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});
+                    if(onUserUpdate) onUserUpdate({...user, afsEnabled:true});
+                  } catch(e){ alert("Could not activate. Please try again."); }
+                }} style={{padding:"8px 18px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  + Add AFS — R1,999/yr
+                </button>
+            }
+          </div>
+
         </div>
       </div>
 
