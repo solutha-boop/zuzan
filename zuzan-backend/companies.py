@@ -42,6 +42,9 @@ class CompanyUpdate(BaseModel):
     logo_url:               Optional[str] = None
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
     afs_enabled:            Optional[bool] = None
+    payfast_merchant_id:    Optional[str] = None
+    payfast_merchant_key:   Optional[str] = None
+    payfast_passphrase:     Optional[str] = None
 
 
 def _company_dict(c: Company) -> dict:
@@ -58,6 +61,9 @@ def _company_dict(c: Company) -> dict:
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
         "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
         "afs_enabled": c.afs_enabled,
+        "payfast_merchant_id":  decrypt_field(c.payfast_merchant_id)  if c.payfast_merchant_id  else "",
+        "payfast_merchant_key": decrypt_field(c.payfast_merchant_key) if c.payfast_merchant_key else "",
+        "payfast_passphrase":   decrypt_field(c.payfast_passphrase)   if c.payfast_passphrase   else "",
         "cipc_registration_date": c.cipc_registration_date.isoformat() if c.cipc_registration_date else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
@@ -75,7 +81,8 @@ async def get_company(current_user: User = Depends(get_current_user), db: Sessio
 async def update_company(data: CompanyUpdate, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     for field, value in data.dict(exclude_none=True).items():
-        if field in ("bank_name", "bank_account", "bank_branch"):
+        if field in ("bank_name", "bank_account", "bank_branch",
+                     "payfast_merchant_id", "payfast_merchant_key", "payfast_passphrase"):
             setattr(company, field, encrypt_field(value))
         elif field == "cipc_registration_date":
             setattr(company, field, datetime.fromisoformat(value) if value else None)

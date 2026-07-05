@@ -6499,10 +6499,32 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     bankingDetails:       user?.bankingDetails       || "",
     payfastMerchantId:    user?.payfastMerchantId    || "",
     payfastMerchantKey:   user?.payfastMerchantKey   || "",
+    payfastPassphrase:    user?.payfastPassphrase    || "",
     logoUrl:              user?.logoUrl              || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
   });
   const [saved, setSaved] = useState(false);
+
+  // Pre-fill Settings form from API on mount so credentials persist across logins
+  useEffect(() => {
+    api("/companies/me").then(data => {
+      setForm(f => ({
+        ...f,
+        companyName:          data.name             || f.companyName,
+        regNumber:            data.reg_number        || f.regNumber,
+        industry:             data.industry          || f.industry,
+        vatNumber:            data.vat_number        || f.vatNumber,
+        bankName:             data.bank_name         || f.bankName,
+        bankAccount:          data.bank_account      || f.bankAccount,
+        branchCode:           data.bank_branch       || f.branchCode,
+        payfastMerchantId:    data.payfast_merchant_id  || f.payfastMerchantId,
+        payfastMerchantKey:   data.payfast_merchant_key || f.payfastMerchantKey,
+        payfastPassphrase:    data.payfast_passphrase   || f.payfastPassphrase,
+        logoUrl:              data.logo_url          || f.logoUrl,
+        cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
+      }));
+    }).catch(() => {});
+  }, []);
   const [showUpgrade,  setShowUpgrade]  = useState(false);
   const [showBilling,  setShowBilling]  = useState(false);
   const [upgradeBilling, setUpgradeBilling] = useState("monthly");
@@ -6553,6 +6575,9 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         branch_code:            form.branchCode,
         logo_url:               form.logoUrl || null,
         cipc_registration_date: form.cipcRegistrationDate || null,
+        payfast_merchant_id:    form.payfastMerchantId  || null,
+        payfast_merchant_key:   form.payfastMerchantKey || null,
+        payfast_passphrase:     form.payfastPassphrase  || null,
       })});
     } catch(e) { console.warn("Settings save failed:", e.message); }
     // Update local user context
@@ -6717,7 +6742,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           ))}
         </div>
         <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12,marginTop:4}}>PayFast Online Payments</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:12}}>
           {[{l:"PayFast Merchant ID",k:"payfastMerchantId",p:"10000100"},{l:"PayFast Merchant Key",k:"payfastMerchantKey",p:"46f0cd694581a"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}</label>
@@ -6725,7 +6750,11 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
           ))}
         </div>
-        <div style={{background:C.goldLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:11,color:C.inkMid}}>Get your Merchant ID and Key from <strong>payfast.co.za → Account → Settings → API Credentials</strong></div>
+        <div style={{marginBottom:16}}>
+          <label style={labelStyle}>PayFast Passphrase <span style={{fontWeight:400,textTransform:"none"}}>(optional — only if set in your PayFast account)</span></label>
+          <input type="password" placeholder="Leave blank if not configured" value={form.payfastPassphrase||""} onChange={e=>setForm(v=>({...v,payfastPassphrase:e.target.value}))} style={inputStyle}/>
+        </div>
+        <div style={{background:C.goldLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:11,color:C.inkMid}}>Get your Merchant ID and Key from <strong>payfast.co.za → Account → Settings → API Credentials</strong>. Each client uses their own PayFast account — Zuzan never touches your funds.</div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <button onClick={handleSave} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
           {saved && <span style={{fontSize:12,color:C.green,fontWeight:600}}>✓ Saved</span>}

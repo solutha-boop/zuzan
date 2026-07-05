@@ -60,6 +60,9 @@ class Company(Base):
     trial_ends=Column(DateTime); payroll_enabled=Column(Boolean,default=False)
     payroll_employees=Column(Integer,default=0)
     afs_enabled=Column(Boolean,default=False)
+    payfast_merchant_id=Column(String,nullable=True)   # Per-company PayFast credentials (encrypted)
+    payfast_merchant_key=Column(String,nullable=True)
+    payfast_passphrase=Column(String,nullable=True)
     cipc_registration_date=Column(DateTime,nullable=True)   # Company anniversary for CIPC AR reminder
     created_at=Column(DateTime,default=datetime.utcnow)
     users=relationship("User",back_populates="company")
@@ -1168,6 +1171,9 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_category_rules_company_keyword_type ON category_rules (company_id, keyword, txn_type)",
             "CREATE INDEX IF NOT EXISTS ix_category_rules_company ON category_rules (company_id)",
             "ALTER TABLE companies ADD COLUMN afs_enabled BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE companies ADD COLUMN payfast_merchant_id VARCHAR",
+            "ALTER TABLE companies ADD COLUMN payfast_merchant_key VARCHAR",
+            "ALTER TABLE companies ADD COLUMN payfast_passphrase VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))

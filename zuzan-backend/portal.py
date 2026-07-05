@@ -10,6 +10,7 @@ from datetime import datetime
 import os, hashlib, uuid, logging
 
 from database import get_db, Invoice, InvoiceStatus, Company, SessionLocal
+from crypto import decrypt_field
 
 logger = logging.getLogger("zuzan.portal")
 
@@ -99,9 +100,14 @@ async def initiate_portal_payment(token: str, db: Session = Depends(get_db)):
     if zar_total <= 0:
         raise HTTPException(status_code=400, detail="Invoice amount must be greater than zero.")
 
+    # Use per-company PayFast credentials; fall back to global env vars
+    pf_merchant_id  = (decrypt_field(company.payfast_merchant_id)  if company and company.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
+    pf_merchant_key = (decrypt_field(company.payfast_merchant_key) if company and company.payfast_merchant_key else None) or PAYFAST_MERCHANT_KEY
+    pf_passphrase   = (decrypt_field(company.payfast_passphrase)   if company and company.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
+
     pf_data = {
-        "merchant_id":   PAYFAST_MERCHANT_ID,
-        "merchant_key":  PAYFAST_MERCHANT_KEY,
+        "merchant_id":   pf_merchant_id,
+        "merchant_key":  pf_merchant_key,
         "return_url":    f"{FRONTEND_URL}/portal/{token}?paid=1",
         "cancel_url":    f"{FRONTEND_URL}/portal/{token}?cancelled=1",
         "notify_url":    f"{BACKEND_URL}/portal/notify",
@@ -115,7 +121,7 @@ async def initiate_portal_payment(token: str, db: Session = Depends(get_db)):
         "custom_str1":   str(inv.id),
         "custom_str2":   str(inv.company_id),
     }
-    pf_data["signature"] = _pf_signature(pf_data, PAYFAST_PASSPHRASE)
+    pf_data["signature"] = _pf_signature(pf_data, pf_passphrase)
 
     return {
         "payfast_url":  PAYFAST_URL,
@@ -151,8 +157,12 @@ async def portal_payfast_notify(
 
     # Signature verification (skip in sandbox mode for easier testing)
     if not PAYFAST_SANDBOX:
+        # Resolve the passphrase for this company so we verify against the right credentials
+        _ipn_inv = db.query(Invoice).filter(Invoice.portal_token == token).first()
+        _ipn_company = db.query(Company).filter(Company.id == _ipn_inv.company_id).first() if _ipn_inv else None
+        _ipn_passphrase = (decrypt_field(_ipn_company.payfast_passphrase) if _ipn_company and _ipn_company.payfast_passphrase else None) or PAYFAST_PASSPHRASE
         sig_data     = {k: v for k, v in data.items() if k != "signature"}
-        expected_sig = _pf_signature(sig_data, PAYFAST_PASSPHRASE)
+        expected_sig = _pf_signature(sig_data, _ipn_passphrase)
         received_sig = data.get("signature", "")
         if received_sig != expected_sig:
             logger.warning(f"Portal IPN: signature mismatch for token {token[:8]}...")
