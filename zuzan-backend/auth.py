@@ -188,6 +188,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
             "subscription_status": str(company.subscription_status.value),
             "trial_ends":          company.trial_ends.isoformat(),
             "payroll_enabled":     company.payroll_enabled,
+            "afs_enabled":         company.afs_enabled,
         },
     }
 
@@ -220,6 +221,7 @@ async def login(request: Request, data: LoginRequest, db: Session = Depends(get_
             "subscription_status": str(company.subscription_status.value),
             "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
             "payroll_enabled":     company.payroll_enabled,
+            "afs_enabled":         company.afs_enabled,
         },
     }
 
@@ -245,6 +247,7 @@ async def get_me(
             "plan":                str(company.plan.value),
             "subscription_status": str(company.subscription_status.value),
             "payroll_enabled":     company.payroll_enabled,
+            "afs_enabled":         company.afs_enabled,
             "payroll_employees":   company.payroll_employees,
         },
     }
@@ -613,6 +616,7 @@ async def accept_invite(
             "subscription_status": str(company.subscription_status.value),
             "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
             "payroll_enabled":     company.payroll_enabled,
+            "afs_enabled":         company.afs_enabled,
         },
     }
 

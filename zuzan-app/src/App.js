@@ -6218,7 +6218,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
           email: data.user.email, companyName: data.company.name,
           logoUrl: data.company.logo_url||"", plan:{name:data.company.plan,id:data.company.plan},
           access_token: data.access_token, trialEnds: data.company.trial_ends,
-          role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false,
+          role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
         });
       }, 1200);
     } catch(e) { setError(e.message); }
@@ -6628,6 +6628,17 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               + Add Payroll
             </button>
           )}
+          {!user?.afsEnabled && (
+            <button onClick={async()=>{
+              try {
+                await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});
+                if(onUserUpdate) onUserUpdate({...user, afsEnabled:true});
+                alert("✓ Annual AFS activated! Head to the Annual AFS tab to get started.");
+              } catch(e){ alert("Could not activate AFS. Please try again."); }
+            }} style={{padding:"9px 18px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              + Add Annual AFS — R1,999/yr
+            </button>
+          )}
         </div>
       </div>
 
@@ -6861,7 +6872,7 @@ function Login({onLogin, onRegister}) {
       }
       localStorage.setItem("zuzan_token", data.access_token);
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -10886,7 +10897,21 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     coa:        <ChartOfAccounts/>,
     inventory:       <Inventory/>,
     fixed_assets:    <FixedAssets/>,
-    fin_statements:  <FinancialStatements/>,
+    fin_statements:  user?.afsEnabled
+      ? <FinancialStatements/>
+      : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
+          <div style={{fontSize:48,marginBottom:16}}>📑</div>
+          <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Annual Financial Statements</h2>
+          <p style={{fontSize:14,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 6px"}}>
+            Generate IFRS-compliant AFS including Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
+          </p>
+          <p style={{fontSize:13,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 28px"}}>
+            <strong style={{color:C.ink}}>R1,999/year</strong> — less than one hour of accountant fees.
+          </p>
+          <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Add Annual AFS in Settings →
+          </button>
+        </div>,
     documents:       <DocumentRepository/>,
     data_import:     <DataImport/>,
     customers:       <Customers/>,
@@ -10993,6 +11018,7 @@ export default function App() {
           trialEnds:      data.company.trial_ends,
           role:           data.user.role || "owner",
           payrollEnabled: data.company.payroll_enabled || false,
+          afsEnabled:     data.company.afs_enabled || false,
         });
         setScreen("app");
       })

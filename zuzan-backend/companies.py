@@ -41,6 +41,7 @@ class CompanyUpdate(BaseModel):
     bank_branch:            Optional[str] = None
     logo_url:               Optional[str] = None
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
+    afs_enabled:            Optional[bool] = None
 
 
 def _company_dict(c: Company) -> dict:
@@ -56,6 +57,7 @@ def _company_dict(c: Company) -> dict:
         "subscription_status": c.subscription_status,
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
         "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
+        "afs_enabled": c.afs_enabled,
         "cipc_registration_date": c.cipc_registration_date.isoformat() if c.cipc_registration_date else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }

@@ -59,6 +59,7 @@ class Company(Base):
     subscription_status=Column(Enum(SubscriptionStatus),default=SubscriptionStatus.trial)
     trial_ends=Column(DateTime); payroll_enabled=Column(Boolean,default=False)
     payroll_employees=Column(Integer,default=0)
+    afs_enabled=Column(Boolean,default=False)
     cipc_registration_date=Column(DateTime,nullable=True)   # Company anniversary for CIPC AR reminder
     created_at=Column(DateTime,default=datetime.utcnow)
     users=relationship("User",back_populates="company")
@@ -1166,6 +1167,7 @@ def init_db():
             )""",
             "CREATE UNIQUE INDEX IF NOT EXISTS ix_category_rules_company_keyword_type ON category_rules (company_id, keyword, txn_type)",
             "CREATE INDEX IF NOT EXISTS ix_category_rules_company ON category_rules (company_id)",
+            "ALTER TABLE companies ADD COLUMN afs_enabled BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 conn.execute(text(sql))
