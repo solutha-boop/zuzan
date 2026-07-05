@@ -6504,6 +6504,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
   });
   const [saved, setSaved] = useState(false);
+  const [subInfo, setSubInfo] = useState({status: user?.subscriptionStatus || "trial", trialEnds: user?.trialEnds || null});
 
   // Pre-fill Settings form from API on mount so credentials persist across logins
   useEffect(() => {
@@ -6523,6 +6524,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         logoUrl:              data.logo_url          || f.logoUrl,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
       }));
+      setSubInfo({status: data.subscription_status, trialEnds: data.trial_ends, plan: data.plan, billingCycle: data.billing_cycle});
     }).catch(() => {});
   }, []);
   const [showUpgrade,  setShowUpgrade]  = useState(false);
@@ -6632,17 +6634,88 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       ) : <>
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
         <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Subscription</div>
+
+        {/* Plan + status row */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <div>
-            <div style={{fontSize:16,fontWeight:700,color:C.ink}}>{user?.plan?.name || "Professional"} Plan</div>
-            <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Trial ends in 9 days</div>
+            <div style={{fontSize:16,fontWeight:700,color:C.ink,textTransform:"capitalize"}}>
+              {subInfo.plan || user?.plan?.name || "Starter"} Plan
+              {subInfo.billingCycle ? <span style={{fontSize:11,fontWeight:400,color:C.inkMid,marginLeft:8}}>({subInfo.billingCycle})</span> : null}
+            </div>
+            <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>
+              {subInfo.status === "trial" && subInfo.trialEnds
+                ? `Trial ends ${new Date(subInfo.trialEnds).toLocaleDateString("en-ZA",{day:"numeric",month:"long",year:"numeric"})}`
+                : subInfo.status === "cancelled"
+                ? "Cancelled — access continues until end of billing period"
+                : subInfo.status === "active"
+                ? "Active subscription"
+                : subInfo.status === "expired"
+                ? "Subscription expired"
+                : ""}
+            </div>
           </div>
-          <Badge label="Trial Active" color={C.gold} bg={C.goldLt}/>
+          <Badge
+            label={subInfo.status === "trial" ? "Trial" : subInfo.status === "active" ? "Active" : subInfo.status === "cancelled" ? "Cancelled" : "Expired"}
+            color={subInfo.status === "active" ? C.green : subInfo.status === "trial" ? C.gold : C.red}
+            bg={subInfo.status === "active" ? C.greenLt : subInfo.status === "trial" ? C.goldLt : C.redLt}
+          />
         </div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+
+        {/* Action buttons */}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
           <button onClick={()=>setShowUpgrade(true)} style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
           <button onClick={()=>setShowBilling(true)} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
         </div>
+
+        {/* Auto-renewal toggle */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:C.bg,borderRadius:10,border:`1px solid ${C.border}`,marginBottom:10}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:C.ink}}>Auto-renewal</div>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>
+              {subInfo.status === "cancelled"
+                ? "Your subscription will not renew. You can re-enable this before your period ends."
+                : "Your subscription renews automatically. You will be notified 7 days before each renewal."}
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              const turningOff = subInfo.status !== "cancelled";
+              if (turningOff && !window.confirm("Turn off auto-renewal? Your access will continue until the end of your current billing period, then stop.")) return;
+              const newStatus = turningOff ? "cancelled" : "active";
+              try {
+                await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: newStatus})});
+                setSubInfo(s => ({...s, status: newStatus}));
+              } catch(e) { alert("Could not update. Please try again."); }
+            }}
+            style={{
+              width:44, height:24, borderRadius:12, border:"none", cursor:"pointer",
+              background: subInfo.status === "cancelled" ? C.border : C.green,
+              position:"relative", flexShrink:0, transition:"background 0.2s",
+            }}
+          >
+            <span style={{
+              position:"absolute", top:3, width:18, height:18, borderRadius:9, background:"#fff",
+              boxShadow:"0 1px 3px rgba(0,0,0,0.2)", transition:"left 0.2s",
+              left: subInfo.status === "cancelled" ? 3 : 23,
+            }}/>
+          </button>
+        </div>
+
+        {/* Cancel subscription */}
+        {subInfo.status !== "cancelled" && subInfo.status !== "expired" && (
+          <button
+            onClick={async () => {
+              if (!window.confirm("Cancel your subscription? Your access continues until the end of your current billing period.")) return;
+              try {
+                await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: "cancelled"})});
+                setSubInfo(s => ({...s, status: "cancelled"}));
+              } catch(e) { alert("Could not cancel. Please email support@solutha.co.za."); }
+            }}
+            style={{fontSize:12,color:C.red,background:"none",border:"none",cursor:"pointer",padding:"4px 0",textDecoration:"underline",fontFamily:"inherit"}}
+          >
+            Cancel subscription
+          </button>
+        )}
       </div>
 
       {/* Add-ons */}

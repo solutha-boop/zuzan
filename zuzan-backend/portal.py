@@ -22,8 +22,8 @@ PAYFAST_MERCHANT_KEY = os.environ.get("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
 PAYFAST_PASSPHRASE   = os.environ.get("PAYFAST_PASSPHRASE",   "")
 PAYFAST_SANDBOX      = os.environ.get("PAYFAST_SANDBOX", "true").lower() == "true"
 PAYFAST_URL          = "https://sandbox.payfast.co.za/eng/process" if PAYFAST_SANDBOX else "https://www.payfast.co.za/eng/process"
-BACKEND_URL          = os.environ.get("BACKEND_URL",   "https://zuzan-backend.onrender.com")
-FRONTEND_URL         = os.environ.get("FRONTEND_URL",  "https://zuzan-app.onrender.com")
+BACKEND_URL          = os.environ.get("BACKEND_URL",   "https://api.zuzan.co.za")
+FRONTEND_URL         = os.environ.get("FRONTEND_URL",  "https://app.zuzan.co.za")
 
 
 def _pf_signature(data: dict, passphrase: str = "") -> str:
