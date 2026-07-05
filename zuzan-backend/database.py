@@ -227,6 +227,11 @@ class Supplier(Base):
     purchase_orders=relationship("PurchaseOrder",back_populates="supplier")
 
 class PurchaseOrder(Base):
+    # CURRENCY POLICY (audit 2026-07-05): purchase orders are ZAR-only by design —
+    # there is deliberately no currency/exchange_rate column. All downstream AP code
+    # (_po_delivered_net, /reports/creditors-aging, post_po_received/post_po_paid,
+    # AP control account 2000) assumes ZAR amounts. If foreign-currency POs are ever
+    # added, every one of those consumers needs exchange-rate handling first.
     __tablename__="purchase_orders"
     id=Column(Integer,primary_key=True,index=True)
     company_id=Column(Integer,ForeignKey("companies.id"))

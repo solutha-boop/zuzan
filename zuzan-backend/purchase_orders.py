@@ -18,6 +18,8 @@ class POItem(BaseModel):
     unit_price:  float = 0
 
 class POCreate(BaseModel):
+    # NOTE: no currency field — POs are ZAR-only by design (see PurchaseOrder model
+    # in database.py). Do not add one without exchange-rate handling across the AP chain.
     supplier_id:   Optional[int] = None
     supplier_name: Optional[str] = None
     delivery_date: Optional[str] = None

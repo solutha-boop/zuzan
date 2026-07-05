@@ -859,7 +859,9 @@ async def reconciliation(
             "detail": f"{len(overdue_90)} invoice(s) outstanding beyond 90 days totalling R {amount_90:,.2f}. Consider writing off or following up.",
             "amount": amount_90,
             "items": [{"id": i.invoice_number, "client": i.client_name,
-                       "amount": i.total_amount,
+                       # ZAR equivalent (audit fix 2026-07-05): raw total_amount showed
+                       # foreign-currency values inconsistent with the _to_zar bucket total
+                       "amount": round(_to_zar(i), 2),
                        "days": (now - i.due_date).days} for i in overdue_90]})
 
     # ── RULE 3: VAT control reconciliation ────────────────────────────────────
