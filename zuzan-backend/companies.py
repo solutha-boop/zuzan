@@ -268,19 +268,38 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    was_paid = invoice.status == InvoiceStatus.paid
+    was_paid     = invoice.status == InvoiceStatus.paid
+    final_status = InvoiceStatus(data.status) if data.status else invoice.status
+    amount_changed = (
+        data.amount is not None
+        and round(data.amount, 2) != round(invoice.amount or 0, 2)
+    )
+    # Block amount edits on invoices that remain paid: the payment journal entry
+    # carries the old amount and cannot be silently re-stated. Revert the invoice
+    # to unpaid first (which reverses the payment entry), then edit the amount.
+    if amount_changed and was_paid and final_status == InvoiceStatus.paid:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot change the amount of a paid invoice. Mark it as unpaid first, then edit the amount.",
+        )
     if data.client_name:
         invoice.client_name = data.client_name
     if data.description:
         invoice.description = data.description
-    if data.amount is not None:
+    if amount_changed:
+        # Preserve the invoice's original VAT treatment (audit fix 2026-07-07):
+        # zero-rated invoices keep 0 VAT, standard invoices keep their effective
+        # rate, and foreign-currency VAT overrides scale proportionally — instead
+        # of forcing 15% on every edit.
+        old_amount = invoice.amount or 0
+        vat_rate = (invoice.vat_amount / old_amount) if (old_amount and invoice.vat_amount) else 0.0
         invoice.amount       = data.amount
-        invoice.vat_amount   = round(data.amount * 0.15, 2)
-        invoice.total_amount = round(data.amount * 1.15, 2)
+        invoice.vat_amount   = round(data.amount * vat_rate, 2)
+        invoice.total_amount = round(data.amount + invoice.vat_amount, 2)
     if data.due_date is not None:
         invoice.due_date = datetime.fromisoformat(data.due_date) if data.due_date else None
     if data.status:
-        invoice.status = InvoiceStatus(data.status)
+        invoice.status = final_status
     if data.paid_date:
         invoice.paid_date = datetime.fromisoformat(data.paid_date)
     # If being marked paid with no paid_date, default to now so date-filtered reports include it
@@ -290,22 +309,50 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         invoice.notes = data.notes
     if data.paid_amount_zar is not None:
         invoice.paid_amount_zar = data.paid_amount_zar
-    # Post payment journal entry when invoice first marked as paid.
-    # Commit once only AFTER both the status update and the journal entry succeed —
-    # this keeps them atomic so a journal failure rolls back the invoice status too.
-    if not was_paid and invoice.status == InvoiceStatus.paid:
-        try:
-            journal_engine.post_invoice_paid(invoice, db)
-            db.commit()
-        except Exception as e:
-            logger.error(f"Journal post failed for invoice payment {invoice.invoice_number}: {e}")
-            db.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Payment recording failed — journal entry could not be posted: {e}. Please retry.",
+
+    reverted_to_unpaid = was_paid and invoice.status != InvoiceStatus.paid
+    newly_paid         = not was_paid and invoice.status == InvoiceStatus.paid
+
+    # Journal postings — commit once only AFTER both the field updates and the
+    # journal entries succeed, so a journal failure rolls back the edit too.
+    try:
+        if amount_changed or reverted_to_unpaid or newly_paid:
+            journal_engine.init_accounts(current_user.company_id, db)
+        if reverted_to_unpaid:
+            # Reverse the payment entry (audit fix 2026-07-07): leaving it in place
+            # overstated Bank (1000) and understated AR (1100).
+            journal_engine.reverse_journal_entries(
+                current_user.company_id, "invoice_payment", invoice.id, db,
+                reason=f"Payment reverted — {invoice.invoice_number} ({invoice.client_name})",
             )
-    else:
+            invoice.paid_date = None
+            invoice.paid_amount_zar = None
+        if amount_changed:
+            # Reverse the original "invoice raised" entry and re-post it with the
+            # new amounts (audit fix 2026-07-07), mirroring the delete flow — so
+            # AR (1100), Sales Revenue (4000) and VAT Output (2100) stay in sync
+            # with the invoice table instead of drifting until a backfill.
+            journal_engine.reverse_journal_entries(
+                current_user.company_id, "invoice", invoice.id, db,
+                reason=f"Invoice amended — {invoice.invoice_number} ({invoice.client_name})",
+            )
+            # Drafts are not re-posted: an unissued invoice carries no AR or VAT
+            # liability (consistent with the dashboard's draft exclusion). The
+            # raised entry is posted when the invoice is issued/backfilled.
+            if invoice.status != InvoiceStatus.draft:
+                journal_engine.post_invoice_raised(invoice, db)
+        if newly_paid:
+            journal_engine.post_invoice_paid(invoice, db)
         db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Journal post failed for invoice update {invoice.invoice_number}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invoice update failed — journal entry could not be posted: {e}. Please retry.",
+        )
     return invoice
 
 

@@ -530,13 +530,11 @@ async def dashboard(
     # Include PO COGS: all received purchase orders — ex-VAT to match expense treatment.
     # Delivered value only (audit fix 2026-07-02): partial POs count what was actually
     # received, matching the incremental journal postings.
-    po_cogs = sum(
-        _po_delivered_net(po)
-        for po in db.query(PurchaseOrder).filter(
-            PurchaseOrder.company_id == cid,
-            PurchaseOrder.status.in_(["received", "partial", "paid"]),
-        ).all()
-    )
+    received_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+    ).all()
+    po_cogs = sum(_po_delivered_net(po) for po in received_pos)
     total_expenses = total_expenses + po_cogs
 
     # Include all-time depreciation from fixed assets (IAS 16 — posted to journal acct 5800)
@@ -574,16 +572,20 @@ async def dashboard(
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
     ).all()
     output_vat = round(sum(i.vat_amount or 0 for i in all_invoices_vat), 2)
-    input_vat  = round(sum(e.vat_amount or 0 for e in expenses), 2)
+    # Input VAT = expense VAT + PO input VAT (audit fix 2026-07-07): PO receipts post
+    # input VAT to account 1300 (journal.py post_po_received), so counting only expense
+    # VAT here overstated net VAT payable whenever received POs existed. Delivered-value
+    # VAT only — consistent with the po_cogs treatment above.
+    expense_input_vat = round(sum(e.vat_amount or 0 for e in expenses), 2)
+    po_input_vat = round(sum(
+        _po_delivered_total(po) - _po_delivered_net(po) for po in received_pos
+    ), 2)
+    input_vat  = round(expense_input_vat + po_input_vat, 2)
     net_vat_payable = round(output_vat - input_vat, 2)
 
     # PO double-count warning: structural check — find expenses whose (supplier, month, net amount)
     # closely match a received PO, which would indicate the same cost recorded twice.
     # Uses ±5% amount tolerance and same calendar month to avoid false positives.
-    received_pos = db.query(PurchaseOrder).filter(
-        PurchaseOrder.company_id == cid,
-        PurchaseOrder.status.in_(["received", "partial", "paid"]),
-    ).all()
     duplicate_expense_warning = None
     for po in received_pos:
         po_date = po.received_date or po.order_date or po.created_at
@@ -872,7 +874,14 @@ async def reconciliation(
     ).all()
     all_expenses = db.query(Expense).filter(Expense.company_id==cid).all()
     vat_output   = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
-    vat_input    = round(sum(e.vat_amount or 0 for e in all_expenses), 2)
+    # Include PO input VAT (audit fix 2026-07-07) — consistent with /reports/dashboard:
+    # PO receipts post input VAT to account 1300, so it belongs in the VAT control check.
+    _vat_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+    ).all()
+    po_vat_input = round(sum(_po_delivered_total(po) - _po_delivered_net(po) for po in _vat_pos), 2)
+    vat_input    = round(sum(e.vat_amount or 0 for e in all_expenses) + po_vat_input, 2)
     net_vat      = round(vat_output - vat_input, 2)
     vat_status   = "pass" if net_vat >= 0 else "warn"
     vat_detail   = (f"Output VAT R {vat_output:,.2f} − Input VAT R {vat_input:,.2f} = Net payable R {net_vat:,.2f} to SARS."
@@ -1770,18 +1779,26 @@ async def vat201(
     due_date = datetime(end_year, end_month + 1 if end_month < 12 else 1, 25).strftime("%d %B %Y") if end_month < 12 else datetime(end_year + 1, 2, 25).strftime("%d %B %Y")
 
     # ── OUTPUT TAX ─────────────────────────────────────────────────────────────
-    # All invoices issued in the period (tax point = invoice issue_date, not created_at).
+    # All ISSUED invoices in the period (tax point = invoice issue_date, not created_at).
     # Using issue_date ensures backdated invoices and bulk-imported invoices land in the
     # correct VAT period, consistent with SARS requirements.
+    # Drafts are excluded (audit fix 2026-07-07): a draft raises no journal VAT
+    # liability — consistent with /reports/dashboard and post_invoice_raised.
     all_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
         Invoice.issue_date >= start,
         Invoice.issue_date < end,
     ).all()
 
-    # Standard rated supplies (excl. VAT)
-    standard_supplies_incl = round(sum(i.total_amount for i in all_invoices), 2)
-    output_vat_exact        = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
+    def _inv_rate(i):
+        # ZAR conversion factor (audit fix 2026-07-07): foreign-currency invoices were
+        # previously summed at face value, inconsistent with every other report.
+        return float(i.exchange_rate or 1.0) if (i.currency and i.currency != "ZAR") else 1.0
+
+    # Standard rated supplies (excl. VAT) — ZAR equivalents
+    standard_supplies_incl = round(sum((i.total_amount or 0) * _inv_rate(i) for i in all_invoices), 2)
+    output_vat_exact        = round(sum((i.vat_amount or 0) * _inv_rate(i) for i in all_invoices), 2)
     # If no vat_amount recorded, estimate from total
     output_vat = output_vat_exact if output_vat_exact > 0 else round(standard_supplies_incl * VAT_RATE / (1 + VAT_RATE), 2)
     standard_supplies_excl  = round(standard_supplies_incl - output_vat, 2)
@@ -1800,14 +1817,28 @@ async def vat201(
     vat_is_exact = stored_input_vat > 0
     total_expenses_excl = round(total_expenses_incl - input_vat_estimated, 2)
 
+    # PO input VAT for the period (audit fix 2026-07-07) — PO receipts post input VAT
+    # to account 1300 (journal.py post_po_received), so it belongs on the VAT201 too.
+    # Delivered-value VAT only, consistent with /reports/dashboard and Rule 3.
+    period_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+        PurchaseOrder.received_date >= start,
+        PurchaseOrder.received_date < end,
+    ).all()
+    po_input_vat = round(sum(_po_delivered_total(po) - _po_delivered_net(po) for po in period_pos), 2)
+    total_input_vat = round(input_vat_estimated + po_input_vat, 2)
+
     # Expense breakdown by category for audit trail
     cat_breakdown: dict = {}
     for e in expenses:
         key = e.category or "Other"
         cat_breakdown[key] = round(cat_breakdown.get(key, 0) + e.amount, 2)
+    if po_input_vat:
+        cat_breakdown["Purchase Orders (input VAT)"] = po_input_vat
 
     # ── NET VAT ────────────────────────────────────────────────────────────────
-    net_vat = round(output_vat - input_vat_estimated, 2)
+    net_vat = round(output_vat - total_input_vat, 2)
 
     return {
         "period":          period_label,
@@ -1823,12 +1854,14 @@ async def vat201(
             "vat_recorded_on_invoices":              output_vat_exact,
         },
         "input": {
-            "field_14_input_vat":                    input_vat_estimated,
+            "field_14_input_vat":                    total_input_vat,
+            "expense_input_vat":                     input_vat_estimated,
+            "po_input_vat":                          po_input_vat,
             "total_expenses_incl_vat":               total_expenses_incl,
             "total_expenses_excl_vat":               total_expenses_excl,
             "expense_count":                          len(expenses),
             "expense_breakdown":                      cat_breakdown,
-            "note": ("Input VAT from stored expense records." if vat_is_exact else "Input VAT estimated at 15/115 of expenses. Adjust for any zero-rated or exempt purchases."),
+            "note": ("Input VAT from stored expense records." if vat_is_exact else "Input VAT estimated at 15/115 of expenses. Adjust for any zero-rated or exempt purchases.") + (" Includes PO input VAT on goods received this period." if po_input_vat else ""),
             "is_exact": vat_is_exact,
         },
         "net": {
