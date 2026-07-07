@@ -7172,12 +7172,38 @@ function Registration({onComplete, onLogin}) {
   const [processing, setProcessing] = useState(false);
   const [complete, setComplete] = useState(false);
   const [tcAccepted, setTcAccepted] = useState(false);
+  const [errors, setErrors] = useState({});
 
   const planPrice = selectedPlan ? (billing === "monthly" ? selectedPlan.monthly : Math.round(selectedPlan.annual / 12)) : 0;
   const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 17.50)) : 0;
   const totalMonthly = planPrice + payrollCost;
 
+  const validateStep2 = () => {
+    const errs = {};
+    if (!form.companyName.trim()) errs.companyName = "Company name is required";
+    if (!form.firstName.trim()) errs.firstName = "First name is required";
+    if (!form.lastName.trim()) errs.lastName = "Last name is required";
+    if (!form.email.trim()) {
+      errs.email = "Email address is required";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      errs.email = "Enter a valid email address";
+    }
+    if (!form.password) {
+      errs.password = "Password is required";
+    } else if (form.password.length < 8) {
+      errs.password = "Password must be at least 8 characters";
+    }
+    if (!form.confirm) {
+      errs.confirm = "Please confirm your password";
+    } else if (form.confirm !== form.password) {
+      errs.confirm = "Passwords do not match";
+    }
+    return errs;
+  };
+
   const handlePayment = async () => {
+    const errs = validateStep2();
+    if (Object.keys(errs).length > 0) { setErrors(errs); setStep(2); return; }
     setProcessing(true);
     let token = null;
     let userData = {...form, plan:selectedPlan, billing, payroll:payrollEnabled, employees:empCount};
@@ -7188,18 +7214,18 @@ function Registration({onComplete, onLogin}) {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-          company_name:    form.companyName || "My Company",
-          reg_number:      form.regNumber  || "",
-          industry:        form.industry   || "",
-          first_name:      form.firstName  || "User",
-          last_name:       form.lastName   || "",
-          email:           form.email      || `user${Date.now()}@zuzan.co.za`,
-          phone:           form.phone      || "",
-          password:        (form.password  || "Zuzan2025!").slice(0, 50),
-          plan:            selectedPlan ? selectedPlan.id : "starter",
-          billing_cycle:   billing || "monthly",
-          payroll_enabled: payrollEnabled || false,
-          employee_count:  empCount || 0,
+          company_name:    form.companyName.trim(),
+          reg_number:      form.regNumber.trim(),
+          industry:        form.industry.trim(),
+          first_name:      form.firstName.trim(),
+          last_name:       form.lastName.trim(),
+          email:           form.email.trim(),
+          phone:           form.phone.trim(),
+          password:        form.password.slice(0, 50),
+          plan:            selectedPlan.id,
+          billing_cycle:   billing,
+          payroll_enabled: payrollEnabled,
+          employee_count:  empCount,
         }),
       });
       const data = await res.json();
@@ -7333,7 +7359,8 @@ function Registration({onComplete, onLogin}) {
               {[{l:"Company Name",k:"companyName",p:"Acme Pty Ltd"},{l:"Registration Number",k:"regNumber",p:"2020/123456/07"}].map(f => (
                 <div key={f.k} style={{marginBottom:14}}>
                   <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                  <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  <input placeholder={f.p} value={form[f.k]} onChange={e => {setForm({...form,[f.k]:e.target.value});if(errors[f.k])setErrors({...errors,[f.k]:""});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${errors[f.k]?"#EF4444":C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  {errors[f.k] && <div style={{color:"#EF4444",fontSize:11,marginTop:4}}>{errors[f.k]}</div>}
                 </div>
               ))}
             </div>
@@ -7343,20 +7370,22 @@ function Registration({onComplete, onLogin}) {
                 {[{l:"First Name",k:"firstName",p:"John"},{l:"Last Name",k:"lastName",p:"Smith"}].map(f => (
                   <div key={f.k}>
                     <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                    <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                    <input placeholder={f.p} value={form[f.k]} onChange={e => {setForm({...form,[f.k]:e.target.value});if(errors[f.k])setErrors({...errors,[f.k]:""});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${errors[f.k]?"#EF4444":C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                    {errors[f.k] && <div style={{color:"#EF4444",fontSize:11,marginTop:4}}>{errors[f.k]}</div>}
                   </div>
                 ))}
               </div>
               {[{l:"Email Address",k:"email",t:"email",p:"john@acme.co.za"},{l:"Password",k:"password",t:"password",p:"Min 8 characters"},{l:"Confirm Password",k:"confirm",t:"password",p:"Repeat password"}].map(f => (
                 <div key={f.k} style={{marginBottom:14}}>
                   <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                  <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e => {setForm({...form,[f.k]:e.target.value});if(errors[f.k])setErrors({...errors,[f.k]:""});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${errors[f.k]?"#EF4444":C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  {errors[f.k] && <div style={{color:"#EF4444",fontSize:11,marginTop:4}}>{errors[f.k]}</div>}
                 </div>
               ))}
             </div>
             <div style={{display:"flex",gap:12}}>
               <button onClick={() => setStep(1)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-              <button onClick={() => setStep(3)} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Continue</button>
+              <button onClick={() => { const errs = validateStep2(); if (Object.keys(errs).length > 0) { setErrors(errs); } else { setErrors({}); setStep(3); } }} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Continue</button>
             </div>
           </div>
         )}
