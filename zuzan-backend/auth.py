@@ -17,7 +17,7 @@ limiter = Limiter(key_func=get_remote_address)
 
 import os
 try:
-    from config import PLAN_PRICES
+    from config import PLAN_PRICES, PAYROLL_PER_EMP
 except ImportError:
     PLAN_PRICES = {
         "starter":      {"monthly": 399,  "annual": 3990},
@@ -138,7 +138,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
 
     # Create payment record
     plan_price = PLAN_PRICES.get(data.plan, {}).get(data.billing_cycle, 299)
-    payroll_cost = max(99, data.employee_count * 17.50) if data.payroll_enabled else 0
+    payroll_cost = max(99, data.employee_count * PAYROLL_PER_EMP) if data.payroll_enabled else 0
     payment = Payment(
         company_id=company.id,
         amount=plan_price + payroll_cost,
