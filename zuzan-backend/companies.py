@@ -263,12 +263,31 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     return invoice
 
 
+def _has_active_raised_entry(company_id: int, invoice_id: int, db: Session) -> bool:
+    """True if an unreversed 'invoice' (raised) journal entry exists for this invoice.
+    Used by the draft-transition logic (audit fix 2026-07-08) to decide whether
+    issuing a draft needs to (re-)post the raised entry."""
+    from database import JournalEntry as _JE
+    ids = [r[0] for r in db.query(_JE.id).filter(
+        _JE.company_id == company_id,
+        _JE.source == "invoice",
+        _JE.source_id == invoice_id,
+    ).all()]
+    if not ids:
+        return False
+    reversed_ids = {r[0] for r in db.query(_JE.is_reversal_of).filter(
+        _JE.is_reversal_of.in_(ids),
+    ).all()}
+    return any(i not in reversed_ids for i in ids)
+
+
 @invoices_router.put("/{invoice_id}")
 async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     was_paid     = invoice.status == InvoiceStatus.paid
+    was_draft    = invoice.status == InvoiceStatus.draft
     final_status = InvoiceStatus(data.status) if data.status else invoice.status
     amount_changed = (
         data.amount is not None
@@ -312,11 +331,17 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
 
     reverted_to_unpaid = was_paid and invoice.status != InvoiceStatus.paid
     newly_paid         = not was_paid and invoice.status == InvoiceStatus.paid
+    # Draft transitions (audit fix 2026-07-08): moving an issued invoice to draft
+    # must reverse its raised entry (a draft carries no AR/VAT liability), and
+    # issuing a draft must re-post it — previously neither happened, desyncing
+    # AR control (1100) with no self-service repair via backfill.
+    became_draft = not was_draft and final_status == InvoiceStatus.draft
+    left_draft   = was_draft and final_status != InvoiceStatus.draft
 
     # Journal postings — commit once only AFTER both the field updates and the
     # journal entries succeed, so a journal failure rolls back the edit too.
     try:
-        if amount_changed or reverted_to_unpaid or newly_paid:
+        if amount_changed or reverted_to_unpaid or newly_paid or became_draft or left_draft:
             journal_engine.init_accounts(current_user.company_id, db)
         if reverted_to_unpaid:
             # Reverse the payment entry (audit fix 2026-07-07): leaving it in place
@@ -327,6 +352,19 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
             )
             invoice.paid_date = None
             invoice.paid_amount_zar = None
+        if became_draft and not amount_changed:
+            # Reverse the raised entry — repeat-safe, so an invoice that was
+            # already reversed (e.g. by a prior draft-time amount edit) is skipped.
+            journal_engine.reverse_journal_entries(
+                current_user.company_id, "invoice", invoice.id, db,
+                reason=f"Invoice moved to draft — {invoice.invoice_number} ({invoice.client_name})",
+            )
+        if left_draft and not amount_changed:
+            # Re-post the raised entry only if none is currently in force (it was
+            # reversed when the invoice was drafted or amount-edited as a draft).
+            # Legacy drafts whose raised entry was never reversed are left as-is.
+            if not _has_active_raised_entry(current_user.company_id, invoice.id, db):
+                journal_engine.post_invoice_raised(invoice, db)
         if amount_changed:
             # Reverse the original "invoice raised" entry and re-post it with the
             # new amounts (audit fix 2026-07-07), mirroring the delete flow — so
@@ -406,9 +444,23 @@ async def send_invoice(invoice_id: int, current_user: User = Depends(require_rol
         invoice.portal_token = _uuid.uuid4().hex
         invoice.portal_token_created_at = _dt.utcnow()
 
-    # Mark as sent
+    # Mark as sent. If this was a draft whose raised journal entry was reversed
+    # (draft-time amount edit) or never posted, re-post it now — issuing the
+    # invoice is what creates the AR/VAT liability (audit fix 2026-07-08).
+    was_draft = invoice.status == InvoiceStatus.draft
     invoice.status = InvoiceStatus.sent
-    db.commit()
+    try:
+        if was_draft and not _has_active_raised_entry(current_user.company_id, invoice.id, db):
+            journal_engine.init_accounts(current_user.company_id, db)
+            journal_engine.post_invoice_raised(invoice, db)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Journal post failed for invoice send {invoice.invoice_number}: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invoice send failed — journal entry could not be posted: {e}. Please retry.",
+        )
     db.refresh(invoice)
 
     portal_url = f"{os.environ.get('FRONTEND_URL','https://zuzan-app.onrender.com')}/portal/{invoice.portal_token}"
@@ -533,61 +585,75 @@ async def update_expense(expense_id: int, data: ExpenseUpdate, current_user: Use
         new_vat = round(data.amount * VAT_RATE, 2) if apply_vat else 0.0
         new_total = round(data.amount + new_vat, 2)
 
-        # Post a correcting journal entry (delta) if the stored amount has changed
+        # Post a correcting journal entry if the stored amount has changed
         old_total = expense.amount or 0
-        old_vat   = expense.vat_amount or 0
         if abs(new_total - old_total) > 0.01:
+            # Block amount edits on paid on-credit expenses (audit fix 2026-07-08):
+            # the AP-clearing payment entry carries the old amount, so re-stating
+            # the expense would desync AP (2000) — same rule as paid invoices.
+            if expense.is_on_credit and expense.paid_at:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot change the amount of a paid credit expense. Delete it and capture a new expense instead.",
+                )
             try:
                 journal_engine.init_accounts(current_user.company_id, db)
-                # Build a temporary expense-like object with the delta values
-                # Reversing entry: negate old amounts, then post new amounts
-                class _Delta:
-                    pass
-                old_exp = _Delta()
-                old_exp.company_id  = expense.company_id
-                old_exp.amount      = old_total
-                old_exp.vat_amount  = old_vat
-                old_exp.vendor      = expense.vendor
-                old_exp.description = f"[REVERSAL] {expense.description or ''}"
-                old_exp.category    = expense.category
-                old_exp.expense_date = expense.expense_date
-                old_exp.id          = expense.id
-                # Reverse old entry by swapping debits/credits (negate amounts trick:
-                # post a negative-amount expense using a manual credit/debit swap)
-                from database import Account, JournalEntry, JournalLine, AccountType
-                existing_entries = db.query(JournalEntry).filter(
-                    JournalEntry.company_id == current_user.company_id,
-                    JournalEntry.source == "expense",
-                    JournalEntry.source_id == expense.id,
-                ).all()
-                for entry in existing_entries:
-                    rev_entry = JournalEntry(
-                        company_id  = current_user.company_id,
-                        date        = datetime.utcnow(),
-                        description = f"Expense correction (reversal) — {expense.vendor}",
-                        reference   = f"REV-EXP-{expense.id}",
-                        source      = "expense_reversal",
-                        source_id   = expense.id,
+                # Reverse the current 'expense' entry via tracked reversals, then
+                # re-post with the new amounts. (Audit fix 2026-07-08: the old
+                # manual loop reversed EVERY 'expense' entry on each edit with no
+                # is_reversal_of tracking, so a second amount edit double-reversed
+                # the original entry and corrupted the ledger.)
+                from database import JournalEntry as _JE
+                tracked_reversed = {
+                    r[0] for r in db.query(_JE.is_reversal_of).filter(
+                        _JE.company_id == current_user.company_id,
+                        _JE.is_reversal_of.isnot(None),
+                    ).all()
+                }
+                entries = db.query(_JE).filter(
+                    _JE.company_id == current_user.company_id,
+                    _JE.source == "expense",
+                    _JE.source_id == expense.id,
+                ).order_by(_JE.id).all()
+                unreversed = [e for e in entries if e.id not in tracked_reversed]
+                # Legacy guard: reversals posted by the pre-2026-07-08 code have
+                # source 'expense_reversal' but no is_reversal_of link. Pair each
+                # one to an unreversed entry of the same total (oldest first) and
+                # skip that entry, so it is not reversed a second time.
+                legacy_totals = [
+                    round(sum(l.debit or 0 for l in r.lines), 2)
+                    for r in db.query(_JE).filter(
+                        _JE.company_id == current_user.company_id,
+                        _JE.source == "expense_reversal",
+                        _JE.source_id == expense.id,
+                        _JE.is_reversal_of.is_(None),
+                    ).all()
+                ]
+                for entry in unreversed:
+                    entry_total = round(sum(l.debit or 0 for l in entry.lines), 2)
+                    if entry_total in legacy_totals:
+                        legacy_totals.remove(entry_total)
+                        continue
+                    journal_engine.reverse_entry_by_id(
+                        entry.id, db,
+                        reason=f"Expense amended — {expense.vendor}: {expense.description or ''}",
                     )
-                    db.add(rev_entry)
-                    db.flush()
-                    for line in entry.lines:
-                        db.add(JournalLine(
-                            entry_id   = rev_entry.id,
-                            account_id = line.account_id,
-                            debit      = line.credit,   # swap
-                            credit     = line.debit,    # swap
-                            description= f"Reversal of line {line.id}",
-                        ))
-                # Now post the new entry
-                # Temporarily set values for post_expense
+                # Re-post with the new amounts
                 expense.amount     = new_total
                 expense.vat_amount = new_vat
                 journal_engine.post_expense(expense, db)
                 db.commit()
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Journal correction failed for expense {expense.id}: {e}")
-                # Non-fatal — still save the field update
+                db.rollback()
+                # Fatal (audit fix 2026-07-08): previously this was swallowed and the
+                # field update was saved anyway, silently desyncing the ledger.
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Expense update failed — journal correction could not be posted: {e}. Please retry.",
+                )
 
         expense.amount     = new_total
         expense.vat_amount = new_vat
@@ -647,14 +713,18 @@ async def delete_expense(expense_id: int, current_user: User = Depends(require_r
     expense = db.query(Expense).filter(Expense.id == expense_id, Expense.company_id == current_user.company_id).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    # Reverse journal entry for this expense before deleting, so that the
-    # Expense account, VAT Input (1300), and Bank (1000) remain accurate.
+    # Reverse ALL journal entries for this expense before deleting, so that the
+    # Expense account, VAT Input (1300), AP (2000) and Bank (1000) remain accurate.
+    # Sources: "expense" (capture) and "expense_payment" (AP settlement) — audit fix
+    # 2026-07-08: deleting a paid credit expense previously left the payment entry
+    # (DR AP / CR Bank) in the ledger, understating Bank and desyncing Rule 7.
     try:
         journal_engine.init_accounts(current_user.company_id, db)
-        journal_engine.reverse_journal_entries(
-            current_user.company_id, "expense", expense.id, db,
-            reason=f"Expense deleted — {expense.vendor}: {expense.description or ''}",
-        )
+        reason = f"Expense deleted — {expense.vendor}: {expense.description or ''}"
+        for src in ("expense", "expense_payment"):
+            journal_engine.reverse_journal_entries(
+                current_user.company_id, src, expense.id, db, reason=reason,
+            )
         db.commit()
     except Exception as e:
         logger.error(f"Journal reversal failed for expense {expense.id}: {e}")

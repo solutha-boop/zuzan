@@ -651,14 +651,39 @@ def backfill_company(company_id: int, db: Session) -> dict:
     """
     init_accounts(company_id, db)
 
-    posted   = {"invoices": 0, "invoice_payments": 0, "expenses": 0, "payroll": 0, "purchase_orders": 0, "errors": []}
+    posted   = {"invoices": 0, "invoice_payments": 0, "expenses": 0, "payroll": 0, "purchase_orders": 0, "draft_reversals": 0, "errors": []}
     existing = {(e.source, e.source_id) for e in
                 db.query(JournalEntry.source, JournalEntry.source_id)
                   .filter(JournalEntry.company_id == company_id).all()}
 
-    # Invoices raised
+    # Reversal-aware view of raised-invoice entries (audit fix 2026-07-08): an
+    # invoice whose raised entry was reversed (draft-time amount edit) and never
+    # re-posted must count as MISSING, or backfill can never repair it.
+    reversed_ids = {r[0] for r in db.query(JournalEntry.is_reversal_of)
+                    .filter(JournalEntry.company_id == company_id,
+                            JournalEntry.is_reversal_of.isnot(None)).all()}
+    active_raised_ids = {e.source_id for e in db.query(JournalEntry)
+                         .filter(JournalEntry.company_id == company_id,
+                                 JournalEntry.source == "invoice").all()
+                         if e.id not in reversed_ids}
+
+    # Invoices raised — drafts are skipped (no AR/VAT liability until issued,
+    # consistent with the dashboard, VAT201 and Rule 6). Draft invoices that
+    # still carry an active raised entry (moved to draft before the 2026-07-08
+    # fix) get that entry reversed here, so Rule 6 is self-service repairable.
     for inv in db.query(Invoice).filter(Invoice.company_id == company_id).all():
-        if ("invoice", inv.id) not in existing:
+        if inv.status == InvoiceStatus.draft:
+            if inv.id in active_raised_ids:
+                try:
+                    reverse_journal_entries(
+                        company_id, "invoice", inv.id, db,
+                        reason=f"Backfill — draft invoice {inv.invoice_number} carries no AR/VAT liability",
+                    )
+                    posted["draft_reversals"] += 1
+                except Exception as e:
+                    posted["errors"].append(f"Draft invoice {inv.invoice_number}: {e}")
+            continue
+        if inv.id not in active_raised_ids:
             try:
                 post_invoice_raised(inv, db)
                 posted["invoices"] += 1

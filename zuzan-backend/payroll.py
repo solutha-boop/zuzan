@@ -1796,12 +1796,32 @@ async def vat201(
         # previously summed at face value, inconsistent with every other report.
         return float(i.exchange_rate or 1.0) if (i.currency and i.currency != "ZAR") else 1.0
 
-    # Standard rated supplies (excl. VAT) — ZAR equivalents
-    standard_supplies_incl = round(sum((i.total_amount or 0) * _inv_rate(i) for i in all_invoices), 2)
-    output_vat_exact        = round(sum((i.vat_amount or 0) * _inv_rate(i) for i in all_invoices), 2)
-    # If no vat_amount recorded, estimate from total
-    output_vat = output_vat_exact if output_vat_exact > 0 else round(standard_supplies_incl * VAT_RATE / (1 + VAT_RATE), 2)
-    standard_supplies_excl  = round(standard_supplies_incl - output_vat, 2)
+    # Per-invoice output VAT (audit fix 2026-07-08): vat_amount == 0 means
+    # explicitly zero-rated (field 1b) — no VAT is estimated for it. The 15/115
+    # estimate applies only to legacy/imported rows where vat_amount is NULL.
+    # The old aggregate fallback estimated VAT for fully zero-rated periods.
+    zero_rated_supplies    = 0.0  # field 1b — zero-rated supplies (VAT = 0, so incl == excl)
+    standard_supplies_incl = 0.0
+    output_vat             = 0.0
+    output_vat_exact       = 0.0  # VAT actually recorded on invoices (reporting only)
+    for i in all_invoices:
+        _r        = _inv_rate(i)
+        total_zar = round((i.total_amount or 0) * _r, 2)
+        if i.vat_amount is None:
+            standard_supplies_incl += total_zar
+            output_vat += round(total_zar * VAT_RATE / (1 + VAT_RATE), 2)
+        elif (i.vat_amount or 0) == 0:
+            zero_rated_supplies += total_zar
+        else:
+            vat_zar = round(i.vat_amount * _r, 2)
+            standard_supplies_incl += total_zar
+            output_vat       += vat_zar
+            output_vat_exact += vat_zar
+    zero_rated_supplies    = round(zero_rated_supplies, 2)
+    standard_supplies_incl = round(standard_supplies_incl, 2)
+    output_vat             = round(output_vat, 2)
+    output_vat_exact       = round(output_vat_exact, 2)
+    standard_supplies_excl = round(standard_supplies_incl - output_vat, 2)
 
     # ── INPUT TAX ──────────────────────────────────────────────────────────────
     expenses = db.query(Expense).filter(
@@ -1847,10 +1867,10 @@ async def vat201(
         "vat_rate_pct":    15,
         "output": {
             "field_1a_standard_supplies_excl_vat": standard_supplies_excl,
-            "field_1b_zero_rated_supplies":         0,
+            "field_1b_zero_rated_supplies":         zero_rated_supplies,
             "field_4a_output_vat":                  output_vat,
             "invoice_count":                         len(all_invoices),
-            "total_invoiced_incl_vat":               standard_supplies_incl,
+            "total_invoiced_incl_vat":               round(standard_supplies_incl + zero_rated_supplies, 2),
             "vat_recorded_on_invoices":              output_vat_exact,
         },
         "input": {
