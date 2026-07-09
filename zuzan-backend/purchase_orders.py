@@ -277,6 +277,11 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
     received_total = 0.0   # ex-VAT amount received in THIS call
     EPS = 1e-6             # float tolerance for quantity comparisons
 
+    # Validate and compute WITHOUT mutating items yet — mutations are applied
+    # after init_accounts below, because init_accounts commits internally and
+    # would otherwise persist the new quantities before the journal post
+    # (audit fix 2026-07-09).
+    new_quantities: dict = {}   # item.id -> new cumulative quantity_received
     for item in po.items:
         qty_recv = received_map.get(item.id, 0)
         if qty_recv < 0:
@@ -291,21 +296,41 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
                 f"(only {max(0, remaining):g} outstanding). "
                 f"Enter this delivery's quantity only, not the full order."
             )
-        item.quantity_received = round(already + qty_recv, 6)
+        new_quantities[item.id] = round(already + qty_recv, 6)
         received_total += round(qty_recv * item.unit_price, 2)
 
     all_received = all(
-        (item.quantity_received or 0) >= (item.quantity or 0) - EPS
+        new_quantities.get(item.id, item.quantity_received or 0) >= (item.quantity or 0) - EPS
         for item in po.items
     )
     received_total = round(received_total, 2)
 
+    # Reject zero-value deliveries (audit fix 2026-07-09): an all-zero receive
+    # would flip the PO to "partial" with NO journal entry, so creditors-aging
+    # and Rule 7 would fall back to po.total_amount against a zero journal AP
+    # balance, and _po_delivered_net's legacy fallback would put the full
+    # subtotal into P&L COGS. Nothing was delivered — there is nothing to post.
+    if received_total <= 0:
+        raise HTTPException(
+            400,
+            "Nothing received — all delivery quantities are zero. "
+            "Enter the quantity actually delivered for at least one line item."
+        )
+
     # Proportional VAT: apply the same VAT rate as the PO (15% if VAT-applicable, 0 otherwise)
     vat_rate = (po.vat_amount / po.subtotal) if (po.subtotal and po.vat_amount) else 0.0
     received_vat   = round(received_total * vat_rate, 2)
-    received_total_with_vat = round(received_total + received_vat, 2)
 
-    # Update PO status
+    # Ensure the chart of accounts exists BEFORE mutating the PO — init_accounts
+    # commits internally, which would otherwise persist the status change early
+    # and defeat the single-commit rollback below (audit fix 2026-07-09).
+    journal_engine.init_accounts(current_user.company_id, db)
+
+    # Apply the receipt: cumulative item quantities + PO status (deferred from
+    # the validation loop above so init_accounts' commit can't persist them early)
+    for item in po.items:
+        if item.id in new_quantities:
+            item.quantity_received = new_quantities[item.id]
     po.status = "received" if all_received else "partial"
     # Keep the FIRST delivery date (audit fix 2026-07-02): overwriting on each partial
     # delivery shifted the PO's COGS into the latest delivery month in trend reports.
@@ -318,31 +343,29 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
     # ignore data.create_expense here; the journal entry IS the cost record.
     expense_id = None
 
-    db.commit()
-    db.refresh(po)
-
+    # Single commit AFTER the journal post succeeds (audit fix 2026-07-09):
+    # previously the receipt was committed first, so a journal failure left a
+    # received/partial PO with no journal entry while the error message falsely
+    # claimed a rollback — and the suggested retry was blocked by the status
+    # guard above. Now a journal failure rolls back the receipt too.
     try:
-        journal_engine.init_accounts(current_user.company_id, db)
-
         # Post a journal entry for the amount received in THIS call.
         # Each call (first receive or subsequent partial delivery) posts its own
         # incremental entry, so the AP and COGS accounts accumulate correctly.
-        # Zero-value deliveries are skipped — they have no financial impact.
-        if received_total_with_vat > 0:
-            journal_engine.post_po_received(
-                po, db,
-                received_net=received_total,
-                received_vat=received_vat,
-            )
-
+        journal_engine.post_po_received(
+            po, db,
+            received_net=received_total,
+            received_vat=received_vat,
+        )
         db.commit()
     except Exception as e:
         logger.error(f"Journal post failed for PO {po.po_number}: {e}")
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"PO received but journal entry failed: {e}. Receipt has been rolled back — please retry.",
+            detail=f"PO receipt failed — journal entry could not be posted: {e}. No changes were saved — please retry.",
         )
+    db.refresh(po)
 
     return {
         **to_dict(po),
@@ -393,41 +416,48 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
     if po.status not in ("received", "partial"):
         raise HTTPException(400, f"PO must be received before marking as paid. Current status: '{po.status}'")
 
-    po.status = "paid"
-    db.commit()
-    db.refresh(po)
+    # Ensure the chart of accounts exists BEFORE mutating the PO — init_accounts
+    # commits internally, which would otherwise persist the status change early
+    # and defeat the single-commit rollback below (audit fix 2026-07-09).
+    journal_engine.init_accounts(current_user.company_id, db)
 
-    try:
-        journal_engine.init_accounts(current_user.company_id, db)
-
-        # Determine the actual AP balance to clear.
-        # For full receipts this equals po.total_amount.
-        # For partial POs the AP balance is the sum of incremental delivery credits
-        # posted to account 2000 by each post_po_received call — which may be less
-        # than po.total_amount.  Paying po.total_amount would over-debit AP and
-        # mis-state the bank balance.
-        from database import Account as _Acct, JournalEntry as _JE, JournalLine as _JL
-        ap_acct = db.query(_Acct).filter(
-            _Acct.company_id == current_user.company_id,
-            _Acct.code == "2000",
-        ).first()
-        ap_balance = None
-        if ap_acct:
-            ap_lines = (
-                db.query(_JL)
-                .join(_JE, _JL.entry_id == _JE.id)
-                .filter(
-                    _JE.company_id == current_user.company_id,
-                    _JE.source == "purchase_order",
-                    _JE.source_id == po.id,
-                    _JL.account_id == ap_acct.id,
-                )
-                .all()
+    # Determine the actual AP balance to clear.
+    # For full receipts this equals po.total_amount.
+    # For partial POs the AP balance is the sum of incremental delivery credits
+    # posted to account 2000 by each post_po_received call — which may be less
+    # than po.total_amount.  Paying po.total_amount would over-debit AP and
+    # mis-state the bank balance.
+    from database import Account as _Acct, JournalEntry as _JE, JournalLine as _JL
+    ap_acct = db.query(_Acct).filter(
+        _Acct.company_id == current_user.company_id,
+        _Acct.code == "2000",
+    ).first()
+    ap_balance = None
+    if ap_acct:
+        ap_lines = (
+            db.query(_JL)
+            .join(_JE, _JL.entry_id == _JE.id)
+            .filter(
+                _JE.company_id == current_user.company_id,
+                _JE.source == "purchase_order",
+                _JE.source_id == po.id,
+                _JL.account_id == ap_acct.id,
             )
-            total_ap_credits = sum(l.credit for l in ap_lines)
-            if total_ap_credits > 0:
-                ap_balance = round(total_ap_credits, 2)
+            .all()
+        )
+        total_ap_credits = sum(l.credit for l in ap_lines)
+        if total_ap_credits > 0:
+            ap_balance = round(total_ap_credits, 2)
 
+    # Single commit AFTER the journal post succeeds (audit fix 2026-07-09):
+    # previously status="paid" was committed first, so a journal failure left a
+    # paid PO whose AP credit was never cleared — it vanished from the creditors
+    # book while account 2000 kept the balance (Rule 7 fail) — and the error
+    # message falsely claimed a rollback while the suggested retry was blocked
+    # by the "already been paid" guard above. Now the status change and the
+    # journal entry commit or roll back together.
+    po.status = "paid"
+    try:
         journal_engine.post_po_paid(po, db, paid_amount=ap_balance)
         db.commit()
     except Exception as e:
@@ -435,7 +465,8 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"PO payment recorded but journal entry failed: {e}. Payment has been rolled back — please retry.",
+            detail=f"PO payment failed — journal entry could not be posted: {e}. No changes were saved — please retry.",
         )
+    db.refresh(po)
 
     return {**to_dict(po), "journal": "DR Accounts Payable / CR Bank posted"}
