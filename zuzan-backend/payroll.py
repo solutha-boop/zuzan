@@ -1107,13 +1107,28 @@ async def cash_flow(
     cash_receipts  = round(cash_receipts + _bank_import_income(db, cid, period_start, period_end), 2)
 
     # ── Payments ──────────────────────────────────────────────────────────────
-    exp_q = db.query(Expense).filter(
+    # Cash basis (audit fix 2026-07-10): unpaid on-credit expenses are accruals
+    # sitting in AP, not cash outflows — including them overstated cash payments
+    # in the accrual month and hid the real outflow at payment time.
+    #   • Cash expenses count by expense_date (paid when incurred).
+    #   • On-credit expenses count by paid_at (when the cash actually left).
+    # .isnot(True) is NULL-safe: legacy rows with is_on_credit = NULL are cash.
+    cash_exp_q = db.query(Expense).filter(
         Expense.company_id == cid,
+        Expense.is_on_credit.isnot(True),
         Expense.expense_date >= period_start,
     )
     if period_end:
-        exp_q = exp_q.filter(Expense.expense_date < period_end)
-    expenses_in_period = exp_q.all()
+        cash_exp_q = cash_exp_q.filter(Expense.expense_date < period_end)
+    paid_credit_q = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.is_on_credit == True,  # noqa: E712
+        Expense.paid_at != None,  # noqa: E711
+        Expense.paid_at >= period_start,
+    )
+    if period_end:
+        paid_credit_q = paid_credit_q.filter(Expense.paid_at < period_end)
+    expenses_in_period = cash_exp_q.all() + paid_credit_q.all()
     cash_payments = round(sum(e.amount for e in expenses_in_period), 2)
 
     # ── Payroll ───────────────────────────────────────────────────────────────
@@ -1129,6 +1144,8 @@ async def cash_flow(
 
     # ── VAT net-to-SARS ──────────────────────────────────────────────────────
     # Output VAT collected on paid invoices minus input VAT on expenses.
+    # Cash basis on both sides: expenses_in_period is the cash-paid set above
+    # (audit fix 2026-07-10), matching the paid-invoice output VAT.
     output_vat = round(sum(i.vat_amount or 0 for i in paid_in_period), 2)
     input_vat  = round(sum(e.vat_amount or 0 for e in expenses_in_period), 2)
     net_vat_to_sars = round(output_vat - input_vat, 2)
@@ -1430,9 +1447,12 @@ async def provisional_tax(
     # Ex-VAT expenses — consistent with dashboard/management endpoints
     ytd_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
 
-    # Add PO COGS (received/partial/paid POs) — ex-VAT, consistent with dashboard
+    # Add PO COGS (received/partial/paid POs) — ex-VAT, delivered value only
+    # (audit fix 2026-07-10): full (total − VAT) overstated YTD expenses for
+    # partially delivered POs, understating taxable income and both IRP6
+    # installments. _po_delivered_net matches dashboard//v1/summary/management.
     po_cogs_ytd = sum(
-        (po.total_amount or 0) - (po.vat_amount or 0)
+        _po_delivered_net(po)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
