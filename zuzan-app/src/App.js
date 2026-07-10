@@ -6487,7 +6487,7 @@ function TeamSettings({user}) {
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
 function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange}) {
-  const [settingsTab, setSettingsTab] = useState("company"); // company | templates | developer
+  const [settingsTab, setSettingsTab] = useState("subscription");
   const [form, setForm] = useState({
     companyName:          user?.companyName          || "",
     regNumber:            user?.regNumber            || "",
@@ -6604,54 +6604,57 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   const inputStyle = {width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
   const labelStyle = {fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5};
 
+  // ── Settings tab definitions ─────────────────────────────────────────────
+  const STABS = [
+    {id:"subscription", label:"Subscription", icon:"💳"},
+    {id:"company",      label:"Company",      icon:"🏢"},
+    {id:"security",     label:"Security",     icon:"🔒"},
+    {id:"templates",    label:"Templates",    icon:"🎨"},
+    {id:"developer",    label:"Developer",    icon:"🔑"},
+    ...(["owner","admin"].includes(user?.role) ? [{id:"team", label:"Team", icon:"👥"}] : []),
+  ];
+
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:24}}>
-        <div>
-          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Settings</h2>
-          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Manage your ZuZan account</p>
-        </div>
-        <div style={{display:"flex",gap:4,background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:4}}>
-          {([...(["owner","admin"].includes(user?.role)?[["team","👥 Team"]]:[]),["company","⚙️ General"],["templates","🎨 Templates"],["developer","🔑 Developer API"]]).map(([id,label])=>(
-            <button key={id} onClick={()=>setSettingsTab(id)} style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:settingsTab===id?700:400,background:settingsTab===id?C.surface:"transparent",color:settingsTab===id?C.ink:C.inkMid,fontFamily:"inherit",boxShadow:settingsTab===id?"0 1px 4px rgba(0,0,0,0.08)":"none"}}>{label}</button>
-          ))}
-        </div>
+      {/* Header */}
+      <div style={{marginBottom:28}}>
+        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:"0 0 4px"}}>Settings</h2>
+        <p style={{fontSize:13,color:C.inkMid,margin:0}}>Manage your Zuzan account</p>
       </div>
 
-      {settingsTab === "team" ? <TeamSettings user={user}/> : settingsTab === "developer" ? <Developer/> : settingsTab === "templates" ? (
-        <div>
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase"}}>Document Templates</div>
-                <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Customise how your invoices and quotes look when printed or shared.</div>
-              </div>
-              <button onClick={()=>{if(onTemplateChange)onTemplateChange(DEFAULT_DOC_TEMPLATE);}} style={{padding:"7px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:11,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Reset to Default</button>
-            </div>
-            <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
-          </div>
-        </div>
-      ) : <>
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Subscription</div>
+      {/* Tab bar — large, easy to click */}
+      <div style={{display:"flex",gap:4,marginBottom:28,background:C.bg,border:`1px solid ${C.border}`,borderRadius:14,padding:5,flexWrap:"wrap"}}>
+        {STABS.map(t => (
+          <button key={t.id} onClick={()=>setSettingsTab(t.id)} style={{
+            flex:"1 1 auto", padding:"11px 18px", borderRadius:10, border:"none",
+            cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:settingsTab===t.id?700:500,
+            background:settingsTab===t.id?C.surface:"transparent",
+            color:settingsTab===t.id?C.ink:C.inkMid,
+            boxShadow:settingsTab===t.id?"0 1px 6px rgba(0,0,0,0.09)":"none",
+            transition:"all 0.15s", whiteSpace:"nowrap",
+          }}>
+            {t.icon}&nbsp; {t.label}
+          </button>
+        ))}
+      </div>
 
-        {/* Plan + status row */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+      {/* ── SUBSCRIPTION TAB ─────────────────────────────────────────────────── */}
+      {settingsTab === "subscription" && <>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Your Plan</div>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
           <div>
-            <div style={{fontSize:16,fontWeight:700,color:C.ink,textTransform:"capitalize"}}>
+            <div style={{fontSize:20,fontWeight:800,color:C.ink,textTransform:"capitalize"}}>
               {subInfo.plan || user?.plan?.name || "Starter"} Plan
-              {subInfo.billingCycle ? <span style={{fontSize:11,fontWeight:400,color:C.inkMid,marginLeft:8}}>({subInfo.billingCycle})</span> : null}
+              {subInfo.billingCycle && <span style={{fontSize:12,fontWeight:400,color:C.inkMid,marginLeft:8}}>({subInfo.billingCycle})</span>}
             </div>
-            <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>
+            <div style={{fontSize:13,color:C.inkMid,marginTop:4}}>
               {subInfo.status === "trial" && subInfo.trialEnds
                 ? `Trial ends ${new Date(subInfo.trialEnds).toLocaleDateString("en-ZA",{day:"numeric",month:"long",year:"numeric"})}`
-                : subInfo.status === "cancelled"
-                ? "Cancelled — access continues until end of billing period"
-                : subInfo.status === "active"
-                ? "Active subscription"
-                : subInfo.status === "expired"
-                ? "Subscription expired"
-                : ""}
+                : subInfo.status === "cancelled" ? "Cancelled — access continues until end of billing period"
+                : subInfo.status === "active"    ? "Active subscription"
+                : subInfo.status === "expired"   ? "Subscription expired" : ""}
             </div>
           </div>
           <Badge
@@ -6661,143 +6664,118 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           />
         </div>
 
-        {/* Action buttons */}
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
-          <button onClick={()=>setShowUpgrade(true)} style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
-          <button onClick={()=>setShowBilling(true)} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:20}}>
+          <button onClick={()=>setShowUpgrade(true)} style={{padding:"10px 22px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
+          <button onClick={()=>setShowBilling(true)} style={{padding:"10px 22px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
         </div>
 
         {/* Auto-renewal toggle */}
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:C.bg,borderRadius:10,border:`1px solid ${C.border}`,marginBottom:10}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 18px",background:C.bg,borderRadius:12,border:`1px solid ${C.border}`,marginBottom:10}}>
           <div>
-            <div style={{fontSize:13,fontWeight:600,color:C.ink}}>Auto-renewal</div>
-            <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>
+            <div style={{fontSize:14,fontWeight:600,color:C.ink}}>Auto-renewal</div>
+            <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>
               {subInfo.status === "cancelled"
-                ? "Your subscription will not renew. You can re-enable this before your period ends."
-                : "Your subscription renews automatically. You will be notified 7 days before each renewal."}
+                ? "Your subscription will not renew. Re-enable before your period ends to keep access."
+                : "Renews automatically. You'll be notified 7 days before each renewal."}
             </div>
           </div>
           <button
             onClick={async () => {
               const turningOff = subInfo.status !== "cancelled";
-              if (turningOff && !window.confirm("Turn off auto-renewal? Your access will continue until the end of your current billing period, then stop.")) return;
+              if (turningOff && !window.confirm("Turn off auto-renewal? Access continues until end of period.")) return;
               const newStatus = turningOff ? "cancelled" : "active";
               try {
                 await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: newStatus})});
                 setSubInfo(s => ({...s, status: newStatus}));
               } catch(e) { alert("Could not update. Please try again."); }
             }}
-            style={{
-              width:44, height:24, borderRadius:12, border:"none", cursor:"pointer",
-              background: subInfo.status === "cancelled" ? C.border : C.green,
-              position:"relative", flexShrink:0, transition:"background 0.2s",
-            }}
-          >
-            <span style={{
-              position:"absolute", top:3, width:18, height:18, borderRadius:9, background:"#fff",
-              boxShadow:"0 1px 3px rgba(0,0,0,0.2)", transition:"left 0.2s",
-              left: subInfo.status === "cancelled" ? 3 : 23,
-            }}/>
+            style={{width:48,height:26,borderRadius:13,border:"none",cursor:"pointer",
+              background:subInfo.status==="cancelled"?C.border:C.green,
+              position:"relative",flexShrink:0,transition:"background 0.2s"}}>
+            <span style={{position:"absolute",top:4,width:18,height:18,borderRadius:9,background:"#fff",
+              boxShadow:"0 1px 3px rgba(0,0,0,0.2)",transition:"left 0.2s",
+              left:subInfo.status==="cancelled"?4:26}}/>
           </button>
         </div>
 
-        {/* Cancel subscription */}
         {subInfo.status !== "cancelled" && subInfo.status !== "expired" && (
-          <button
-            onClick={async () => {
-              if (!window.confirm("Cancel your subscription? Your access continues until the end of your current billing period.")) return;
-              try {
-                await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: "cancelled"})});
-                setSubInfo(s => ({...s, status: "cancelled"}));
-              } catch(e) { alert("Could not cancel. Please email support@solutha.co.za."); }
-            }}
-            style={{fontSize:12,color:C.red,background:"none",border:"none",cursor:"pointer",padding:"4px 0",textDecoration:"underline",fontFamily:"inherit"}}
-          >
+          <button onClick={async()=>{
+            if(!window.confirm("Cancel your subscription? Access continues until end of billing period.")) return;
+            try {
+              await api("/companies/me",{method:"PUT",body:JSON.stringify({subscription_status:"cancelled"})});
+              setSubInfo(s=>({...s,status:"cancelled"}));
+            } catch(e){ alert("Could not cancel. Email support@solutha.co.za."); }
+          }} style={{fontSize:13,color:C.red,background:"none",border:"none",cursor:"pointer",padding:"6px 0",textDecoration:"underline",fontFamily:"inherit"}}>
             Cancel subscription
           </button>
         )}
       </div>
 
       {/* Add-ons */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Add-ons</div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Add-ons</div>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
-
-          {/* Payroll add-on */}
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",border:`1px solid ${user?.payrollEnabled ? C.green : C.border}`,borderRadius:12,background:user?.payrollEnabled ? C.greenLt : C.bg}}>
-            <div style={{display:"flex",alignItems:"center",gap:14}}>
-              <div style={{fontSize:28}}>👥</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 20px",border:`1px solid ${user?.payrollEnabled?C.green:C.border}`,borderRadius:12,background:user?.payrollEnabled?C.greenLt:C.bg}}>
+            <div style={{display:"flex",alignItems:"center",gap:16}}>
+              <div style={{fontSize:32}}>👥</div>
               <div>
-                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Payroll</div>
+                <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Payroll</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>PAYE, UIF &amp; SDL calculations · Payslips · EMP201 reports</div>
-                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>From <strong style={{color:C.ink}}>R99/month</strong> (R34 per employee)</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>From <strong style={{color:C.ink}}>R99/month</strong> + R34 per employee</div>
               </div>
             </div>
             {user?.payrollEnabled
-              ? <span style={{padding:"6px 14px",background:C.green,color:"#fff",borderRadius:8,fontSize:12,fontWeight:700}}>✓ Active</span>
-              : <button onClick={async()=>{
-                  try {
-                    await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});
-                    if(onUserUpdate) onUserUpdate({...user, payrollEnabled:true});
-                  } catch(e){ alert("Could not activate. Please try again."); }
-                }} style={{padding:"8px 18px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                  + Add Payroll
-                </button>
+              ? <span style={{padding:"7px 16px",background:C.green,color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
+              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});if(onUserUpdate)onUserUpdate({...user,payrollEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Payroll</button>
             }
           </div>
-
-          {/* Annual AFS add-on */}
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",border:`1px solid ${user?.afsEnabled ? "#7C3AED" : C.border}`,borderRadius:12,background:user?.afsEnabled ? "#F5F3FF" : C.bg}}>
-            <div style={{display:"flex",alignItems:"center",gap:14}}>
-              <div style={{fontSize:28}}>📑</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 20px",border:`1px solid ${user?.afsEnabled?"#7C3AED":C.border}`,borderRadius:12,background:user?.afsEnabled?"#F5F3FF":C.bg}}>
+            <div style={{display:"flex",alignItems:"center",gap:16}}>
+              <div style={{fontSize:32}}>📑</div>
               <div>
-                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Annual Financial Statements</div>
+                <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Annual Financial Statements</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Income Statement · Balance Sheet · Cash Flow · Changes in Equity</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}><strong style={{color:C.ink}}>R1,999/year</strong> — IFRS-compliant, ready for your accountant</div>
               </div>
             </div>
             {user?.afsEnabled
-              ? <span style={{padding:"6px 14px",background:"#7C3AED",color:"#fff",borderRadius:8,fontSize:12,fontWeight:700}}>✓ Active</span>
-              : <button onClick={async()=>{
-                  try {
-                    await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});
-                    if(onUserUpdate) onUserUpdate({...user, afsEnabled:true});
-                  } catch(e){ alert("Could not activate. Please try again."); }
-                }} style={{padding:"8px 18px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                  + Add AFS — R1,999/yr
-                </button>
+              ? <span style={{padding:"7px 16px",background:"#7C3AED",color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
+              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});if(onUserUpdate)onUserUpdate({...user,afsEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add AFS — R1,999/yr</button>
             }
           </div>
-
         </div>
       </div>
+      </>}
 
-      {/* Company Logo */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Logo</div>
-        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:12}}>
+      {/* ── COMPANY TAB ──────────────────────────────────────────────────────── */}
+      {settingsTab === "company" && <>
+      {/* Logo */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Logo</div>
+        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:4}}>
           {form.logoUrl
-            ? <img src={form.logoUrl} alt="Logo" style={{height:64,maxWidth:200,objectFit:"contain",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff",padding:4}}/>
-            : <div style={{width:120,height:64,borderRadius:8,border:`2px dashed ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:C.inkMid}}>No logo</div>
+            ? <img src={form.logoUrl} alt="Logo" style={{height:72,maxWidth:220,objectFit:"contain",borderRadius:10,border:`1px solid ${C.border}`,background:"#fff",padding:6}}/>
+            : <div style={{width:120,height:72,borderRadius:10,border:`2px dashed ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.inkMid}}>No logo</div>
           }
           <div>
             <input type="file" accept="image/*" id="logo-upload" style={{display:"none"}} onChange={e=>{
               const file=e.target.files[0]; if(!file)return;
-              if(file.size>500000){alert("Logo must be under 500KB. Please resize and try again.");return;}
+              if(file.size>500000){alert("Logo must be under 500KB.");return;}
               const reader=new FileReader();
               reader.onload=ev=>setForm(v=>({...v,logoUrl:ev.target.result}));
               reader.readAsDataURL(file);
             }}/>
-            <label htmlFor="logo-upload" style={{display:"inline-block",padding:"8px 16px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer"}}>Upload Logo</label>
-            {form.logoUrl && <button onClick={()=>setForm(v=>({...v,logoUrl:""}))} style={{marginLeft:8,padding:"8px 14px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>}
-            <div style={{fontSize:11,color:C.inkMid,marginTop:6}}>PNG, JPG or SVG · Max 500KB · Shown on invoices & quotes</div>
+            <label htmlFor="logo-upload" style={{display:"inline-block",padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:13,fontWeight:700,cursor:"pointer"}}>Upload Logo</label>
+            {form.logoUrl && <button onClick={()=>setForm(v=>({...v,logoUrl:""}))} style={{marginLeft:10,padding:"9px 16px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>}
+            <div style={{fontSize:12,color:C.inkMid,marginTop:8}}>PNG, JPG or SVG · Max 500 KB · Appears on invoices &amp; quotes</div>
           </div>
         </div>
       </div>
 
       {/* Company Details */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Details</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:20}}>Company Details</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
           {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"Industry",k:"industry"},{l:"VAT Number",k:"vatNumber"},{l:"CIPC Registration Date",k:"cipcRegistrationDate",type:"date",hint:"Used for Annual Return reminders"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}{f.hint&&<span style={{fontWeight:400,textTransform:"none",color:C.inkDim,marginLeft:6}}>{f.hint}</span>}</label>
@@ -6805,8 +6783,9 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
           ))}
         </div>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12,marginTop:4}}>Banking Details (shown on invoices)</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:16}}>
+
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Banking Details <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(shown on invoices)</span></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16,marginBottom:20}}>
           {[{l:"Bank Name",k:"bankName"},{l:"Account Number",k:"bankAccount"},{l:"Branch Code",k:"branchCode"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}</label>
@@ -6814,9 +6793,10 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
           ))}
         </div>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12,marginTop:4}}>PayFast Online Payments</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:12}}>
-          {[{l:"PayFast Merchant ID",k:"payfastMerchantId",p:"10000100"},{l:"PayFast Merchant Key",k:"payfastMerchantKey",p:"46f0cd694581a"}].map(f=>(
+
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>PayFast Online Payments</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:14}}>
+          {[{l:"Merchant ID",k:"payfastMerchantId",p:"10000100"},{l:"Merchant Key",k:"payfastMerchantKey",p:"46f0cd694581a"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}</label>
               <input placeholder={f.p} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
@@ -6824,48 +6804,85 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           ))}
         </div>
         <div style={{marginBottom:16}}>
-          <label style={labelStyle}>PayFast Passphrase <span style={{fontWeight:400,textTransform:"none"}}>(optional — only if set in your PayFast account)</span></label>
-          <input type="password" placeholder="Leave blank if not configured" value={form.payfastPassphrase||""} onChange={e=>setForm(v=>({...v,payfastPassphrase:e.target.value}))} style={inputStyle}/>
+          <label style={labelStyle}>Passphrase <span style={{fontWeight:400,textTransform:"none"}}>(optional)</span></label>
+          <input type="password" placeholder="Leave blank if not set in PayFast" value={form.payfastPassphrase||""} onChange={e=>setForm(v=>({...v,payfastPassphrase:e.target.value}))} style={inputStyle}/>
         </div>
-        <div style={{background:C.goldLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:11,color:C.inkMid}}>Get your Merchant ID and Key from <strong>payfast.co.za → Account → Settings → API Credentials</strong>. Each client uses their own PayFast account — Zuzan never touches your funds.</div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <button onClick={handleSave} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
-          {saved && <span style={{fontSize:12,color:C.green,fontWeight:600}}>✓ Saved</span>}
+        <div style={{background:C.goldLt,borderRadius:10,padding:"12px 16px",marginBottom:20,fontSize:12,color:C.inkMid}}>
+          Get your credentials at <strong>payfast.co.za → Account → Settings → API Credentials</strong>. Each client uses their own PayFast account — Zuzan never touches your funds.
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <button onClick={handleSave} style={{padding:"11px 26px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+          {saved && <span style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Saved</span>}
         </div>
       </div>
+      </>}
 
-      {/* Payroll PIN Security */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.ink,letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>🔒 Payroll PIN</div>
-        <p style={{fontSize:12,color:C.inkMid,marginTop:0,marginBottom:16}}>Set a PIN to restrict access to salary and payroll data. Anyone opening Payroll must enter this PIN first.</p>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+      {/* ── SECURITY TAB ─────────────────────────────────────────────────────── */}
+      {settingsTab === "security" && <>
+      {/* Payroll PIN */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+          <div style={{fontSize:28}}>🔒</div>
           <div>
-            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>New PIN (4–8 digits)</label>
+            <div style={{fontSize:16,fontWeight:700,color:C.ink}}>Payroll PIN</div>
+            <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Restrict access to salary data. Anyone opening Payroll must enter this PIN first.</div>
+          </div>
+        </div>
+        <div style={{height:1,background:C.border,margin:"16px 0"}}/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:20,maxWidth:480}}>
+          <div>
+            <label style={labelStyle}>New PIN <span style={{fontWeight:400,textTransform:"none"}}>(4–8 digits)</span></label>
             <input type="password" inputMode="numeric" maxLength={8} placeholder="••••" value={pinForm.newPin}
               onChange={e=>setPinForm(f=>({...f,newPin:e.target.value.replace(/\D/g,"")}))}
-              style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box",letterSpacing:4}}/>
+              style={{...inputStyle,fontSize:20,letterSpacing:8,textAlign:"center",padding:"12px"}}/>
           </div>
           <div>
-            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Confirm PIN</label>
+            <label style={labelStyle}>Confirm PIN</label>
             <input type="password" inputMode="numeric" maxLength={8} placeholder="••••" value={pinForm.confirmPin}
               onChange={e=>setPinForm(f=>({...f,confirmPin:e.target.value.replace(/\D/g,"")}))}
-              style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box",letterSpacing:4}}/>
+              style={{...inputStyle,fontSize:20,letterSpacing:8,textAlign:"center",padding:"12px"}}/>
           </div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <button onClick={handleSetPin} disabled={pinSaving} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:pinSaving?0.6:1}}>{pinSaving?"Saving...":"Set PIN"}</button>
-          {pinMsg && <span style={{fontSize:12,color:pinMsg.startsWith("✓")?C.green:C.red,fontWeight:600}}>{pinMsg}</span>}
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <button onClick={handleSetPin} disabled={pinSaving} style={{padding:"11px 26px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:pinSaving?0.6:1}}>
+            {pinSaving ? "Saving…" : "Set PIN"}
+          </button>
+          {pinMsg && <span style={{fontSize:13,color:pinMsg.startsWith("✓")?C.green:C.red,fontWeight:600}}>{pinMsg}</span>}
+        </div>
+        <div style={{marginTop:16,fontSize:12,color:C.inkMid,background:C.bg,borderRadius:8,padding:"10px 14px"}}>
+          💡 Forgot your PIN? Simply set a new one here — no old PIN required.
         </div>
       </div>
 
-      {/* Danger Zone */}
-      <div style={{background:C.surface,border:`1px solid ${C.red}40`,borderRadius:16,padding:24}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Danger Zone</div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={onLogout} style={{padding:"9px 18px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
-          <button onClick={handleCancelSub} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
+      {/* Account actions */}
+      <div style={{background:C.surface,border:`1px solid ${C.red}30`,borderRadius:16,padding:28}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Account</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <button onClick={onLogout} style={{padding:"11px 22px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
+          <button onClick={handleCancelSub} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
         </div>
       </div>
+      </>}
+
+      {/* ── TEMPLATES TAB ────────────────────────────────────────────────────── */}
+      {settingsTab === "templates" && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+            <div>
+              <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Document Templates</div>
+              <div style={{fontSize:13,color:C.inkMid}}>Customise how your invoices and quotes look when printed or shared.</div>
+            </div>
+            <button onClick={()=>{if(onTemplateChange)onTemplateChange(DEFAULT_DOC_TEMPLATE);}} style={{padding:"9px 18px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Reset to Default</button>
+          </div>
+          <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
+        </div>
+      )}
+
+      {/* ── DEVELOPER TAB ────────────────────────────────────────────────────── */}
+      {settingsTab === "developer" && <Developer/>}
+
+      {/* ── TEAM TAB ─────────────────────────────────────────────────────────── */}
+      {settingsTab === "team" && <TeamSettings user={user}/>}
       {/* ── Upgrade Plan Modal ── */}
       {showUpgrade && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
@@ -6943,7 +6960,6 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         </div>
       )}
 
-      </>}
     </div>
   );
 }
