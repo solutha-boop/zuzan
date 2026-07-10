@@ -10492,11 +10492,19 @@ function DataImport() {
     URL.revokeObjectURL(url);
   }
 
-  // Client-side CSV parse for preview only (simple, no quoted-field support needed)
+  // Client-side parse for preview only
   function handleFileChange(e) {
     const f = e.target.files[0];
     if (!f) { setFile(null); setPreview(null); setResult(null); return; }
     setFile(f); setResult(null); setErr(null);
+
+    const ext = f.name.split(".").pop().toLowerCase();
+
+    // Excel files: binary format — skip text preview, let backend parse
+    if (ext === "xlsx" || ext === "xls") {
+      setPreview({headers: [], rows: [], total: null, xlsx: true});
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = ev => {
@@ -10514,7 +10522,7 @@ function DataImport() {
       const parseLine = l => l.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
       const headers   = parseLine(lines[0]);
       const rows      = lines.slice(1, 6).map(parseLine);
-      setPreview({headers, rows, total: lines.length - 1});
+      setPreview({headers, rows, total: lines.length - 1, xlsx: false});
     };
     reader.readAsText(f);
   }
@@ -10600,10 +10608,10 @@ function DataImport() {
       {/* Upload section */}
       <div style={cardSt}>
         <p style={{margin:"0 0 12px",fontSize:13,fontWeight:600,color:C.ink}}>
-          Step 2 — Upload your CSV file
+          Step 2 — Upload your file (CSV or Excel)
         </p>
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-          <input ref={fileRef} type="file" accept=".csv,.tsv,.txt"
+          <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls"
             onChange={handleFileChange}
             style={{fontSize:13,fontFamily:"inherit",flex:1,minWidth:200}}/>
           {file && (
@@ -10623,47 +10631,71 @@ function DataImport() {
       {/* Preview */}
       {preview && (
         <div style={cardSt}>
-          <p style={{margin:"0 0 12px",fontSize:13,fontWeight:600,color:C.ink}}>
-            Step 3 — Preview ({preview.total.toLocaleString()} data rows detected, showing first 5)
-          </p>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-              <thead>
-                <tr style={{background:"#f8f5f2"}}>
-                  {preview.headers.map((h,i) => (
-                    <th key={i} style={{padding:"6px 10px",textAlign:"left",
-                      color:C.inkMid,fontWeight:600,fontSize:11,
-                      borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {preview.rows.map((row,ri) => (
-                  <tr key={ri} style={{borderBottom:`1px solid ${C.border}`}}>
-                    {row.map((cell,ci) => (
-                      <td key={ci} style={{padding:"5px 10px",color:C.ink,
-                        maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {cell}
-                      </td>
+          {preview.xlsx ? (
+            /* Excel file — no client-side preview; backend parses it */
+            <div>
+              <p style={{margin:"0 0 8px",fontSize:13,fontWeight:600,color:C.ink}}>
+                Step 3 — Excel file ready
+              </p>
+              <p style={{margin:"0 0 16px",fontSize:12,color:C.inkMid}}>
+                Excel files are processed server-side. Click Import to upload and parse all rows.
+              </p>
+              <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                <button onClick={handleImport} disabled={importing} style={{
+                  padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
+                  border:"none",borderRadius:8,fontSize:13,fontWeight:600,
+                  cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+                }}>
+                  {importing ? "Importing…" : "Import Excel file"}
+                </button>
+                {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+              </div>
+            </div>
+          ) : (
+            /* CSV preview table */
+            <div>
+              <p style={{margin:"0 0 12px",fontSize:13,fontWeight:600,color:C.ink}}>
+                Step 3 — Preview ({preview.total.toLocaleString()} data rows detected, showing first 5)
+              </p>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr style={{background:"#f8f5f2"}}>
+                      {preview.headers.map((h,i) => (
+                        <th key={i} style={{padding:"6px 10px",textAlign:"left",
+                          color:C.inkMid,fontWeight:600,fontSize:11,
+                          borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.rows.map((row,ri) => (
+                      <tr key={ri} style={{borderBottom:`1px solid ${C.border}`}}>
+                        {row.map((cell,ci) => (
+                          <td key={ci} style={{padding:"5px 10px",color:C.ink,
+                            maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {cell}
+                          </td>
+                        ))}
+                      </tr>
                     ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
-            <button onClick={handleImport} disabled={importing} style={{
-              padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
-              border:"none",borderRadius:8,fontSize:13,fontWeight:600,
-              cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
-            }}>
-              {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
-            </button>
-            {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
-          </div>
+                  </tbody>
+                </table>
+              </div>
+              <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                <button onClick={handleImport} disabled={importing} style={{
+                  padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
+                  border:"none",borderRadius:8,fontSize:13,fontWeight:600,
+                  cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+                }}>
+                  {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
+                </button>
+                {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

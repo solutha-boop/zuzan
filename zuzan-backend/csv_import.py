@@ -186,6 +186,33 @@ def _parse_status(s: str) -> InvoiceStatus:
 
 
 def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
+    """
+    Parse a CSV *or* Excel (.xlsx/.xls) upload into (headers, data_rows).
+    Detection is by magic bytes: xlsx/xls are ZIP archives (PK\\x03\\x04).
+    """
+    # ── Excel ─────────────────────────────────────────────────────────────────
+    if file_bytes[:4] in (b"PK\x03\x04", b"\xd0\xcf\x11\xe0"):
+        # xlsx (zip) or xls (OLE2 compound document)
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(500, "openpyxl is not installed — cannot read Excel files")
+
+        import io as _io
+        wb  = openpyxl.load_workbook(_io.BytesIO(file_bytes), read_only=True, data_only=True)
+        ws  = wb.active
+        rows_raw: list[list[str]] = []
+        for row in ws.iter_rows(values_only=True):
+            str_row = [str(c) if c is not None else "" for c in row]
+            if any(c.strip() for c in str_row):
+                rows_raw.append(str_row)
+        wb.close()
+
+        if not rows_raw:
+            raise HTTPException(400, "Excel file is empty or has no data on the active sheet")
+        return rows_raw[0], rows_raw[1:]
+
+    # ── CSV ───────────────────────────────────────────────────────────────────
     # utf-8-sig handles Excel BOM; fall back to latin-1 for Windows exports
     try:
         text = file_bytes.decode("utf-8-sig")
