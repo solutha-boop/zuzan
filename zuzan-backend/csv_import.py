@@ -26,6 +26,7 @@ from datetime import datetime
 
 from database import (
     get_db, Customer, Supplier, Invoice, Expense, InvoiceStatus,
+    Account, AccountType, JournalEntry, JournalLine,
 )
 from auth import require_role
 
@@ -465,3 +466,560 @@ async def import_expenses(
         "skipped":    0,
         "errors":     errors,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FINANCIAL STATEMENT IMPORTS
+# Trial Balance, Balance Sheet, Profit & Loss, General Ledger, Journals
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Column alias maps ─────────────────────────────────────────────────────────
+
+TRIAL_BALANCE_ALIASES: dict[str, list[str]] = {
+    "code":    ["code", "account_code", "acc_code", "account_no", "account_number",
+                "number", "gl_code"],
+    "name":    ["name", "account_name", "account", "description", "gl_account"],
+    "type":    ["type", "account_type", "acc_type", "category", "classification"],
+    "debit":   ["debit", "dr", "debit_balance", "debit_amount"],
+    "credit":  ["credit", "cr", "credit_balance", "credit_amount"],
+    "balance": ["balance", "amount", "net_balance", "net", "closing_balance"],
+}
+
+BALANCE_SHEET_ALIASES: dict[str, list[str]] = {
+    "classification": ["classification", "type", "category", "section",
+                       "account_type", "account_class"],
+    "code":    ["code", "account_code", "acc_code", "account_no", "number"],
+    "name":    ["name", "account_name", "account", "description"],
+    "balance": ["balance", "amount", "value", "closing_balance", "net"],
+    "debit":   ["debit", "dr"],
+    "credit":  ["credit", "cr"],
+}
+
+PROFIT_LOSS_ALIASES: dict[str, list[str]] = {
+    "type":    ["type", "account_type", "category", "section", "classification",
+                "income_type", "expense_type"],
+    "code":    ["code", "account_code", "acc_code", "number"],
+    "name":    ["name", "account_name", "account", "description"],
+    "amount":  ["amount", "balance", "value", "total", "ytd_amount",
+                "period_amount", "net"],
+    "period":  ["period", "month", "date", "year", "financial_year"],
+}
+
+GENERAL_LEDGER_ALIASES: dict[str, list[str]] = {
+    "date":         ["date", "transaction_date", "posting_date", "entry_date",
+                     "accounting_date"],
+    "reference":    ["reference", "ref", "journal_no", "journal_number", "document_no",
+                     "doc_no", "transaction_no", "batch_no", "source_ref",
+                     "source_document"],
+    "description":  ["description", "narration", "memo", "notes", "details",
+                     "particulars", "comment"],
+    "account_code": ["account_code", "code", "acc_code", "account_no", "account_number",
+                     "gl_code"],
+    "account_name": ["account_name", "account", "name", "gl_account"],
+    "debit":        ["debit", "dr", "debit_amount"],
+    "credit":       ["credit", "cr", "credit_amount"],
+}
+
+JOURNAL_ALIASES: dict[str, list[str]] = {
+    "date":         ["date", "transaction_date", "posting_date", "journal_date",
+                     "entry_date"],
+    "reference":    ["journal_no", "journal_number", "reference", "ref", "batch_no",
+                     "document_no", "doc_no", "source_document"],
+    "description":  ["narration", "description", "memo", "notes", "details",
+                     "particulars", "comment"],
+    "account_code": ["account_code", "code", "acc_code", "account_no", "gl_code"],
+    "account_name": ["account_name", "account", "name", "gl_account"],
+    "debit":        ["debit", "dr", "debit_amount"],
+    "credit":       ["credit", "cr", "credit_amount"],
+}
+
+
+# ── Account helpers ───────────────────────────────────────────────────────────
+
+def _parse_account_type(s: str) -> AccountType:
+    """Map a freeform type string to an AccountType enum value."""
+    v = s.strip().lower().replace(" ", "_") if s else ""
+    if v in ("asset", "assets", "current_asset", "current_assets", "fixed_asset",
+             "non_current_asset", "bank", "cash", "receivable", "accounts_receivable",
+             "trade_receivable", "other_asset"):
+        return AccountType.asset
+    if v in ("liability", "liabilities", "current_liability", "current_liabilities",
+             "long_term_liability", "accounts_payable", "trade_payable", "payable",
+             "other_liability"):
+        return AccountType.liability
+    if v in ("equity", "owner_equity", "shareholders_equity", "capital",
+             "retained_earnings", "retained_income", "owners_equity"):
+        return AccountType.equity
+    if v in ("revenue", "income", "sales", "turnover", "other_income",
+             "operating_revenue", "non_operating_income"):
+        return AccountType.revenue
+    if v in ("expense", "expenses", "cost", "cost_of_sales", "cogs",
+             "cost_of_goods_sold", "overhead", "operating_expense",
+             "direct_cost", "admin", "other_expense"):
+        return AccountType.expense
+    return AccountType.asset  # safe default
+
+
+def _infer_type_from_code(code: str) -> AccountType:
+    """Infer AccountType from the first digit of a GAAP-style account code."""
+    if not code or not code.strip():
+        return AccountType.asset
+    try:
+        prefix = int(str(code).strip()[0])
+    except (ValueError, IndexError):
+        return AccountType.asset
+    return {
+        1: AccountType.asset,
+        2: AccountType.liability,
+        3: AccountType.equity,
+        4: AccountType.revenue,
+        5: AccountType.expense,
+        6: AccountType.expense,
+        7: AccountType.expense,
+        8: AccountType.expense,
+        9: AccountType.expense,
+    }.get(prefix, AccountType.asset)
+
+
+def _find_or_create_account(
+    db, cid: int, code: str, name: str, atype: AccountType
+) -> Account:
+    """Return an existing Account (by code, then by name) or create a new one."""
+    acct = None
+    if code:
+        acct = db.query(Account).filter(
+            Account.company_id == cid, Account.code == code
+        ).first()
+    if acct is None and name:
+        acct = db.query(Account).filter(
+            Account.company_id == cid, Account.name == name
+        ).first()
+    if acct:
+        return acct
+    acct = Account(
+        company_id = cid,
+        code       = code or (name[:20] if name else "UNKNOWN"),
+        name       = name or code,
+        type       = atype,
+        is_system  = False,
+        is_active  = True,
+    )
+    db.add(acct)
+    db.flush()
+    return acct
+
+
+def _ob_equity_account(db, cid: int) -> Account:
+    """Return (or create) the Opening Balance Equity account (code 3999)."""
+    acct = db.query(Account).filter(
+        Account.company_id == cid, Account.code == "3999"
+    ).first()
+    if not acct:
+        acct = Account(
+            company_id = cid,
+            code       = "3999",
+            name       = "Opening Balance Equity",
+            type       = AccountType.equity,
+            is_system  = True,
+            is_active  = True,
+        )
+        db.add(acct)
+        db.flush()
+    return acct
+
+
+def _add_ob_offset(db, entry_id: int, acct_id: int, ob_offset: float) -> None:
+    """Add the balancing line to the opening balance equity account."""
+    amt = round(ob_offset, 2)
+    if amt > 0:
+        db.add(JournalLine(entry_id=entry_id, account_id=acct_id,
+                           debit=amt, credit=0.0,
+                           description="Opening Balance Equity — offset"))
+    elif amt < 0:
+        db.add(JournalLine(entry_id=entry_id, account_id=acct_id,
+                           debit=0.0, credit=-amt,
+                           description="Opening Balance Equity — offset"))
+
+
+# ── TRIAL BALANCE ─────────────────────────────────────────────────────────────
+
+@router.post("/trial_balance")
+async def import_trial_balance(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Each row is one account with an opening debit or credit balance.
+    Rows are posted as a single "Opening Balances" journal entry; the net
+    difference is offset to account 3999 (Opening Balance Equity).
+
+    Accepted columns: Code, Account Name, Type, Debit, Credit.
+    If only a Balance column exists, sign is inferred from account type
+    (asset/expense → debit; liability/equity/revenue → credit).
+    """
+    cid           = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m             = _map_headers(headers, TRIAL_BALANCE_ALIASES)
+
+    if "name" not in m:
+        raise HTTPException(
+            400,
+            f"No account name column found.  Detected columns: {headers}.  "
+            "Expected one of: Name, Account Name, Account."
+        )
+
+    ob_acct = _ob_equity_account(db, cid)
+    entry = JournalEntry(
+        company_id  = cid,
+        date        = datetime.utcnow(),
+        description = "Opening Balances — Trial Balance Import",
+        reference   = "OB-TB",
+        source      = "import",
+    )
+    db.add(entry)
+    db.flush()
+
+    imported, skipped, errors = 0, 0, []
+    ob_offset = 0.0
+
+    for i, row in enumerate(rows, start=2):
+        try:
+            name = _get(row, m, "name")
+            if not name:
+                continue
+
+            code   = _get(row, m, "code")
+            atype  = _parse_account_type(_get(row, m, "type"))
+            debit  = _parse_float(_get(row, m, "debit"))
+            credit = _parse_float(_get(row, m, "credit"))
+            bal    = _parse_float(_get(row, m, "balance"))
+
+            # Infer DR/CR from balance column when explicit columns are absent
+            if debit == 0.0 and credit == 0.0 and bal != 0.0:
+                if atype in (AccountType.asset, AccountType.expense):
+                    debit = abs(bal)
+                else:
+                    credit = abs(bal)
+
+            if debit == 0.0 and credit == 0.0:
+                skipped += 1
+                continue
+
+            acct = _find_or_create_account(db, cid, code, name, atype)
+            db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
+                               debit=debit, credit=credit, description=name))
+            ob_offset += credit - debit
+            imported += 1
+        except Exception as e:
+            errors.append({"row": i, "message": str(e)})
+
+    _add_ob_offset(db, entry.id, ob_acct.id, ob_offset)
+    db.commit()
+    return {"entity": "trial_balance", "total_rows": len(rows),
+            "imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ── BALANCE SHEET ─────────────────────────────────────────────────────────────
+
+@router.post("/balance_sheet")
+async def import_balance_sheet(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Import a Balance Sheet CSV.  Each row is an account with its closing
+    balance.  Assets are posted as debit balances; Liabilities and Equity
+    as credit balances.  A Classification column determines account type.
+    The net difference is offset to account 3999 (Opening Balance Equity).
+
+    Accepted columns: Classification, Code, Account Name, Balance (or Debit/Credit).
+    """
+    cid           = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m             = _map_headers(headers, BALANCE_SHEET_ALIASES)
+
+    if "name" not in m:
+        raise HTTPException(
+            400,
+            f"No account name column found.  Detected: {headers}.  "
+            "Expected one of: Name, Account Name, Account."
+        )
+
+    ob_acct = _ob_equity_account(db, cid)
+    entry = JournalEntry(
+        company_id  = cid,
+        date        = datetime.utcnow(),
+        description = "Opening Balances — Balance Sheet Import",
+        reference   = "OB-BS",
+        source      = "import",
+    )
+    db.add(entry)
+    db.flush()
+
+    imported, skipped, errors = 0, 0, []
+    ob_offset = 0.0
+
+    for i, row in enumerate(rows, start=2):
+        try:
+            name = _get(row, m, "name")
+            if not name:
+                continue
+
+            code   = _get(row, m, "code")
+            atype  = _parse_account_type(_get(row, m, "classification"))
+            debit  = _parse_float(_get(row, m, "debit"))
+            credit = _parse_float(_get(row, m, "credit"))
+            bal    = _parse_float(_get(row, m, "balance"))
+
+            # Balance sheet rule: assets → DR, liabilities/equity → CR
+            if debit == 0.0 and credit == 0.0 and bal != 0.0:
+                if atype in (AccountType.asset, AccountType.expense):
+                    debit = abs(bal)
+                else:
+                    credit = abs(bal)
+
+            if debit == 0.0 and credit == 0.0:
+                skipped += 1
+                continue
+
+            acct = _find_or_create_account(db, cid, code, name, atype)
+            db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
+                               debit=debit, credit=credit, description=name))
+            ob_offset += credit - debit
+            imported += 1
+        except Exception as e:
+            errors.append({"row": i, "message": str(e)})
+
+    _add_ob_offset(db, entry.id, ob_acct.id, ob_offset)
+    db.commit()
+    return {"entity": "balance_sheet", "total_rows": len(rows),
+            "imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ── INCOME STATEMENT / PROFIT & LOSS ──────────────────────────────────────────
+
+@router.post("/profit_loss")
+async def import_profit_loss(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Import an Income Statement / P&L CSV.  Revenue accounts are credited;
+    expense accounts are debited.  The net profit/loss is offset to account
+    3998 (Retained Earnings), created if absent.
+
+    Accepted columns: Type (Revenue/Expense), Code, Account Name, Amount.
+    """
+    cid           = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m             = _map_headers(headers, PROFIT_LOSS_ALIASES)
+
+    if "name" not in m:
+        raise HTTPException(
+            400,
+            f"No account name column found.  Detected: {headers}.  "
+            "Expected one of: Name, Account Name, Account."
+        )
+
+    # Retained Earnings — offset for P&L balances
+    re_acct = db.query(Account).filter(
+        Account.company_id == cid, Account.code == "3998"
+    ).first()
+    if not re_acct:
+        re_acct = Account(
+            company_id = cid, code = "3998", name = "Retained Earnings",
+            type = AccountType.equity, is_system = True, is_active = True,
+        )
+        db.add(re_acct)
+        db.flush()
+
+    entry = JournalEntry(
+        company_id  = cid,
+        date        = datetime.utcnow(),
+        description = "P&L Opening Balances — Import",
+        reference   = "OB-PL",
+        source      = "import",
+    )
+    db.add(entry)
+    db.flush()
+
+    imported, skipped, errors = 0, 0, []
+    re_offset = 0.0  # net profit = revenue - expenses
+
+    for i, row in enumerate(rows, start=2):
+        try:
+            name   = _get(row, m, "name")
+            if not name:
+                continue
+            code   = _get(row, m, "code")
+            tp     = _get(row, m, "type")
+            amount = _parse_float(_get(row, m, "amount"))
+            if amount == 0.0:
+                skipped += 1
+                continue
+
+            atype = _parse_account_type(tp) if tp else AccountType.revenue
+            acct  = _find_or_create_account(db, cid, code, name, atype)
+
+            if atype == AccountType.revenue:
+                db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
+                                   debit=0.0, credit=amount, description=name))
+                re_offset += amount  # revenue increases retained earnings
+            else:
+                db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
+                                   debit=amount, credit=0.0, description=name))
+                re_offset -= amount  # expenses reduce retained earnings
+
+            imported += 1
+        except Exception as e:
+            errors.append({"row": i, "message": str(e)})
+
+    # Offset net to Retained Earnings
+    amt = round(re_offset, 2)
+    if amt > 0:
+        db.add(JournalLine(entry_id=entry.id, account_id=re_acct.id,
+                           debit=amt, credit=0.0,
+                           description="Retained Earnings — net profit offset"))
+    elif amt < 0:
+        db.add(JournalLine(entry_id=entry.id, account_id=re_acct.id,
+                           debit=0.0, credit=-amt,
+                           description="Retained Earnings — net loss offset"))
+
+    db.commit()
+    return {"entity": "profit_loss", "total_rows": len(rows),
+            "imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ── SHARED JOURNAL LINE IMPORT LOGIC ─────────────────────────────────────────
+
+def _import_journal_rows(
+    db, cid: int, rows: list[list[str]], m: dict,
+    entity: str,
+) -> dict:
+    """
+    Group rows by reference into JournalEntry + JournalLines.
+    Unbalanced groups are flagged but still imported.
+    """
+    from collections import defaultdict
+
+    groups: dict[str, list[tuple[int, list[str]]]] = defaultdict(list)
+    for i, row in enumerate(rows, start=2):
+        ref = _get(row, m, "reference") or f"IMP-{i:04d}"
+        groups[ref].append((i, row))
+
+    imported, skipped, errors = 0, 0, []
+
+    for ref, group_rows in groups.items():
+        try:
+            first_row  = group_rows[0][1]
+            entry_date = _parse_date(_get(first_row, m, "date")) or datetime.utcnow()
+            description = _get(first_row, m, "description") or f"{entity.replace('_',' ').title()} Import"
+
+            entry = JournalEntry(
+                company_id  = cid,
+                date        = entry_date,
+                description = description,
+                reference   = ref,
+                source      = "import",
+            )
+            db.add(entry)
+            db.flush()
+
+            total_dr = total_cr = 0.0
+
+            for row_i, row in group_rows:
+                code  = _get(row, m, "account_code")
+                name  = _get(row, m, "account_name")
+                if not code and not name:
+                    continue
+                debit  = _parse_float(_get(row, m, "debit"))
+                credit = _parse_float(_get(row, m, "credit"))
+                if debit == 0.0 and credit == 0.0:
+                    continue
+
+                atype = _infer_type_from_code(code)
+                acct  = _find_or_create_account(db, cid, code, name, atype)
+                line_desc = _get(row, m, "description") or description
+                db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
+                                   debit=debit, credit=credit, description=line_desc))
+                total_dr += debit
+                total_cr += credit
+                imported += 1
+
+            diff = round(total_dr - total_cr, 2)
+            if abs(diff) > 0.01:
+                errors.append({
+                    "row":     group_rows[0][0],
+                    "message": (
+                        f"Journal '{ref}' is unbalanced: "
+                        f"DR {total_dr:.2f} ≠ CR {total_cr:.2f} (diff {diff:+.2f})"
+                        " — imported anyway"
+                    ),
+                })
+
+        except Exception as e:
+            skipped += 1
+            errors.append({"row": group_rows[0][0], "message": str(e)})
+
+    db.commit()
+    return {"entity": entity, "total_rows": len(rows),
+            "imported": imported, "skipped": skipped, "errors": errors}
+
+
+# ── GENERAL LEDGER ────────────────────────────────────────────────────────────
+
+@router.post("/general_ledger")
+async def import_general_ledger(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Import a General Ledger CSV.  Rows are grouped by Reference; each group
+    becomes one JournalEntry with multiple JournalLines.
+
+    Accepted columns: Date, Reference, Description, Account Code, Account Name,
+    Debit, Credit.
+    """
+    cid           = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m             = _map_headers(headers, GENERAL_LEDGER_ALIASES)
+
+    if "debit" not in m and "credit" not in m:
+        raise HTTPException(
+            400,
+            f"No Debit/Credit columns found.  Detected: {headers}."
+        )
+
+    return _import_journal_rows(db, cid, rows, m, entity="general_ledger")
+
+
+# ── JOURNALS ──────────────────────────────────────────────────────────────────
+
+@router.post("/journals")
+async def import_journals(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Import a Journals CSV (Xero / QuickBooks manual journal export).
+    Rows grouped by Journal No / Reference become individual journal entries.
+
+    Accepted columns: Date, Journal No, Narration, Account Code, Account Name,
+    Debit, Credit.
+    """
+    cid           = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m             = _map_headers(headers, JOURNAL_ALIASES)
+
+    if "debit" not in m and "credit" not in m:
+        raise HTTPException(
+            400,
+            f"No Debit/Credit columns found.  Detected: {headers}."
+        )
+
+    return _import_journal_rows(db, cid, rows, m, entity="journals")

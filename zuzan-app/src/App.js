@@ -10428,33 +10428,53 @@ function DataImport() {
   const fileRef = useRef(null);
 
   const ITABS = [
-    {id:"customers", label:"Customers",  icon:"👥"},
-    {id:"suppliers", label:"Suppliers",  icon:"🏭"},
-    {id:"invoices",  label:"Invoices",   icon:"🧾"},
-    {id:"expenses",  label:"Expenses",   icon:"💳"},
+    {id:"customers",     label:"Customers",        icon:"👥"},
+    {id:"suppliers",     label:"Suppliers",        icon:"🏭"},
+    {id:"invoices",      label:"Invoices",         icon:"🧾"},
+    {id:"expenses",      label:"Expenses",         icon:"💳"},
+    {id:"trial_balance", label:"Trial Balance",    icon:"⚖️"},
+    {id:"balance_sheet", label:"Balance Sheet",    icon:"📊"},
+    {id:"profit_loss",   label:"Income Statement", icon:"📈"},
+    {id:"general_ledger",label:"General Ledger",   icon:"📒"},
+    {id:"journals",      label:"Journals",         icon:"📓"},
   ];
 
   // CSV templates — column headers users should use (or what Xero/QBO exports)
   const TEMPLATES = {
-    customers: ["Name","Email","Phone","Address","VAT Number","Payment Terms","Notes"],
-    suppliers: ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
-    invoices:  ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
-    expenses:  ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
+    customers:     ["Name","Email","Phone","Address","VAT Number","Payment Terms","Notes"],
+    suppliers:     ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
+    invoices:      ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
+    expenses:      ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
+    trial_balance: ["Code","Account Name","Type","Debit","Credit"],
+    balance_sheet: ["Classification","Code","Account Name","Balance"],
+    profit_loss:   ["Type","Code","Account Name","Amount"],
+    general_ledger:["Date","Reference","Description","Account Code","Account Name","Debit","Credit"],
+    journals:      ["Date","Journal No","Narration","Account Code","Account Name","Debit","Credit"],
   };
 
   const REQUIRED = {
-    customers: "Name*",
-    suppliers: "Name*",
-    invoices:  "Client Name*",
-    expenses:  "Amount*",
+    customers:     "Name*",
+    suppliers:     "Name*",
+    invoices:      "Client Name*",
+    expenses:      "Amount*",
+    trial_balance: "Account Name*",
+    balance_sheet: "Account Name*",
+    profit_loss:   "Account Name*",
+    general_ledger:"Debit* or Credit*",
+    journals:      "Debit* or Credit*",
   };
 
   // Xero / QBO aliases shown as hints
   const HINTS = {
-    customers: "Xero: Contact Name · QBO: Customer / Display Name",
-    suppliers: "Xero: Contact Name · QBO: Vendor",
-    invoices:  "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
-    expenses:  "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
+    customers:     "Xero: Contact Name · QBO: Customer / Display Name",
+    suppliers:     "Xero: Contact Name · QBO: Vendor",
+    invoices:      "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
+    expenses:      "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
+    trial_balance: "Xero: Account Code, Account, Debit, Credit · QBO: Account, Type, Debit Balance, Credit Balance",
+    balance_sheet: "Use Classification column (Asset/Liability/Equity) + Account Name + Balance. Xero/QBO balance sheet exports work directly.",
+    profit_loss:   "Use Type column (Revenue/Expense) + Account Name + Amount. Xero/QBO P&L exports work directly.",
+    general_ledger:"Xero: Date, SourceNo, Account Code, Account, Description, Debit, Credit · QBO: Date, Ref No, Account, Description, Debit, Credit",
+    journals:      "Xero: Date, Journal No, Narration, Account Code, Account, Debit, Credit · QBO: Date, Journal No, Description, Account, Debit, Credit",
   };
 
   function switchTab(id) {
