@@ -10437,10 +10437,11 @@ function DataImport() {
   const token = localStorage.getItem("zuzan_token");
   const [tab,       setTab]       = useState("customers");
   const [file,      setFile]      = useState(null);
-  const [preview,   setPreview]   = useState(null);   // {headers, rows}
-  const [result,    setResult]    = useState(null);   // {imported, skipped, errors, total_rows}
-  const [importing, setImporting] = useState(false);
-  const [err,       setErr]       = useState(null);
+  const [preview,     setPreview]     = useState(null);   // {headers, rows}
+  const [result,      setResult]      = useState(null);   // {imported, skipped, errors, total_rows}
+  const [importing,   setImporting]   = useState(false);
+  const [err,         setErr]         = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
   const fileRef = useRef(null);
 
   const ITABS = [
@@ -10657,7 +10658,7 @@ function DataImport() {
                 Excel files are processed server-side. Click Import to upload and parse all rows.
               </p>
               <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
-                <button onClick={handleImport} disabled={importing} style={{
+                <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
                   padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
                   border:"none",borderRadius:8,fontSize:13,fontWeight:600,
                   cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
@@ -10701,7 +10702,7 @@ function DataImport() {
                 </table>
               </div>
               <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
-                <button onClick={handleImport} disabled={importing} style={{
+                <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
                   padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
                   border:"none",borderRadius:8,fontSize:13,fontWeight:600,
                   cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
@@ -10712,6 +10713,39 @@ function DataImport() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Confirmation modal */}
+      {showConfirm && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.surface,borderRadius:16,padding:32,width:"100%",maxWidth:440,boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
+            <div style={{fontSize:18,fontWeight:800,color:C.ink,marginBottom:8}}>Confirm Import</div>
+            <p style={{fontSize:13,color:C.inkMid,margin:"0 0 20px",lineHeight:1.6}}>
+              You're about to import{" "}
+              <strong style={{color:C.ink}}>
+                {preview?.xlsx ? "all rows" : `${preview?.total?.toLocaleString() ?? "all"} rows`}
+              </strong>{" "}
+              of <strong style={{color:C.ink,textTransform:"capitalize"}}>{ITABS.find(t=>t.id===tab)?.label}</strong> data from{" "}
+              <strong style={{color:C.ink}}>{file?.name}</strong> into your books.
+              <br/><br/>
+              Duplicates are skipped automatically. This action cannot be undone.
+            </p>
+            <div style={{display:"flex",gap:12}}>
+              <button
+                onClick={async () => { setShowConfirm(false); await handleImport(); }}
+                style={{flex:1,padding:"11px 0",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}
+              >
+                Yes, Import
+              </button>
+              <button
+                onClick={()=>setShowConfirm(false)}
+                style={{flex:1,padding:"11px 0",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
