@@ -185,10 +185,27 @@ def _parse_status(s: str) -> InvoiceStatus:
     return InvoiceStatus.sent
 
 
+def _find_header_row(rows_raw: list[list[str]], max_scan: int = 15) -> int:
+    """
+    Accounting software exports often prepend title/metadata rows before the
+    real column headers (e.g. company name, report period, blank lines).
+    Skip rows that have fewer than 2 non-trivial cells (non-empty, not just
+    a comma or separator character) and return the index of the first row
+    that looks like a real header row.
+    """
+    for idx, row in enumerate(rows_raw[:max_scan]):
+        meaningful = [c.strip() for c in row
+                      if c.strip() and c.strip() not in (",", ";", "|", "-", "_")]
+        if len(meaningful) >= 2:
+            return idx
+    return 0  # fallback: use the first row
+
+
 def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
     """
     Parse a CSV *or* Excel (.xlsx/.xls) upload into (headers, data_rows).
     Detection is by magic bytes: xlsx/xls are ZIP archives (PK\\x03\\x04).
+    Title/metadata rows above the real header are skipped automatically.
     """
     # ── Excel ─────────────────────────────────────────────────────────────────
     if file_bytes[:4] in (b"PK\x03\x04", b"\xd0\xcf\x11\xe0"):
@@ -210,7 +227,9 @@ def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
 
         if not rows_raw:
             raise HTTPException(400, "Excel file is empty or has no data on the active sheet")
-        return rows_raw[0], rows_raw[1:]
+
+        hi = _find_header_row(rows_raw)
+        return rows_raw[hi], rows_raw[hi + 1:]
 
     # ── CSV ───────────────────────────────────────────────────────────────────
     # utf-8-sig handles Excel BOM; fall back to latin-1 for Windows exports
@@ -225,7 +244,9 @@ def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
 
     if not rows:
         raise HTTPException(400, "CSV file is empty or unreadable")
-    return rows[0], rows[1:]
+
+    hi = _find_header_row(rows)
+    return rows[hi], rows[hi + 1:]
 
 
 # ── CUSTOMERS ─────────────────────────────────────────────────────────────────
