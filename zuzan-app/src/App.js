@@ -2961,8 +2961,15 @@ function Payroll({live = {}, user = {}}) {
         />
       )}
       {showNew && (
-        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:28,marginBottom:20}}>
-          <h3 style={{fontFamily:"serif",fontSize:20,margin:"0 0 20px",color:C.ink}}>New Employee</h3>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:250,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"20px 16px",overflowY:"auto"}}>
+          <div style={{background:C.surface,borderRadius:20,width:"100%",maxWidth:700,boxShadow:"0 8px 40px #00000030",margin:"auto",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
+          {/* Pinned header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 28px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>New Employee</h3>
+            <button onClick={()=>setShowNew(false)} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:C.inkMid,lineHeight:1}}>×</button>
+          </div>
+          {/* Scrollable body */}
+          <div style={{overflowY:"auto",padding:"20px 28px",flex:1}}>
 
           {/* Employment Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Employment Details</div>
@@ -3137,10 +3144,13 @@ function Payroll({live = {}, user = {}}) {
             </div>
           </div>
 
-          <div style={{display:"flex",gap:8}}>
+          </div>{/* end scrollable body */}
+          {/* Pinned footer */}
+          <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
             <button onClick={handleAdd} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add Employee</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
+          </div>{/* end modal card */}
         </div>
       )}
       <div key={taxYear} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden",marginBottom:16}}>
