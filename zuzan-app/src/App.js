@@ -2483,6 +2483,8 @@ function Payroll({live = {}, user = {}}) {
   const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
+  const [editEmp,     setEditEmp]     = useState(null);
+  const [editForm,    setEditForm]    = useState({});
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
   const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).paye, 0);
   const totalNet = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).netPay, 0);
@@ -2538,6 +2540,64 @@ function Payroll({live = {}, user = {}}) {
       console.warn("Employee save failed:", err.message);
     }
   };
+  const handleEditSave = async () => {
+    if (!editEmp) return;
+    const nameParts = (editForm.name || "").trim().split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName  = nameParts.slice(1).join(" ") || "";
+    const updated = {
+      ...editEmp,
+      name:             editForm.name,
+      position:         editForm.position,
+      salary:           +editForm.salary || editEmp.salary,
+      dept:             editForm.dept,
+      grade:            editForm.grade,
+      employment_type:  editForm.employmentType,
+      hourly_rate:      editForm.hourlyRate ? +editForm.hourlyRate : null,
+      id_number:        editForm.idNumber,
+      tax_number:       editForm.taxNumber,
+      date_of_birth:    editForm.dob,
+      appointment_date: editForm.appointmentDate,
+      address:          editForm.address,
+      bank_name:        editForm.bankName,
+      account_number:   editForm.accountNumber,
+      branch_code:      editForm.branchCode,
+      account_type:     editForm.accountType,
+    };
+    setEmployees(employees.map(e => e.id === editEmp.id ? updated : e));
+    setEditEmp(null);
+    try {
+      const token = localStorage.getItem("zuzan_token");
+      if (token && !token.startsWith("demo_")) {
+        await api(`/employees/${editEmp.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            first_name:       firstName,
+            last_name:        lastName,
+            position:         editForm.position,
+            department:       editForm.dept,
+            grade:            editForm.grade || null,
+            employment_type:  editForm.employmentType || "salaried",
+            hourly_rate:      editForm.hourlyRate ? +editForm.hourlyRate : null,
+            gross_salary:     +editForm.salary,
+            id_number:        editForm.idNumber,
+            tax_number:       editForm.taxNumber,
+            date_of_birth:    editForm.dob || null,
+            appointment_date: editForm.appointmentDate || null,
+            address:          editForm.address,
+            bank_name:        editForm.bankName,
+            account_number:   editForm.accountNumber,
+            branch_code:      editForm.branchCode,
+            account_type:     editForm.accountType,
+          }),
+        });
+        if (live && live.reload) live.reload();
+      }
+    } catch(err) {
+      console.warn("Employee update failed:", err.message);
+    }
+  };
+
   // Show PIN gate if not yet verified
   if (!pinOk) {
     return (
@@ -3106,7 +3166,10 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.green}}>{fmt(p.netPay)}</td>
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
-                    <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -3142,6 +3205,169 @@ function Payroll({live = {}, user = {}}) {
           logoUrl={user.logoUrl || ""}
           onClose={()=>setViewPayslip(null)}
         />
+      )}
+
+      {/* ── Edit Employee Modal ─────────────────────────────────────────────── */}
+      {editEmp && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:300,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"20px 16px",overflowY:"auto"}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:680,boxShadow:"0 8px 40px #00000030",margin:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Edit Employee</h3>
+              <button onClick={()=>setEditEmp(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
+            </div>
+
+            {/* Basic Info */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Basic Information</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+              {[
+                {l:"Full Name",             k:"name",     p:"Jane Smith",    t:"text"},
+                {l:"Job Title / Position",  k:"position", p:"Accountant",    t:"text"},
+                {l:"Department",            k:"dept",     p:"Finance",       t:"text"},
+                {l:"Monthly Salary (ZAR)",  k:"salary",   p:"25000",         t:"number"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} placeholder={f.p} value={editForm[f.k]} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              {/* Patterson Grade */}
+              <div style={{gridColumn:"1 / -1"}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Patterson Grade</label>
+                <select value={editForm.grade} onChange={e=>setEditForm(v=>({...v,grade:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="">-- Select Grade --</option>
+                  <optgroup label="Band A — Unskilled / entry-level operational">
+                    <option value="A1">A1 — Basic unskilled work</option>
+                    <option value="A2">A2 — Semi-skilled / entry operational</option>
+                  </optgroup>
+                  <optgroup label="Band B — Semi-skilled / skilled operational">
+                    <option value="B1">B1 — Skilled trades / junior admin</option>
+                    <option value="B2">B2 — Skilled technical / admin</option>
+                    <option value="B3">B3 — Senior skilled / specialist</option>
+                    <option value="B4">B4 — Senior skilled / team lead</option>
+                    <option value="B5">B5 — Senior specialist / supervisor</option>
+                  </optgroup>
+                  <optgroup label="Band C — Highly skilled / junior professional">
+                    <option value="C1">C1 — Junior professional</option>
+                    <option value="C2">C2 — Professional / technical specialist</option>
+                    <option value="C3">C3 — Senior professional</option>
+                    <option value="C4">C4 — Lead professional</option>
+                    <option value="C5">C5 — Senior specialist / section manager</option>
+                  </optgroup>
+                  <optgroup label="Band D — Middle management / senior professional">
+                    <option value="D1">D1 — Junior / first-line manager</option>
+                    <option value="D2">D2 — Middle manager</option>
+                    <option value="D3">D3 — Senior manager (department)</option>
+                    <option value="D4">D4 — Senior manager (multi-dept)</option>
+                    <option value="D5">D5 — Divisional manager</option>
+                  </optgroup>
+                  <optgroup label="Band E — Senior management">
+                    <option value="E1">E1 — Junior senior manager</option>
+                    <option value="E2">E2 — Senior manager / head of function</option>
+                    <option value="E3">E3 — Senior middle manager</option>
+                    <option value="E4">E4 — General manager</option>
+                    <option value="E5">E5 — Senior general manager</option>
+                  </optgroup>
+                  <optgroup label="Band F — Senior / Executive Management">
+                    <option value="F1">F1 — Director / senior executive</option>
+                    <option value="F2">F2 — Executive director</option>
+                    <option value="F3">F3 — Chief executive / top management</option>
+                  </optgroup>
+                </select>
+                {editForm.grade && PATTERSON_RANGES[editForm.grade] && (() => {
+                  const r = PATTERSON_RANGES[editForm.grade];
+                  const fmtR = n => "R" + n.toLocaleString("en-ZA");
+                  const pct = editForm.salary ? Math.round(((+editForm.salary - r.min) / (r.max - r.min)) * 100) : null;
+                  const pos = pct === null ? null : Math.max(0, Math.min(100, pct));
+                  return (
+                    <div style={{marginTop:10,padding:"12px 14px",background:"#f0f7ff",border:"1px solid #b8d4f0",borderRadius:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                        <div style={{fontSize:12,fontWeight:700,color:"#1a4a7a"}}>📊 Market range for {editForm.grade} — 2025 SA general market (monthly CTC)</div>
+                        <button type="button" onClick={()=>setEditForm(v=>({...v,salary:String(r.median)}))} style={{padding:"4px 12px",background:"#1a6fcc",border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Use median</button>
+                      </div>
+                      <div style={{position:"relative",height:8,background:"#d0e4f8",borderRadius:4,marginBottom:6}}>
+                        <div style={{position:"absolute",left:"33%",right:"33%",top:0,height:"100%",background:"#6baee8",borderRadius:4}}/>
+                        {pos !== null && <div style={{position:"absolute",top:-3,left:`${pos}%`,transform:"translateX(-50%)",width:14,height:14,borderRadius:7,background:pos < 33 ? "#e8a020" : pos > 67 ? "#1a6fcc" : "#2a9d3f",border:"2px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>}
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#3a6a9a"}}>
+                        <span>Min: <strong>{fmtR(r.min)}</strong></span>
+                        <span>Median: <strong style={{color:"#1a4a7a"}}>{fmtR(r.median)}</strong></span>
+                        <span>Max: <strong>{fmtR(r.max)}</strong></span>
+                      </div>
+                      {pos !== null && <div style={{marginTop:6,fontSize:11,fontWeight:600,color:pos < 25 ? "#b85c00" : pos > 75 ? "#1a4a7a" : "#2a7d3f"}}>{pos < 25 ? "⚠️ Below market — risk of turnover" : pos > 75 ? "💡 Above median — strong retention" : "✓ Within market range"}</div>}
+                      <div style={{marginTop:4,fontSize:10,color:"#6a8aaa"}}>Indicative only — varies by industry, province &amp; experience. Source: Peromnes/Patterson surveys.</div>
+                    </div>
+                  );
+                })()}
+              </div>
+              {/* Employment Type */}
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employment Type</label>
+                <select value={editForm.employmentType} onChange={e=>setEditForm(v=>({...v,employmentType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="salaried">Salaried (fixed monthly)</option>
+                  <option value="hourly">Hourly rate</option>
+                </select>
+              </div>
+              {editForm.employmentType === "hourly" && (
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Hourly Rate (ZAR)</label>
+                  <input type="number" placeholder="e.g. 150" value={editForm.hourlyRate} onChange={e=>setEditForm(v=>({...v,hourlyRate:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              )}
+            </div>
+
+            {/* Personal Details */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Personal Details</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+              {[
+                {l:"SA ID Number",      k:"idNumber",        p:"8001015009087", t:"text"},
+                {l:"Tax Number",        k:"taxNumber",        p:"1234567890",    t:"text"},
+                {l:"Date of Birth",     k:"dob",              p:"",              t:"date"},
+                {l:"Appointment Date",  k:"appointmentDate",  p:"",              t:"date"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} placeholder={f.p} value={editForm[f.k]} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div style={{gridColumn:"1 / -1"}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Residential Address</label>
+                <input placeholder="123 Main St, Johannesburg, 2000" value={editForm.address} onChange={e=>setEditForm(v=>({...v,address:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+
+            {/* Bank Details */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:24}}>
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Bank Name</label>
+                <select value={editForm.bankName} onChange={e=>setEditForm(v=>({...v,bankName:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="">-- Select Bank --</option>
+                  {["ABSA","Capitec","Discovery Bank","FNB","Investec","Nedbank","Standard Bank","TymeBank","African Bank"].map(b=><option key={b}>{b}</option>)}
+                </select>
+              </div>
+              {[
+                {l:"Account Number", k:"accountNumber", p:"62123456789"},
+                {l:"Branch Code",    k:"branchCode",    p:"250655"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input placeholder={f.p} value={editForm[f.k]} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Type</label>
+                <select value={editForm.accountType} onChange={e=>setEditForm(v=>({...v,accountType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  {["Cheque","Savings","Transmission"].map(t=><option key={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleEditSave} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+              <button onClick={()=>setEditEmp(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -10695,152 +10921,217 @@ function DataImport() {
     if (fileRef.current) fileRef.current.value = "";
   }
 
-  const cardSt = {background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:20,marginBottom:20};
+  const currentTab = ITABS.find(t => t.id === tab);
 
   return (
     <div>
       {/* Header */}
       <div style={{marginBottom:24}}>
         <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:"0 0 4px"}}>Import Data</h2>
-        <p style={{fontSize:12,color:C.inkMid,margin:0}}>
-          Migrate history from Xero, QuickBooks, or any CSV export. Duplicate entries are skipped automatically.
+        <p style={{fontSize:13,color:C.inkMid,margin:0}}>
+          Migrate history from Xero, QuickBooks, or any CSV / Excel export. Duplicates are skipped automatically.
         </p>
       </div>
 
-      {/* Entity tabs */}
-      <div style={{display:"flex",gap:6,marginBottom:24,flexWrap:"wrap"}}>
-        {ITABS.map(t => (
-          <button key={t.id} onClick={()=>switchTab(t.id)} style={{
-            padding:"8px 18px",borderRadius:20,border:`1px solid ${tab===t.id?C.accent:C.border}`,
-            fontSize:13,cursor:"pointer",fontFamily:"inherit",
-            background:tab===t.id?C.accentLt:"transparent",
-            color:tab===t.id?C.accent:C.inkMid,
-            fontWeight:tab===t.id?700:400,
-          }}>
-            {t.icon} {t.label}
-          </button>
-        ))}
-      </div>
+      <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
 
-      {/* How-to card */}
-      <div style={{...cardSt,background:"#f8f5f2"}}>
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
-          <div>
-            <p style={{margin:"0 0 6px",fontSize:13,fontWeight:600,color:C.ink}}>
-              Step 1 — Prepare your CSV
-            </p>
-            <p style={{margin:"0 0 4px",fontSize:12,color:C.inkMid}}>
-              Column names are detected automatically from Xero and QuickBooks exports.<br/>
-              <em>{HINTS[tab]}</em>
-            </p>
-            <p style={{margin:"6px 0 0",fontSize:12,color:C.inkMid}}>
-              Required column: <strong style={{color:C.ink}}>{REQUIRED[tab]}</strong>.
-              All other columns are optional.
-            </p>
-          </div>
-          <button onClick={downloadTemplate} style={{
-            padding:"7px 16px",border:`1px solid ${C.accent}`,borderRadius:8,
-            fontSize:12,cursor:"pointer",color:C.accent,background:"transparent",
-            fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,flexShrink:0,
-          }}>
-            Download Template
-          </button>
-        </div>
-      </div>
-
-      {/* Upload section */}
-      <div style={cardSt}>
-        <p style={{margin:"0 0 12px",fontSize:13,fontWeight:600,color:C.ink}}>
-          Step 2 — Upload your file (CSV or Excel)
-        </p>
-        <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-          <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls"
-            onChange={handleFileChange}
-            style={{fontSize:13,fontFamily:"inherit",flex:1,minWidth:200}}/>
-          {file && (
-            <button onClick={reset} style={{padding:"5px 12px",border:`1px solid ${C.border}`,
-              borderRadius:6,fontSize:12,cursor:"pointer",color:C.inkMid,background:"transparent",fontFamily:"inherit"}}>
-              Clear
+        {/* ── Left sidebar: entity picker ── */}
+        <div style={{width:190,flexShrink:0,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.8,padding:"6px 10px 10px"}}>Data Type</div>
+          {ITABS.map(t => (
+            <button key={t.id} onClick={()=>switchTab(t.id)} style={{
+              display:"flex",alignItems:"center",gap:10,width:"100%",textAlign:"left",
+              padding:"11px 14px",borderRadius:10,border:"none",cursor:"pointer",
+              fontFamily:"inherit",fontSize:13,marginBottom:2,
+              background:tab===t.id ? C.accentLt : "transparent",
+              color:tab===t.id ? C.accent : C.ink,
+              fontWeight:tab===t.id ? 700 : 400,
+            }}>
+              <span style={{fontSize:16,lineHeight:1}}>{t.icon}</span>
+              <span>{t.label}</span>
             </button>
-          )}
+          ))}
         </div>
-        {file && (
-          <p style={{margin:"8px 0 0",fontSize:11,color:C.inkMid}}>
-            {file.name} &mdash; {(file.size/1024).toFixed(1)} KB
-          </p>
-        )}
-      </div>
 
-      {/* Preview */}
-      {preview && (
-        <div style={cardSt}>
-          {preview.xlsx ? (
-            /* Excel file — no client-side preview; backend parses it */
-            <div>
-              <p style={{margin:"0 0 8px",fontSize:13,fontWeight:600,color:C.ink}}>
-                Step 3 — Excel file ready
-              </p>
-              <p style={{margin:"0 0 16px",fontSize:12,color:C.inkMid}}>
-                Excel files are processed server-side. Click Import to upload and parse all rows.
-              </p>
-              <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
-                <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
-                  padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
-                  border:"none",borderRadius:8,fontSize:13,fontWeight:600,
-                  cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
-                }}>
-                  {importing ? "Importing…" : "Import Excel file"}
-                </button>
-                {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+        {/* ── Right panel ── */}
+        <div style={{flex:1,minWidth:0}}>
+
+          {/* Info + template bar */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"18px 22px",marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:15,color:C.ink,marginBottom:6}}>
+                  {currentTab?.icon} {currentTab?.label}
+                </div>
+                <div style={{fontSize:12,color:C.inkMid,lineHeight:1.6,marginBottom:4}}>
+                  <strong style={{color:C.ink}}>Required: </strong>{REQUIRED[tab]}
+                </div>
+                <div style={{fontSize:12,color:C.inkMid,lineHeight:1.6}}>
+                  <strong style={{color:C.ink}}>Column aliases: </strong>{HINTS[tab]}
+                </div>
               </div>
+              <button onClick={downloadTemplate} style={{
+                display:"flex",alignItems:"center",gap:6,
+                padding:"9px 18px",border:`1px solid ${C.accent}`,borderRadius:10,
+                fontSize:13,cursor:"pointer",color:C.accent,background:"transparent",
+                fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,flexShrink:0,
+              }}>
+                ⬇ Template CSV
+              </button>
             </div>
-          ) : (
-            /* CSV preview table */
-            <div>
-              <p style={{margin:"0 0 12px",fontSize:13,fontWeight:600,color:C.ink}}>
-                Step 3 — Preview ({preview.total.toLocaleString()} data rows detected, showing first 5)
-              </p>
-              <div style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                  <thead>
-                    <tr style={{background:"#f8f5f2"}}>
-                      {preview.headers.map((h,i) => (
-                        <th key={i} style={{padding:"6px 10px",textAlign:"left",
-                          color:C.inkMid,fontWeight:600,fontSize:11,
-                          borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {preview.rows.map((row,ri) => (
-                      <tr key={ri} style={{borderBottom:`1px solid ${C.border}`}}>
-                        {row.map((cell,ci) => (
-                          <td key={ci} style={{padding:"5px 10px",color:C.ink,
-                            maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            {cell}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
-                <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
-                  padding:"9px 24px",background:importing?"#ccc":C.accent,color:"#fff",
-                  border:"none",borderRadius:8,fontSize:13,fontWeight:600,
-                  cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+          </div>
+
+          {/* Upload zone — shown until a file is chosen */}
+          {!result && (
+            <div style={{marginBottom:16}}>
+              {!file ? (
+                <label style={{
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                  border:`2px dashed ${C.border}`,borderRadius:14,padding:"40px 24px",
+                  cursor:"pointer",textAlign:"center",background:C.bg,
+                  transition:"border-color 0.15s",
                 }}>
-                  {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
-                </button>
-                {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+                  <div style={{fontSize:36,marginBottom:10}}>📂</div>
+                  <div style={{fontWeight:700,fontSize:15,color:C.ink,marginBottom:4}}>
+                    Drop a file here, or click to browse
+                  </div>
+                  <div style={{fontSize:12,color:C.inkMid}}>CSV, Excel (.xlsx / .xls), TSV</div>
+                  <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls"
+                    onChange={handleFileChange} style={{display:"none"}}/>
+                </label>
+              ) : (
+                /* File chosen — show name + clear */
+                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 22px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:14,color:C.ink}}>📄 {file.name}</div>
+                    <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>{(file.size/1024).toFixed(1)} KB</div>
+                  </div>
+                  <button onClick={reset} style={{
+                    padding:"7px 16px",border:`1px solid ${C.border}`,borderRadius:8,
+                    fontSize:13,cursor:"pointer",color:C.inkMid,background:"transparent",fontFamily:"inherit",
+                  }}>✕ Clear</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Preview */}
+          {preview && !result && (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"18px 22px",marginBottom:16}}>
+              {preview.xlsx ? (
+                <div>
+                  <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:6}}>Excel file ready</div>
+                  <div style={{fontSize:13,color:C.inkMid,marginBottom:16}}>
+                    All rows will be parsed server-side. Click Import to continue.
+                  </div>
+                  <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                    <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
+                      padding:"10px 28px",background:importing?"#ccc":C.accent,color:"#fff",
+                      border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+                      cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+                    }}>
+                      {importing ? "Importing…" : "Import Excel file"}
+                    </button>
+                    {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:12}}>
+                    Preview — {preview.total.toLocaleString()} rows detected <span style={{fontWeight:400,color:C.inkMid,fontSize:12}}>(showing first 5)</span>
+                  </div>
+                  <div style={{overflowX:"auto",borderRadius:8,border:`1px solid ${C.border}`}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead>
+                        <tr style={{background:C.bg}}>
+                          {preview.headers.map((h,i) => (
+                            <th key={i} style={{padding:"8px 12px",textAlign:"left",
+                              color:C.inkMid,fontWeight:600,fontSize:11,
+                              borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.rows.map((row,ri) => (
+                          <tr key={ri} style={{borderBottom:`1px solid ${C.border}30`}}>
+                            {row.map((cell,ci) => (
+                              <td key={ci} style={{padding:"7px 12px",color:C.ink,
+                                maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center"}}>
+                    <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
+                      padding:"10px 28px",background:importing?"#ccc":C.accent,color:"#fff",
+                      border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+                      cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+                    }}>
+                      {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
+                    </button>
+                    {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Results */}
+          {result && (
+            <div style={{background:C.surface,border:`2px solid ${result.errors.filter(e=>!e.message.includes("already exists")).length ? "#C8401A" : "#28a745"}`,borderRadius:14,padding:"20px 24px"}}>
+              <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:16}}>✅ Import Complete</div>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20}}>
+                {[
+                  {label:"Rows in file",        value:result.total_rows, color:C.inkMid},
+                  {label:"Imported",             value:result.imported,   color:"#28a745"},
+                  {label:"Skipped (duplicate)",  value:result.skipped||0, color:C.inkMid},
+                  {label:"Errors",               value:result.errors.filter(e=>!e.message.includes("already exists")).length, color:"#C8401A"},
+                ].map(k => (
+                  <div key={k.label} style={{flex:1,minWidth:110,background:C.bg,borderRadius:10,padding:"14px 16px",textAlign:"center"}}>
+                    <div style={{fontSize:28,fontWeight:800,color:k.color}}>{k.value}</div>
+                    <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>{k.label}</div>
+                  </div>
+                ))}
               </div>
+              {result.errors.length > 0 && (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Row notes ({result.errors.length})</div>
+                  <div style={{maxHeight:200,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead>
+                        <tr style={{background:C.bg,position:"sticky",top:0}}>
+                          <th style={{padding:"6px 12px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`,width:60}}>Row</th>
+                          <th style={{padding:"6px 12px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>Note</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.errors.map((e,i) => (
+                          <tr key={i} style={{borderBottom:`1px solid ${C.border}30`,background:e.message.includes("already exists")?"transparent":"#fff0ee"}}>
+                            <td style={{padding:"5px 12px",fontFamily:"monospace",color:C.inkMid}}>{e.row}</td>
+                            <td style={{padding:"5px 12px",color:e.message.includes("already exists")?C.inkMid:"#C8401A"}}>{e.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              <button onClick={reset} style={{
+                padding:"9px 22px",border:`1px solid ${C.border}`,borderRadius:10,
+                fontSize:13,cursor:"pointer",color:C.ink,background:"transparent",fontFamily:"inherit",fontWeight:600,
+              }}>
+                ← Import another file
+              </button>
             </div>
           )}
         </div>
-      )}
+      </div>
 
       {/* Confirmation modal */}
       {showConfirm && (
@@ -10852,7 +11143,7 @@ function DataImport() {
               <strong style={{color:C.ink}}>
                 {preview?.xlsx ? "all rows" : `${preview?.total?.toLocaleString() ?? "all"} rows`}
               </strong>{" "}
-              of <strong style={{color:C.ink,textTransform:"capitalize"}}>{ITABS.find(t=>t.id===tab)?.label}</strong> data from{" "}
+              of <strong style={{color:C.ink}}>{currentTab?.label}</strong> data from{" "}
               <strong style={{color:C.ink}}>{file?.name}</strong> into your books.
               <br/><br/>
               Duplicates are skipped automatically. This action cannot be undone.
@@ -10872,67 +11163,6 @@ function DataImport() {
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Results */}
-      {result && (
-        <div style={{...cardSt,borderColor: result.errors.filter(e=>!e.message.includes("already exists")).length ? "#C8401A" : "#28a745"}}>
-          <p style={{margin:"0 0 16px",fontSize:14,fontWeight:700,color:C.ink}}>
-            Import Complete
-          </p>
-
-          {/* KPI row */}
-          <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
-            {[
-              {label:"Rows in file",    value:result.total_rows,             color:C.inkMid},
-              {label:"Successfully imported", value:result.imported,          color:"#28a745"},
-              {label:"Skipped (duplicate)",   value:result.skipped||0,       color:C.inkMid},
-              {label:"Errors",                value:result.errors.filter(e=>!e.message.includes("already exists")).length, color:"#C8401A"},
-            ].map(k => (
-              <div key={k.label} style={{flex:1,minWidth:120,background:"#f8f5f2",
-                borderRadius:10,padding:"12px 16px",textAlign:"center"}}>
-                <div style={{fontSize:24,fontWeight:700,color:k.color}}>{k.value}</div>
-                <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{k.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Error list */}
-          {result.errors.length > 0 && (
-            <div>
-              <p style={{fontSize:12,fontWeight:600,color:C.ink,margin:"0 0 8px"}}>
-                Row notes ({result.errors.length}):
-              </p>
-              <div style={{maxHeight:220,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                  <thead>
-                    <tr style={{background:"#f8f5f2",position:"sticky",top:0}}>
-                      <th style={{padding:"6px 10px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`,width:60}}>Row</th>
-                      <th style={{padding:"6px 10px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>Note</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.errors.map((e,i) => (
-                      <tr key={i} style={{borderBottom:`1px solid ${C.border}`,
-                        background:e.message.includes("already exists")?"transparent":"#fff0ee"}}>
-                        <td style={{padding:"5px 10px",fontFamily:"monospace",color:C.inkMid}}>{e.row}</td>
-                        <td style={{padding:"5px 10px",color:e.message.includes("already exists")?C.inkMid:"#C8401A"}}>{e.message}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          <button onClick={reset} style={{
-            marginTop:16,padding:"7px 18px",border:`1px solid ${C.border}`,
-            borderRadius:8,fontSize:13,cursor:"pointer",color:C.ink,
-            background:"transparent",fontFamily:"inherit",
-          }}>
-            Import another file
-          </button>
         </div>
       )}
     </div>
