@@ -1,57 +1,54 @@
-# Reports / Debtors / Creditors Audit — 2026-07-11
+# Reports / Debtors / Creditors Audit — 2026-07-11 (run 2, evening)
 
-Scope: `/reports/dashboard`, `/reports/management`, `/v1/summary`, Debtors (AR), Creditors (AP), cross-module journal coverage.
-Files reviewed: payroll.py, main.py, journal.py, purchase_orders.py, companies.py, suppliers.py, customers.py, database.py, csv_import.py (new since last run), App_js_fixed.js.
+Scope: `/reports/dashboard`, `/reports/management`, `/v1/summary`, Debtors (AR), Creditors (AP), cross-module journal coverage, **IFRS compliance of the AFS module (new checklist section)**, **SARS tax rates (new checklist section)**.
+Files reviewed: payroll.py, main.py, journal.py, purchase_orders.py, companies.py, suppliers.py, csv_import.py, financial_statements.py, App_js_fixed.js.
+
+This run supersedes the 09:41 report of the same date. Primary purpose: verify the six same-day fixes from the morning run (H1, H2, M1, M2, M3, L2) are intact in code, and perform the first audit under the expanded checklist (IFRS + SARS tax verification).
 
 ## 1. Summary
 
 | Section | Verdict |
 |---|---|
-| Reports (dashboard / management / v1 summary) | **PASS** — all checklist items verified, no regressions |
-| Debtors (AR) | **PASS with new findings** — view is correct; new CSV/xlsx import path bypasses journal postings |
-| Creditors (AP) | **PASS** — no issues in the audited path |
-| Cross-module | **FAIL (new)** — financial-statement imports (shipped 2026-07-10) break balance-sheet equity aggregation and Rule 6/7 reconciliation semantics |
-
-The core reporting engine is unchanged and healthy. All new findings come from the **financial statement import feature** added to csv_import.py and App_js_fixed.js on 2026-07-10 (commits 0c4b1cc…81aff38), which posts journal entries and creates invoices/expenses outside the posting functions the reports reconcile against.
+| Reports (dashboard / management / v1 summary) | **PASS** — all checklist items verified |
+| Debtors (AR) | **PASS** — morning fixes H1/M3 verified in code |
+| Creditors (AP) | **PASS** — no issues |
+| Cross-module | **PASS** — morning fixes H2/M1/M2/L2 verified; only L1 (Low) carried over |
+| IFRS compliance (AFS) | **PASS with findings** — correct framework (IFRS for SMEs); one Medium policy issue (cash-basis revenue), 3rd-edition transition due FY2028 |
+| Tax (company + payroll) | **PASS** — 2026/2027 PAYE tables, rebate, UIF, SDL, CIT 27%, VAT 15% all current per Budget 2026 |
 
 ## 2. Reports
 
-✓ No issues found in the checklist items:
+✓ No issues found.
 
-- `total_revenue` sums only `InvoiceStatus.paid` invoices via `_to_zar()` (payroll.py:510–516). `_to_zar` (payroll.py:17–24) prefers `paid_amount_zar`, falls back to `amount × exchange_rate`, ZAR passthrough — correct.
-- `total_outstanding` = sent + overdue via `_to_zar()` (payroll.py:518–522). Note: the enum has no separate "pending" status — `sent` **is** "pending" (database.py:38).
+- `total_revenue` sums only `InvoiceStatus.paid` via `_to_zar()` (payroll.py:510–516); `_to_zar` (payroll.py:17–23) prefers `paid_amount_zar`, falls back to `amount × exchange_rate`, ZAR passthrough.
+- `total_outstanding` = sent + overdue via `_to_zar()` (payroll.py:518–522). Note: the status enum has no separate "pending" — `sent` is "pending".
 - Expenses excluded from revenue; ex-VAT in P&L (payroll.py:524–528).
-- Payroll included from all payslips incl. terminated employees, with estimate fallback (payroll.py:552–562).
-- PO COGS: received/partial/paid at delivered value `_po_delivered_net` (payroll.py:530–538); duplicate-expense heuristic guards double-counting (payroll.py:589–623). Receipts post the journal instead of an Expense record (purchase_orders.py:340–344) — no structural double-count.
-- Management trend loop applies `_to_zar()` + bank-import income consistently (payroll.py:1358–1362).
-- `/v1/summary` mirrors dashboard: `_to_zar`, `_po_delivered_net`, depreciation, payroll (main.py:264–309).
-
-Design note (no action needed, but document it): dashboard/management revenue reads the Invoice table plus journal entries with source `"bank_import_income"` only (payroll.py:59–97). Revenue imported via the new P&L/GL/journal imports (source `"import"`) is treated as opening-balance history and will **not** appear in dashboard revenue — intentional non-double-counting, but users migrating from Xero may ask why.
+- Payroll from all payslips incl. terminated employees, estimate fallback (payroll.py:552–562).
+- PO COGS at delivered value `_po_delivered_net` for received/partial/paid (payroll.py:530–538); journal posts on receipt instead of Expense rows — no structural double-count.
+- Management trend loop applies `_to_zar()` + bank-import income per month (payroll.py:1443–1447); PO COGS and depreciation per period (1452–1465).
+- `/v1/summary` mirrors dashboard: `_to_zar`, `_po_delivered_net`, `_bank_import_income` (main.py:264–309).
 
 ## 3. Debtors
 
-Core view: ✓ correct.
+✓ No issues found.
 
-- Backend `/reports/debtors-aging` (payroll.py:1529–1589): filters `status IN (sent, overdue)` — paid and draft excluded; amounts via `_to_zar()` (1552); aged strictly from `due_date` with no-due-date invoices parked in `not_due` (1546–1559); buckets not_due / 0–30 / 31–60 / 61–90 / 90+.
-- Frontend `Debtors` (App_js_fixed.js:4731–4854): renders backend data only, refreshes on `live.invoices`, correct bucket totals and grand total.
-
-New findings (import path, shipped 2026-07-10):
-
-- **[H1] Imported invoices post no journal entries.** `import_invoices` (csv_import.py:390–460) inserts Invoice rows directly — no `post_invoice_raised`/`post_invoice_paid` — and the import UI never triggers `/journal/backfill` (App_js_fixed.js:10547–10565; backfill is only a manual button on the Journal tab, 3396). After a migration import, the Debtors book and dashboard show the invoices but AR control 1100 has nothing: Rule 6 fails, balance-sheet trade receivables understate, and revenue accounts miss the paid history until the user happens to click "Re-run backfill". Same gap for `import_expenses` (csv_import.py:466–516). Fix: call the backfill automatically after invoice/expense imports (it is idempotent and covers both — journal.py:688–729), or post entries per-row.
-- **[M3] Hard-coded `exchange_rate = 1.0`** (csv_import.py:442) and `paid_amount_zar = total` (447). An imported USD invoice is valued 1:1 in every report `_to_zar` touches. Either capture a rate/`amount_zar` column or reject non-ZAR rows with a clear message.
+- `/reports/debtors-aging` (payroll.py:1614–1674): filters `status IN (sent, overdue)` — paid and draft excluded (1623–1626); `_to_zar()` per invoice (1637); aged strictly from `due_date`, no-due-date invoices parked in `not_due` (1631–1649); buckets not_due / 0–30 / 31–60 / 61–90 / 90+ with correct totals.
+- Frontend `Debtors` (App_js_fixed.js:4744–4750) renders backend data only, refreshes on invoice changes.
+- **Morning fix H1 verified intact:** `/import/invoices` and `/import/expenses` auto-run the idempotent journal backfill after commit (`_auto_backfill`, csv_import.py:124–136; called at 501, 563); backfill errors surface without failing the import.
+- **Morning fix M3 verified intact:** non-ZAR imported invoices without a positive `exchange_rate` are rejected with a clear error; ZAR rows forced to rate 1.0; `paid_amount_zar = total × rate` (csv_import.py:458–492).
 
 ## 4. Creditors
 
 ✓ No issues found.
 
-- Backend `/reports/creditors-aging` (payroll.py:1592–1764): pulls received/partial POs (fully paid excluded, 1608–1611) plus unpaid on-credit expenses (1700–1704); per-PO amounts from actual journal AP credits with `total_amount` fallback (1616–1633, 1680); aged from `received_date + supplier payment_terms` (1652–1654); expenses aged at +30 days by design.
-- Supplier bank details decrypted via `decrypt_field` before display (payroll.py:1668–1670; suppliers.py:48–50). Encryption at rest on create/update confirmed (suppliers.py:68, 78).
-- `pay_po` clears the true journal AP balance, not `total_amount` (purchase_orders.py:424–450); single-commit-after-journal pattern in receive/pay verified intact (audit fixes 2026-07-09 unchanged).
-- Frontend `Creditors` (App_js_fixed.js:4857–5009): backend-driven, client-side bucket filter, refreshes on PO/expense changes.
+- `/reports/creditors-aging` (payroll.py:1677–1830): received/partial POs only — fully paid excluded (1693–1696); per-PO AP from actual journal credits on account 2000 with fallback (1698–1718); unpaid on-credit expenses included; aged from `received_date + supplier payment_terms` (1739–1740).
+- Supplier bank details decrypted via `decrypt_field` before display (payroll.py:1688, 1753–1755).
+- `pay_po` clears the true journal AP balance, not `total_amount` (purchase_orders.py:427–461).
+- Frontend `Creditors` (App_js_fixed.js:4871–4877) backend-driven.
 
 ## 5. Cross-module
 
-Journal event coverage — all wired, unchanged since last run:
+Journal event coverage — all wired:
 
 | Event | Posting fn | Called from |
 |---|---|---|
@@ -59,44 +56,73 @@ Journal event coverage — all wired, unchanged since last run:
 | Invoice payment | journal.py:221 | companies.py:383, portal.py:205 |
 | Expense (cash/credit) | journal.py:280 | companies.py:554, 644, 961 |
 | Expense payment | journal.py:392 | companies.py:699 |
-| PO receipt (incremental) | journal.py:421 | purchase_orders.py:355 |
-| PO payment | journal.py:473 | purchase_orders.py:461 |
+| PO receipt (incremental) | post_po_received | purchase_orders.py:355 |
+| PO payment | post_po_paid | purchase_orders.py:461 |
 | Payroll run | journal.py:355 | payroll.py:407 |
 | Bank-import income | journal.py:315 | companies.py:996 |
+| Import backfill | journal.py:688–729 | csv_import.py:501, 563 (auto) |
 
-Invoice edit semantics (reverse+repost on amount change, payment reversal, draft transitions) verified intact (companies.py:340–394).
+Import-awareness fixes of 2026-07-11 (morning run) — **all verified intact**:
 
-New gaps — all from the financial-statement imports:
+- Rules 6/7 exclude source `"import"` lines on 1100/2000 (`ar_import_bal` payroll.py:1008–1027; `ap_import_bal` 1080–1102) and report them as imported opening balances.
+- Balance sheet includes 3999 Opening Balance Equity, 3998 imported Retained Earnings, `other_equity`, `other_assets`, `other_liabilities` (payroll.py:762–870).
+- Unbalanced journal import groups are DR/CR-validated before entry creation and rejected with "group NOT imported" (csv_import.py:1034–1070).
+- `_find_or_create_account` matches names case-insensitively/trimmed (csv_import.py:699–708).
 
-- **[H2] Balance sheet cannot absorb statement imports.** `/reports/balance-sheet` aggregates assets/liabilities by *hard-coded account codes* (payroll.py:742–771) but equity as `bal("3000") + Σrevenue − Σexpenses` by *account type* (778–782). The imports offset to **3999 Opening Balance Equity** (csv_import.py:660–689) and **3998 Retained Earnings** (876–885) — neither is included in total equity, and imported asset/liability accounts with non-ZuZan codes (Xero code schemes) are invisible to the asset/liability sections. Consequences: any trial-balance or balance-sheet import unbalances Rule 1; a P&L import *overstates* equity by the imported net profit (the revenue credits are counted via the type query while the 3998 debit offset is ignored) with no matching asset. Fix: aggregate assets/liabilities/equity by `Account.type` (with the code-based lines kept as named sub-rows), or at minimum include all equity-type accounts in `total_equity`.
-- **[M1] Rule 6/7 are not import-aware.** Imports can post directly to 1100/2000 (`_find_or_create_account` matches system accounts by code — csv_import.py:632–657). An imported opening debtors balance makes journal-1100 exceed the invoice-table total, so Rule 6 reports FAIL and advises "run /journal/backfill", which cannot repair it (payroll.py:938–958; same for Rule 7, 960–1018). Additionally that opening AR never appears in the Debtors book (invoice-table based). Fix: either exclude source `"import"` lines from Rules 6/7 and show them as a separate "opening balances" line, or reconcile against invoices + imported openings.
-- **[M2] Unbalanced journal imports are accepted.** `_import_journal_rows` flags unbalanced reference groups but imports them anyway (csv_import.py:1000–1009), silently breaking the Rule 1 equation. Fix: reject unbalanced groups, or auto-offset to 3999 like the statement imports do.
-- **[L2] Duplicate account creation.** `_find_or_create_account` falls back to `code = name[:20]` when no code exists (csv_import.py:649); repeated imports with name variants can spawn duplicate revenue/expense accounts, all of which feed retained income.
-- **[L1] Carried over (2026-07-09):** per-PO AP-credit lookups (payroll.py:976–987, 1620–1633; purchase_orders.py:437–448) sum credits under source `"purchase_order"` only and ignore reversal debits. Still unreachable in practice.
+Carried over: **[L1]** per-PO AP-credit lookups (payroll.py:1698–1718; purchase_orders.py:427–448) sum credits under source `"purchase_order"` only and ignore reversal debits. Still unreachable in practice (2026-07-09).
 
-## 6. Action items
+## 6. IFRS compliance (AFS)
 
-1. **[High — H1]** Auto-run the journal backfill (or post per-row entries) after `/import/invoices` and `/import/expenses`, so migrated data reconciles without a hidden manual step (csv_import.py:390–516; App_js_fixed.js:10547).
-2. **[High — H2]** Rework `/reports/balance-sheet` aggregation to include Opening Balance Equity (3999), imported Retained Earnings (3998), and non-standard-code asset/liability accounts — type-based totals with code-based sub-rows (payroll.py:742–783).
-3. **[Medium — M1]** Make Rules 6/7 import-aware: exclude/segregate source `"import"` lines on 1100/2000 and correct the misleading backfill advice (payroll.py:938–1018).
-4. **[Medium — M2]** Reject or auto-offset unbalanced journal groups in `_import_journal_rows` (csv_import.py:1000–1009).
-5. **[Medium — M3]** Handle foreign currency in `import_invoices` — accept a rate/ZAR-amount column or reject non-ZAR rows instead of hard-coding `exchange_rate=1.0` (csv_import.py:442, 447).
-6. **[Low — L1]** Make per-PO AP-credit lookups reversal-aware (carried over from 2026-07-09).
-7. **[Low — L2]** Dedupe/normalise account matching in `_find_or_create_account` (csv_import.py:632–657).
+Framework implemented: **IFRS for SMEs** — stated in the module docstring (financial_statements.py:2), meta `basis` (386), and the basis-of-preparation note (473–475). Appropriate for a SA private company under Companies Act 71 of 2008 regulations.
 
-## 8. Resolution log (2026-07-11, same day)
+Standards status as at 11 July 2026 (web-verified):
 
-All new issues fixed on request:
+- **IFRS for SMEs 3rd edition** (issued Feb 2025): effective for annual periods beginning **on or after 1 Jan 2027**, early application permitted. Under the app's SA FY convention (1 Mar – 28/29 Feb, financial_statements.py:24–29), the first mandatory FY is **1 Mar 2027 – 29 Feb 2028 (FY2028)**. Current statements may continue on the 2015 second edition — compliant today, transition work needed before FY2028.
+- **IFRS 18** (replacing IAS 1, effective 1 Jan 2027): applies to **full-IFRS** preparers only — **not applicable** to an IFRS for SMEs entity. No action needed unless a client elects full IFRS.
+- Sources: [IFRS Foundation — IFRS for SMEs](https://www.ifrs.org/issued-standards/ifrs-for-smes/), [IAS Plus — third edition](https://www.iasplus.com/en/news/2025/02/third-ifrs-for-smes), [IAS Plus — IFRS 18 effective date](https://www.iasplus.com/en/events/effective-dates/2027/ifrs-18), [PKF SA — SMEs framework changes](https://www.pkf.co.za/news/2026/ifrs-for-sme-conceptual-framework/).
 
-- **H1 ✅** `csv_import.py`: new `_auto_backfill()` helper runs the idempotent `journal.backfill_company()` after `/import/invoices` and `/import/expenses` commit. A backfill failure never fails the import — it surfaces in `errors` with manual-backfill instructions. Response now includes a `journal_backfill` summary.
-- **H2 ✅** `payroll.py /reports/balance-sheet`: added `other_assets` / `other_liabilities` aggregates (all asset/liability-type accounts outside the known code lists) and reworked equity to include **all** equity-type accounts — 3000 (retained income basis), 3999 Opening Balance Equity, 3998 imported Retained Earnings, and `other_equity` — each exposed as its own response key. Frontend (App_js_fixed.js + zuzan-app/src/App.js) shows the new rows conditionally, plus the previously hidden income-tax/prov-tax liability rows.
-- **M1 ✅** `payroll.py` Rules 6/7: source-`"import"` lines on 1100/2000 are excluded from the control-account comparison (`ar_import_bal` / `ap_import_bal`) and reported in the detail text as imported opening balances that carry no invoice/PO-level detail.
-- **M2 ✅** `csv_import.py _import_journal_rows`: lines are parsed and DR/CR-validated **before** the entry is created; unbalanced groups are rejected with a per-group error ("group NOT imported"), empty groups skipped.
-- **M3 ✅** `csv_import.py /import/invoices`: new `exchange_rate` column aliases; ZAR rows forced to rate 1.0; non-ZAR rows without a positive rate are rejected with a clear error; `paid_amount_zar = total × rate`.
-- **L2 ✅** `_find_or_create_account`: name matching is now case-insensitive and whitespace-trimmed.
+Statement completeness (Section 3.17 of IFRS for SMEs): income statement ✓ (389–405), balance sheet ✓ (406–429), statement of changes in equity ✓ (430–440), cash flow — indirect method ✓ (441–461), notes incl. accounting policies ✓ (462–496). Titles "Income Statement"/"Balance Sheet" are permitted alternatives under para 3.22 (not misleading) — cosmetic only.
 
-Still open: **L1** (reversal-aware AP-credit lookups, carried over from 2026-07-09).
+Findings:
 
-## 7. Changes since last run (2026-07-10)
+- **[M4 — Medium] Cash-basis revenue recognition is not IFRS for SMEs-compliant.** The policy note states "Revenue is recognised when invoices are settled by customers (cash basis)" (financial_statements.py:476–478) and the income statement is built accordingly. Section 23 (3rd ed: Section 23 revised) requires accrual recognition — revenue when the performance obligation is satisfied (normally on invoice/delivery), not on receipt. The disclosure is honest, but statements prepared this way cannot claim IFRS for SMEs compliance in the basis note. Fix: recognise revenue on issued (sent/overdue/paid) invoices with a trade-receivables movement, or soften the basis wording to "prepared on the entity's accounting policies, which approximate IFRS for SMEs except for revenue recognition".
+- **[L3 — Low] `deferred_tax` hard-coded 0.0** (financial_statements.py:371) while the policy note says deferred tax "is not separately disclosed" (494). Acceptable for condensed statements; note if fixed-asset temporary differences grow.
+- **[L4 — Low] `finance_costs` hard-coded 0.0** (financial_statements.py:400). Correct while the app has no loan module; will silently misstate once bank feeds bring interest expense in.
 
-Both Medium items from yesterday (provisional-tax delivered-value COGS; cash-basis expense payments in cash-flow) remain fixed. The only substantive change since then is the **financial statement import feature** (csv_import.py + Import UI in App_js_fixed.js, commits 0c4b1cc…81aff38): trial balance / balance sheet / P&L / general ledger / journals imports plus xlsx support. It introduces two High and three Medium findings above — none regress the previously audited report code, but the imports write journal data the Reports/Debtors/Creditors reconciliation layer was not designed to absorb. The Low reversal-awareness item remains open.
+## 7. Tax updates (company + payroll)
+
+Current SARS tax year at run date: **2026/2027** (1 Mar 2026 – 28 Feb 2027).
+
+All rates verified against Budget 2026 (25 Feb 2026) sources — **all current, no changes required**:
+
+- **PAYE brackets 2026/2027** (payroll.py:127–139): match the gazetted tables exactly — 18% to R245,100; 26% to R383,100 (base R44,118); 31% to R530,200 (R79,998); 36% to R695,800 (R125,599); 39% to R887,000 (R185,215); 41% to R1,878,600 (R259,783); 45% above (R666,339). Bracket bases arithmetically re-verified. Budget 2026 adjusted brackets upward 3.4% — correctly reflected.
+- **Primary rebate** R17,820 (payroll.py:137) ✓. Secondary/tertiary rebates (R9,765 / R3,249) are not implemented — acceptable while the payroll module has no employee date-of-birth-driven rebate logic; note as future enhancement.
+- **UIF**: ceiling R17,712/month (payroll.py:138) ✓ (unchanged since June 2021); employee/employer 1% each (148) ✓; overtime excluded from UIF base (253–255) ✓.
+- **SDL**: 1% (149) with R500,000 annual-payroll exemption threshold (259–260) ✓.
+- **Tax-year selection**: `CURRENT_TAX_YEAR = "2026/2027"` (payroll.py:142) — correct for the run date. It is a hard-coded constant, not date-derived; the separate annual update task must flip it each 1 March. `calc_paye`/`calc_payroll` fall back to it safely (206, 240).
+- **CIT 27%**: dashboard provision (payroll.py:566), management accounts (1417), provisional tax `CORP_TAX_RATE` (1514), AFS tax note (financial_statements.py:403, 493) — all 27%, unchanged in Budget 2026 ✓.
+- **VAT 15%**: `VAT_RATE` (payroll.py:885, 1867) and VAT201 fraction 15/115 (1917, 1941) ✓. The 2025-era proposed VAT increase was withdrawn; Budget 2026 kept 15%. No announced future rate change. (Note: the compulsory VAT **registration** threshold rose R1m → R2.3m from 1 Apr 2026 — the app hard-codes no registration threshold, so nothing to update.)
+- **EMP201 due-day**: 7th of the following month (payroll.py:1273–1275) ✓ per SARS rule.
+
+Sources: [SARS — rates of tax for individuals](https://www.sars.gov.za/tax-rates/income-tax/rates-of-tax-for-individuals/), [Treasury — Budget 2026 Tax Guide](https://www.treasury.gov.za/documents/national%20budget/2026/sars/Budget%202026%20Tax%20guide.pdf), [SARS — Budget 2026 FAQ](https://www.sars.gov.za/about/sars-tax-and-customs-system/budget/budget-2026-frequently-asked-questions/), [SARS — UIF](https://www.sars.gov.za/types-of-tax/unemployment-insurance-fund/), [Werksmans — Budget 2026/27 tax overview](https://werksmans.com/budget-speech-2026-2027-tax-overview/).
+
+## 8. Action items
+
+1. **[Medium — M4]** ~~Align AFS revenue recognition with IFRS for SMEs Section 23~~ — **RESOLVED same day**, see §9 Resolution log.
+2. **[Low — L1]** Make per-PO AP-credit lookups reversal-aware (carried over from 2026-07-09; payroll.py:1698–1718, purchase_orders.py:427–448).
+3. **[Low — L3]** Revisit deferred-tax disclosure once fixed-asset temporary differences are material (financial_statements.py:371, 494).
+4. **[Low — L4]** Wire `finance_costs` to journal interest accounts before bank-feed interest lands (financial_statements.py:400).
+5. **[Low — planning]** Schedule IFRS for SMEs 3rd-edition transition review ahead of FY2028 (first period beginning 1 Mar 2027); add secondary/tertiary rebates if employees over 65 are onboarded; ensure the annual tax task flips `CURRENT_TAX_YEAR` on 1 Mar 2027.
+
+## 9. Resolution log (2026-07-11 evening, same day)
+
+**M4 ✅ fixed on request.** Investigation showed the income statement was **already accrual** — it aggregates journal revenue accounts (financial_statements.py:69–74), and `post_invoice_raised` credits revenue at issue date (journal.py:181–218). The defects were the policy note and two notes prepared on a different basis than the statements:
+
+- Basis-of-preparation note rewritten: accrual recognition at invoice issue per Section 23 of IFRS for SMEs, consideration receivable net of VAT, FX translated at transaction-date rate (financial_statements.py:500–505).
+- Note 4 (Revenue by customer) now uses all **issued** invoices (sent/overdue/paid) by issue date, ex-VAT, ZAR at the raised-basis exchange rate — previously paid-only, VAT-inclusive, raw FX, so it reconciled to nothing on the face of the statements (financial_statements.py:290–306).
+- Note 3 (Receivables aging) now converts to ZAR at the raised-basis rate via new `_inv_total_zar` helper, matching the 1100 AR control postings — previously raw foreign-currency totals (financial_statements.py:55–67, 275–286).
+- Frontend unchanged: the AFS view renders the policy text from the API, and its "Revenue (ZAR)" column label is now accurate.
+
+## 10. Changes since last run (2026-07-11 morning)
+
+All six same-day fixes from the morning run (H1, H2, M1, M2, M3, L2) are **verified intact in code** — no regressions. No new code changes detected in the audited reporting paths since. The IFRS and SARS-tax sections were audited for the first time under the expanded checklist: tax tables fully current; one Medium IFRS finding (M4, cash-basis revenue) plus three Low items.

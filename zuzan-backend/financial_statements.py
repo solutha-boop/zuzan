@@ -52,6 +52,21 @@ def _acct_lines(db, company_id, acct_type: AccountType, date_from=None, date_to=
 def _r(v): return round(v, 2)
 
 
+def _inv_rate(inv) -> float:
+    """ZAR conversion rate for an invoice at the raised-basis exchange rate —
+    the same rate post_invoice_raised uses, so note amounts reconcile with the
+    journal-driven statement lines. ZAR invoices are 1.0."""
+    if inv.currency and inv.currency != "ZAR":
+        return float(inv.exchange_rate or 1.0)
+    return 1.0
+
+
+def _inv_total_zar(inv) -> float:
+    """Invoice total (incl VAT) in ZAR at the raised-basis rate — matches the
+    AR control (1100) posting in post_invoice_raised."""
+    return round((inv.total_amount or 0) * _inv_rate(inv), 2)
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.get("/annual")
@@ -254,32 +269,41 @@ def annual_financial_statements(
     def _days_overdue(inv):
         ref = inv.due_date or inv.issue_date
         return max(0, (today - ref).days) if ref else 0
-    ar_current = _r(sum(i.total_amount for i in open_invoices if _days_overdue(i) == 0))
-    ar_0_30    = _r(sum(i.total_amount for i in open_invoices if 1  <= _days_overdue(i) <= 30))
-    ar_31_60   = _r(sum(i.total_amount for i in open_invoices if 31 <= _days_overdue(i) <= 60))
-    ar_61_90   = _r(sum(i.total_amount for i in open_invoices if 61 <= _days_overdue(i) <= 90))
-    ar_90plus  = _r(sum(i.total_amount for i in open_invoices if _days_overdue(i) > 90))
+    # ZAR at the raised-basis rate (audit fix 2026-07-11 M4) — previously raw
+    # foreign-currency totals were summed, so this note could not reconcile
+    # with the ZAR-denominated trade receivables line (1100) on the balance sheet.
+    ar_current = _r(sum(_inv_total_zar(i) for i in open_invoices if _days_overdue(i) == 0))
+    ar_0_30    = _r(sum(_inv_total_zar(i) for i in open_invoices if 1  <= _days_overdue(i) <= 30))
+    ar_31_60   = _r(sum(_inv_total_zar(i) for i in open_invoices if 31 <= _days_overdue(i) <= 60))
+    ar_61_90   = _r(sum(_inv_total_zar(i) for i in open_invoices if 61 <= _days_overdue(i) <= 90))
+    ar_90plus  = _r(sum(_inv_total_zar(i) for i in open_invoices if _days_overdue(i) > 90))
     receivables_aging = {
         "current":   ar_current,
         "days_1_30": ar_0_30,
         "days_31_60": ar_31_60,
         "days_61_90": ar_61_90,
         "days_90plus": ar_90plus,
-        "total":     _r(sum(i.total_amount for i in open_invoices)),
+        "total":     _r(sum(_inv_total_zar(i) for i in open_invoices)),
         "count":     len(open_invoices),
     }
 
-    # Note 4 — Revenue by customer (top 10, period)
-    paid_invoices = db.query(Invoice).filter(
+    # Note 4 — Revenue by customer (top 10, period).
+    # Accrual basis to match the income statement (audit fix 2026-07-11 M4):
+    # all ISSUED invoices (sent/overdue/paid) by issue date — previously only
+    # paid invoices were counted, so this note reconciled to nothing on the face
+    # of the statements. Amounts ex-VAT, translated to ZAR at the invoice
+    # exchange rate — the same raised-basis rate post_invoice_raised uses for
+    # the revenue account (4000) this note breaks down.
+    issued_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status == InvoiceStatus.paid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
         Invoice.issue_date >= start,
         Invoice.issue_date <= end,
     ).all()
     client_rev: dict = {}
-    for inv in paid_invoices:
+    for inv in issued_invoices:
         k = inv.client_name or "Unknown"
-        client_rev[k] = client_rev.get(k, 0) + (inv.paid_amount or inv.total_amount or 0)
+        client_rev[k] = client_rev.get(k, 0) + round((inv.amount or 0) * _inv_rate(inv), 2)
     revenue_by_customer = sorted(
         [{"client": k, "revenue": _r(v)} for k, v in client_rev.items()],
         key=lambda x: x["revenue"], reverse=True
@@ -474,8 +498,11 @@ def annual_financial_statements(
                     "These financial statements have been prepared in accordance with the International "
                     "Financial Reporting Standard for Small and Medium-sized Entities (IFRS for SMEs).",
                 "revenue_recognition":
-                    "Revenue is recognised when invoices are settled by customers (cash basis). "
-                    "Revenue is measured at the fair value of the consideration received, net of VAT.",
+                    "Revenue is recognised on the accrual basis when invoices are issued to customers "
+                    "and the entity's performance obligation is satisfied (Section 23 of the IFRS for "
+                    "SMEs Standard). Revenue is measured at the fair value of the consideration "
+                    "receivable, net of VAT. Foreign-currency invoices are translated to Rand at the "
+                    "exchange rate ruling at the transaction date.",
                 "fixed_assets":
                     "Property, plant and equipment are stated at cost less accumulated depreciation. "
                     "Depreciation is calculated on the straight-line or diminishing balance method "
