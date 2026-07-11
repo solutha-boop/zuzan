@@ -3199,6 +3199,7 @@ function Reports({live = {}}) {
               <ReportRow label="Accumulated Depreciation"   value={bs.assets.accum_depreciation}  color={C.red}  indent/>
               <ReportRow label="Fixed Assets (Net)"         value={bs.assets.fixed_assets_net}    color={C.blue}/>
             </>}
+            {(bs.assets.other_assets||0) !== 0 && <ReportRow label="Other Assets (imported)" value={bs.assets.other_assets} color={C.blue}/>}
             <ReportRow label="Total Assets"                value={bs.assets.total} bold border color={C.blue}/>
           </div>
           <div>
@@ -3208,10 +3209,16 @@ function Reports({live = {}}) {
             <ReportRow label="PAYE Payable (SARS)"          value={bs.liabilities.paye_payable}     indent color={C.red}/>
             <ReportRow label="UIF Payable (SARS)"           value={bs.liabilities.uif_payable}      indent color={C.red}/>
             <ReportRow label="SDL Payable (SARS)"           value={bs.liabilities.sdl_payable}      indent color={C.red}/>
+            {(bs.liabilities.income_tax_payable||0) !== 0 && <ReportRow label="Income Tax Payable (SARS)" value={bs.liabilities.income_tax_payable} indent color={C.red}/>}
+            {(bs.liabilities.prov_tax_payable||0) !== 0 && <ReportRow label="Provisional Tax Payable (SARS)" value={bs.liabilities.prov_tax_payable} indent color={C.red}/>}
+            {(bs.liabilities.other_liabilities||0) !== 0 && <ReportRow label="Other Liabilities (imported)" value={bs.liabilities.other_liabilities} indent color={C.red}/>}
             <ReportRow label="Total Liabilities"            value={bs.liabilities.total} bold border color={C.red}/>
             <div style={{height:12}}/>
             <div style={{fontSize:11,fontWeight:700,color:C.green,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Equity</div>
             <ReportRow label="Retained Income" value={bs.equity.retained_income} color={C.green}/>
+            {(bs.equity.opening_balance_equity||0) !== 0 && <ReportRow label="Opening Balance Equity (imported)" value={bs.equity.opening_balance_equity} color={C.green}/>}
+            {(bs.equity.imported_retained_earnings||0) !== 0 && <ReportRow label="Retained Earnings (imported)" value={bs.equity.imported_retained_earnings} color={C.green}/>}
+            {(bs.equity.other_equity||0) !== 0 && <ReportRow label="Other Equity" value={bs.equity.other_equity} color={C.green}/>}
             <ReportRow label="Total Equity"    value={bs.equity.total} bold color={C.green}/>
             <div style={{height:12}}/>
             <ReportRow label="Total Liabilities and Equity" value={bs.total_liabilities_and_equity} bold border large color={balanced?C.ink:C.red}/>

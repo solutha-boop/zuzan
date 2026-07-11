@@ -754,7 +754,20 @@ async def balance_sheet(
     fixed_assets_cost     = bal("1500")
     accum_depreciation    = bal("1510")   # contra-asset: journal stores as negative (credit normal)
     fixed_assets_net      = round(fixed_assets_cost + accum_depreciation, 2)  # cost - accum (accum is negative)
-    total_assets = round(cash_and_equivalents + trade_receivables + inventory_at_cost + vat_input_recoverable + fixed_assets_net, 2)
+    # Other asset accounts (audit fix 2026-07-11): statement imports can create
+    # asset accounts under foreign code schemes (Xero/QuickBooks), which the
+    # code-keyed lines above can't see. Aggregate every remaining asset-type
+    # account so imported balances aren't invisible to the balance sheet.
+    _KNOWN_ASSET_CODES = ("1000", "1100", "1200", "1300", "1500", "1510")
+    other_assets = round(sum(
+        journal_engine.account_balance(a, db)
+        for a in db.query(Account).filter(
+            Account.company_id == cid,
+            Account.type == AccountType.asset,
+            Account.code.notin_(_KNOWN_ASSET_CODES),
+        ).all()
+    ), 2)
+    total_assets = round(cash_and_equivalents + trade_receivables + inventory_at_cost + vat_input_recoverable + fixed_assets_net + other_assets, 2)
 
     # ── LIABILITIES ───────────────────────────────────────────────────────────
     accounts_payable    = bal("2000")
@@ -764,9 +777,19 @@ async def balance_sheet(
     sdl_payable         = bal("2220")
     income_tax_payable  = bal("2126")   # Corporate income tax due to SARS
     prov_tax_payable    = bal("2127")   # Provisional tax (IRP6) due to SARS
+    # Other liability accounts (audit fix 2026-07-11) — same rationale as other_assets.
+    _KNOWN_LIAB_CODES = ("2000", "2100", "2200", "2210", "2220", "2126", "2127")
+    other_liabilities = round(sum(
+        journal_engine.account_balance(a, db)
+        for a in db.query(Account).filter(
+            Account.company_id == cid,
+            Account.type == AccountType.liability,
+            Account.code.notin_(_KNOWN_LIAB_CODES),
+        ).all()
+    ), 2)
     total_liabilities = round(
         accounts_payable + vat_payable + paye_payable + uif_payable + sdl_payable
-        + income_tax_payable + prov_tax_payable,
+        + income_tax_payable + prov_tax_payable + other_liabilities,
         2,
     )
 
@@ -775,12 +798,37 @@ async def balance_sheet(
     # unless the owner manually journals equity (e.g. share capital, drawings).
     # Retained income = explicit equity balance (3000) + cumulative P&L derived
     # from all revenue and expense journal accounts — identical approach to AFS.
+    #
+    # ALL equity-type accounts are included (audit fix 2026-07-11): previously
+    # only 3000 was counted, so Opening Balance Equity (3999) and imported
+    # Retained Earnings (3998) — the balancing offsets posted by the statement
+    # imports — were excluded from total equity. Every trial-balance/balance-
+    # sheet import therefore unbalanced the equation (Rule 1), and a P&L import
+    # overstated equity by the imported net profit (its revenue credits were
+    # counted via the type-based query below while the 3998 offset was ignored).
     rev_accounts = db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.revenue).all()
     exp_accounts = db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.expense).all()
     cum_revenue  = sum(journal_engine.account_balance(a, db) for a in rev_accounts)
     cum_expenses = sum(journal_engine.account_balance(a, db) for a in exp_accounts)
-    retained_income = round(bal("3000") + cum_revenue - cum_expenses, 2)
-    total_equity = retained_income
+    owner_equity_3000          = 0.0
+    opening_balance_equity     = 0.0  # 3999 — offset from trial-balance / balance-sheet imports
+    imported_retained_earnings = 0.0  # 3998 — offset from P&L imports
+    other_equity               = 0.0  # any other equity account (imported code schemes)
+    for a in db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.equity).all():
+        b = journal_engine.account_balance(a, db)
+        if a.code == "3000":
+            owner_equity_3000 += b
+        elif a.code == "3999":
+            opening_balance_equity += b
+        elif a.code == "3998":
+            imported_retained_earnings += b
+        else:
+            other_equity += b
+    opening_balance_equity     = round(opening_balance_equity, 2)
+    imported_retained_earnings = round(imported_retained_earnings, 2)
+    other_equity               = round(other_equity, 2)
+    retained_income = round(owner_equity_3000 + cum_revenue - cum_expenses, 2)
+    total_equity = round(retained_income + opening_balance_equity + imported_retained_earnings + other_equity, 2)
 
     # ── BALANCE CHECK ─────────────────────────────────────────────────────────
     total_liabilities_and_equity = round(total_liabilities + total_equity, 2)
@@ -800,6 +848,7 @@ async def balance_sheet(
             "fixed_assets_cost":     fixed_assets_cost,
             "accum_depreciation":    accum_depreciation,
             "fixed_assets_net":      fixed_assets_net,
+            "other_assets":          other_assets,
             "total":                 total_assets,
         },
         "liabilities": {
@@ -810,11 +859,15 @@ async def balance_sheet(
             "sdl_payable":        sdl_payable,
             "income_tax_payable": income_tax_payable,
             "prov_tax_payable":   prov_tax_payable,
+            "other_liabilities":  other_liabilities,
             "total":              total_liabilities,
         },
         "equity": {
-            "retained_income": retained_income,
-            "total":           total_equity,
+            "retained_income":            retained_income,
+            "opening_balance_equity":     opening_balance_equity,
+            "imported_retained_earnings": imported_retained_earnings,
+            "other_equity":               other_equity,
+            "total":                      total_equity,
         },
         "total_liabilities_and_equity": total_liabilities_and_equity,
     }
@@ -947,14 +1000,31 @@ async def reconciliation(
             Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
         ).all()
         ar_raw_total = round(sum(_to_zar(i) for i in outstanding_invs), 2)
-        ar_diff = round(ar_journal_bal - ar_raw_total, 2)
+        # Imported opening balances (audit fix 2026-07-11): statement imports can
+        # post directly to 1100 (source "import") with no matching Invoice rows.
+        # Those lines false-failed this rule and the advice ("run /journal/backfill")
+        # could never repair it. Exclude import-sourced lines from the comparison
+        # and report them separately as opening balances.
+        ar_import_bal = round(
+            db.query(func.coalesce(func.sum(JournalLine.debit - JournalLine.credit), 0))
+            .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+            .filter(
+                JournalEntry.company_id == cid,
+                JournalEntry.source == "import",
+                JournalLine.account_id == ar_acct.id,
+            ).scalar() or 0, 2)
+        ar_import_note = (
+            f" (plus R {ar_import_bal:,.2f} imported opening debtors excluded from the check — "
+            "opening balances have no invoice-level detail)"
+        ) if ar_import_bal else ""
+        ar_diff = round(ar_journal_bal - ar_import_bal - ar_raw_total, 2)
         if abs(ar_diff) < 1.0:
             checks.append({"rule": "AR Control Account (1100)", "status": "pass",
-                "detail": f"Journal AR balance R {ar_journal_bal:,.2f} reconciles with outstanding invoices R {ar_raw_total:,.2f} ✓",
+                "detail": f"Journal AR balance R {ar_journal_bal - ar_import_bal:,.2f} reconciles with outstanding invoices R {ar_raw_total:,.2f} ✓{ar_import_note}",
                 "amount": ar_journal_bal})
         else:
             checks.append({"rule": "AR Control Account (1100)", "status": "fail",
-                "detail": f"AR journal balance R {ar_journal_bal:,.2f} differs from outstanding invoice total R {ar_raw_total:,.2f} by R {ar_diff:,.2f}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
+                "detail": f"AR journal balance R {ar_journal_bal - ar_import_bal:,.2f} differs from outstanding invoice total R {ar_raw_total:,.2f} by R {ar_diff:,.2f}{ar_import_note}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
                 "amount": ar_diff})
 
     # ── RULE 7: AP control account — journal 2000 vs open POs + unpaid credit expenses ──
@@ -1004,17 +1074,32 @@ async def reconciliation(
             2,
         )
         ap_raw_total = round(open_po_total + credit_exp_total, 2)
-        ap_diff = round(ap_journal_bal - ap_raw_total, 2)
+        # Imported opening balances (audit fix 2026-07-11) — mirror of the Rule 6
+        # treatment: exclude source="import" lines on 2000 from the comparison,
+        # since imported opening creditors have no PO/expense-level detail.
+        ap_import_bal = round(
+            db.query(func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0))
+            .join(_JE, JournalLine.entry_id == _JE.id)
+            .filter(
+                _JE.company_id == cid,
+                _JE.source == "import",
+                JournalLine.account_id == ap_acct.id,
+            ).scalar() or 0, 2)
+        ap_import_note = (
+            f" (plus R {ap_import_bal:,.2f} imported opening creditors excluded from the check — "
+            "opening balances have no PO/expense-level detail)"
+        ) if ap_import_bal else ""
+        ap_diff = round(ap_journal_bal - ap_import_bal - ap_raw_total, 2)
         detail_breakdown = f"Open POs R {open_po_total:,.2f}"
         if credit_exp_total:
             detail_breakdown += f" + unpaid credit expenses R {credit_exp_total:,.2f}"
         if abs(ap_diff) < 1.0:
             checks.append({"rule": "AP Control Account (2000)", "status": "pass",
-                "detail": f"Journal AP balance R {ap_journal_bal:,.2f} reconciles with {detail_breakdown} = R {ap_raw_total:,.2f} ✓",
+                "detail": f"Journal AP balance R {ap_journal_bal - ap_import_bal:,.2f} reconciles with {detail_breakdown} = R {ap_raw_total:,.2f} ✓{ap_import_note}",
                 "amount": ap_journal_bal})
         else:
             checks.append({"rule": "AP Control Account (2000)", "status": "fail",
-                "detail": f"AP journal balance R {ap_journal_bal:,.2f} differs from {detail_breakdown} = R {ap_raw_total:,.2f} by R {ap_diff:,.2f}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
+                "detail": f"AP journal balance R {ap_journal_bal - ap_import_bal:,.2f} differs from {detail_breakdown} = R {ap_raw_total:,.2f} by R {ap_diff:,.2f}{ap_import_note}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
                 "amount": ap_diff})
 
     # ── RULE 8: Inventory valuation ───────────────────────────────────────────

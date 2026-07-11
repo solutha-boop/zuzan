@@ -94,6 +94,8 @@ INVOICE_ALIASES: dict[str, list[str]] = {
     "total_amount":   ["total_amount", "total", "gross", "incl_vat", "amount_due",
                        "grand_total", "invoice_total", "balance_due"],
     "currency":       ["currency", "currency_code", "currencycode"],
+    "exchange_rate":  ["exchange_rate", "exchangerate", "rate", "fx_rate",
+                       "conversion_rate", "currency_rate", "zar_rate"],
     "issue_date":     ["issue_date", "issuedate", "date", "invoice_date",
                        "invoicedate", "created_date", "sent_date", "transaction_date"],
     "due_date":       ["due_date", "duedate", "payment_due", "due",
@@ -118,6 +120,30 @@ EXPENSE_ALIASES: dict[str, list[str]] = {
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _auto_backfill(db, cid: int) -> dict:
+    """
+    Post journal entries for freshly imported invoices/expenses (audit fix
+    2026-07-11): imported rows previously carried no journal postings until the
+    user manually clicked "Re-run backfill" on the Journal tab, so the AR
+    control account (Rule 6), revenue accounts and balance sheet desynced
+    immediately after a migration import. backfill_company is idempotent —
+    it only posts entries that are missing.
+    Returns a summary dict; a backfill failure never fails the import itself.
+    """
+    try:
+        import journal as journal_engine
+        result = journal_engine.backfill_company(cid, db)
+        db.commit()
+        return result
+    except Exception as e:
+        db.rollback()
+        return {"errors": [
+            f"Journal backfill failed after import: {e}. "
+            "Your data was imported — run 'Re-run backfill' from the Journal tab "
+            "to post the accounting entries."
+        ]}
+
 
 def _map_headers(headers: list[str], aliases: dict) -> dict[str, int]:
     """Return {field: column_index} for every field we can match in headers."""
@@ -426,8 +452,27 @@ async def import_invoices(
 
             issue_date = _parse_date(_get(row, m, "issue_date")) or datetime.utcnow()
             due_date   = _parse_date(_get(row, m, "due_date"))
-            currency   = _get(row, m, "currency", "ZAR") or "ZAR"
+            currency   = (_get(row, m, "currency", "ZAR") or "ZAR").strip().upper()
             status     = _parse_status(_get(row, m, "status"))
+
+            # Foreign currency (audit fix 2026-07-11): exchange_rate was hard-coded
+            # to 1.0, so a USD invoice was valued 1:1 in every ZAR report via
+            # _to_zar(). Non-ZAR rows now require an Exchange Rate column (units of
+            # ZAR per 1 unit of foreign currency); rows without one are rejected
+            # rather than silently misstated.
+            rate = _parse_float(_get(row, m, "exchange_rate"))
+            if currency == "ZAR":
+                rate = 1.0
+            elif rate <= 0:
+                errors.append({
+                    "row": i,
+                    "message": (
+                        f"Invoice {inv_no}: currency is {currency} but no Exchange Rate "
+                        "column/value was found (rate to ZAR). Row skipped — add an "
+                        "'Exchange Rate' column or convert the amounts to ZAR."
+                    ),
+                })
+                continue
 
             db.add(Invoice(
                 company_id      = cid,
@@ -439,24 +484,30 @@ async def import_invoices(
                 vat_amount      = vat_amount,
                 total_amount    = total,
                 currency        = currency,
-                exchange_rate   = 1.0,
+                exchange_rate   = rate,
                 status          = status,
                 issue_date      = issue_date,
                 due_date        = due_date,
                 paid_date       = issue_date if status == InvoiceStatus.paid else None,
-                paid_amount_zar = total      if status == InvoiceStatus.paid else None,
+                paid_amount_zar = round(total * rate, 2) if status == InvoiceStatus.paid else None,
             ))
             imported += 1
         except Exception as e:
             errors.append({"row": i, "message": str(e)})
 
     db.commit()
+
+    # Auto-post journal entries for the imported invoices (audit fix 2026-07-11)
+    backfill = _auto_backfill(db, cid)
+    errors.extend({"row": None, "message": msg} for msg in backfill.get("errors", []))
+
     return {
-        "entity":     "invoices",
-        "total_rows": len(rows),
-        "imported":   imported,
-        "skipped":    0,
-        "errors":     errors,
+        "entity":           "invoices",
+        "total_rows":       len(rows),
+        "imported":         imported,
+        "skipped":          0,
+        "errors":           errors,
+        "journal_backfill": {k: v for k, v in backfill.items() if k != "errors"},
     }
 
 
@@ -507,12 +558,18 @@ async def import_expenses(
             errors.append({"row": i, "message": str(e)})
 
     db.commit()
+
+    # Auto-post journal entries for the imported expenses (audit fix 2026-07-11)
+    backfill = _auto_backfill(db, cid)
+    errors.extend({"row": None, "message": msg} for msg in backfill.get("errors", []))
+
     return {
-        "entity":     "expenses",
-        "total_rows": len(rows),
-        "imported":   imported,
-        "skipped":    0,
-        "errors":     errors,
+        "entity":           "expenses",
+        "total_rows":       len(rows),
+        "imported":         imported,
+        "skipped":          0,
+        "errors":           errors,
+        "journal_backfill": {k: v for k, v in backfill.items() if k != "errors"},
     }
 
 
@@ -632,15 +689,23 @@ def _infer_type_from_code(code: str) -> AccountType:
 def _find_or_create_account(
     db, cid: int, code: str, name: str, atype: AccountType
 ) -> Account:
-    """Return an existing Account (by code, then by name) or create a new one."""
+    """Return an existing Account (by code, then by name) or create a new one.
+
+    Name matching is case-insensitive and whitespace-trimmed (audit fix
+    2026-07-11) so repeated imports with header variants ("Sales" / "SALES ")
+    don't spawn duplicate accounts that all feed retained income.
+    """
     acct = None
+    code = (code or "").strip()
+    name = (name or "").strip()
     if code:
         acct = db.query(Account).filter(
             Account.company_id == cid, Account.code == code
         ).first()
     if acct is None and name:
         acct = db.query(Account).filter(
-            Account.company_id == cid, Account.name == name
+            Account.company_id == cid,
+            func.lower(func.trim(Account.name)) == name.lower(),
         ).first()
     if acct:
         return acct
@@ -966,6 +1031,44 @@ def _import_journal_rows(
             entry_date = _parse_date(_get(first_row, m, "date")) or datetime.utcnow()
             description = _get(first_row, m, "description") or f"{entity.replace('_',' ').title()} Import"
 
+            # Parse and validate ALL lines BEFORE creating the entry (audit fix
+            # 2026-07-11): unbalanced groups were previously "flagged but imported
+            # anyway", silently breaking the balance sheet equation (Rule 1).
+            # Unbalanced groups are now rejected with a clear per-row error.
+            pending_lines = []
+            total_dr = total_cr = 0.0
+            for row_i, row in group_rows:
+                code  = _get(row, m, "account_code")
+                name  = _get(row, m, "account_name")
+                if not code and not name:
+                    continue
+                debit  = _parse_float(_get(row, m, "debit"))
+                credit = _parse_float(_get(row, m, "credit"))
+                if debit == 0.0 and credit == 0.0:
+                    continue
+                line_desc = _get(row, m, "description") or description
+                pending_lines.append((code, name, debit, credit, line_desc))
+                total_dr += debit
+                total_cr += credit
+
+            if not pending_lines:
+                skipped += 1
+                continue
+
+            diff = round(total_dr - total_cr, 2)
+            if abs(diff) > 0.01:
+                skipped += 1
+                errors.append({
+                    "row":     group_rows[0][0],
+                    "message": (
+                        f"Journal '{ref}' is unbalanced: "
+                        f"DR {total_dr:.2f} ≠ CR {total_cr:.2f} (diff {diff:+.2f})"
+                        " — group NOT imported. Fix the export and re-import; "
+                        "already-imported balanced groups are unaffected."
+                    ),
+                })
+                continue
+
             entry = JournalEntry(
                 company_id  = cid,
                 date        = entry_date,
@@ -976,37 +1079,12 @@ def _import_journal_rows(
             db.add(entry)
             db.flush()
 
-            total_dr = total_cr = 0.0
-
-            for row_i, row in group_rows:
-                code  = _get(row, m, "account_code")
-                name  = _get(row, m, "account_name")
-                if not code and not name:
-                    continue
-                debit  = _parse_float(_get(row, m, "debit"))
-                credit = _parse_float(_get(row, m, "credit"))
-                if debit == 0.0 and credit == 0.0:
-                    continue
-
+            for code, name, debit, credit, line_desc in pending_lines:
                 atype = _infer_type_from_code(code)
                 acct  = _find_or_create_account(db, cid, code, name, atype)
-                line_desc = _get(row, m, "description") or description
                 db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
                                    debit=debit, credit=credit, description=line_desc))
-                total_dr += debit
-                total_cr += credit
                 imported += 1
-
-            diff = round(total_dr - total_cr, 2)
-            if abs(diff) > 0.01:
-                errors.append({
-                    "row":     group_rows[0][0],
-                    "message": (
-                        f"Journal '{ref}' is unbalanced: "
-                        f"DR {total_dr:.2f} ≠ CR {total_cr:.2f} (diff {diff:+.2f})"
-                        " — imported anyway"
-                    ),
-                })
 
         except Exception as e:
             skipped += 1
