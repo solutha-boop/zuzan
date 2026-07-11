@@ -11089,6 +11089,22 @@ function DocumentRepository() {
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
   const [tab, setTab] = useState("dashboard");
+
+  // ── Site analytics: fire a page-view ping on every tab change ────────────
+  const _sessionId = useRef((() => {
+    try {
+      let sid = localStorage.getItem("_zz_sid");
+      if (!sid) { sid = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("_zz_sid", sid); }
+      return sid;
+    } catch { return "anon"; }
+  })());
+  useEffect(() => {
+    fetch(`${BASE_URL}/track`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ session_id: _sessionId.current, page: tab, referrer: document.referrer || "" }),
+    }).catch(() => {});
+  }, [tab]);
   const [docTemplate, setDocTemplate] = useState(() => {
     try { const s = localStorage.getItem("zuzan_doc_template"); return s ? {...DEFAULT_DOC_TEMPLATE, ...JSON.parse(s)} : DEFAULT_DOC_TEMPLATE; } catch { return DEFAULT_DOC_TEMPLATE; }
   });

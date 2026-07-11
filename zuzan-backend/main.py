@@ -177,6 +177,7 @@ from bank_direct_feeds import absa_router, nedbank_router, investec_router, stan
 from documents import router as documents_router
 from csv_import import router as csv_import_router
 from category_rules import router as category_rules_router
+from analytics import router as analytics_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -208,6 +209,7 @@ app.include_router(fin_stmts_router,     prefix="/financial-statements", tags=["
 app.include_router(documents_router,     prefix="/documents",            tags=["Documents"])
 app.include_router(csv_import_router,    prefix="/import",               tags=["CSV Import"])
 app.include_router(category_rules_router,                                tags=["Category Rules"])
+app.include_router(analytics_router,                                     tags=["Analytics"])
 
 
 @app.get("/")
@@ -597,6 +599,65 @@ async def admin_mrr(db: Session = Depends(get_db_session), _=Depends(_check_admi
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/api/analytics", tags=["Admin"])
+async def admin_analytics(db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    """Engagement + geo stats for the admin dashboard."""
+    from database import SiteVisit as _SV
+    from sqlalchemy import func as _func
+    from datetime import timedelta
+    try:
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        visits_today = db.query(_SV).filter(_SV.timestamp >= today_start).count()
+        visits_7d    = db.query(_SV).filter(_SV.timestamp >= now - timedelta(days=7)).count()
+        visits_30d   = db.query(_SV).filter(_SV.timestamp >= now - timedelta(days=30)).count()
+
+        unique_sessions_30d = db.query(_func.count(_func.distinct(_SV.session_id))).filter(
+            _SV.timestamp >= now - timedelta(days=30)
+        ).scalar() or 0
+
+        top_countries = db.query(_SV.country, _func.count(_SV.id).label("n")).filter(
+            _SV.timestamp >= now - timedelta(days=30),
+            _SV.country.isnot(None),
+        ).group_by(_SV.country).order_by(_func.count(_SV.id).desc()).limit(10).all()
+
+        top_pages = db.query(_SV.page, _func.count(_SV.id).label("n")).filter(
+            _SV.timestamp >= now - timedelta(days=30),
+            _SV.page.isnot(None),
+        ).group_by(_SV.page).order_by(_func.count(_SV.id).desc()).limit(10).all()
+
+        # Daily visit counts for the last 30 days
+        daily_raw = db.query(
+            _func.date(_SV.timestamp).label("day"),
+            _func.count(_SV.id).label("n"),
+        ).filter(_SV.timestamp >= now - timedelta(days=30)
+        ).group_by(_func.date(_SV.timestamp)
+        ).order_by(_func.date(_SV.timestamp)).all()
+
+        recent = db.query(_SV).order_by(_SV.timestamp.desc()).limit(50).all()
+
+        return {
+            "visits_today":        visits_today,
+            "visits_7d":           visits_7d,
+            "visits_30d":          visits_30d,
+            "unique_sessions_30d": unique_sessions_30d,
+            "top_countries": [{"country": r.country, "visits": r.n} for r in top_countries],
+            "top_pages":     [{"page": r.page,       "visits": r.n} for r in top_pages],
+            "daily":         [{"day": str(r.day),    "n":      r.n} for r in daily_raw],
+            "recent": [{
+                "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                "page":      r.page,
+                "country":   r.country,
+                "city":      r.city,
+                "referrer":  r.referrer,
+            } for r in recent],
+        }
+    except Exception as e:
+        logger.error(f"Admin analytics error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/admin", response_class=_HTML, tags=["Admin"])
 async def admin_dashboard():
     html = """<!DOCTYPE html>
@@ -677,6 +738,7 @@ tr:hover td{background:#fdf9f7}
   <div class="tabs">
     <button class="tab active" onclick="showTab('clients')">Clients</button>
     <button class="tab" onclick="showTab('revenue')">Subscription Revenue</button>
+    <button class="tab" onclick="showTab('analytics')">Site Analytics</button>
   </div>
 
   <!-- ── CLIENTS TAB ── -->
@@ -747,6 +809,51 @@ tr:hover td{background:#fdf9f7}
       </table>
     </div>
   </div><!-- end tab-revenue -->
+
+  <!-- ── ANALYTICS TAB ── -->
+  <div id="tab-analytics" style="display:none">
+    <div class="stats" id="analyticsStats"></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <!-- Daily visits chart -->
+      <div class="card">
+        <div class="card-header"><h3>Daily Visits (30 days)</h3></div>
+        <div class="bar-wrap" id="visitsBars"></div>
+        <div class="bar-labels" id="visitsBarsLabels"></div>
+      </div>
+
+      <!-- Top countries -->
+      <div class="card">
+        <div class="card-header"><h3>Top Countries (30 days)</h3></div>
+        <table>
+          <thead><tr><th>Country</th><th>Visits</th></tr></thead>
+          <tbody id="countriesTbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <!-- Top pages -->
+      <div class="card">
+        <div class="card-header"><h3>Top Pages / Tabs (30 days)</h3></div>
+        <table>
+          <thead><tr><th>Page</th><th>Views</th></tr></thead>
+          <tbody id="pagesTbody"></tbody>
+        </table>
+      </div>
+
+      <!-- Recent visits -->
+      <div class="card">
+        <div class="card-header"><h3>Recent Visits</h3></div>
+        <div style="overflow-x:auto;max-height:320px;overflow-y:auto">
+          <table>
+            <thead><tr><th>Time</th><th>Page</th><th>Country</th><th>City</th><th>Referrer</th></tr></thead>
+            <tbody id="recentVisitsTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div><!-- end tab-analytics -->
 </div><!-- end main -->
 
 <script>
@@ -757,9 +864,11 @@ function showTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
-  document.getElementById('tab-clients').style.display = tab === 'clients' ? '' : 'none';
-  document.getElementById('tab-revenue').style.display = tab === 'revenue' ? '' : 'none';
-  if (tab === 'revenue') loadRevenue();
+  document.getElementById('tab-clients').style.display   = tab === 'clients'   ? '' : 'none';
+  document.getElementById('tab-revenue').style.display   = tab === 'revenue'   ? '' : 'none';
+  document.getElementById('tab-analytics').style.display = tab === 'analytics' ? '' : 'none';
+  if (tab === 'revenue')   loadRevenue();
+  if (tab === 'analytics') loadAnalytics();
 }
 
 function login() {
@@ -890,6 +999,55 @@ function renderSubTable(subs) {
 function toggleAddForm() {
   const f = document.getElementById('addForm');
   f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+
+async function loadAnalytics() {
+  try {
+    const res = await fetch('/admin/api/analytics', { headers: {'X-Admin-Secret': secret} });
+    if (!res.ok) { console.error('Analytics load failed'); return; }
+    const d = await res.json();
+
+    // KPI cards
+    document.getElementById('analyticsStats').innerHTML = `
+      <div class="stat"><div class="val">${d.visits_today}</div><div class="lbl">Visits Today</div></div>
+      <div class="stat"><div class="val">${d.visits_7d}</div><div class="lbl">Visits (7 days)</div></div>
+      <div class="stat"><div class="val">${d.visits_30d}</div><div class="lbl">Visits (30 days)</div></div>
+      <div class="stat"><div class="val">${d.unique_sessions_30d}</div><div class="lbl">Unique Sessions (30d)</div></div>
+    `;
+
+    // Daily bar chart
+    if (d.daily && d.daily.length) {
+      const maxN = Math.max(...d.daily.map(r => r.n), 1);
+      document.getElementById('visitsBars').innerHTML = d.daily.map(r => {
+        const pct = Math.round((r.n / maxN) * 100);
+        return `<div class="bar" style="height:${pct}%" data-tip="${r.day}: ${r.n} visits"></div>`;
+      }).join('');
+      document.getElementById('visitsBarsLabels').innerHTML = d.daily.map(r => {
+        const label = r.day ? r.day.slice(5) : ''; // MM-DD
+        return `<div class="bar-label">${label}</div>`;
+      }).join('');
+    } else {
+      document.getElementById('visitsBars').innerHTML = '<div style="color:#aaa;font-size:12px;padding:8px">No data yet</div>';
+    }
+
+    // Top countries
+    document.getElementById('countriesTbody').innerHTML = (d.top_countries||[]).map(r =>
+      `<tr><td>${r.country||'Unknown'}</td><td><strong>${r.visits}</strong></td></tr>`
+    ).join('') || '<tr><td colspan="2" style="color:#aaa;font-size:12px">No data yet</td></tr>';
+
+    // Top pages
+    document.getElementById('pagesTbody').innerHTML = (d.top_pages||[]).map(r =>
+      `<tr><td><code style="font-size:12px">${r.page||'—'}</code></td><td><strong>${r.visits}</strong></td></tr>`
+    ).join('') || '<tr><td colspan="2" style="color:#aaa;font-size:12px">No data yet</td></tr>';
+
+    // Recent visits
+    document.getElementById('recentVisitsTbody').innerHTML = (d.recent||[]).map(r => {
+      const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : '—';
+      const ref = r.referrer ? `<span title="${r.referrer}" style="color:#aaa">${r.referrer.slice(0,30)}${r.referrer.length>30?'…':''}</span>` : '—';
+      return `<tr><td style="font-size:11px;white-space:nowrap">${ts}</td><td>${r.page||'—'}</td><td>${r.country||'—'}</td><td>${r.city||'—'}</td><td>${ref}</td></tr>`;
+    }).join('') || '<tr><td colspan="5" style="color:#aaa;font-size:12px">No visits recorded yet</td></tr>';
+
+  } catch(e) { console.error('loadAnalytics error', e); }
 }
 
 async function submitManual() {

@@ -844,6 +844,20 @@ class CategoryRule(Base):
     updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     company     = relationship("Company", back_populates="category_rules")
 
+
+class SiteVisit(Base):
+    """Anonymous site visit / engagement tracking — no PII stored."""
+    __tablename__ = "site_visits"
+    id          = Column(Integer, primary_key=True, index=True)
+    session_id  = Column(String, nullable=True)   # client-generated UUID (localStorage)
+    timestamp   = Column(DateTime, default=datetime.utcnow, index=True)
+    page        = Column(String, nullable=True)   # tab or route name
+    referrer    = Column(String, nullable=True)   # document.referrer (max 500 chars)
+    country     = Column(String, nullable=True)   # from IP geo lookup
+    city        = Column(String, nullable=True)
+    user_agent  = Column(String, nullable=True)   # truncated to 300 chars
+    ip_hash     = Column(String, nullable=True)   # first 16 chars of SHA-256 hash
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
@@ -1174,6 +1188,20 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN payfast_merchant_id VARCHAR",
             "ALTER TABLE companies ADD COLUMN payfast_merchant_key VARCHAR",
             "ALTER TABLE companies ADD COLUMN payfast_passphrase VARCHAR",
+            # ── Site analytics (2026-07) ──────────────────────────────────────
+            """CREATE TABLE IF NOT EXISTS site_visits (
+                id         SERIAL PRIMARY KEY,
+                session_id VARCHAR,
+                timestamp  TIMESTAMP DEFAULT NOW(),
+                page       VARCHAR,
+                referrer   VARCHAR,
+                country    VARCHAR,
+                city       VARCHAR,
+                user_agent VARCHAR,
+                ip_hash    VARCHAR
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_site_visits_timestamp ON site_visits (timestamp)",
+            "CREATE INDEX IF NOT EXISTS ix_site_visits_session ON site_visits (session_id)",
         ]:
             try:
                 conn.execute(text(sql))
