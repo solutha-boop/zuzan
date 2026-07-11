@@ -2403,6 +2403,37 @@ function LeaveManagement({employees = []}) {
   );
 }
 
+// ── Patterson Grade market salary ranges (2025 SA general market, monthly CTC) ──
+// Source: Peromnes/Patterson compensation surveys — use as indicative benchmarks.
+// Ranges vary by industry, company size, and province.
+const PATTERSON_RANGES = {
+  A1: { min:  3500, median:  4500, max:  5500 },
+  A2: { min:  5000, median:  6500, max:  8000 },
+  B1: { min:  7000, median:  9000, max: 11000 },
+  B2: { min:  9500, median: 12000, max: 15000 },
+  B3: { min: 12000, median: 15500, max: 19000 },
+  B4: { min: 15000, median: 19000, max: 23000 },
+  B5: { min: 18000, median: 23000, max: 28000 },
+  C1: { min: 20000, median: 26000, max: 32000 },
+  C2: { min: 25000, median: 32000, max: 40000 },
+  C3: { min: 30000, median: 39000, max: 48000 },
+  C4: { min: 36000, median: 46000, max: 56000 },
+  C5: { min: 43000, median: 54000, max: 65000 },
+  D1: { min: 45000, median: 57000, max: 70000 },
+  D2: { min: 55000, median: 70000, max: 85000 },
+  D3: { min: 65000, median: 82000, max:100000 },
+  D4: { min: 80000, median:102000, max:125000 },
+  D5: { min: 95000, median:122000, max:150000 },
+  E1: { min:110000, median:140000, max:170000 },
+  E2: { min:130000, median:170000, max:210000 },
+  E3: { min:160000, median:210000, max:260000 },
+  E4: { min:200000, median:260000, max:320000 },
+  E5: { min:240000, median:320000, max:400000 },
+  F1: { min:280000, median:390000, max:500000 },
+  F2: { min:380000, median:540000, max:700000 },
+  F3: { min:500000, median:800000, max:1200000 },
+};
+
 function Payroll({live = {}, user = {}}) {
   const liveEmployees = live.employees;
   const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
@@ -2883,13 +2914,101 @@ function Payroll({live = {}, user = {}}) {
               {l:"Department",           k:"dept",            p:"Tech",        t:"text"},
               {l:"Monthly Salary (ZAR)", k:"salary",          p:"35000",       t:"number"},
               {l:"Date of Appointment",  k:"appointmentDate", p:"",            t:"date"},
-              {l:"Grade / Pay Band",     k:"grade",           p:"e.g. A, B2, Senior", t:"text"},
             ].map(f => (
               <div key={f.k}>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
                 <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
               </div>
             ))}
+            {/* Patterson Grade dropdown + market salary hint */}
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Patterson Grade</label>
+              <select value={form.grade} onChange={e=>setForm(v=>({...v,grade:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="">— Select grade —</option>
+                <optgroup label="Band A — Unskilled / Elementary">
+                  <option value="A1">A1 — Basic unskilled (cleaners, general workers)</option>
+                  <option value="A2">A2 — Elementary semi-skilled</option>
+                </optgroup>
+                <optgroup label="Band B — Semi-Skilled">
+                  <option value="B1">B1 — Routine semi-skilled</option>
+                  <option value="B2">B2 — Defined semi-skilled</option>
+                  <option value="B3">B3 — Skilled semi-skilled</option>
+                  <option value="B4">B4 — Advanced semi-skilled</option>
+                  <option value="B5">B5 — Expert semi-skilled</option>
+                </optgroup>
+                <optgroup label="Band C — Skilled / Technical / Clerical">
+                  <option value="C1">C1 — Junior skilled (bookkeepers, admin clerks)</option>
+                  <option value="C2">C2 — Skilled technician / senior clerk</option>
+                  <option value="C3">C3 — Senior skilled / team leader</option>
+                  <option value="C4">C4 — Specialist / senior technician</option>
+                  <option value="C5">C5 — Expert specialist</option>
+                </optgroup>
+                <optgroup label="Band D — Junior Management / Professional">
+                  <option value="D1">D1 — Junior professional / supervisor</option>
+                  <option value="D2">D2 — Professional / junior manager</option>
+                  <option value="D3">D3 — Senior professional / manager</option>
+                  <option value="D4">D4 — Senior manager / department head</option>
+                  <option value="D5">D5 — Divisional head / senior specialist</option>
+                </optgroup>
+                <optgroup label="Band E — Middle Management">
+                  <option value="E1">E1 — Junior middle manager</option>
+                  <option value="E2">E2 — Middle manager</option>
+                  <option value="E3">E3 — Senior middle manager</option>
+                  <option value="E4">E4 — General manager</option>
+                  <option value="E5">E5 — Senior general manager</option>
+                </optgroup>
+                <optgroup label="Band F — Senior / Executive Management">
+                  <option value="F1">F1 — Director / senior executive</option>
+                  <option value="F2">F2 — Executive director</option>
+                  <option value="F3">F3 — Chief executive / top management</option>
+                </optgroup>
+              </select>
+              {/* Market salary hint — appears when a grade is selected */}
+              {form.grade && PATTERSON_RANGES[form.grade] && (() => {
+                const r = PATTERSON_RANGES[form.grade];
+                const fmt = n => "R" + n.toLocaleString("en-ZA");
+                const pct = form.salary
+                  ? Math.round(((+form.salary - r.min) / (r.max - r.min)) * 100)
+                  : null;
+                const position = pct === null ? null : Math.max(0, Math.min(100, pct));
+                return (
+                  <div style={{marginTop:10,padding:"12px 14px",background:"#f0f7ff",border:"1px solid #b8d4f0",borderRadius:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <div style={{fontSize:12,fontWeight:700,color:"#1a4a7a"}}>
+                        📊 Market range for {form.grade} — 2025 SA general market (monthly CTC)
+                      </div>
+                      <button
+                        type="button"
+                        onClick={()=>setForm(v=>({...v,salary:String(r.median)}))}
+                        style={{padding:"4px 12px",background:"#1a6fcc",border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+                      >
+                        Use median
+                      </button>
+                    </div>
+                    {/* Range bar */}
+                    <div style={{position:"relative",height:8,background:"#d0e4f8",borderRadius:4,marginBottom:6}}>
+                      <div style={{position:"absolute",left:"33%",right:"33%",top:0,height:"100%",background:"#6baee8",borderRadius:4}}/>
+                      {position !== null && (
+                        <div style={{position:"absolute",top:-3,left:`${position}%`,transform:"translateX(-50%)",width:14,height:14,borderRadius:7,background:position < 33 ? "#e8a020" : position > 67 ? "#1a6fcc" : "#2a9d3f",border:"2px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
+                      )}
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#3a6a9a"}}>
+                      <span>Min: <strong>{fmt(r.min)}</strong></span>
+                      <span>Median: <strong style={{color:"#1a4a7a"}}>{fmt(r.median)}</strong></span>
+                      <span>Max: <strong>{fmt(r.max)}</strong></span>
+                    </div>
+                    {position !== null && (
+                      <div style={{marginTop:6,fontSize:11,color: position < 25 ? "#b85c00" : position > 75 ? "#1a4a7a" : "#2a7d3f", fontWeight:600}}>
+                        {position < 25 ? "⚠️ Below market — risk of turnover"
+                          : position > 75 ? "💡 Above median — strong retention"
+                          : "✓ Within market range"}
+                      </div>
+                    )}
+                    <div style={{marginTop:4,fontSize:10,color:"#6a8aaa"}}>Indicative only — varies by industry, province &amp; experience. Source: Peromnes/Patterson surveys.</div>
+                  </div>
+                );
+              })()}
+            </div>
             <div>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employment Type</label>
               <select value={form.employmentType} onChange={e=>setForm(v=>({...v,employmentType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
