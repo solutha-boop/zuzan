@@ -4004,7 +4004,7 @@ function Reports({live = {}}) {
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
         const today = new Date();
-        const rows = invs.filter(i=>["pending","sent","overdue"].includes(i.status))
+        const rows = invs.filter(i=>["sent","overdue"].includes(i.status))
           .sort((a,b)=>new Date(a.due_date||0)-new Date(b.due_date||0));
         setMgmtDrill({type, title:"Outstanding — Pending & Overdue Invoices", color:C.gold,
           total: rows.reduce((s,i)=>s+toZarD(i),0),
