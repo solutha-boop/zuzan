@@ -434,18 +434,21 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
     ).first()
     ap_balance = None
     if ap_acct:
+        # Reversal-aware (audit fix 2026-07-13): net credits minus debits and
+        # include "purchase_order_reversal" entries, so paying a PO whose receipt
+        # was partially reversed clears only the true remaining AP balance.
         ap_lines = (
             db.query(_JL)
             .join(_JE, _JL.entry_id == _JE.id)
             .filter(
                 _JE.company_id == current_user.company_id,
-                _JE.source == "purchase_order",
+                _JE.source.in_(["purchase_order", "purchase_order_reversal"]),
                 _JE.source_id == po.id,
                 _JL.account_id == ap_acct.id,
             )
             .all()
         )
-        total_ap_credits = sum(l.credit for l in ap_lines)
+        total_ap_credits = sum(l.credit - l.debit for l in ap_lines)
         if total_ap_credits > 0:
             ap_balance = round(total_ap_credits, 2)
 

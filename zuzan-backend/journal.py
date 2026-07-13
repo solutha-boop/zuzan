@@ -62,6 +62,9 @@ DEFAULT_ACCOUNTS = [
     {"code": "5800", "name": "Depreciation Expense",         "type": AccountType.expense},
     {"code": "4900", "name": "Gain on Disposal of Assets",   "type": AccountType.revenue},
     {"code": "6800", "name": "Loss on Disposal of Assets",   "type": AccountType.expense},
+    # Finance costs (audit fix 2026-07-13) — interest on loans/overdrafts, presented
+    # below EBIT in the AFS. init_accounts upserts, so existing companies get it.
+    {"code": "6700", "name": "Finance Costs (Interest Paid)", "type": AccountType.expense},
 ]
 
 # Maps income categories to revenue account codes (all map to Sales Revenue 4000 for now)
@@ -88,6 +91,8 @@ CATEGORY_TO_CODE = {
     "Rent":             "5280",
     "Marketing":        "5290",
     "Professional Fees":"5300",
+    "Interest":         "6700",
+    "Finance Costs":    "6700",
 }
 
 
@@ -782,12 +787,15 @@ def backfill_company(company_id: int, db: Session) -> dict:
             try:
                 paid_amount = None
                 if ap_backfill_acct:
+                    # Reversal-aware (audit fix 2026-07-13): net credits minus debits
+                    # and include reversal entries, matching the creditors-aging and
+                    # pay_po lookups.
                     ap_credits = (
-                        db.query(func.sum(JournalLine.credit))
+                        db.query(func.sum(JournalLine.credit - JournalLine.debit))
                         .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
                         .filter(
                             JournalEntry.company_id == company_id,
-                            JournalEntry.source == "purchase_order",
+                            JournalEntry.source.in_(["purchase_order", "purchase_order_reversal"]),
                             JournalEntry.source_id == po.id,
                             JournalLine.account_id == ap_backfill_acct.id,
                         )

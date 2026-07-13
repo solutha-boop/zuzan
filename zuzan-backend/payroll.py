@@ -1043,12 +1043,16 @@ async def reconciliation(
         # Fallback to po.total_amount when no journal entry exists yet.
         po_ap_credit_map: dict = {}
         if open_po_list:
+            # Reversal-aware (audit fix 2026-07-13): net credits minus debits, and
+            # include "purchase_order_reversal" entries (reversals keep source_id
+            # but change source to "<source>_reversal"), so a reversed receipt no
+            # longer inflates the expected AP balance.
             _rows = (
-                db.query(_JE.source_id, func.sum(JournalLine.credit))
+                db.query(_JE.source_id, func.sum(JournalLine.credit - JournalLine.debit))
                 .join(JournalLine, JournalLine.entry_id == _JE.id)
                 .filter(
                     _JE.company_id == cid,
-                    _JE.source == "purchase_order",
+                    _JE.source.in_(["purchase_order", "purchase_order_reversal"]),
                     _JE.source_id.in_([po.id for po in open_po_list]),
                     JournalLine.account_id == ap_acct.id,
                 )
@@ -1702,12 +1706,15 @@ async def creditors_aging(
     po_ap_amounts: dict = {}  # po.id -> actual AP credits outstanding (excl. any partial payment)
     if ap_acct and open_pos:
         po_ids = [po.id for po in open_pos]
+        # Reversal-aware (audit fix 2026-07-13): net credits minus debits and
+        # include "purchase_order_reversal" entries so reversed receipts don't
+        # overstate the creditors book.
         rows = (
-            db.query(_JE.source_id, func.sum(_JL.credit))
+            db.query(_JE.source_id, func.sum(_JL.credit - _JL.debit))
             .join(_JL, _JL.entry_id == _JE.id)
             .filter(
                 _JE.company_id == cid,
-                _JE.source == "purchase_order",
+                _JE.source.in_(["purchase_order", "purchase_order_reversal"]),
                 _JE.source_id.in_(po_ids),
                 _JL.account_id == ap_acct.id,
             )

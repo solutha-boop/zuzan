@@ -95,9 +95,18 @@ def annual_financial_statements(
         for c, n, dr, cr in exp_rows if _r(dr - cr) != 0
     ]
 
+    # Finance costs (audit fix 2026-07-13): interest lines are presented below
+    # EBIT, not inside opex. Matches account 6700 plus any imported account whose
+    # name indicates interest/finance charges.
+    def _is_finance_cost(l):
+        nm = l["name"].lower()
+        return l["code"] == "6700" or "interest" in nm or "finance cost" in nm
+    finance_lines = [l for l in expense_lines if _is_finance_cost(l)]
+    finance_costs = _r(sum(l["amount"] for l in finance_lines))
+
     # Split COGS (51xx) from OPEX
-    cogs_lines = [l for l in expense_lines if l["code"].startswith("51")]
-    opex_lines  = [l for l in expense_lines if not l["code"].startswith("51")]
+    cogs_lines = [l for l in expense_lines if l["code"].startswith("51") and not _is_finance_cost(l)]
+    opex_lines  = [l for l in expense_lines if not l["code"].startswith("51") and not _is_finance_cost(l)]
 
     total_cogs    = sum(l["amount"] for l in cogs_lines)
     gross_profit  = _r(total_revenue - total_cogs)
@@ -113,9 +122,11 @@ def annual_financial_statements(
     ]
     total_depreciation = _r(sum(d.amount for d in dep_period))
 
-    # SA corporate tax (27%)
-    tax_expense = _r(max(0.0, ebit * 0.27))
-    net_profit  = _r(ebit - tax_expense)
+    # SA corporate tax (27%) — on profit before tax, i.e. after finance costs
+    # (audit fix 2026-07-13; previously taxed EBIT with finance_costs stubbed 0.0)
+    profit_before_tax = _r(ebit - finance_costs)
+    tax_expense = _r(max(0.0, profit_before_tax * 0.27))
+    net_profit  = _r(profit_before_tax - tax_expense)
 
     # ── BALANCE SHEET (cumulative to period end) ──────────────────────────────
 
@@ -389,12 +400,12 @@ def annual_financial_statements(
 
     # Note 9 — Taxation
     tax_note = {
-        "profit_before_tax": _r(ebit),
+        "profit_before_tax": _r(profit_before_tax),
         "tax_rate_pct":      27.0,
         "current_tax":       _r(tax_expense),
         "deferred_tax":      0.0,
         "total_tax":         _r(tax_expense),
-        "effective_rate_pct": round(tax_expense / ebit * 100, 1) if ebit > 0 else 0.0,
+        "effective_rate_pct": round(tax_expense / profit_before_tax * 100, 1) if profit_before_tax > 0 else 0.0,
     }
 
     return {
@@ -421,8 +432,9 @@ def annual_financial_statements(
             "total_opex":      _r(total_opex),
             "depreciation":    total_depreciation,
             "ebit":            ebit,
-            "finance_costs":   0.0,
-            "profit_before_tax": ebit,
+            "finance_lines":   finance_lines,
+            "finance_costs":   finance_costs,
+            "profit_before_tax": profit_before_tax,
             "tax_expense":     tax_expense,
             "tax_rate_pct":    27.0,
             "net_profit":      net_profit,

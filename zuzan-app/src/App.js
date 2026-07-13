@@ -6130,10 +6130,10 @@ function BankImport({live = {}, onNavigate}) {
         <div>
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
             <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Select Your Bank</div>
-            <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
               {Object.entries(BANK_FORMATS).map(([key,b]) => (
-                <div key={key} onClick={() => setBank(key)} style={{padding:"16px 20px",border:`2px solid ${bank===key?C.accent:C.border}`,borderRadius:12,cursor:"pointer",textAlign:"center",background:bank===key?C.accentLt:C.bg,minWidth:100}}>
-                  <div style={{fontSize:28,marginBottom:6}}>{b.logo}</div>
+                <div key={key} onClick={() => setBank(key)} style={{padding:"14px 12px",border:`2px solid ${bank===key?C.accent:C.border}`,borderRadius:12,cursor:"pointer",textAlign:"center",background:bank===key?C.accentLt:C.bg}}>
+                  <div style={{fontSize:26,marginBottom:6}}>{b.logo}</div>
                   <div style={{fontSize:12,fontWeight:700,color:bank===key?C.accent:C.ink}}>{b.name}</div>
                 </div>
               ))}
@@ -10256,6 +10256,8 @@ function FinancialStatements() {
           {is.depreciation>0 && <Row label="Depreciation" value={is.depreciation} indent sub/>}
           <Row label="Total Operating Expenses" value={is.total_opex} bold hr/>
           <Row label="Operating Profit (EBIT)" value={is.ebit} bold hr/>
+          {is.finance_costs>0 && <Row label="Finance Costs (Interest Paid)" value={is.finance_costs} indent/>}
+          {is.finance_costs>0 && <Row label="Profit Before Tax" value={is.profit_before_tax} bold hr/>}
           <Row label="Income Tax (27%)" value={is.tax_expense} indent/>
           <Row label="NET PROFIT FOR THE YEAR" value={is.net_profit} bold hr/>
         </tbody>
