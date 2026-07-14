@@ -197,6 +197,94 @@ class _CORSMiddleware:
 
 app.add_middleware(_CORSMiddleware)
 
+import json as _json
+from jose import jwt as _jwt, JWTError as _JWTError
+
+# Paths exempt from subscription gating (must be accessible even when expired)
+_SUB_EXEMPT_EXACT   = {"/", "/health", "/docs", "/openapi.json", "/redoc"}
+_SUB_EXEMPT_PREFIXES = (
+    "/auth/",
+    "/billing/",
+    "/admin",
+    "/portal/",
+    "/v1/",
+    "/companies/",   # settings & company profile
+    "/api-keys/",
+)
+
+class _SubscriptionGateMiddleware:
+    """
+    Return 402 for accounts whose subscription_status == 'expired'.
+    Runs inside the CORS middleware so the 402 response already has the
+    CORS header appended by _CORSMiddleware's _send_with_cors wrapper.
+    """
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: _Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path   = scope.get("path", "")
+        method = scope.get("method", "")
+
+        # OPTIONS handled by CORS layer; exempt paths pass straight through
+        if method == "OPTIONS" or path in _SUB_EXEMPT_EXACT or any(
+            path.startswith(p) for p in _SUB_EXEMPT_PREFIXES
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        # Extract Bearer token from headers
+        auth_header = ""
+        for k, v in scope.get("headers", []):
+            if k == b"authorization":
+                auth_header = v.decode("utf-8", errors="ignore")
+                break
+
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            try:
+                from auth import SECRET_KEY, ALGORITHM
+                payload = _jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                user_id = payload.get("user_id")
+                if user_id:
+                    from database import SessionLocal, User, Company, SubscriptionStatus
+                    db = SessionLocal()
+                    try:
+                        user = db.query(User).filter(User.id == user_id).first()
+                        if user:
+                            company = db.query(Company).filter(Company.id == user.company_id).first()
+                            if company and company.subscription_status == SubscriptionStatus.expired:
+                                body = _json.dumps({
+                                    "detail": "Your subscription has expired. Please reactivate to continue using ZuZan."
+                                }).encode()
+                                await send({
+                                    "type": "http.response.start",
+                                    "status": 402,
+                                    "headers": [
+                                        [b"content-type", b"application/json"],
+                                        [b"access-control-allow-origin", b"*"],
+                                    ],
+                                })
+                                await send({"type": "http.response.body", "body": body})
+                                return
+                    finally:
+                        db.close()
+            except _JWTError:
+                pass  # normal auth layer will reject the bad token
+            except Exception as _e:
+                logger.warning(f"Subscription gate check failed (non-fatal): {_e}")
+
+        await self.app(scope, receive, send)
+
+# Starlette inserts middleware at index 0, so the LAST add_middleware call
+# becomes the outermost (first called). SubGate is outermost → sees the
+# request before CORS. 402 responses sent directly from SubGate bypass the
+# CORS _send_with_cors wrapper, so the CORS header is included manually above.
+app.add_middleware(_SubscriptionGateMiddleware)
+
 @app.get("/health")
 async def health(): return {"status": "ok"}
 
