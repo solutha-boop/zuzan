@@ -7814,8 +7814,10 @@ function Login({onLogin, onRegister}) {
         data = await attempt();
       }
       localStorage.setItem("zuzan_token", data.access_token);
+      const _rawSub = data.company.subscription_status || "trial";
+      const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:data.company.subscription_status||"trial", role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -12129,6 +12131,8 @@ export default function App() {
     })
       .then(r => { clearTimeout(timeout); return r.ok ? r.json() : Promise.reject(); })
       .then(data => {
+        const _meSub = data.company.subscription_status || "trial";
+        const _meStatus = (_meSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _meSub;
         setUser({
           firstName:    data.user.first_name,
           lastName:     data.user.last_name,
@@ -12138,7 +12142,7 @@ export default function App() {
           plan:           {name: data.company.plan, id: data.company.plan},
           access_token:   token,
           trialEnds:          data.company.trial_ends,
-          subscriptionStatus: data.company.subscription_status || "trial",
+          subscriptionStatus: _meStatus,
           role:               data.user.role || "owner",
           payrollEnabled: data.company.payroll_enabled || false,
           afsEnabled:     data.company.afs_enabled || false,

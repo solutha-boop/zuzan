@@ -28,6 +28,22 @@ const BASE_URL = "https://zuzan-backend.onrender.com";
 const fmt = n => `R${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2})}`;
 const fmtDate = d => new Date(d).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"});
 
+// ── PAYFAST FORM SUBMIT ───────────────────────────────────────────────────────
+// PayFast requires a POST form with all params as hidden inputs.
+// A bare redirect (GET) doesn't carry the params, so the checkout fails.
+function pfSubmit(payfast_url, payfast_data) {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = payfast_url;
+  Object.entries(payfast_data).forEach(([k, v]) => {
+    const inp = document.createElement("input");
+    inp.type = "hidden"; inp.name = k; inp.value = v;
+    form.appendChild(inp);
+  });
+  document.body.appendChild(form);
+  form.submit();
+}
+
 // ── API HELPER ────────────────────────────────────────────────────────────────
 async function api(path, options = {}) {
   const token = localStorage.getItem("zuzan_token");
@@ -166,24 +182,91 @@ function calcOvertime(grossMonthly, otHours=0, sunHours=0, phHours=0, explicitHo
            total: Math.round((otAmt + sunAmt + phAmt)*100)/100 };
 }
 
-function calcPayroll(salary, taxYear, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null) {
+// Section 11F and Medical Tax Credit constants (2026/2027)
+const S11F_RATE = 0.275;      // 27.5%
+const S11F_CAP  = 430_000;    // R430,000/year (increased from R350,000, effective 1 March 2026)
+const MTC_MAIN_FIRST = 376;   // R/month — main member + first dependant each
+const MTC_ADDITIONAL = 254;   // R/month — each additional dependant
+
+function calcMedicalTaxCredit(numDependants = 0) {
+  // numDependants = people on the plan EXCLUDING the main member
+  if (numDependants === 0) return MTC_MAIN_FIRST;
+  if (numDependants === 1) return MTC_MAIN_FIRST * 2;
+  return MTC_MAIN_FIRST * 2 + MTC_ADDITIONAL * (numDependants - 1);
+}
+
+function calcPayroll(
+  salary,
+  taxYear,
+  otHours = 0,
+  sunHours = 0,
+  phHours = 0,
+  explicitHourlyRate = null,
+  pensionEmployeePct = 0,
+  pensionEmployerPct = 0,
+  medicalAidEmployee = 0,
+  medicalAidEmployer = 0,
+  medicalAidDependants = 0,
+  pensionEmployeeFixed = 0,   // optional fixed ZAR/month voluntary top-up
+  pensionEmployerFixed = 0,   // optional fixed ZAR/month employer add-on
+) {
   const yr = TAX_YEARS[taxYear || CURRENT_TAX_YEAR] || TAX_YEARS[CURRENT_TAX_YEAR];
   const ot = calcOvertime(salary, otHours, sunHours, phHours, explicitHourlyRate);
   const taxableGross = salary + ot.total;
-  const paye = calcPAYE(taxableGross*12, taxYear)/12;
-  // UIF on base salary only (SARS excludes overtime from UIF)
-  const uifBase = Math.min(salary, yr.uifCeil);
-  const uifEmp = uifBase*0.01, uifEmpr = uifBase*0.01, sdl = taxableGross*0.01;
+
+  // Pension/provident: % of gross + optional fixed top-up (both add to total contribution)
+  const pensionEmployee = salary * pensionEmployeePct + pensionEmployeeFixed;
+  const pensionEmployer = salary * pensionEmployerPct + pensionEmployerFixed;
+
+  // PAYE base: cash remuneration + employer medical aid fringe benefit (7th Schedule s2(i))
+  const payeBaseMonthly = taxableGross + medicalAidEmployer;
+  const payeBaseAnnual  = payeBaseMonthly * 12;
+
+  // Section 11F: min(total employee contributions, 27.5% × remuneration, R430,000)
+  // Excess above the cap is still deducted from pay but gives no additional PAYE relief.
+  const pensionEmployeeAnnual = pensionEmployee * 12;
+  const s11fAnnual = Math.min(pensionEmployeeAnnual, S11F_RATE * payeBaseAnnual, S11F_CAP);
+  const s11fMonthly = s11fAnnual / 12;
+  const s11fExcessMonthly = Math.max(0, pensionEmployee - s11fMonthly); // post-tax excess
+
+  // PAYE before MTC
+  const payeBeforeMtc = calcPAYE(payeBaseAnnual - s11fAnnual, taxYear) / 12;
+
+  // Medical Tax Credit (Section 6A) — only applies if employee is on medical aid
+  const onMedicalAid = (medicalAidEmployee > 0 || medicalAidEmployer > 0);
+  const mtc = onMedicalAid ? calcMedicalTaxCredit(medicalAidDependants) : 0;
+  const paye = Math.max(0, payeBeforeMtc - mtc);
+
+  // UIF on base salary only (SARS excludes overtime and fringe benefits)
+  const uifBase  = Math.min(salary, yr.uifCeil);
+  const uifEmp   = uifBase * 0.01;
+  const uifEmpr  = uifBase * 0.01;
+  const sdl      = taxableGross * 0.01;
+
+  // Net pay: cash earnings minus employee-side deductions (fringe benefit excluded from cash)
+  const netPay = taxableGross - paye - uifEmp - pensionEmployee - medicalAidEmployee;
+
+  // Total employer cost
+  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer;
+
   return {
-    gross:salary,
+    gross: salary,
     overtime: ot,
-    taxableGross: Math.round(taxableGross),
-    paye:Math.round(paye),
-    uifEmployee:Math.round(uifEmp),
-    uifEmployer:Math.round(uifEmpr),
-    sdl:Math.round(sdl),
-    netPay:Math.round(taxableGross-paye-uifEmp),
-    totalCost:Math.round(taxableGross+uifEmpr+sdl)
+    taxableGross:   Math.round(taxableGross),
+    pensionEmployee: Math.round(pensionEmployee),
+    pensionEmployer: Math.round(pensionEmployer),
+    s11fDeduction:      Math.round(s11fMonthly),
+    s11fExcessMonthly:  Math.round(s11fExcessMonthly), // contribution above cap (post-tax, no extra relief)
+    medicalAidEmployee: Math.round(medicalAidEmployee),
+    medicalAidEmployer: Math.round(medicalAidEmployer),
+    medicalTaxCredit:   Math.round(mtc),
+    payeBeforeMtc:  Math.round(payeBeforeMtc),
+    paye:           Math.round(paye),
+    uifEmployee:    Math.round(uifEmp),
+    uifEmployer:    Math.round(uifEmpr),
+    sdl:            Math.round(sdl),
+    netPay:         Math.round(netPay),
+    totalCost:      Math.round(totalCost),
   };
 }
 
@@ -194,7 +277,7 @@ const Badge = ({label,color,bg}) => (
 const StatusBadge = ({status}) => {
   const m={
     paid:   [C.green,  C.greenLt,  "Paid"],
-    sent:   [C.blue,   C.blueLt,   "Sent"],
+    sent:   [C.gold,   C.goldLt,   "Pending"],
     pending:[C.gold,   C.goldLt,   "Pending"],
     draft:  [C.inkMid, C.border,   "Draft"],
     overdue:[C.red,    C.redLt,    "Overdue"],
@@ -255,7 +338,7 @@ const DEFAULT_COA = [
   {code:"1111",name:"FNB Business Account",type:"Detail",group:"Assets",normal:"Debit",description:"Primary FNB business cheque account"},
   {code:"1112",name:"ABSA Business Account",type:"Detail",group:"Assets",normal:"Debit",description:"ABSA business account"},
   {code:"1113",name:"Petty Cash",type:"Detail",group:"Assets",normal:"Debit",description:"Cash on hand for small expenses"},
-  {code:"1120",name:"Trade Receivables (Debtors)",type:"Detail",group:"Assets",normal:"Debit",description:"Amounts owed by customers"},
+  {code:"1100",name:"Trade Receivables (Debtors)",type:"Detail",group:"Assets",normal:"Debit",description:"Amounts owed by customers — Debtors Control, matches journal account 1100"},
   {code:"1130",name:"Inventory",type:"Detail",group:"Assets",normal:"Debit",description:"Stock on hand"},
   {code:"1140",name:"Prepaid Expenses",type:"Detail",group:"Assets",normal:"Debit",description:"Expenses paid in advance"},
   {code:"1150",name:"VAT Input",type:"Detail",group:"Assets",normal:"Debit",description:"VAT claimable from SARS"},
@@ -268,7 +351,7 @@ const DEFAULT_COA = [
   {code:"1221",name:"Accum Dep - Vehicles",type:"Detail",group:"Assets",normal:"Credit",description:"Depreciation on vehicles"},
   {code:"1222",name:"Accum Dep - Computer Equipment",type:"Detail",group:"Assets",normal:"Credit",description:"Depreciation on computers"},
   {code:"2000",name:"LIABILITIES",type:"Header",group:"Liabilities",normal:"Credit",description:"All liabilities of the business"},
-  {code:"2110",name:"Trade Payables (Creditors)",type:"Detail",group:"Liabilities",normal:"Credit",description:"Amounts owed to suppliers"},
+  {code:"2110",name:"Trade Payables (Creditors)",type:"Detail",group:"Liabilities",normal:"Credit",description:"Amounts owed to suppliers — Creditors Control, posted to journal account 2000 (code 2110 here only because 2000 is the Liabilities header)"},
   {code:"2121",name:"PAYE Payable",type:"Detail",group:"Liabilities",normal:"Credit",description:"Employee tax withheld - due to SARS by 7th"},
   {code:"2122",name:"UIF Payable",type:"Detail",group:"Liabilities",normal:"Credit",description:"UIF contributions due to SARS"},
   {code:"2123",name:"SDL Payable",type:"Detail",group:"Liabilities",normal:"Credit",description:"Skills Development Levy due to SARS"},
@@ -351,19 +434,41 @@ const DEFAULT_COA = [
   {code:"7600",name:"Donations",type:"Detail",group:"Expenses",normal:"Debit",description:"Charitable donations Section 18A"},
 ];
 
+// BANK_FORMATS — these are now FALLBACK values only.
+// The parser first auto-detects the data start row via date-pattern scan,
+// then auto-detects column layout from the header row's text.
+// Values here kick in only when header detection fails (e.g. headerless exports).
+//
+// Known SA bank header formats (for reference):
+//  FNB Business:   Date | Amount | Balance | Description            → single Amount col
+//  ABSA:           Date | Description | Debit | Credit | Balance    → separate Debit/Credit
+//  Standard Bank:  Date | Description | Debit | Credit | Balance    → separate Debit/Credit
+//  Nedbank:        Date | Transaction Description | Debit Amount | Credit Amount | Balance
+//  Capitec:        Date | Transaction Description | Amount | Running Balance
+//  Discovery Bank: Date | Description | Debit | Credit | Balance    → separate Debit/Credit
+//  Investec:       Date | Transaction Description | Debit | Credit | Balance
+//  TymeBank:       Date | Description | Amount | Balance
 const BANK_FORMATS = {
-  fnb:          {name:"FNB",           logo:"🟢",skipRows:4,dateCol:0,descCol:2,amtCol:4},
-  absa:         {name:"ABSA",          logo:"🔴",skipRows:1,dateCol:0,descCol:1,amtCol:3},
-  standardbank: {name:"Standard Bank", logo:"🔵",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  nedbank:      {name:"Nedbank",       logo:"🟩",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  capitec:      {name:"Capitec",       logo:"🟦",skipRows:1,dateCol:0,descCol:2,amtCol:3},
-  discovery:    {name:"Discovery Bank",logo:"🟣",skipRows:1,dateCol:0,descCol:1,amtCol:2},
-  investec:     {name:"Investec",      logo:"🔷",skipRows:1,dateCol:0,descCol:1,amtCol:3},
-  tymebank:     {name:"TymeBank",      logo:"🩵",skipRows:1,dateCol:0,descCol:1,amtCol:2},
+  fnb:          {name:"FNB",           logo:"🟢", skipRows:5, dateCol:0, amtCol:1,  descCol:3},
+  absa:         {name:"ABSA",          logo:"🔴", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  standardbank: {name:"Standard Bank", logo:"🔵", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  nedbank:      {name:"Nedbank",       logo:"🟩", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  capitec:      {name:"Capitec",       logo:"🟦", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  discovery:    {name:"Discovery Bank",logo:"🟣", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  investec:     {name:"Investec",      logo:"🔷", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
+  tymebank:     {name:"TymeBank",      logo:"🩵", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
 };
 
-function autoCategory(desc) {
+function autoCategory(desc, type) {
   const d = desc.toLowerCase();
+  if (type === "credit") {
+    // Income category auto-detection
+    if (d.includes("interest")) return "Interest Income";
+    if (d.includes("refund") || d.includes("reversal")) return "Other Income";
+    if (d.includes("rental") || d.includes("rent receive")) return "Rental Income";
+    return "Sales Revenue";  // default income account
+  }
+  // Expense category auto-detection
   if (d.includes("interest")) return "Interest Income";
   if (d.includes("eskom") || d.includes("electric") || d.includes("water")) return "Utilities";
   if (d.includes("telkom") || d.includes("vodacom") || d.includes("mtn") || d.includes("fibre")) return "Telecoms";
@@ -377,6 +482,19 @@ function autoCategory(desc) {
   if (d.includes("advertis") || d.includes("google") || d.includes("facebook")) return "Marketing";
   if (d.includes("attorney") || d.includes("accountant") || d.includes("audit")) return "Professional Fees";
   return "Other";
+}
+
+// Checks company-learned rules first, then falls back to built-in patterns.
+// `rules` is the array fetched from /category-rules/ (sorted by match_count desc).
+function smartCategory(desc, type, rules) {
+  if (rules && rules.length) {
+    const d = desc.toLowerCase();
+    const match = rules.find(r =>
+      (r.txn_type === "any" || r.txn_type === type) && d.includes(r.keyword)
+    );
+    if (match) return match.category;
+  }
+  return autoCategory(desc, type);
 }
 
 function parseCSVLine(line) {
@@ -393,17 +511,38 @@ function parseCSVLine(line) {
 }
 
 function parseAmt(str) {
-  if (!str) return 0;
-  return parseFloat(str.replace(/[R,\s]/g,"").replace("(","-").replace(")","")) || 0;
+  if (!str || !str.trim()) return 0;
+  let s = str.trim()
+    .replace(/^R\s*/i, "")        // strip leading R / r
+    .replace(/ /g, "")       // non-breaking space
+    .replace(/\s/g, "")           // all remaining whitespace (thousand-sep spaces)
+    .replace(/[€$£]/g, "");       // other currency symbols
+  // Parentheses = negative: (1234.56) → -1234.56
+  if (s.startsWith("(") && s.endsWith(")")) s = "-" + s.slice(1, -1);
+  // Handle European format: 1.234,56 → 1234.56
+  if (/^\-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, "").replace(",", ".");
+  // Remove thousands commas: 1,234.56 → 1234.56
+  else s = s.replace(/,/g, "");
+  return parseFloat(s) || 0;
 }
 
 function parseDt(str) {
-  if (!str) return new Date().toISOString().slice(0,10);
-  const m1 = str.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
-  const m2 = str.trim().match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
-  if (m2) return `${m2[1]}-${m2[2]}-${m2[3]}`;
-  return new Date().toISOString().slice(0,10);
+  if (!str || !str.trim()) return new Date().toISOString().slice(0, 10);
+  const s = str.trim();
+  const MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  // YYYY/MM/DD or YYYY-MM-DD
+  let m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  // DD/MM/YYYY or DD-MM-YYYY
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  // DD Mon YYYY  or  DD Month YYYY
+  m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/);
+  if (m) { const mo = MON[m[2].slice(0,3).toLowerCase()]; if (mo) return `${m[3]}-${String(mo).padStart(2,"0")}-${m[1].padStart(2,"0")}`; }
+  // YYYYMMDD
+  m = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return new Date().toISOString().slice(0, 10);
 }
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 function CIPCBanner({cipc, poDupWarning}) {
@@ -520,7 +659,7 @@ function Dashboard({live = {}}) {
           rows: allRows.map(r=>r.cols)});
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
-        const rows = invs.filter(i => ["pending","sent","overdue"].includes(i.status))
+        const rows = invs.filter(i => ["sent","overdue"].includes(i.status))
           .sort((a,b) => new Date(a.due_date||0)-new Date(b.due_date||0));
         const today = new Date();
         setDrill({type, title:"Outstanding — Pending & Overdue", color:C.gold,
@@ -1135,27 +1274,242 @@ function DocumentTemplateSettings({template, onChange}) {
   );
 }
 
+// ── RECURRING INVOICES TAB ────────────────────────────────────────────────────
+function RecurringInvoicesTab() {
+  const [items, setItems] = useState([]);
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({client_name:"",client_email:"",description:"",amount:"",vat_applicable:true,currency:"ZAR",frequency:"monthly",start_date:new Date().toISOString().slice(0,10)});
+  const [saving, setSaving] = useState(false);
+  const load = () => api("/recurring-invoices").then(setItems).catch(()=>{});
+  useEffect(load, []);
+  const FREQ = {weekly:"Weekly",monthly:"Monthly",quarterly:"Quarterly",annually:"Annually"};
+  const handleCreate = async () => {
+    if(!form.client_name||!form.amount){alert("Client name and amount required.");return;}
+    setSaving(true);
+    try { await api("/recurring-invoices",{method:"POST",body:JSON.stringify({...form,amount:+form.amount})}); setShowNew(false); setForm({client_name:"",client_email:"",description:"",amount:"",vat_applicable:true,currency:"ZAR",frequency:"monthly",start_date:new Date().toISOString().slice(0,10)}); load(); }
+    catch(e){alert("Failed to create.");}
+    finally{setSaving(false);}
+  };
+  const handleDelete = async (id) => {
+    if(!window.confirm("Delete recurring invoice?"))return;
+    await api(`/recurring-invoices/${id}`,{method:"DELETE"}).catch(()=>{});
+    load();
+  };
+  const handleToggle = async (item) => {
+    await api(`/recurring-invoices/${item.id}`,{method:"PUT",body:JSON.stringify({is_active:!item.is_active})}).catch(()=>{});
+    load();
+  };
+  const handleRunNow = async (id) => {
+    try { await api(`/recurring-invoices/${id}/run`,{method:"POST"}); alert("Invoice generated!"); load(); }
+    catch(e){alert("Failed to run.");}
+  };
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:20,fontWeight:800,fontFamily:"serif",color:C.ink}}>Recurring Invoices</div>
+          <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Auto-generate invoices on a schedule</div>
+        </div>
+        <button onClick={()=>setShowNew(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New Recurring</button>
+      </div>
+      {showNew && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.surface,borderRadius:20,width:"100%",maxWidth:600,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px #00000030"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 28px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>New Recurring Invoice</h3>
+              <button onClick={()=>setShowNew(false)} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:C.inkMid,lineHeight:1}}>×</button>
+            </div>
+            <div style={{overflowY:"auto",padding:"20px 28px",flex:1}}>
+              {[{l:"Client Name",k:"client_name",p:"Client name"},{l:"Client Email",k:"client_email",p:"client@example.com"},{l:"Description",k:"description",p:"Monthly retainer"},{l:"Amount (excl. VAT)",k:"amount",p:"0.00",type:"number"},{l:"Start Date",k:"start_date",type:"date"}].map(f=>(
+                <div key={f.k} style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.type||"text"} placeholder={f.p||""} value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div style={{marginBottom:14}}>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Frequency</label>
+                <select value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annually">Annually</option>
+                </select>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+                <input type="checkbox" checked={form.vat_applicable} onChange={e=>setForm({...form,vat_applicable:e.target.checked})} id="vat-recur" style={{width:16,height:16,accentColor:C.accent}}/>
+                <label htmlFor="vat-recur" style={{fontSize:13,color:C.ink,cursor:"pointer"}}>Add VAT (15%)</label>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
+              <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Create"}</button>
+              <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {items.length===0 ? (
+        <div style={{textAlign:"center",padding:"60px 20px",color:C.inkMid}}>
+          <div style={{fontSize:48,marginBottom:16}}>🔁</div>
+          <div style={{fontSize:16,fontWeight:600,color:C.ink,marginBottom:8}}>No recurring invoices yet</div>
+          <div style={{fontSize:13}}>Set up a recurring invoice to auto-generate invoices for retainers and subscriptions.</div>
+        </div>
+      ) : (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr style={{background:C.bg}}>
+              {["Client","Description","Amount","Frequency","Next Run","Status","Actions"].map(h=>(
+                <th key={h} style={{padding:"11px 16px",textAlign:"left",fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase"}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {items.map((item,i)=>(
+                <tr key={item.id} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?C.surface:C.bg}}>
+                  <td style={{padding:"12px 16px",fontWeight:600}}>{item.client_name}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid,fontSize:12}}>{item.description||"—"}</td>
+                  <td style={{padding:"12px 16px",fontWeight:700}}>{fmt(item.amount)}</td>
+                  <td style={{padding:"12px 16px",textTransform:"capitalize"}}>{FREQ[item.frequency]||item.frequency}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid}}>{item.next_run_date?new Date(item.next_run_date).toLocaleDateString("en-ZA"):"—"}</td>
+                  <td style={{padding:"12px 16px"}}>
+                    <span style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:item.is_active?C.greenLt:C.border,color:item.is_active?C.green:C.inkMid}}>{item.is_active?"Active":"Paused"}</span>
+                  </td>
+                  <td style={{padding:"12px 16px"}}>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>handleToggle(item)} style={{background:item.is_active?C.goldLt:C.greenLt,color:item.is_active?C.gold:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{item.is_active?"Pause":"Resume"}</button>
+                      <button onClick={()=>handleRunNow(item.id)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Run Now</button>
+                      <button onClick={()=>handleDelete(item.id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CREDIT NOTES TAB ──────────────────────────────────────────────────────────
+function CreditNotesTab() {
+  const [items, setItems] = useState([]);
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:new Date().toISOString().slice(0,10)});
+  const [saving, setSaving] = useState(false);
+  const load = () => api("/credit-notes").then(setItems).catch(()=>{});
+  useEffect(load, []);
+  const handleCreate = async () => {
+    if(!form.client_name||!form.amount){alert("Client name and amount required.");return;}
+    setSaving(true);
+    try { await api("/credit-notes",{method:"POST",body:JSON.stringify({...form,amount:+form.amount,vat_rate:+form.vat_rate})}); setShowNew(false); setForm({client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:new Date().toISOString().slice(0,10)}); load(); }
+    catch(e){alert("Failed to create credit note.");}
+    finally{setSaving(false);}
+  };
+  const handleDelete = async (id) => {
+    if(!window.confirm("Delete this credit note?"))return;
+    await api(`/credit-notes/${id}`,{method:"DELETE"}).catch(()=>{});
+    load();
+  };
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:20,fontWeight:800,fontFamily:"serif",color:C.ink}}>Credit Notes</div>
+          <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Issue credit notes to reduce amounts owed by clients</div>
+        </div>
+        <button onClick={()=>setShowNew(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New Credit Note</button>
+      </div>
+      {showNew && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.surface,borderRadius:20,width:"100%",maxWidth:560,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px #00000030"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 28px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>New Credit Note</h3>
+              <button onClick={()=>setShowNew(false)} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:C.inkMid,lineHeight:1}}>×</button>
+            </div>
+            <div style={{overflowY:"auto",padding:"20px 28px",flex:1}}>
+              {[{l:"Client Name",k:"client_name",p:"Client name"},{l:"Description",k:"description",p:"Reason for credit note"},{l:"Amount (excl. VAT)",k:"amount",p:"0.00",type:"number"},{l:"Issue Date",k:"issue_date",type:"date"},{l:"Notes",k:"notes",p:"Optional additional notes"}].map(f=>(
+                <div key={f.k} style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.type||"text"} placeholder={f.p||""} value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div style={{marginBottom:14}}>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>VAT Rate</label>
+                <select value={form.vat_rate} onChange={e=>setForm({...form,vat_rate:+e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value={0.15}>15% VAT</option>
+                  <option value={0}>No VAT (0%)</option>
+                </select>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
+              <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Issue Credit Note"}</button>
+              <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {items.length===0 ? (
+        <div style={{textAlign:"center",padding:"60px 20px",color:C.inkMid}}>
+          <div style={{fontSize:48,marginBottom:16}}>📋</div>
+          <div style={{fontSize:16,fontWeight:600,color:C.ink,marginBottom:8}}>No credit notes yet</div>
+          <div style={{fontSize:13}}>Issue a credit note to reduce the amount owed on an invoice.</div>
+        </div>
+      ) : (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr style={{background:C.bg}}>
+              {["Number","Client","Description","Amount","Total incl. VAT","Date","Actions"].map(h=>(
+                <th key={h} style={{padding:"11px 16px",textAlign:"left",fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase"}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {items.map((cn,i)=>(
+                <tr key={cn.id} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?C.surface:C.bg}}>
+                  <td style={{padding:"12px 16px",fontWeight:700,color:C.accent}}>{cn.credit_note_number}</td>
+                  <td style={{padding:"12px 16px",fontWeight:500}}>{cn.client_name}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid,fontSize:12}}>{cn.description||"—"}</td>
+                  <td style={{padding:"12px 16px",fontWeight:700,color:C.red}}>{fmt(cn.amount)}</td>
+                  <td style={{padding:"12px 16px",fontWeight:700,color:C.red}}>{fmt(cn.total_amount)}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid}}>{cn.issue_date?new Date(cn.issue_date).toLocaleDateString("en-ZA"):"—"}</td>
+                  <td style={{padding:"12px 16px"}}>
+                    <button onClick={()=>handleDelete(cn.id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── INVOICING ─────────────────────────────────────────────────────────────────
 function Invoicing({live = {}, user = {}, docTemplate}) {
   const liveInvoices = live.invoices;
   const [invoices, setInvoices] = useState(MOCK_INVOICES);
-  useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, amount: i.total_amount || i.amount, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
+  useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, clientEmail: i.client_email || "", amount: i.total_amount || i.amount, portalToken: i.portal_token || null, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
 
   const [showNew,      setShowNew]      = useState(false);
   const [preview,      setPreview]      = useState(null);   // view modal
   const [editInv,      setEditInv]      = useState(null);   // amend modal
   const [payModal,     setPayModal]     = useState(null);   // {inv, zarAmt, payDate, ref}
-  const [filterStatus, setFilterStatus] = useState(null);   // null | "paid" | "pending" | "overdue"
+  const [filterStatus, setFilterStatus] = useState(null);   // null | "paid" | "sent" | "overdue"
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true,currency:"ZAR",exchangeRate:"18.5",vatAmount:"0"});
   const [saving, setSaving] = useState(false);
+  const [invTab, setInvTab] = useState("invoices");
   const [customers, setCustomers] = useState([]);
   useEffect(()=>{ api("/customers/").then(setCustomers).catch(()=>{}); },[]);
 
   const toZar = i => (i.currency && i.currency !== "ZAR") ? (i.amount||0) * (i.exchange_rate||1) : (i.amount||0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const isOverdue = i => i.status === "sent" && i.due && new Date(i.due) < today;
   const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
-  const totalPending = invoices.filter(i => i.status === "pending").reduce((s,i) => s + toZar(i), 0);
-  const totalOverdue = invoices.filter(i => i.status === "overdue").reduce((s,i) => s + toZar(i), 0);
-  const displayedInvoices = filterStatus ? invoices.filter(i => i.status === filterStatus) : invoices;
+  const totalOverdue = invoices.filter(isOverdue).reduce((s,i) => s + toZar(i), 0);
+  const totalPending = invoices.filter(i => i.status === "sent" && !isOverdue(i)).reduce((s,i) => s + toZar(i), 0);
+  const displayedInvoices = filterStatus === "overdue"
+    ? invoices.filter(isOverdue)
+    : filterStatus === "sent"
+    ? invoices.filter(i => i.status === "sent" && !isOverdue(i))
+    : filterStatus
+    ? invoices.filter(i => i.status === filterStatus)
+    : invoices;
   const toggleFilter = (status) => setFilterStatus(prev => prev === status ? null : status);
 
   const openPayModal = (inv) => {
@@ -1210,10 +1564,19 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
 
   return (
     <div>
-      <SectionHeader title="Invoicing" sub="Manage your client invoices" action="+ New Invoice" onAction={() => setShowNew(true)}/>
+      <div style={{display:"flex",gap:0,marginBottom:24,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
+        <div style={{flex:1,paddingBottom:10}}>
+          <div style={{fontSize:22,fontWeight:800,fontFamily:"serif",color:C.ink}}>Invoicing</div>
+        </div>
+        {[{id:"invoices",label:"Invoices"},{id:"recurring",label:"Recurring"},{id:"credit_notes",label:"Credit Notes"}].map(t=>(
+          <button key={t.id} onClick={()=>setInvTab(t.id)} style={{padding:"8px 18px 11px",border:"none",borderRadius:0,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:invTab===t.id?700:400,background:"transparent",color:invTab===t.id?C.accent:C.inkMid,borderBottom:invTab===t.id?`2px solid ${C.accent}`:"2px solid transparent",marginBottom:-1}}>{t.label}</button>
+        ))}
+        {invTab==="invoices" && <button onClick={()=>setShowNew(true)} style={{marginLeft:16,background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginBottom:8}}>+ New Invoice</button>}
+      </div>
+      {invTab==="invoices" && <>
       <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
         <KPI label="Paid"    value={fmt(totalPaid)}    color={C.green} icon="✅" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"}/>
-        <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("pending")} active={filterStatus==="pending"}/>
+        <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
       </div>
       {filterStatus && (
@@ -1252,12 +1615,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div id="invoice-preview-content">
               <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>
-            {user.payfastMerchantId && (
-              <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"12px 14px",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><div style={{fontSize:12,fontWeight:700,color:C.green}}>Online Payment</div><div style={{fontSize:11,color:C.inkMid}}>PayFast payment link</div></div>
-                <button onClick={()=>{const params=new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");}} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Pay →</button>
-              </div>
-            )}
+            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={true}/>
           </div>
           {/* Sticky action bar */}
           <div style={{flexShrink:0,background:C.surface,borderTop:`1px solid ${C.border}`,padding:"12px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -1279,15 +1637,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div id="invoice-preview-content">
             <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>
-            {user.payfastMerchantId && (
-              <div style={{background:C.greenLt,border:`1px solid ${C.green}30`,borderRadius:10,padding:"12px 16px",marginTop:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><div style={{fontSize:12,fontWeight:700,color:C.green}}>Online Payment</div><div style={{fontSize:11,color:C.inkMid}}>Send client a PayFast payment link</div></div>
-                <button onClick={()=>{const params=new URLSearchParams({merchant_id:user.payfastMerchantId,merchant_key:user.payfastMerchantKey||"",amount:preview.amount.toFixed(2),item_name:`Invoice ${preview.id}`,item_description:preview.desc||"Payment",email_address:preview.clientEmail||""});window.open(`https://www.payfast.co.za/eng/process?${params.toString()}`,"_blank");}} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Open PayFast →</button>
-              </div>
-            )}
-            {!user.payfastMerchantId && (
-              <div style={{background:C.goldLt,border:`1px solid ${C.gold}30`,borderRadius:10,padding:"10px 16px",marginTop:12,fontSize:11,color:C.inkMid}}>Add your PayFast Merchant ID in Settings to enable online payments.</div>
-            )}
+            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={false}/>
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={printInvoice} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
@@ -1306,9 +1656,10 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div style={{marginBottom:16}}>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Status</label>
               <select value={editInv.status} onChange={e=>setEditInv({...editInv,status:e.target.value})} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
-                <option value="pending">Pending</option>
+                <option value="sent">Pending</option>
                 <option value="paid">Paid</option>
                 <option value="overdue">Overdue</option>
+                <option value="draft">Draft</option>
               </select>
             </div>
             <div style={{display:"flex",gap:8}}>
@@ -1366,7 +1717,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div key={inv.id} onClick={()=>setPreview(inv)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px",cursor:"pointer",WebkitTapHighlightColor:"transparent"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                 <div style={{fontWeight:800,fontSize:15,color:C.accent}}>{inv.id}</div>
-                <StatusBadge status={inv.status}/>
+                <StatusBadge status={isOverdue(inv)?"overdue":inv.status}/>
               </div>
               <div style={{fontWeight:600,fontSize:14,color:C.ink,marginBottom:2}}>{inv.client}</div>
               <div style={{fontSize:12,color:C.inkMid,marginBottom:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.desc}</div>
@@ -1374,7 +1725,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                 <div style={{fontWeight:800,fontSize:16,color:C.ink}}>
                   {inv.currency && inv.currency!=="ZAR" ? fmt((inv.amount||0)*(inv.exchange_rate||1)) : fmt(inv.amount||0)}
                 </div>
-                <div style={{fontSize:11,color:inv.status==="overdue"?C.red:C.inkMid}}>Due {fmtDate(inv.due)}</div>
+                <div style={{fontSize:11,color:isOverdue(inv)?C.red:C.inkMid}}>Due {fmtDate(inv.due)}</div>
               </div>
             </div>
           ))}
@@ -1403,8 +1754,8 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                       : fmt(inv.amount||0)}
                   </td>
                   <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
-                  <td style={{padding:"13px 16px",color:inv.status==="overdue"?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
-                  <td style={{padding:"13px 16px"}}><StatusBadge status={inv.status}/></td>
+                  <td style={{padding:"13px 16px",color:isOverdue(inv)?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
+                  <td style={{padding:"13px 16px"}}><StatusBadge status={isOverdue(inv)?"overdue":inv.status}/></td>
                   <td style={{padding:"13px 16px"}}>
                     <div style={{display:"flex",gap:6}}>
                       <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
@@ -1421,6 +1772,9 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
           </table>
         </div>
       )}
+      </>}
+      {invTab==="recurring" && <RecurringInvoicesTab/>}
+      {invTab==="credit_notes" && <CreditNotesTab/>}
     </div>
   );
 }
@@ -1925,17 +2279,20 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           <div style={{marginBottom:20}}>
             <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:10,borderBottom:`1px solid ${C.border}`,paddingBottom:4}}>Deductions</div>
             {[
-              ["PAYE (Income Tax)",     p.paye,        C.red],
+              p.s11fDeduction > 0 && ["Pension / Provident (s11F deductible)", p.pensionEmployee || p.pension_employee, C.red],
+              p.medicalAidEmployee > 0 && ["Medical Aid (Employee Contribution)", p.medicalAidEmployee || p.medical_aid_employee_ded, C.red],
+              ["PAYE (Income Tax)", p.paye, C.red],
+              p.medicalTaxCredit > 0 && ["  ↳ Medical Tax Credit (s6A)", -(p.medicalTaxCredit || p.medical_tax_credit), C.green],
               ["UIF (Employee Contribution)", p.uifEmployee, C.gold],
-            ].map(([l,v,c]) => (
+            ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
-                <span style={{fontWeight:600,color:c}}>({fmt(v)})</span>
+                <span style={{fontWeight:600,color:c}}>{v < 0 ? `+${fmt(Math.abs(v))}` : `(${fmt(v)})`}</span>
               </div>
             ))}
             <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",fontSize:14,fontWeight:800,borderTop:`2px solid ${C.border}`,marginTop:8}}>
               <span>Total Deductions</span>
-              <span style={{color:C.red}}>({fmt(p.paye + p.uifEmployee)})</span>
+              <span style={{color:C.red}}>({fmt(p.paye + p.uifEmployee + (p.pensionEmployee||p.pension_employee||0) + (p.medicalAidEmployee||p.medical_aid_employee_ded||0))})</span>
             </div>
           </div>
 
@@ -1954,9 +2311,11 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           <div style={{marginBottom:20}}>
             <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:10,borderBottom:`1px solid ${C.border}`,paddingBottom:4}}>Employer Contributions (for info)</div>
             {[
+              (p.pensionEmployer||p.pension_employer) > 0 && ["Pension / Provident (Employer)", p.pensionEmployer||p.pension_employer, C.blue],
+              (p.medicalAidEmployer||p.medical_aid_employer_con) > 0 && ["Medical Aid (Employer Contribution)", p.medicalAidEmployer||p.medical_aid_employer_con, C.blue],
               ["UIF (Employer Contribution)", p.uifEmployer, C.blue],
-              ["SDL (Skills Development Levy)", p.sdl,        C.blue],
-            ].map(([l,v,c]) => (
+              ["SDL (Skills Development Levy)", p.sdl, C.blue],
+            ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
                 <span style={{fontWeight:600,color:c}}>{fmt(v)}</span>
@@ -1972,6 +2331,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           <div style={{background:C.bg,borderRadius:10,padding:"12px 16px",fontSize:11,color:C.inkMid,lineHeight:1.8}}>
             <strong style={{color:C.ink}}>SARS Reference (2026/2027)</strong><br/>
             PAYE calculated on annualised taxable gross of {fmt((p.taxableGross||p.gross) * 12)} — Primary rebate R17,820/year<br/>
+            {(p.s11fDeduction||p.s11f_deduction) > 0 && <>Section 11F deduction: {fmt((p.s11fDeduction||p.s11f_deduction)*12)}/year (27.5% of remuneration, capped at R430,000)<br/></>}
+            {(p.medicalTaxCredit||p.medical_tax_credit) > 0 && <>Section 6A Medical Tax Credit: R{p.medicalTaxCredit||p.medical_tax_credit}/month (direct PAYE reduction)<br/></>}
             UIF: 1% employee + 1% employer — capped at R17,712/month (on basic salary only)<br/>
             SDL: 1% of taxable gross payroll<br/>
             {p.overtime && p.overtime.total > 0 && `BCEA Overtime: Weekday/Sat 1.5× · Sunday 2× · Public Holiday 2× · Hourly rate: ${fmt(p.overtime.hourly_rate||p.overtime.hourlyRate)}/hr`}
@@ -2351,6 +2712,37 @@ function LeaveManagement({employees = []}) {
   );
 }
 
+// ── Patterson Grade market salary ranges (2025 SA general market, monthly CTC) ──
+// Source: Peromnes/Patterson compensation surveys — use as indicative benchmarks.
+// Ranges vary by industry, company size, and province.
+const PATTERSON_RANGES = {
+  A1: { min:  3500, median:  4500, max:  5500 },
+  A2: { min:  5000, median:  6500, max:  8000 },
+  B1: { min:  7000, median:  9000, max: 11000 },
+  B2: { min:  9500, median: 12000, max: 15000 },
+  B3: { min: 12000, median: 15500, max: 19000 },
+  B4: { min: 15000, median: 19000, max: 23000 },
+  B5: { min: 18000, median: 23000, max: 28000 },
+  C1: { min: 20000, median: 26000, max: 32000 },
+  C2: { min: 25000, median: 32000, max: 40000 },
+  C3: { min: 30000, median: 39000, max: 48000 },
+  C4: { min: 36000, median: 46000, max: 56000 },
+  C5: { min: 43000, median: 54000, max: 65000 },
+  D1: { min: 45000, median: 57000, max: 70000 },
+  D2: { min: 55000, median: 70000, max: 85000 },
+  D3: { min: 65000, median: 82000, max:100000 },
+  D4: { min: 80000, median:102000, max:125000 },
+  D5: { min: 95000, median:122000, max:150000 },
+  E1: { min:110000, median:140000, max:170000 },
+  E2: { min:130000, median:170000, max:210000 },
+  E3: { min:160000, median:210000, max:260000 },
+  E4: { min:200000, median:260000, max:320000 },
+  E5: { min:240000, median:320000, max:400000 },
+  F1: { min:280000, median:390000, max:500000 },
+  F2: { min:380000, median:540000, max:700000 },
+  F3: { min:500000, median:800000, max:1200000 },
+};
+
 function Payroll({live = {}, user = {}}) {
   const liveEmployees = live.employees;
   const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
@@ -2397,16 +2789,18 @@ function Payroll({live = {}, user = {}}) {
   const [payrollRun, setPayrollRun] = useState(false);
   const [showOtModal, setShowOtModal] = useState(false);
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:""});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
+  const [editEmp,     setEditEmp]     = useState(null);
+  const [editForm,    setEditForm]    = useState({});
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
   const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).paye, 0);
   const totalNet = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).netPay, 0);
   const totalCost = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).totalCost, 0);
   const totalUIF = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).uifEmployer, 0);
   const totalSDL = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).sdl, 0);
-  const zuZanFee = Math.max(99, employees.length * 17.50);
+  const zuZanFee = Math.max(99, employees.length * 34);
   const handleAdd = async () => {
     const nameParts = form.name.trim().split(" ");
     const firstName = nameParts[0] || form.name;
@@ -2421,7 +2815,7 @@ function Payroll({live = {}, user = {}}) {
     };
     setEmployees([...employees, newEmp]);
     setShowNew(false);
-    setForm({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
+    setForm({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:""});
     try {
       const token = localStorage.getItem("zuzan_token");
       if (token && !token.startsWith("demo_")) {
@@ -2430,24 +2824,31 @@ function Payroll({live = {}, user = {}}) {
       await api("/employees/", {
         method: "POST",
         body: JSON.stringify({
-          first_name:       firstName,
-          last_name:        lastName,
-          position:         form.position,
-          department:       form.dept,
-          grade:            form.grade || null,
-          employment_type:  form.employmentType || "salaried",
-          hourly_rate:      form.hourlyRate ? +form.hourlyRate : null,
-          gross_salary:     +form.salary,
-          employee_number:  form.empNo,
-          id_number:        form.idNumber,
-          tax_number:       form.taxNumber,
-          date_of_birth:    form.dob || null,
-          appointment_date: form.appointmentDate || null,
-          address:          form.address,
-          bank_name:        form.bankName,
-          account_number:   form.accountNumber,
-          branch_code:      form.branchCode,
-          account_type:     form.accountType,
+          first_name:                 firstName,
+          last_name:                  lastName,
+          position:                   form.position,
+          department:                 form.dept,
+          grade:                      form.grade || null,
+          employment_type:            form.employmentType || "salaried",
+          hourly_rate:                form.hourlyRate ? +form.hourlyRate : null,
+          gross_salary:               +form.salary,
+          employee_number:            form.empNo,
+          id_number:                  form.idNumber,
+          tax_number:                 form.taxNumber,
+          date_of_birth:              form.dob || null,
+          appointment_date:           form.appointmentDate || null,
+          address:                    form.address,
+          bank_name:                  form.bankName,
+          account_number:             form.accountNumber,
+          branch_code:                form.branchCode,
+          account_type:               form.accountType,
+          pension_fund_employee_pct:  form.pensionEmployeePct ? +form.pensionEmployeePct / 100 : 0,
+          pension_fund_employer_pct:  form.pensionEmployerPct ? +form.pensionEmployerPct / 100 : 0,
+          pension_employee_fixed:     form.pensionEmployeeFixed ? +form.pensionEmployeeFixed : 0,
+          pension_employer_fixed:     form.pensionEmployerFixed ? +form.pensionEmployerFixed : 0,
+          medical_aid_employee:       form.medicalAidEmployee ? +form.medicalAidEmployee : 0,
+          medical_aid_employer:       form.medicalAidEmployer ? +form.medicalAidEmployer : 0,
+          medical_aid_dependants:     form.medicalAidDependants ? +form.medicalAidDependants : 0,
         }),
       });
       if (live && live.reload) live.reload();
@@ -2455,6 +2856,78 @@ function Payroll({live = {}, user = {}}) {
       console.warn("Employee save failed:", err.message);
     }
   };
+  const handleEditSave = async () => {
+    if (!editEmp) return;
+    const nameParts = (editForm.name || "").trim().split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName  = nameParts.slice(1).join(" ") || "";
+    const updated = {
+      ...editEmp,
+      name:                       editForm.name,
+      position:                   editForm.position,
+      salary:                     +editForm.salary || editEmp.salary,
+      dept:                       editForm.dept,
+      grade:                      editForm.grade,
+      employment_type:            editForm.employmentType,
+      hourly_rate:                editForm.hourlyRate ? +editForm.hourlyRate : null,
+      id_number:                  editForm.idNumber,
+      tax_number:                 editForm.taxNumber,
+      date_of_birth:              editForm.dob,
+      appointment_date:           editForm.appointmentDate,
+      address:                    editForm.address,
+      bank_name:                  editForm.bankName,
+      account_number:             editForm.accountNumber,
+      branch_code:                editForm.branchCode,
+      account_type:               editForm.accountType,
+      pension_fund_employee_pct:  editForm.pensionEmployeePct ? +editForm.pensionEmployeePct / 100 : 0,
+      pension_fund_employer_pct:  editForm.pensionEmployerPct ? +editForm.pensionEmployerPct / 100 : 0,
+      pension_employee_fixed:     editForm.pensionEmployeeFixed ? +editForm.pensionEmployeeFixed : 0,
+      pension_employer_fixed:     editForm.pensionEmployerFixed ? +editForm.pensionEmployerFixed : 0,
+      medical_aid_employee:       editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
+      medical_aid_employer:       editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
+      medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
+    };
+    setEmployees(employees.map(e => e.id === editEmp.id ? updated : e));
+    setEditEmp(null);
+    try {
+      const token = localStorage.getItem("zuzan_token");
+      if (token && !token.startsWith("demo_")) {
+        await api(`/employees/${editEmp.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            first_name:                 firstName,
+            last_name:                  lastName,
+            position:                   editForm.position,
+            department:                 editForm.dept,
+            grade:                      editForm.grade || null,
+            employment_type:            editForm.employmentType || "salaried",
+            hourly_rate:                editForm.hourlyRate ? +editForm.hourlyRate : null,
+            gross_salary:               +editForm.salary,
+            id_number:                  editForm.idNumber,
+            tax_number:                 editForm.taxNumber,
+            date_of_birth:              editForm.dob || null,
+            appointment_date:           editForm.appointmentDate || null,
+            address:                    editForm.address,
+            bank_name:                  editForm.bankName,
+            account_number:             editForm.accountNumber,
+            branch_code:                editForm.branchCode,
+            account_type:               editForm.accountType,
+            pension_fund_employee_pct:  editForm.pensionEmployeePct ? +editForm.pensionEmployeePct / 100 : 0,
+            pension_fund_employer_pct:  editForm.pensionEmployerPct ? +editForm.pensionEmployerPct / 100 : 0,
+            pension_employee_fixed:     editForm.pensionEmployeeFixed ? +editForm.pensionEmployeeFixed : 0,
+            pension_employer_fixed:     editForm.pensionEmployerFixed ? +editForm.pensionEmployerFixed : 0,
+            medical_aid_employee:       editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
+            medical_aid_employer:       editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
+            medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
+          }),
+        });
+        if (live && live.reload) live.reload();
+      }
+    } catch(err) {
+      console.warn("Employee update failed:", err.message);
+    }
+  };
+
   // Show PIN gate if not yet verified
   if (!pinOk) {
     return (
@@ -2632,7 +3105,7 @@ function Payroll({live = {}, user = {}}) {
         </div>
       </div>
       <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R17.50 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
+        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R34 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
         <Badge label="Active" color={C.green} bg={C.greenLt}/>
       </div>
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
@@ -2818,8 +3291,15 @@ function Payroll({live = {}, user = {}}) {
         />
       )}
       {showNew && (
-        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:28,marginBottom:20}}>
-          <h3 style={{fontFamily:"serif",fontSize:20,margin:"0 0 20px",color:C.ink}}>New Employee</h3>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:250,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"20px 16px",overflowY:"auto"}}>
+          <div style={{background:C.surface,borderRadius:20,width:"100%",maxWidth:700,boxShadow:"0 8px 40px #00000030",margin:"auto",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
+          {/* Pinned header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 28px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+            <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>New Employee</h3>
+            <button onClick={()=>setShowNew(false)} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:C.inkMid,lineHeight:1}}>×</button>
+          </div>
+          {/* Scrollable body */}
+          <div style={{overflowY:"auto",padding:"20px 28px",flex:1}}>
 
           {/* Employment Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Employment Details</div>
@@ -2831,13 +3311,101 @@ function Payroll({live = {}, user = {}}) {
               {l:"Department",           k:"dept",            p:"Tech",        t:"text"},
               {l:"Monthly Salary (ZAR)", k:"salary",          p:"35000",       t:"number"},
               {l:"Date of Appointment",  k:"appointmentDate", p:"",            t:"date"},
-              {l:"Grade / Pay Band",     k:"grade",           p:"e.g. A, B2, Senior", t:"text"},
             ].map(f => (
               <div key={f.k}>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
                 <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
               </div>
             ))}
+            {/* Patterson Grade dropdown + market salary hint */}
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Patterson Grade</label>
+              <select value={form.grade} onChange={e=>setForm(v=>({...v,grade:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="">— Select grade —</option>
+                <optgroup label="Band A — Unskilled / Elementary">
+                  <option value="A1">A1 — Basic unskilled (cleaners, general workers)</option>
+                  <option value="A2">A2 — Elementary semi-skilled</option>
+                </optgroup>
+                <optgroup label="Band B — Semi-Skilled">
+                  <option value="B1">B1 — Routine semi-skilled</option>
+                  <option value="B2">B2 — Defined semi-skilled</option>
+                  <option value="B3">B3 — Skilled semi-skilled</option>
+                  <option value="B4">B4 — Advanced semi-skilled</option>
+                  <option value="B5">B5 — Expert semi-skilled</option>
+                </optgroup>
+                <optgroup label="Band C — Skilled / Technical / Clerical">
+                  <option value="C1">C1 — Junior skilled (bookkeepers, admin clerks)</option>
+                  <option value="C2">C2 — Skilled technician / senior clerk</option>
+                  <option value="C3">C3 — Senior skilled / team leader</option>
+                  <option value="C4">C4 — Specialist / senior technician</option>
+                  <option value="C5">C5 — Expert specialist</option>
+                </optgroup>
+                <optgroup label="Band D — Junior Management / Professional">
+                  <option value="D1">D1 — Junior professional / supervisor</option>
+                  <option value="D2">D2 — Professional / junior manager</option>
+                  <option value="D3">D3 — Senior professional / manager</option>
+                  <option value="D4">D4 — Senior manager / department head</option>
+                  <option value="D5">D5 — Divisional head / senior specialist</option>
+                </optgroup>
+                <optgroup label="Band E — Middle Management">
+                  <option value="E1">E1 — Junior middle manager</option>
+                  <option value="E2">E2 — Middle manager</option>
+                  <option value="E3">E3 — Senior middle manager</option>
+                  <option value="E4">E4 — General manager</option>
+                  <option value="E5">E5 — Senior general manager</option>
+                </optgroup>
+                <optgroup label="Band F — Senior / Executive Management">
+                  <option value="F1">F1 — Director / senior executive</option>
+                  <option value="F2">F2 — Executive director</option>
+                  <option value="F3">F3 — Chief executive / top management</option>
+                </optgroup>
+              </select>
+              {/* Market salary hint — appears when a grade is selected */}
+              {form.grade && PATTERSON_RANGES[form.grade] && (() => {
+                const r = PATTERSON_RANGES[form.grade];
+                const fmt = n => "R" + n.toLocaleString("en-ZA");
+                const pct = form.salary
+                  ? Math.round(((+form.salary - r.min) / (r.max - r.min)) * 100)
+                  : null;
+                const position = pct === null ? null : Math.max(0, Math.min(100, pct));
+                return (
+                  <div style={{marginTop:10,padding:"12px 14px",background:"#f0f7ff",border:"1px solid #b8d4f0",borderRadius:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <div style={{fontSize:12,fontWeight:700,color:"#1a4a7a"}}>
+                        📊 Market range for {form.grade} — 2025 SA general market (monthly CTC)
+                      </div>
+                      <button
+                        type="button"
+                        onClick={()=>setForm(v=>({...v,salary:String(r.median)}))}
+                        style={{padding:"4px 12px",background:"#1a6fcc",border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+                      >
+                        Use median
+                      </button>
+                    </div>
+                    {/* Range bar */}
+                    <div style={{position:"relative",height:8,background:"#d0e4f8",borderRadius:4,marginBottom:6}}>
+                      <div style={{position:"absolute",left:"33%",right:"33%",top:0,height:"100%",background:"#6baee8",borderRadius:4}}/>
+                      {position !== null && (
+                        <div style={{position:"absolute",top:-3,left:`${position}%`,transform:"translateX(-50%)",width:14,height:14,borderRadius:7,background:position < 33 ? "#e8a020" : position > 67 ? "#1a6fcc" : "#2a9d3f",border:"2px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
+                      )}
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#3a6a9a"}}>
+                      <span>Min: <strong>{fmt(r.min)}</strong></span>
+                      <span>Median: <strong style={{color:"#1a4a7a"}}>{fmt(r.median)}</strong></span>
+                      <span>Max: <strong>{fmt(r.max)}</strong></span>
+                    </div>
+                    {position !== null && (
+                      <div style={{marginTop:6,fontSize:11,color: position < 25 ? "#b85c00" : position > 75 ? "#1a4a7a" : "#2a7d3f", fontWeight:600}}>
+                        {position < 25 ? "⚠️ Below market — risk of turnover"
+                          : position > 75 ? "💡 Above median — strong retention"
+                          : "✓ Within market range"}
+                      </div>
+                    )}
+                    <div style={{marginTop:4,fontSize:10,color:"#6a8aaa"}}>Indicative only — varies by industry, province &amp; experience. Source: Peromnes/Patterson surveys.</div>
+                  </div>
+                );
+              })()}
+            </div>
             <div>
               <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employment Type</label>
               <select value={form.employmentType} onChange={e=>setForm(v=>({...v,employmentType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
@@ -2879,6 +3447,52 @@ function Payroll({live = {}, user = {}}) {
             </div>
           </div>
 
+          {/* Benefits */}
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Pension / Provident Fund &amp; Medical Aid</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+            {[
+              {l:"Employee Pension %",             k:"pensionEmployeePct",   p:"7.5",  t:"number", tip:"% of gross salary — standard/mandatory rate"},
+              {l:"Employee Pension Fixed (ZAR/mo)",k:"pensionEmployeeFixed",  p:"500",  t:"number", tip:"Optional voluntary top-up (ZAR/month, added to % above). No limit — excess above s11F cap is post-tax."},
+              {l:"Employer Pension %",             k:"pensionEmployerPct",   p:"7.5",  t:"number", tip:"% of gross salary contributed by employer"},
+              {l:"Employer Pension Fixed (ZAR/mo)",k:"pensionEmployerFixed",  p:"500",  t:"number", tip:"Optional employer add-on (ZAR/month). Contribution has no SARS cap — only s11F employee relief is capped."},
+              {l:"Medical Aid — Employee (ZAR/mo)",k:"medicalAidEmployee",   p:"1500", t:"number", tip:"Employee's own monthly medical aid contribution"},
+              {l:"Medical Aid — Employer (ZAR/mo)",k:"medicalAidEmployer",   p:"1500", t:"number", tip:"Employer's monthly contribution (taxable fringe benefit — added to PAYE base)"},
+              {l:"Medical Aid Dependants",          k:"medicalAidDependants", p:"1",    t:"number", tip:"Dependants EXCLUDING the main member (s6A MTC: R376 main+first, R254 each additional)"},
+            ].map(f=>(
+              <div key={f.k}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                <div style={{fontSize:10,color:C.inkDim,marginTop:3}}>{f.tip}</div>
+              </div>
+            ))}
+          </div>
+          {/* Live pension/medical preview */}
+          {form.salary && (form.pensionEmployeePct || form.pensionEmployeeFixed || form.medicalAidEmployee || form.medicalAidEmployer) && (()=>{
+            const p = calcPayroll(+form.salary, null, 0, 0, 0, null,
+              form.pensionEmployeePct ? +form.pensionEmployeePct/100 : 0,
+              form.pensionEmployerPct ? +form.pensionEmployerPct/100 : 0,
+              form.medicalAidEmployee ? +form.medicalAidEmployee : 0,
+              form.medicalAidEmployer ? +form.medicalAidEmployer : 0,
+              form.medicalAidDependants ? +form.medicalAidDependants : 0,
+              form.pensionEmployeeFixed ? +form.pensionEmployeeFixed : 0,
+              form.pensionEmployerFixed ? +form.pensionEmployerFixed : 0,
+            );
+            const hasExcess = p.s11fExcessMonthly > 0;
+            return (
+              <div style={{background:C.blueLt,border:`1px solid ${hasExcess?C.gold:C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12}}>
+                <strong style={{color:C.blue}}>Live preview: </strong>
+                <span style={{color:C.ink}}>
+                  PAYE {fmt(p.paye)} · s11F relief {fmt(p.s11fDeduction)}/mo · MTC R{p.medicalTaxCredit} · Net Pay {fmt(p.netPay)} · Employer Cost {fmt(p.totalCost)}
+                </span>
+                {hasExcess && (
+                  <div style={{marginTop:6,fontSize:11,color:C.gold,fontWeight:600}}>
+                    ⚠️ {fmt(p.s11fExcessMonthly)}/month ({fmt(p.s11fExcessMonthly*12)}/year) of employee contributions exceed the s11F cap — this portion is deducted from after-tax income with no additional PAYE relief. Contributions are still processed in full.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Bank Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:20}}>
@@ -2906,10 +3520,13 @@ function Payroll({live = {}, user = {}}) {
             </div>
           </div>
 
-          <div style={{display:"flex",gap:8}}>
+          </div>{/* end scrollable body */}
+          {/* Pinned footer */}
+          <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
             <button onClick={handleAdd} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add Employee</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
+          </div>{/* end modal card */}
         </div>
       )}
       <div key={taxYear} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden",marginBottom:16}}>
@@ -2935,7 +3552,10 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.green}}>{fmt(p.netPay)}</td>
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
-                    <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : ""});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -2971,6 +3591,213 @@ function Payroll({live = {}, user = {}}) {
           logoUrl={user.logoUrl || ""}
           onClose={()=>setViewPayslip(null)}
         />
+      )}
+
+      {/* ── Edit Employee Modal ─────────────────────────────────────────────── */}
+      {editEmp && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:300,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"20px 16px",overflowY:"auto"}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:680,boxShadow:"0 8px 40px #00000030",margin:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Edit Employee</h3>
+              <button onClick={()=>setEditEmp(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
+            </div>
+
+            {/* Basic Info */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Basic Information</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+              {[
+                {l:"Full Name",             k:"name",     p:"Jane Smith",    t:"text"},
+                {l:"Job Title / Position",  k:"position", p:"Accountant",    t:"text"},
+                {l:"Department",            k:"dept",     p:"Finance",       t:"text"},
+                {l:"Monthly Salary (ZAR)",  k:"salary",   p:"25000",         t:"number"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} placeholder={f.p} value={editForm[f.k]} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              {/* Patterson Grade */}
+              <div style={{gridColumn:"1 / -1"}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Patterson Grade</label>
+                <select value={editForm.grade} onChange={e=>setEditForm(v=>({...v,grade:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="">-- Select Grade --</option>
+                  <optgroup label="Band A — Unskilled / entry-level operational">
+                    <option value="A1">A1 — Basic unskilled work</option>
+                    <option value="A2">A2 — Semi-skilled / entry operational</option>
+                  </optgroup>
+                  <optgroup label="Band B — Semi-skilled / skilled operational">
+                    <option value="B1">B1 — Skilled trades / junior admin</option>
+                    <option value="B2">B2 — Skilled technical / admin</option>
+                    <option value="B3">B3 — Senior skilled / specialist</option>
+                    <option value="B4">B4 — Senior skilled / team lead</option>
+                    <option value="B5">B5 — Senior specialist / supervisor</option>
+                  </optgroup>
+                  <optgroup label="Band C — Highly skilled / junior professional">
+                    <option value="C1">C1 — Junior professional</option>
+                    <option value="C2">C2 — Professional / technical specialist</option>
+                    <option value="C3">C3 — Senior professional</option>
+                    <option value="C4">C4 — Lead professional</option>
+                    <option value="C5">C5 — Senior specialist / section manager</option>
+                  </optgroup>
+                  <optgroup label="Band D — Middle management / senior professional">
+                    <option value="D1">D1 — Junior / first-line manager</option>
+                    <option value="D2">D2 — Middle manager</option>
+                    <option value="D3">D3 — Senior manager (department)</option>
+                    <option value="D4">D4 — Senior manager (multi-dept)</option>
+                    <option value="D5">D5 — Divisional manager</option>
+                  </optgroup>
+                  <optgroup label="Band E — Senior management">
+                    <option value="E1">E1 — Junior senior manager</option>
+                    <option value="E2">E2 — Senior manager / head of function</option>
+                    <option value="E3">E3 — Senior middle manager</option>
+                    <option value="E4">E4 — General manager</option>
+                    <option value="E5">E5 — Senior general manager</option>
+                  </optgroup>
+                  <optgroup label="Band F — Senior / Executive Management">
+                    <option value="F1">F1 — Director / senior executive</option>
+                    <option value="F2">F2 — Executive director</option>
+                    <option value="F3">F3 — Chief executive / top management</option>
+                  </optgroup>
+                </select>
+                {editForm.grade && PATTERSON_RANGES[editForm.grade] && (() => {
+                  const r = PATTERSON_RANGES[editForm.grade];
+                  const fmtR = n => "R" + n.toLocaleString("en-ZA");
+                  const pct = editForm.salary ? Math.round(((+editForm.salary - r.min) / (r.max - r.min)) * 100) : null;
+                  const pos = pct === null ? null : Math.max(0, Math.min(100, pct));
+                  return (
+                    <div style={{marginTop:10,padding:"12px 14px",background:"#f0f7ff",border:"1px solid #b8d4f0",borderRadius:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                        <div style={{fontSize:12,fontWeight:700,color:"#1a4a7a"}}>📊 Market range for {editForm.grade} — 2025 SA general market (monthly CTC)</div>
+                        <button type="button" onClick={()=>setEditForm(v=>({...v,salary:String(r.median)}))} style={{padding:"4px 12px",background:"#1a6fcc",border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Use median</button>
+                      </div>
+                      <div style={{position:"relative",height:8,background:"#d0e4f8",borderRadius:4,marginBottom:6}}>
+                        <div style={{position:"absolute",left:"33%",right:"33%",top:0,height:"100%",background:"#6baee8",borderRadius:4}}/>
+                        {pos !== null && <div style={{position:"absolute",top:-3,left:`${pos}%`,transform:"translateX(-50%)",width:14,height:14,borderRadius:7,background:pos < 33 ? "#e8a020" : pos > 67 ? "#1a6fcc" : "#2a9d3f",border:"2px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>}
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#3a6a9a"}}>
+                        <span>Min: <strong>{fmtR(r.min)}</strong></span>
+                        <span>Median: <strong style={{color:"#1a4a7a"}}>{fmtR(r.median)}</strong></span>
+                        <span>Max: <strong>{fmtR(r.max)}</strong></span>
+                      </div>
+                      {pos !== null && <div style={{marginTop:6,fontSize:11,fontWeight:600,color:pos < 25 ? "#b85c00" : pos > 75 ? "#1a4a7a" : "#2a7d3f"}}>{pos < 25 ? "⚠️ Below market — risk of turnover" : pos > 75 ? "💡 Above median — strong retention" : "✓ Within market range"}</div>}
+                      <div style={{marginTop:4,fontSize:10,color:"#6a8aaa"}}>Indicative only — varies by industry, province &amp; experience. Source: Peromnes/Patterson surveys.</div>
+                    </div>
+                  );
+                })()}
+              </div>
+              {/* Employment Type */}
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employment Type</label>
+                <select value={editForm.employmentType} onChange={e=>setEditForm(v=>({...v,employmentType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="salaried">Salaried (fixed monthly)</option>
+                  <option value="hourly">Hourly rate</option>
+                </select>
+              </div>
+              {editForm.employmentType === "hourly" && (
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Hourly Rate (ZAR)</label>
+                  <input type="number" placeholder="e.g. 150" value={editForm.hourlyRate} onChange={e=>setEditForm(v=>({...v,hourlyRate:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              )}
+            </div>
+
+            {/* Personal Details */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Personal Details</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
+              {[
+                {l:"SA ID Number",      k:"idNumber",        p:"8001015009087", t:"text"},
+                {l:"Tax Number",        k:"taxNumber",        p:"1234567890",    t:"text"},
+                {l:"Date of Birth",     k:"dob",              p:"",              t:"date"},
+                {l:"Appointment Date",  k:"appointmentDate",  p:"",              t:"date"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} placeholder={f.p} value={editForm[f.k]} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div style={{gridColumn:"1 / -1"}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Residential Address</label>
+                <input placeholder="123 Main St, Johannesburg, 2000" value={editForm.address} onChange={e=>setEditForm(v=>({...v,address:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+
+            {/* Benefits */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Pension / Provident Fund &amp; Medical Aid</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+              {[
+                {l:"Employee Pension %",              k:"pensionEmployeePct",   p:"7.5",  t:"number"},
+                {l:"Employee Fixed Top-up (ZAR/mo)", k:"pensionEmployeeFixed",  p:"500",  t:"number"},
+                {l:"Employer Pension %",              k:"pensionEmployerPct",   p:"7.5",  t:"number"},
+                {l:"Employer Fixed Add-on (ZAR/mo)", k:"pensionEmployerFixed",  p:"500",  t:"number"},
+                {l:"Medical Aid — Employee (ZAR/mo)",k:"medicalAidEmployee",   p:"1500", t:"number"},
+                {l:"Medical Aid — Employer (ZAR/mo)",k:"medicalAidEmployer",   p:"1500", t:"number"},
+                {l:"Medical Aid Dependants",          k:"medicalAidDependants", p:"1",    t:"number"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} placeholder={f.p} value={editForm[f.k]||""} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+            </div>
+            {editForm.salary && (editForm.pensionEmployeePct || editForm.pensionEmployeeFixed || editForm.medicalAidEmployee || editForm.medicalAidEmployer) && (()=>{
+              const p = calcPayroll(+editForm.salary, null, 0, 0, 0, null,
+                editForm.pensionEmployeePct ? +editForm.pensionEmployeePct/100 : 0,
+                editForm.pensionEmployerPct ? +editForm.pensionEmployerPct/100 : 0,
+                editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
+                editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
+                editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
+                editForm.pensionEmployeeFixed ? +editForm.pensionEmployeeFixed : 0,
+                editForm.pensionEmployerFixed ? +editForm.pensionEmployerFixed : 0,
+              );
+              const hasExcess = p.s11fExcessMonthly > 0;
+              return (
+                <div style={{background:C.blueLt,border:`1px solid ${hasExcess?C.gold:C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12}}>
+                  <strong style={{color:C.blue}}>Live preview: </strong>
+                  <span style={{color:C.ink}}>
+                    PAYE {fmt(p.paye)} · s11F relief {fmt(p.s11fDeduction)}/mo · MTC R{p.medicalTaxCredit} · Net Pay {fmt(p.netPay)} · Employer Cost {fmt(p.totalCost)}
+                  </span>
+                  {hasExcess && (
+                    <div style={{marginTop:6,fontSize:11,color:C.gold,fontWeight:600}}>
+                      ⚠️ {fmt(p.s11fExcessMonthly)}/month above s11F cap — deducted from after-tax income (contribution is still processed in full, no additional PAYE relief on the excess).
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Bank Details */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:24}}>
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Bank Name</label>
+                <select value={editForm.bankName} onChange={e=>setEditForm(v=>({...v,bankName:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="">-- Select Bank --</option>
+                  {["ABSA","Capitec","Discovery Bank","FNB","Investec","Nedbank","Standard Bank","TymeBank","African Bank"].map(b=><option key={b}>{b}</option>)}
+                </select>
+              </div>
+              {[
+                {l:"Account Number", k:"accountNumber", p:"62123456789"},
+                {l:"Branch Code",    k:"branchCode",    p:"250655"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input placeholder={f.p} value={editForm[f.k]} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Type</label>
+                <select value={editForm.accountType} onChange={e=>setEditForm(v=>({...v,accountType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  {["Cheque","Savings","Transmission"].map(t=><option key={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleEditSave} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+              <button onClick={()=>setEditEmp(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -3147,6 +3974,7 @@ function Reports({live = {}}) {
               <ReportRow label="Accumulated Depreciation"   value={bs.assets.accum_depreciation}  color={C.red}  indent/>
               <ReportRow label="Fixed Assets (Net)"         value={bs.assets.fixed_assets_net}    color={C.blue}/>
             </>}
+            {(bs.assets.other_assets||0) !== 0 && <ReportRow label="Other Assets (imported)" value={bs.assets.other_assets} color={C.blue}/>}
             <ReportRow label="Total Assets"                value={bs.assets.total} bold border color={C.blue}/>
           </div>
           <div>
@@ -3156,10 +3984,16 @@ function Reports({live = {}}) {
             <ReportRow label="PAYE Payable (SARS)"          value={bs.liabilities.paye_payable}     indent color={C.red}/>
             <ReportRow label="UIF Payable (SARS)"           value={bs.liabilities.uif_payable}      indent color={C.red}/>
             <ReportRow label="SDL Payable (SARS)"           value={bs.liabilities.sdl_payable}      indent color={C.red}/>
+            {(bs.liabilities.income_tax_payable||0) !== 0 && <ReportRow label="Income Tax Payable (SARS)" value={bs.liabilities.income_tax_payable} indent color={C.red}/>}
+            {(bs.liabilities.prov_tax_payable||0) !== 0 && <ReportRow label="Provisional Tax Payable (SARS)" value={bs.liabilities.prov_tax_payable} indent color={C.red}/>}
+            {(bs.liabilities.other_liabilities||0) !== 0 && <ReportRow label="Other Liabilities (imported)" value={bs.liabilities.other_liabilities} indent color={C.red}/>}
             <ReportRow label="Total Liabilities"            value={bs.liabilities.total} bold border color={C.red}/>
             <div style={{height:12}}/>
             <div style={{fontSize:11,fontWeight:700,color:C.green,textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>Equity</div>
             <ReportRow label="Retained Income" value={bs.equity.retained_income} color={C.green}/>
+            {(bs.equity.opening_balance_equity||0) !== 0 && <ReportRow label="Opening Balance Equity (imported)" value={bs.equity.opening_balance_equity} color={C.green}/>}
+            {(bs.equity.imported_retained_earnings||0) !== 0 && <ReportRow label="Retained Earnings (imported)" value={bs.equity.imported_retained_earnings} color={C.green}/>}
+            {(bs.equity.other_equity||0) !== 0 && <ReportRow label="Other Equity" value={bs.equity.other_equity} color={C.green}/>}
             <ReportRow label="Total Equity"    value={bs.equity.total} bold color={C.green}/>
             <div style={{height:12}}/>
             <ReportRow label="Total Liabilities and Equity" value={bs.total_liabilities_and_equity} bold border large color={balanced?C.ink:C.red}/>
@@ -3526,7 +4360,7 @@ function Reports({live = {}}) {
     return (
       <div>
         <div style={{display:"flex",justifyContent:"space-between",marginBottom:24}}>
-          <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Cash Flow Statement</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the month ended {cf.period}</div></div>
+          <div><div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C.ink}}>Cash Flow Statement</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>For the period {cf.period}</div></div>
           <ExcelBtn filename="cash-flow.csv" data={[{Item:"Cash Receipts",Amount:op.cash_receipts_from_customers},{Item:"Cash Paid",Amount:op.cash_paid_to_suppliers},{Item:"Payroll",Amount:op.payroll_net_pay},{Item:"SARS",Amount:op.sars_paye_uif_sdl},{Item:"Net Operating",Amount:op.net_cash_from_operations},{Item:"Net Investing",Amount:cf.investing.net_cash_from_investing},{Item:"Net Financing",Amount:cf.financing.net_cash_from_financing},{Item:"Net Change",Amount:cf.net_increase_in_cash}]}/>
         </div>
         <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Operating Activities</div>
@@ -3590,7 +4424,7 @@ function Reports({live = {}}) {
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
         const today = new Date();
-        const rows = invs.filter(i=>["pending","sent","overdue"].includes(i.status))
+        const rows = invs.filter(i=>["sent","overdue"].includes(i.status))
           .sort((a,b)=>new Date(a.due_date||0)-new Date(b.due_date||0));
         setMgmtDrill({type, title:"Outstanding — Pending & Overdue Invoices", color:C.gold,
           total: rows.reduce((s,i)=>s+toZarD(i),0),
@@ -4373,64 +5207,69 @@ function Budgeting({live = {}}) {
             </button>}
         </div>
         <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:900}}>
+          <table style={{borderCollapse:"collapse",fontSize:12,tableLayout:"fixed",width:"1139px"}}>
+            <colgroup>
+              <col style={{width:155}}/>
+              {MONTHS.map((_,i)=><col key={i} style={{width:72}}/>)}
+              <col style={{width:95}}/>
+            </colgroup>
             <thead>
               <tr style={{background:C.surface}}>
-                <th style={{padding:"8px 12px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1}}>Category</th>
-                {MONTHS.map((m,i)=><th key={i} style={{padding:"8px 8px",textAlign:"center",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,minWidth:80}}>{m}</th>)}
-                <th style={{padding:"8px 8px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`}}>Total</th>
+                <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1,whiteSpace:"nowrap"}}>Category</th>
+                {MONTHS.map((m,i)=><th key={i} style={{padding:"8px 4px",textAlign:"center",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{m}</th>)}
+                <th style={{padding:"8px 6px",textAlign:"right",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>Total</th>
               </tr>
             </thead>
             <tbody>
               {/* Income section */}
-              <tr><td colSpan={14} style={{background:C.greenLt,padding:"6px 12px",fontSize:11,fontWeight:700,color:C.green,letterSpacing:0.5,textTransform:"uppercase"}}>Income</td></tr>
+              <tr><td colSpan={14} style={{background:C.greenLt,padding:"5px 10px",fontSize:11,fontWeight:700,color:C.green,letterSpacing:0.5,textTransform:"uppercase"}}>Income</td></tr>
               {INCOME_CATS.map(cat=>(
                 <tr key={cat}>
-                  <td style={{padding:"6px 12px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1}}>{cat}</td>
+                  <td style={{padding:"4px 10px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{cat}</td>
                   {MONTHS.map((_,i)=>{
-                    const m=i+1; const key=`${cat}-${m}-income`;
+                    const m=i+1;
                     const cur=getCellVal(cat,m,"income");
-                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"2px 4px",textAlign:"right"}}>
+                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"1px 2px"}}>
                       <input type="number" value={cur} placeholder="0"
                         onChange={e=>setPending(cat,m,"income",e.target.value)}
-                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:12,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 2px"}}/>
+                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:11,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 3px",boxSizing:"border-box"}}/>
                     </td>;
                   })}
-                  <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",fontWeight:600,color:C.green}}>
+                  <td style={{border:`1px solid ${C.border}`,padding:"4px 6px",textAlign:"right",fontWeight:600,color:C.green,fontSize:11,whiteSpace:"nowrap"}}>
                     {fmtR(MONTHS.reduce((s,_,i)=>s+(parseFloat(getCellVal(cat,i+1,"income"))||0),0))}
                   </td>
                 </tr>
               ))}
               {/* Expense section */}
-              <tr><td colSpan={14} style={{background:"#FFF3F3",padding:"6px 12px",fontSize:11,fontWeight:700,color:C.red,letterSpacing:0.5,textTransform:"uppercase"}}>Expenses</td></tr>
+              <tr><td colSpan={14} style={{background:"#FFF3F3",padding:"5px 10px",fontSize:11,fontWeight:700,color:C.red,letterSpacing:0.5,textTransform:"uppercase"}}>Expenses</td></tr>
               {EXPENSE_CATS.map(cat=>(
                 <tr key={cat}>
-                  <td style={{padding:"6px 12px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1}}>{cat}</td>
+                  <td style={{padding:"4px 10px",border:`1px solid ${C.border}`,fontWeight:500,color:C.ink,position:"sticky",left:0,background:"#fff",zIndex:1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{cat}</td>
                   {MONTHS.map((_,i)=>{
-                    const m=i+1; const key=`${cat}-${m}-expense`;
+                    const m=i+1;
                     const cur=getCellVal(cat,m,"expense");
-                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"2px 4px",textAlign:"right"}}>
+                    return <td key={m} style={{border:`1px solid ${C.border}`,padding:"1px 2px"}}>
                       <input type="number" value={cur} placeholder="0"
                         onChange={e=>setPending(cat,m,"expense",e.target.value)}
-                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:12,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 2px"}}/>
+                        style={{width:"100%",border:"none",background:"transparent",textAlign:"right",fontSize:11,fontFamily:"inherit",color:cur?C.ink:C.inkDim,outline:"none",padding:"4px 3px",boxSizing:"border-box"}}/>
                     </td>;
                   })}
-                  <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",fontWeight:600,color:C.red}}>
+                  <td style={{border:`1px solid ${C.border}`,padding:"4px 6px",textAlign:"right",fontWeight:600,color:C.red,fontSize:11,whiteSpace:"nowrap"}}>
                     {fmtR(MONTHS.reduce((s,_,i)=>s+(parseFloat(getCellVal(cat,i+1,"expense"))||0),0))}
                   </td>
                 </tr>
               ))}
               {/* Net row */}
               <tr style={{background:C.surface,fontWeight:700}}>
-                <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1}}>Net (Income − Expenses)</td>
+                <td style={{padding:"6px 10px",border:`1px solid ${C.border}`,position:"sticky",left:0,background:C.surface,zIndex:1,whiteSpace:"nowrap",fontSize:11}}>Net (Income − Expenses)</td>
                 {MONTHS.map((_,i)=>{
                   const m=i+1;
                   const inc=(parseFloat(getCellVal("Revenue",m,"income"))||0);
                   const exp=EXPENSE_CATS.reduce((s,c)=>s+(parseFloat(getCellVal(c,m,"expense"))||0),0);
                   const net=inc-exp;
-                  return <td key={m} style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:net>=0?C.green:C.red}}>{net?fmtR(net):""}</td>;
+                  return <td key={m} style={{border:`1px solid ${C.border}`,padding:"6px 4px",textAlign:"right",fontSize:11,color:net>=0?C.green:C.red,whiteSpace:"nowrap"}}>{net?fmtR(net):""}</td>;
                 })}
-                <td style={{border:`1px solid ${C.border}`,padding:"6px 8px",textAlign:"right",color:C.ink}}>
+                <td style={{border:`1px solid ${C.border}`,padding:"6px 6px",textAlign:"right",color:C.ink,fontSize:11,whiteSpace:"nowrap"}}>
                   {fmtR(MONTHS.reduce((s,_,i)=>{
                     const m=i+1;
                     const inc=(parseFloat(getCellVal("Revenue",m,"income"))||0);
@@ -4807,12 +5646,12 @@ function Creditors({live = {}}) {
     api("/reports/creditors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
   }, []);
 
-  // Refresh when a PO is received or paid
+  // Refresh when a PO is received or paid, or when an on-credit expense is paid
   useEffect(() => {
-    if (live.purchaseOrders) {
+    if (live.purchaseOrders || live.expenses) {
       api("/reports/creditors-aging").then(setData).catch(()=>null);
     }
-  }, [live.purchaseOrders]); // eslint-disable-line
+  }, [live.purchaseOrders, live.expenses]); // eslint-disable-line
 
   const BUCKETS = [
     {key:"not_due",  label:"Not Yet Due",   color:C.blue},
@@ -5128,88 +5967,342 @@ const SA_BANKS = [
   {id:"tymebank",     name:"TymeBank",      logo:"🩵",color:"#00B4D8"},
 ];
 
-function BankFeeds() {
-  const [linked,    setLinked]   = useState([]);
-  const [showLink,  setShowLink] = useState(false);
-  const [linking,   setLinking]  = useState(null);
-  const STITCH_CONFIGURED = false; // Set to true once Stitch API credentials are added
+// ── Shared sub-component: BankFeedPanel ──────────────────────────────────────
+// Renders accounts + transactions for one bank (absa | nedbank)
+function BankFeedPanel({ bank }) {
+  const prefix  = `/banking/${bank}`;
+  const [status,     setStatus]    = useState(null);
+  const [accounts,   setAccounts]  = useState([]);
+  const [txns,       setTxns]      = useState([]);
+  const [txnTab,     setTxnTab]    = useState("unmatched");
+  const [syncing,    setSyncing]   = useState(false);
+  const [connecting, setConnecting]= useState(false);
+  const [banner,     setBanner]    = useState(null);
+  const [matchModal, setMatchModal]= useState(null);
+  const [invoices,   setInvoices]  = useState([]);
+  const [expenses,   setExpenses]  = useState([]);
 
-  const handleLink = async (bank) => {
-    if (!STITCH_CONFIGURED) {
-      alert("Direct bank feeds are coming soon! We are completing our integration with Stitch Money. In the meantime, use the Bank Import tab to upload CSV statements.");
-      return;
+  const BANK_META = {
+    absa:         {label:"ABSA",          color:"#CC0000", icon:"🔴"},
+    nedbank:      {label:"Nedbank",        color:"#009A44", icon:"🟩"},
+    investec:     {label:"Investec",       color:"#1A1A1A", icon:"⬛"},
+    standardbank: {label:"Standard Bank",  color:"#0033A0", icon:"🔵"},
+  };
+  const bankLabel = BANK_META[bank]?.label || bank;
+  const bankColor = BANK_META[bank]?.color || C.accent;
+  const bankIcon  = BANK_META[bank]?.icon  || "🏦";
+
+  // Detect OAuth callback redirect (?absa=callback or ?nedbank=callback)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get(bank) === "callback") {
+      window.history.replaceState({}, "", window.location.pathname + "#banking");
+      if (params.get("success")) { setBanner("success"); loadAll(); }
+      else { setBanner("error"); }
     }
-    setLinking(bank);
-    // Stitch OAuth flow will go here
-    try {
-      const res = await api("/bank/link-initiate", {method:"POST", body:JSON.stringify({bank_id: bank.id})});
-      window.location.href = res.auth_url; // Redirect to Stitch OAuth
-    } catch(e) { alert("Could not initiate bank link: " + e.message); setLinking(null); }
+  }, []); // eslint-disable-line
+
+  const loadAll = async () => {
+    const st = await api(`${prefix}/status`).catch(() => ({connected: false, configured: false}));
+    setStatus(st);
+    if (st.connected) {
+      const [accts, t] = await Promise.all([
+        api(`${prefix}/accounts`),
+        api(`${prefix}/transactions?match_status=unmatched&limit=200`),
+      ]);
+      setAccounts(accts || []);
+      setTxns(t || []);
+    }
   };
 
-  const handleUnlink = (id) => {
-    if(!window.confirm("Unlink this account?")) return;
-    setLinked(l => l.filter(a => a.id !== id));
+  useEffect(() => { loadAll(); }, []); // eslint-disable-line
+
+  useEffect(() => {
+    if (!status?.connected) return;
+    api(`${prefix}/transactions?match_status=${txnTab}&limit=200`).then(t=>setTxns(t||[])).catch(()=>{});
+  }, [txnTab, status?.connected]); // eslint-disable-line
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    try {
+      const res = await api(`${prefix}/connect`);
+      window.location.href = res.connect_url;
+    } catch(e) { alert(`Could not initiate ${bankLabel} connection: ${e.message}`); setConnecting(false); }
   };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await api(`${prefix}/sync`, {method:"POST"});
+      await loadAll();
+      alert(`Synced ${res.accounts_synced} account(s), ${res.transactions_new} new transaction(s).`);
+    } catch(e) { alert("Sync failed: " + e.message); }
+    setSyncing(false);
+  };
+
+  const handleDisconnect = async () => {
+    if (!window.confirm(`Disconnect ${bankLabel}? Transaction history will be kept.`)) return;
+    try {
+      await api(`${prefix}/disconnect`, {method:"DELETE"});
+      setStatus({connected:false, configured:status?.configured}); setAccounts([]); setTxns([]);
+    } catch(e) { alert("Disconnect failed: " + e.message); }
+  };
+
+  const openMatchModal = async (txn) => {
+    let inv = invoices, exp = expenses;
+    if (!inv.length) { inv = await api("/invoices/"); setInvoices(inv); }
+    if (!exp.length) { exp = await api("/expenses/"); setExpenses(exp); }
+    setMatchModal({txn, invoices: inv, expenses: exp});
+  };
+
+  const handleMatch = async (txn, invoiceId, expenseId) => {
+    try {
+      await api(`${prefix}/transactions/${txn.id}/match`, {
+        method:"POST", body: JSON.stringify({invoice_id: invoiceId||null, expense_id: expenseId||null}),
+      });
+      setMatchModal(null);
+      const t = await api(`${prefix}/transactions?match_status=${txnTab}&limit=200`);
+      setTxns(t || []);
+    } catch(e) { alert("Match failed: " + e.message); }
+  };
+
+  const handleExclude = async (txn) => {
+    try {
+      await api(`${prefix}/transactions/${txn.id}/exclude`, {method:"POST"});
+      const t = await api(`${prefix}/transactions?match_status=${txnTab}&limit=200`);
+      setTxns(t || []);
+    } catch(e) { alert(e.message); }
+  };
+
+  const handleUnmatch = async (txn) => {
+    try {
+      await api(`${prefix}/transactions/${txn.id}/unmatch`, {method:"POST"});
+      const t = await api(`${prefix}/transactions?match_status=${txnTab}&limit=200`);
+      setTxns(t || []);
+    } catch(e) { alert(e.message); }
+  };
+
+  const fmtAmt = (n) => {
+    const abs = Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,",");
+    return n >= 0 ? `+R${abs}` : `-R${abs}`;
+  };
+
+  const confBadge = (c) => {
+    if (!c) return null;
+    const pct = Math.round(c * 100);
+    const col = c >= 0.9 ? C.green : c >= 0.7 ? C.gold : C.red;
+    const bg  = c >= 0.9 ? C.greenLt : c >= 0.7 ? C.goldLt : C.redLt;
+    return <span style={{background:bg,color:col,borderRadius:4,padding:"1px 6px",fontSize:10,fontWeight:700}}>{pct}%</span>;
+  };
+
+  const txnDate = (t) => (t.txn_date || t.date || "").slice(0,10);
+
+  if (status === null) return <div style={{padding:20,color:C.inkMid,fontSize:12}}>Loading {bankLabel} connection…</div>;
 
   return (
-    <div style={{marginBottom:24}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-        <div>
-          <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Direct Bank Feeds</div>
-          <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Connect your bank for automatic transaction imports</div>
+    <div>
+      {/* Banners */}
+      {banner === "success" && (
+        <div style={{background:C.greenLt,border:`1px solid ${C.green}`,borderRadius:10,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{color:C.green,fontWeight:700,fontSize:13}}>✓ {bankLabel} connected! Transactions imported and matched.</span>
+          <button onClick={()=>setBanner(null)} style={{background:"transparent",border:"none",cursor:"pointer",color:C.inkMid,fontSize:16}}>×</button>
         </div>
-        <button onClick={()=>setShowLink(o=>!o)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"9px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Link Bank Account</button>
+      )}
+      {banner === "error" && (
+        <div style={{background:C.redLt,border:`1px solid ${C.red}`,borderRadius:10,padding:"12px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{color:C.red,fontWeight:700,fontSize:13}}>{bankLabel} connection failed. Please try again.</span>
+          <button onClick={()=>setBanner(null)} style={{background:"transparent",border:"none",cursor:"pointer",color:C.inkMid,fontSize:16}}>×</button>
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:700,color:C.ink}}>{bankIcon} {bankLabel} Live Feed</div>
+          <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>
+            {status?.connected
+              ? `${status.account_count ?? accounts.length} account(s) · Last synced: ${status.last_synced ? status.last_synced.slice(0,16).replace("T"," ") : "never"}`
+              : "Connect your " + bankLabel + " account for automatic transaction imports"}
+          </div>
+        </div>
+        {status?.connected && (
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={handleSync} disabled={syncing} style={{background:bankColor,color:"#fff",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:syncing?0.6:1}}>
+              {syncing ? "Syncing…" : "↻ Sync Now"}
+            </button>
+            <button onClick={handleDisconnect} style={{background:C.redLt,color:C.red,border:`1px solid ${C.red}40`,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              Disconnect
+            </button>
+          </div>
+        )}
       </div>
 
-      {!STITCH_CONFIGURED && (
-        <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",gap:12,alignItems:"flex-start"}}>
-          <span style={{fontSize:20}}>⏳</span>
-          <div>
-            <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:4}}>Coming Soon — Stitch Money Integration</div>
-            <div style={{fontSize:12,color:C.inkMid,lineHeight:1.6}}>We're finalising our approval with Stitch Money to enable live bank feeds for all major SA banks. Once approved, you'll be able to connect your bank and transactions will import automatically every few hours. Use the CSV import below in the meantime.</div>
+      {!status?.connected ? (
+        <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:12,padding:28,textAlign:"center"}}>
+          <div style={{fontSize:28,marginBottom:10}}>{bankIcon}</div>
+          <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>Connect your {bankLabel} account</div>
+          <div style={{fontSize:11,color:C.inkMid,lineHeight:1.7,maxWidth:380,margin:"0 auto 16px"}}>
+            You'll be redirected to <strong>{bankLabel}'s secure login page</strong> to authorise ZuZan.
+            ZuZan never sees your banking password — only read-only transaction data is shared.
           </div>
-        </div>
-      )}
-
-      {linked.length === 0 ? (
-        <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:14,padding:32,textAlign:"center",color:C.inkMid,fontSize:13}}>
-          No bank accounts linked yet. Click <strong>Link Bank Account</strong> to connect.
+          <button onClick={handleConnect} disabled={connecting} style={{background:bankColor,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:connecting?0.6:1}}>
+            {connecting ? "Redirecting to " + bankLabel + "…" : "🔗 Connect " + bankLabel}
+          </button>
         </div>
       ) : (
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {linked.map(acc=>(
-            <div key={acc.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                <span style={{fontSize:24}}>{acc.logo}</span>
-                <div>
-                  <div style={{fontSize:13,fontWeight:700,color:C.ink}}>{acc.name}</div>
-                  <div style={{fontSize:11,color:C.inkMid}}>{acc.accountNumber} · Last synced: {acc.lastSync}</div>
+        <div>
+          {accounts.length > 0 && (
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+              {accounts.map(a=>(
+                <div key={a.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",minWidth:180,flex:"0 0 auto"}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:18}}>{bankIcon}</span>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{a.account_name || "Account"}</div>
+                      <div style={{fontSize:10,color:C.inkMid}}>{a.account_type || a.currency || "ZAR"}</div>
+                    </div>
+                  </div>
+                  <div style={{fontSize:13,fontWeight:700,color:C.ink}}>
+                    R {((a.current_balance) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,",")}
+                  </div>
                 </div>
-              </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <Badge label="Connected" color={C.green} bg={C.greenLt}/>
-                <button onClick={()=>handleUnlink(acc.id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Unlink</button>
-              </div>
+              ))}
             </div>
-          ))}
+          )}
+
+          <div style={{display:"flex",borderBottom:`2px solid ${C.border}`,marginBottom:12}}>
+            {[["unmatched","Unmatched"],["matched","Matched"],["excluded","Excluded"]].map(([id,label])=>(
+              <button key={id} onClick={()=>setTxnTab(id)} style={{
+                padding:"7px 16px",fontSize:12,fontWeight:txnTab===id?700:400,cursor:"pointer",
+                border:"none",background:"none",fontFamily:"inherit",
+                color:txnTab===id?bankColor:C.inkMid,
+                borderBottom:`3px solid ${txnTab===id?bankColor:"transparent"}`,marginBottom:-2,
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {txns.length === 0 ? (
+            <div style={{padding:24,textAlign:"center",color:C.inkMid,fontSize:12,background:C.surface,borderRadius:12,border:`1px dashed ${C.border}`}}>
+              {txnTab === "unmatched" ? "All transactions matched — great work!" : `No ${txnTab} transactions.`}
+            </div>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {txns.map(t=>(
+                <div key={t.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+                      <span style={{fontSize:12,fontWeight:700,color:t.amount>=0?C.green:C.red}}>{fmtAmt(t.amount)}</span>
+                      <span style={{fontSize:11,color:C.inkMid}}>{txnDate(t)}</span>
+                      {t.match_confidence && txnTab==="matched" && confBadge(t.match_confidence)}
+                    </div>
+                    <div style={{fontSize:12,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t.description || t.reference || "—"}</div>
+                  </div>
+                  <div style={{display:"flex",gap:5,flexShrink:0}}>
+                    {txnTab === "unmatched" && (
+                      <>
+                        <button onClick={()=>openMatchModal(t)} style={{background:bankColor,color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Match</button>
+                        <button onClick={()=>handleExclude(t)} style={{background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Ignore</button>
+                      </>
+                    )}
+                    {(txnTab === "matched" || txnTab === "excluded") && (
+                      <button onClick={()=>handleUnmatch(t)} style={{background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {showLink && (
-        <div style={{background:C.surface,border:`2px solid ${C.accent}`,borderRadius:16,padding:24,marginTop:16}}>
-          <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Select your bank to connect</div>
-          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            {SA_BANKS.map(bank=>(
-              <button key={bank.id} onClick={()=>handleLink(bank)} disabled={!!linking}
-                style={{display:"flex",alignItems:"center",gap:8,padding:"12px 18px",borderRadius:12,border:`2px solid ${C.border}`,background:C.bg,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:600,color:C.ink,opacity:linking?0.6:1}}>
-                <span style={{fontSize:22}}>{bank.logo}</span>{bank.name}
-              </button>
-            ))}
+      {/* Match Modal */}
+      {matchModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.bg,borderRadius:16,padding:24,width:"100%",maxWidth:480,maxHeight:"80vh",overflowY:"auto",boxShadow:"0 8px 40px rgba(0,0,0,0.2)"}}>
+            <div style={{fontWeight:700,fontSize:15,color:C.ink,marginBottom:4}}>Match Transaction</div>
+            <div style={{fontSize:12,color:C.inkMid,marginBottom:18}}>
+              <strong>{fmtAmt(matchModal.txn.amount)}</strong> · {txnDate(matchModal.txn)} · {matchModal.txn.description||"—"}
+            </div>
+            {matchModal.txn.amount > 0 && (
+              <>
+                <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",marginBottom:8}}>Match to Invoice</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+                  {matchModal.invoices.filter(i=>["sent","overdue"].includes(i.status)).length === 0
+                    ? <div style={{fontSize:12,color:C.inkMid}}>No open invoices.</div>
+                    : matchModal.invoices.filter(i=>["sent","overdue"].includes(i.status)).map(inv=>(
+                      <button key={inv.id} onClick={()=>handleMatch(matchModal.txn, inv._dbId||inv.id, null)}
+                        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>
+                        <div style={{fontSize:12,fontWeight:700,color:C.ink}}>INV #{inv.invoiceNumber||inv.invoice_number} — {inv.clientName||inv.client_name}</div>
+                        <div style={{fontSize:11,color:C.inkMid}}>R {(inv.totalAmount||inv.total_amount||0).toFixed(2)} · {inv.status}</div>
+                      </button>
+                    ))
+                  }
+                </div>
+              </>
+            )}
+            {matchModal.txn.amount < 0 && (
+              <>
+                <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",marginBottom:8}}>Match to Expense</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+                  {matchModal.expenses.slice(0,20).map(exp=>(
+                    <button key={exp.id} onClick={()=>handleMatch(matchModal.txn, null, exp.id)}
+                      style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}>
+                      <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{exp.vendor}</div>
+                      <div style={{fontSize:11,color:C.inkMid}}>R {(exp.amount||0).toFixed(2)} · {exp.category}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <button onClick={()=>setMatchModal(null)} style={{width:"100%",background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
-          <button onClick={()=>setShowLink(false)} style={{marginTop:16,background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
         </div>
       )}
+    </div>
+  );
+}
+
+function BankFeeds() {
+  const [bankTab, setBankTab] = useState("absa");
+
+  const BANKS = [
+    {id:"absa",         label:"🔴 ABSA",          color:"#CC0000"},
+    {id:"nedbank",      label:"🟩 Nedbank",        color:"#009A44"},
+    {id:"investec",     label:"⬛ Investec",        color:"#1A1A1A"},
+    {id:"standardbank", label:"🔵 Standard Bank",  color:"#0033A0"},
+  ];
+
+  const active = BANKS.find(b=>b.id===bankTab);
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Live Bank Feeds</div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Direct OAuth connection — your bank credentials never touch ZuZan</div>
+        </div>
+      </div>
+
+      {/* Bank selector tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+        {BANKS.map(({id,label,color})=>(
+          <button key={id} onClick={()=>setBankTab(id)} style={{
+            padding:"9px 18px",fontSize:12,fontWeight:bankTab===id?700:500,cursor:"pointer",
+            border:`2px solid ${bankTab===id?color:C.border}`,
+            borderRadius:10,background:bankTab===id?`${color}12`:C.surface,
+            fontFamily:"inherit",color:bankTab===id?color:C.inkMid,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <BankFeedPanel key={bankTab} bank={bankTab} />
+
+      {/* Info footer */}
+      <div style={{marginTop:24,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",fontSize:11,color:C.inkMid,lineHeight:1.7}}>
+        <strong style={{color:C.ink}}>How it works:</strong> When you click "Connect", you are redirected to your bank's own secure login.
+        You authorise ZuZan for read-only access. The bank sends transactions directly to ZuZan — your banking password is never shared.
+        ZuZan automatically matches transactions to your open invoices and expenses.
+      </div>
     </div>
   );
 }
@@ -5226,7 +6319,31 @@ function BankImport({live = {}, onNavigate}) {
   const [result, setResult] = useState(null);
   const [search, setSearch] = useState("");
   const [filterType, setFilter] = useState("all");
+  const [companyRules, setCompanyRules] = useState([]);
   const fileRef = useRef(null);
+
+  // Fetch learned category rules from the backend on mount
+  useEffect(() => {
+    const token = localStorage.getItem("zuzan_token");
+    if (!token || token.startsWith("demo_")) return;
+    fetch(`${BASE_URL}/category-rules/`, {
+      headers: {"Authorization": `Bearer ${token}`}
+    }).then(r => r.ok ? r.json() : []).then(data => {
+      if (Array.isArray(data)) setCompanyRules(data);
+    }).catch(() => {});
+  }, []);
+
+  // Re-apply learned rules to parsed transactions when rules load after the file
+  useEffect(() => {
+    if (!companyRules.length || !txns.length) return;
+    setTxns(prev => prev.map(t => {
+      const d = t.description.toLowerCase();
+      const match = companyRules.find(r =>
+        (r.txn_type === "any" || r.txn_type === t.type) && d.includes(r.keyword)
+      );
+      return match ? {...t, category: match.category} : t;
+    }));
+  }, [companyRules]); // eslint-disable-line
 
   const processFile = f => {
     if (!bank) { setError("Please select your bank first."); return; }
@@ -5237,18 +6354,70 @@ function BankImport({live = {}, onNavigate}) {
     reader.onload = e => {
       try {
         const rows = e.target.result.split("\n").filter(l => l.trim()).map(l => parseCSVLine(l));
-        const data = rows.slice(bfmt.skipRows);
+        // Auto-detect first real data row: col[0] must look like a date (YYYY/MM/DD or DD/MM/YYYY etc.)
+        const dateRx = /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$|^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
+        let dataStart = bfmt.skipRows; // fallback to configured value
+        for (let i = 0; i < Math.min(rows.length, 25); i++) {
+          if (rows[i] && rows[i][0] && dateRx.test(rows[i][0].trim())) {
+            dataStart = i;
+            break;
+          }
+        }
+        // ── Column auto-detection from the header row (row just before data start) ──
+        // Falls back to bank-specific config if header names aren't recognised.
+        let dateCol  = bfmt.dateCol;
+        let amtCol   = bfmt.amtCol;
+        let descCol  = bfmt.descCol;
+        let debitCol  = -1;   // Standard Bank / Nedbank: separate Debit column
+        let creditCol = -1;   // Standard Bank / Nedbank: separate Credit column
+
+        if (dataStart > 0) {
+          const hdr = rows[dataStart - 1].map(h => (h || "").trim().toLowerCase());
+          // Date column
+          const di = hdr.findIndex(h => /^date$|trans.*date|value.*date|^datum$/.test(h));
+          if (di >= 0) dateCol = di;
+          // Description column
+          const xi = hdr.findIndex(h => /descr|narrat|particular|reference|^details?$|^memo$|^remarks?$|^information$/.test(h));
+          if (xi >= 0) descCol = xi;
+          // Single signed-amount column (FNB Business, Capitec, TymeBank, etc.)
+          const ai = hdr.findIndex(h => /^amount$|^amt$|^bedrag$/.test(h));
+          if (ai >= 0) amtCol = ai;
+          // Separate debit + credit columns (Standard Bank, Nedbank, ABSA, Investec)
+          const dbi = hdr.findIndex(h => /^debit$|^debit.*amount|^withdrawals?$/.test(h));
+          const cri = hdr.findIndex(h => /^credit$|^credit.*amount|^deposits?$/.test(h));
+          if (dbi >= 0 && cri >= 0) { debitCol = dbi; creditCol = cri; }
+        }
+
+        const minCols = debitCol >= 0
+          ? Math.max(dateCol, descCol, debitCol, creditCol) + 1
+          : Math.max(dateCol, descCol, amtCol) + 1;
+
+        const data = rows.slice(dataStart);
         const parsed = data
-          .filter(r => r.length > Math.max(bfmt.dateCol, bfmt.descCol, bfmt.amtCol))
-          .map((r,i) => {
-            const amt = parseAmt(r[bfmt.amtCol]);
-            const desc = r[bfmt.descCol] || "Unknown";
-            return {id:i+1,date:parseDt(r[bfmt.dateCol]),description:desc,amount:Math.abs(amt),type:amt < 0 ? "debit" : "credit",category:autoCategory(desc),hasVat:false,vatAmount:0};
+          .filter(r => r.length >= minCols)
+          .map((r, i) => {
+            let amt, type;
+            if (debitCol >= 0) {
+              // Banks that export separate Debit / Credit columns (Standard Bank, Nedbank, ABSA, Investec)
+              const dv = parseAmt(r[debitCol]);
+              const cv = parseAmt(r[creditCol]);
+              if (dv > 0)      { amt = dv; type = "debit"; }
+              else if (cv > 0) { amt = cv; type = "credit"; }
+              else return null; // empty row (e.g. running balance summary line)
+            } else {
+              // Banks that export a single signed Amount column (FNB, Capitec, TymeBank, etc.)
+              amt = parseAmt(r[amtCol]);
+              type = amt < 0 ? "debit" : "credit";
+              amt = Math.abs(amt);
+            }
+            const desc = (r[descCol] || "").trim() || "Unknown";
+            return {id:i+1, date:parseDt(r[dateCol]), description:desc, amount:amt, type,
+                    category:smartCategory(desc, type, companyRules), hasVat:false, vatAmount:0};
           })
-          .filter(t => t.amount > 0);
+          .filter(t => t && t.amount > 0);
         if (!parsed.length) { setError("No transactions found. Check you selected the correct bank."); return; }
         setTxns(parsed);
-        setSelected(new Set(parsed.filter(t => t.type === "debit").map(t => t.id)));
+        setSelected(new Set(parsed.map(t => t.id)));  // pre-select all (expenses + income)
         setStep("preview");
       } catch(err) { setError("Could not read file. Check it is a valid CSV bank statement."); }
     };
@@ -5256,7 +6425,33 @@ function BankImport({live = {}, onNavigate}) {
   };
 
   const toggleRow = id => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const updateCat = (id,cat) => setTxns(prev => prev.map(t => t.id === id ? {...t,category:cat} : t));
+  const updateCat = (id, cat) => {
+    const txn = txns.find(t => t.id === id);
+    setTxns(prev => prev.map(t => t.id === id ? {...t, category: cat} : t));
+    // Persist the correction as a learned rule so future imports auto-apply it
+    if (txn && cat) {
+      const token = localStorage.getItem("zuzan_token");
+      if (token && !token.startsWith("demo_")) {
+        fetch(`${BASE_URL}/category-rules/`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "Authorization": `Bearer ${token}`},
+          body: JSON.stringify({
+            keyword: txn.description.toLowerCase().trim().slice(0, 100),
+            category: cat,
+            txn_type: txn.type,
+          }),
+        }).then(r => r.ok ? r.json() : null).then(rule => {
+          if (rule && rule.id) {
+            setCompanyRules(prev => {
+              const idx = prev.findIndex(r => r.id === rule.id);
+              if (idx >= 0) { const u = [...prev]; u[idx] = rule; return u; }
+              return [rule, ...prev];
+            });
+          }
+        }).catch(() => {});
+      }
+    }
+  };
   const filtered = txns.filter(t => t.description.toLowerCase().includes(search.toLowerCase()) && (filterType === "all" || t.type === filterType));
   const selectedTxns = txns.filter(t => selected.has(t.id));
   const totalDebits = selectedTxns.filter(t => t.type === "debit").reduce((s,t) => s + t.amount, 0);
@@ -5337,31 +6532,28 @@ function BankImport({live = {}, onNavigate}) {
 
   return (
     <div>
-      <div style={{marginBottom:24}}>
-        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank</h2>
-        <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Connect your bank or import a CSV statement</p>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Bank Import</h2>
+        <p style={{fontSize:12,color:C.inkMid,marginTop:3,margin:"3px 0 0"}}>Upload and categorise your bank statement</p>
       </div>
-      <BankFeeds/>
-      <div style={{borderTop:`2px solid ${C.border}`,paddingTop:20,marginBottom:20}}>
-        <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:4}}>CSV Statement Import</div>
-        <div style={{fontSize:12,color:C.inkMid}}>Upload a bank statement CSV to import transactions manually</div>
-      </div>
-      <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",width:"fit-content",marginBottom:24}}>
+      <div>
+      {/* Step progress bar */}
+      <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",width:"fit-content",marginBottom:20}}>
         {[["select","1. Select Bank"],["preview","2. Preview"],["categorise","3. Categorise"],["done","4. Done"]].map(([id,label],i) => {
           const steps = ["select","preview","categorise","done"];
           const done = steps.indexOf(id) < steps.indexOf(step);
           const active = id === step;
-          return <div key={id} style={{padding:"10px 18px",fontSize:12,fontWeight:active?700:400,color:active?C.accent:done?C.green:C.inkDim,background:active?C.accentLt:"transparent",borderRight:i<3?`1px solid ${C.border}`:"none"}}>{done ? "done " : ""}{label}</div>;
+          return <div key={id} style={{padding:"10px 18px",fontSize:12,fontWeight:active?700:400,color:active?C.accent:done?C.green:C.inkDim,background:active?C.accentLt:"transparent",borderRight:i<3?`1px solid ${C.border}`:"none"}}>{done ? "✓ " : ""}{label}</div>;
         })}
       </div>
       {step === "select" && (
         <div>
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
             <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Select Your Bank</div>
-            <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
               {Object.entries(BANK_FORMATS).map(([key,b]) => (
-                <div key={key} onClick={() => setBank(key)} style={{padding:"16px 20px",border:`2px solid ${bank===key?C.accent:C.border}`,borderRadius:12,cursor:"pointer",textAlign:"center",background:bank===key?C.accentLt:C.bg,minWidth:100}}>
-                  <div style={{fontSize:28,marginBottom:6}}>{b.logo}</div>
+                <div key={key} onClick={() => setBank(key)} style={{padding:"14px 12px",border:`2px solid ${bank===key?C.accent:C.border}`,borderRadius:12,cursor:"pointer",textAlign:"center",background:bank===key?C.accentLt:C.bg}}>
+                  <div style={{fontSize:26,marginBottom:6}}>{b.logo}</div>
                   <div style={{fontSize:12,fontWeight:700,color:bank===key?C.accent:C.ink}}>{b.name}</div>
                 </div>
               ))}
@@ -5432,7 +6624,7 @@ function BankImport({live = {}, onNavigate}) {
                     <td style={{padding:"10px 14px"}}><Badge label={t.type==="debit"?"Expense":"Income"} color={t.type==="debit"?C.red:C.green} bg={t.type==="debit"?C.redLt:C.greenLt}/></td>
                     <td style={{padding:"10px 14px",fontWeight:700,color:t.type==="debit"?C.red:C.green}}>{t.type==="debit"?"-":"+"}{fmt(t.amount)}</td>
                     <td style={{padding:"10px 14px"}}>
-                      <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"4px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:180}}>
+                      <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"4px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,minWidth:220,maxWidth:"100%"}}>
                         <option value="">-- Select Account --</option>
                         {COA_GROUPS.map(group => (
                           <optgroup key={group} label={group}>
@@ -5462,67 +6654,97 @@ function BankImport({live = {}, onNavigate}) {
           </div>
         </div>
       )}
-      {step === "categorise" && (
-        <div>
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-            <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:6}}>Review Categories</div>
-            <div style={{fontSize:12,color:C.inkMid,marginBottom:18}}>Adjust any categories before importing into ZuZan.</div>
-            <div style={{maxHeight:360,overflowY:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead style={{position:"sticky",top:0}}>
-                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-                    {["Date","Description","Amount","Account","VAT","VAT Amt"].map(h => <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedTxns.filter(t => t.type === "debit").map(t => (
-                    <tr key={t.id} style={{borderBottom:`1px solid ${C.border}20`}}>
-                      <td style={{padding:"10px 14px",color:C.inkMid,fontSize:11,fontFamily:"monospace"}}>{t.date}</td>
-                      <td style={{padding:"10px 14px",color:C.ink}}>{t.description}</td>
-                      <td style={{padding:"10px 14px",fontWeight:700,color:C.red}}>-{fmt(t.amount)}</td>
-                      <td style={{padding:"10px 14px"}}>
-                        <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,maxWidth:180}}>
-                          <option value="">-- Select Account --</option>
-                          {COA_GROUPS.map(group => (
-                            <optgroup key={group} label={group}>
-                              {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
-                                <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
-                              ))}
-                            </optgroup>
-                          ))}
-                        </select>
-                      </td>
-                      <td style={{padding:"10px 14px",textAlign:"center"}}>
-                        <input type="checkbox" checked={t.hasVat||false} title="Includes VAT at 15%"
-                          onChange={e => setTxns(prev => prev.map(tx => tx.id === t.id ? {...tx,hasVat:e.target.checked,vatAmount:e.target.checked?Math.round((t.amount/115)*15*100)/100:0} : tx))}
-                          style={{cursor:"pointer",width:16,height:16}}/>
-                      </td>
-                      <td style={{padding:"10px 14px",fontSize:11,color:t.hasVat?C.accent:C.inkDim,fontWeight:t.hasVat?700:400}}>
-                        {t.hasVat ? fmt(t.vatAmount||0) : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      {step === "categorise" && (() => {
+        const debits  = selectedTxns.filter(t => t.type === "debit");
+        const credits = selectedTxns.filter(t => t.type === "credit");
+        const totalCredits = credits.reduce((s,t) => s + t.amount, 0);
+        const TH = h => <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>;
+        const vatToggle = t => e => setTxns(prev => prev.map(tx => tx.id === t.id ? {...tx, hasVat:e.target.checked, vatAmount:e.target.checked ? Math.round((t.amount/1.15)*0.15*100)/100 : 0} : tx));
+        const renderRow = (t, isDebit) => (
+          <tr key={t.id} style={{borderBottom:`1px solid ${C.border}20`}}>
+            <td style={{padding:"10px 14px",color:C.inkMid,fontSize:11,fontFamily:"monospace"}}>{t.date}</td>
+            <td style={{padding:"10px 14px",color:C.ink}}>{t.description}</td>
+            <td style={{padding:"10px 14px",fontWeight:700,color:isDebit?C.red:C.green}}>{isDebit?"-":"+"}  {fmt(t.amount)}</td>
+            <td style={{padding:"10px 14px"}}>
+              <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,minWidth:220,maxWidth:"100%"}}>
+                <option value="">-- Select Account --</option>
+                {isDebit ? (
+                  COA_GROUPS.map(group => (
+                    <optgroup key={group} label={group}>
+                      {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
+                        <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
+                      ))}
+                    </optgroup>
+                  ))
+                ) : (
+                  <optgroup label="Revenue">
+                    {DEFAULT_COA.filter(a => a.group === "Revenue" && a.type === "Detail").map(a => (
+                      <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </td>
+            <td style={{padding:"10px 14px",textAlign:"center"}}>
+              <input type="checkbox" checked={t.hasVat||false} title="Includes VAT at 15%" onChange={vatToggle(t)} style={{cursor:"pointer",width:16,height:16}}/>
+            </td>
+            <td style={{padding:"10px 14px",fontSize:11,color:t.hasVat?C.accent:C.inkDim,fontWeight:t.hasVat?700:400}}>
+              {t.hasVat ? fmt(t.vatAmount||0) : "-"}
+            </td>
+          </tr>
+        );
+        return (
+          <div>
+            {/* EXPENSES section */}
+            {debits.length > 0 && (
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:12}}>📤 Expenses ({debits.length})</div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Account","VAT","VAT Amt"].map(TH)}</tr></thead>
+                    <tbody>{debits.map(t => renderRow(t, true))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {/* INCOME section */}
+            {credits.length > 0 && (
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>📥 Income ({credits.length})</div>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>Posted as DR Bank / CR Revenue — select the income account for each.</div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Income Account","VAT","VAT Amt"].map(TH)}</tr></thead>
+                    <tbody>{credits.map(t => renderRow(t, false))}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {error && <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.red}}>Warning: {error}</div>}
+            <div style={{background:C.ink,borderRadius:14,padding:"18px 24px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>IMPORT SUMMARY</div>
+                <div style={{fontSize:14,color:"#fff",fontWeight:600}}>
+                  {debits.length > 0 && <span>{debits.length} expenses {fmt(totalDebits)}</span>}
+                  {debits.length > 0 && credits.length > 0 && <span style={{color:"rgba(255,255,255,0.4)"}}> · </span>}
+                  {credits.length > 0 && <span style={{color:C.greenLt||"#86efac"}}>{credits.length} income {fmt(totalCredits)}</span>}
+                </div>
+              </div>
+              <button onClick={handleImport} disabled={importing} style={{background:importing?C.inkDim:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontSize:13,fontWeight:700,cursor:importing?"wait":"pointer",fontFamily:"inherit"}}>{importing ? "Importing..." : "Import to ZuZan"}</button>
             </div>
+            <button onClick={() => setStep("preview")} style={{padding:"10px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
           </div>
-          {error && <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.red}}>Warning: {error}</div>}
-          <div style={{background:C.ink,borderRadius:14,padding:"18px 24px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div>
-              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>IMPORT SUMMARY</div>
-              <div style={{fontSize:14,color:"#fff",fontWeight:600}}>{selectedTxns.filter(t=>t.type==="debit").length} expenses - {fmt(totalDebits)}</div>
-            </div>
-            <button onClick={handleImport} disabled={importing} style={{background:importing?C.inkDim:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontSize:13,fontWeight:700,cursor:importing?"wait":"pointer",fontFamily:"inherit"}}>{importing ? "Importing..." : "Import to ZuZan"}</button>
-          </div>
-          <button onClick={() => setStep("preview")} style={{padding:"10px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-        </div>
-      )}
+        );
+      })()}
       {step === "done" && (
         <div style={{textAlign:"center",maxWidth:520,margin:"40px auto"}}>
           <div style={{fontSize:64,marginBottom:16}}>🎉</div>
           <h2 style={{fontFamily:"serif",fontSize:30,color:C.ink,marginBottom:12}}>Import Complete!</h2>
           <p style={{color:C.inkMid,fontSize:14,lineHeight:1.7,marginBottom:28}}>
-            Successfully imported <strong style={{color:C.ink}}>{result ? result.expenses_created : 0} expenses</strong> totalling <strong style={{color:C.red}}>{fmt(totalDebits)}</strong> into ZuZan.
+            {result && result.expenses_created > 0 && <span>Imported <strong style={{color:C.ink}}>{result.expenses_created} expenses</strong> ({fmt(totalDebits)}). </span>}
+            {result && result.credits_recorded > 0 && <span>Recorded <strong style={{color:C.green}}>{result.credits_recorded} income entries</strong> to your P&amp;L. </span>}
+            {result && result.credits_skipped > 0 && <span style={{color:C.gold}}>⚠ {result.credits_skipped} income entries could not be recorded. </span>}
+            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0)) && <span>Nothing new was imported (all transactions already exist).</span>}
           </p>
           <div style={{display:"flex",gap:10,justifyContent:"center"}}>
             <button onClick={reset} style={{padding:"11px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Upload Another</button>
@@ -5530,12 +6752,524 @@ function BankImport({live = {}, onNavigate}) {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
+
+
+// ── INVOICE PORTAL (public — no auth) ─────────────────────────────────────────
+function InvoicePortal({token}) {
+  const [inv,  setInv]  = useState(null);
+  const [err,  setErr]  = useState("");
+  const [busy, setBusy] = useState(false);
+  const [paid, setPaid] = useState(false);
+  const urlParams = new URLSearchParams(window.location.search);
+  const justPaid = urlParams.get("paid") === "1";
+
+  useEffect(() => {
+    if (!token) { setErr("Invalid payment link."); return; }
+    fetch(`${BASE_URL}/portal/invoice/${token}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(data => { setInv(data); if (data.status === "paid") setPaid(true); if (justPaid) setPaid(true); })
+      .catch(() => setErr("Invoice not found or link has expired."));
+  }, [token]);
+
+  const handlePay = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`${BASE_URL}/portal/invoice/${token}/pay`, {method:"POST"});
+      if (!res.ok) { const d = await res.json(); setErr(d.detail || "Payment error"); setBusy(false); return; }
+      const data = await res.json();
+      // Build PayFast form and submit
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = data.payfast_url;
+      Object.entries(data.payfast_data).forEach(([k,v]) => {
+        const inp = document.createElement("input");
+        inp.type = "hidden"; inp.name = k; inp.value = v;
+        form.appendChild(inp);
+      });
+      document.body.appendChild(form);
+      form.submit();
+    } catch(e) { setErr("Payment error — please try again."); setBusy(false); }
+  };
+
+  const C2 = {bg:"#FAF7F4",surface:"#fff",accent:"#C8401A",ink:"#1a1a1a",inkMid:"#666",border:"#e5e0d8",green:"#1a7a4a",greenLt:"#edf7f0",gold:"#B7791F",goldLt:"#FEF9E7"};
+
+  if (err) return (
+    <div style={{minHeight:"100vh",background:C2.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,sans-serif"}}>
+      <div style={{textAlign:"center",padding:40}}>
+        <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
+        <div style={{fontFamily:"serif",fontSize:24,color:C2.ink,marginBottom:8}}>Link Not Found</div>
+        <div style={{color:C2.inkMid,fontSize:14}}>{err}</div>
+      </div>
+    </div>
+  );
+
+  if (!inv) return (
+    <div style={{minHeight:"100vh",background:C2.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"system-ui,sans-serif"}}>
+      <div style={{textAlign:"center"}}><div style={{fontFamily:"serif",fontSize:36,color:C2.ink}}><span style={{color:C2.accent}}>Zu</span>Zan</div><div style={{color:C2.inkMid,marginTop:8}}>Loading invoice...</div></div>
+    </div>
+  );
+
+  const curSym = ({ZAR:"R",USD:"$",EUR:"€",GBP:"£"})[inv.currency] || inv.currency + " ";
+  const isPaid = paid || inv.status === "paid";
+
+  return (
+    <div style={{minHeight:"100vh",background:C2.bg,fontFamily:"system-ui,sans-serif",padding:"24px 16px"}}>
+      <div style={{maxWidth:560,margin:"0 auto"}}>
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:32}}>
+          {inv.company_logo && <img src={inv.company_logo} alt="" style={{height:44,objectFit:"contain"}}/>}
+          <div>
+            <div style={{fontFamily:"serif",fontSize:20,fontWeight:800,color:C2.ink}}>{inv.company_name || <span><span style={{color:C2.accent}}>Zu</span>Zan</span>}</div>
+            {inv.company_email && <div style={{fontSize:12,color:C2.inkMid}}>{inv.company_email}</div>}
+          </div>
+        </div>
+
+        {/* Invoice card */}
+        <div style={{background:C2.surface,borderRadius:20,padding:32,boxShadow:"0 4px 24px rgba(0,0,0,0.06)",marginBottom:24}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+            <div>
+              <div style={{fontSize:11,fontWeight:700,color:C2.inkMid,textTransform:"uppercase",letterSpacing:1}}>Invoice</div>
+              <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C2.ink,marginTop:2}}>{inv.invoice_number}</div>
+            </div>
+            <div style={{background:isPaid?C2.greenLt:C2.goldLt,color:isPaid?C2.green:C2.gold,padding:"6px 14px",borderRadius:20,fontSize:12,fontWeight:700}}>
+              {isPaid ? "✓ PAID" : "PAYMENT DUE"}
+            </div>
+          </div>
+
+          <div style={{borderTop:`1px solid ${C2.border}`,paddingTop:20,marginBottom:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+              <span style={{color:C2.inkMid,fontSize:13}}>To</span>
+              <span style={{fontWeight:600,color:C2.ink,fontSize:13}}>{inv.client_name}</span>
+            </div>
+            {inv.description && (
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <span style={{color:C2.inkMid,fontSize:13}}>Description</span>
+                <span style={{color:C2.ink,fontSize:13,textAlign:"right",maxWidth:280}}>{inv.description}</span>
+              </div>
+            )}
+            {inv.due_date && (
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <span style={{color:C2.inkMid,fontSize:13}}>Due Date</span>
+                <span style={{fontWeight:600,color:isPaid?C2.green:C2.accent,fontSize:13}}>{new Date(inv.due_date).toLocaleDateString("en-ZA",{day:"numeric",month:"short",year:"numeric"})}</span>
+              </div>
+            )}
+            {inv.currency !== "ZAR" && (
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+                <span style={{color:C2.inkMid,fontSize:13}}>Currency</span>
+                <span style={{color:C2.ink,fontSize:13}}>{inv.currency} (Rate: {inv.exchange_rate})</span>
+              </div>
+            )}
+          </div>
+
+          <div style={{background:C2.bg,borderRadius:12,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,color:C2.inkMid,fontWeight:600}}>Total Due</span>
+            <span style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:isPaid?C2.green:C2.ink}}>{curSym}{(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+          </div>
+          {inv.currency !== "ZAR" && (
+            <div style={{textAlign:"right",fontSize:11,color:C2.inkMid,marginTop:6}}>≈ R{(inv.zar_total||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} ZAR (charged via PayFast)</div>
+          )}
+        </div>
+
+        {/* Action area */}
+        {isPaid ? (
+          <div style={{background:C2.greenLt,border:`1px solid ${C2.green}30`,borderRadius:16,padding:24,textAlign:"center"}}>
+            <div style={{fontSize:40,marginBottom:8}}>✅</div>
+            <div style={{fontWeight:700,color:C2.green,fontSize:17}}>Payment Received</div>
+            <div style={{color:C2.inkMid,fontSize:13,marginTop:4}}>Thank you! This invoice has been paid.</div>
+          </div>
+        ) : (
+          <div style={{background:C2.surface,borderRadius:16,padding:24}}>
+            {err && <div style={{color:C2.accent,marginBottom:12,fontSize:13}}>{err}</div>}
+            <button onClick={handlePay} disabled={busy}
+              style={{width:"100%",background:C2.accent,color:"#fff",border:"none",borderRadius:12,padding:"16px",fontSize:16,fontWeight:700,cursor:busy?"not-allowed":"pointer",fontFamily:"inherit",opacity:busy?0.7:1}}>
+              {busy ? "Redirecting to PayFast..." : `Pay ${curSym}${(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} Securely`}
+            </button>
+            <div style={{textAlign:"center",marginTop:10,fontSize:11,color:C2.inkMid}}>🔒 Secured by PayFast — South Africa's trusted payment gateway</div>
+          </div>
+        )}
+
+        {inv.notes && (
+          <div style={{marginTop:16,background:C2.surface,borderRadius:12,padding:"16px 20px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C2.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Notes</div>
+            <div style={{fontSize:13,color:C2.inkMid}}>{inv.notes}</div>
+          </div>
+        )}
+
+        <div style={{textAlign:"center",marginTop:24,fontSize:11,color:C2.inkMid}}>
+          Powered by <a href="https://zuzan.co.za" style={{color:C2.accent,textDecoration:"none",fontWeight:700}}><span style={{color:C2.accent}}>Zu</span>Zan</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── SEND INVOICE PANEL (inside invoice preview modal) ─────────────────────────
+function SendInvoicePanel({preview, onSent, isMobile}) {
+  const [sending,    setSending]    = useState(false);
+  const [portalUrl,  setPortalUrl]  = useState(preview?.portalToken ? `${window.location.origin}/portal/${preview.portalToken}` : null);
+  const [copied,     setCopied]     = useState(false);
+  const [sentMsg,    setSentMsg]    = useState("");
+
+  const handleSend = async () => {
+    if (!preview?._dbId) return;
+    setSending(true); setSentMsg("");
+    try {
+      const res = await fetch(`${BASE_URL}/invoices/${preview._dbId}/send`, {method:"POST", headers:{"Authorization":"Bearer "+localStorage.getItem("zuzan_token")}});
+      const data = await res.json();
+      if (res.ok) {
+        setPortalUrl(data.portal_url);
+        if (onSent) onSent(data.portal_token);
+        setSentMsg(data.email_sent ? "✓ Invoice emailed to client" : "✓ Portal link ready (no client email on file)");
+      } else {
+        setSentMsg(data.detail || "Error — please try again");
+      }
+    } catch(e) { setSentMsg("Network error"); }
+    setSending(false);
+  };
+
+  const handleCopy = () => {
+    if (!portalUrl) return;
+    navigator.clipboard.writeText(portalUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
+  const C2 = {accent:"#C8401A",green:"#1a7a4a",greenLt:"#edf7f0",gold:"#B7791F",goldLt:"#FEF9E7",inkMid:"#666",border:"#e5e0d8",surface:"#fff",bg:"#FAF7F4",blue:"#1a5fa8",blueLt:"#EBF3FF"};
+
+  return (
+    <div style={{background:C2.blueLt,border:`1px solid ${C2.blue}30`,borderRadius:12,padding:"14px 16px",marginTop:16}}>
+      <div style={{fontSize:12,fontWeight:700,color:C2.blue,marginBottom:8}}>📧 Send to Client</div>
+      {portalUrl ? (
+        <div>
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <input readOnly value={portalUrl} style={{flex:1,fontSize:11,padding:"7px 10px",border:`1px solid ${C2.border}`,borderRadius:8,background:C2.surface,color:C2.inkMid,fontFamily:"monospace",outline:"none"}}/>
+            <button onClick={handleCopy} style={{background:copied?C2.green:C2.blue,color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{copied?"✓ Copied":"Copy Link"}</button>
+          </div>
+          <button onClick={()=>window.open(portalUrl,"_blank")} style={{fontSize:11,color:C2.blue,background:"transparent",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0,textDecoration:"underline"}}>Open portal page →</button>
+          {sentMsg && <div style={{fontSize:11,color:C2.green,marginTop:6}}>{sentMsg}</div>}
+        </div>
+      ) : (
+        <div>
+          <div style={{fontSize:11,color:C2.inkMid,marginBottom:10}}>Generate a secure payment link and optionally email it to the client.</div>
+          <button onClick={handleSend} disabled={sending} style={{background:C2.blue,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:sending?"not-allowed":"pointer",fontFamily:"inherit",opacity:sending?0.7:1}}>
+            {sending ? "Sending..." : "Send Invoice"}
+          </button>
+          {sentMsg && <div style={{fontSize:11,color:C2.accent,marginTop:6}}>{sentMsg}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ACCEPT INVITE ─────────────────────────────────────────────────────────────
+function AcceptInvite({token, onLogin, onSignIn}) {
+  const [info,    setInfo]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState("");
+  const [form,    setForm]    = useState({firstName:"", lastName:"", password:"", confirm:""});
+  const [saving,  setSaving]  = useState(false);
+  const [done,    setDone]    = useState(false);
+
+  useEffect(() => {
+    if (!token) { setError("Invalid invite link."); setLoading(false); return; }
+    fetch(`${BASE_URL}/auth/invite/${token}`)
+      .then(r => r.json().then(d => r.ok ? d : Promise.reject(d.detail)))
+      .then(d => { setInfo(d); setLoading(false); })
+      .catch(e => { setError(typeof e === "string" ? e : "This invite link is invalid or has expired."); setLoading(false); });
+  }, [token]);
+
+  const handleAccept = async () => {
+    if (!form.firstName.trim() || !form.lastName.trim()) { setError("Please enter your name."); return; }
+    if (!form.password || form.password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (form.password !== form.confirm) { setError("Passwords do not match."); return; }
+    setSaving(true); setError("");
+    try {
+      const res = await fetch(`${BASE_URL}/auth/accept-invite`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({token, first_name:form.firstName.trim(), last_name:form.lastName.trim(), password:form.password}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not accept invite.");
+      localStorage.setItem("zuzan_token", data.access_token);
+      setDone(true);
+      setTimeout(() => {
+        onLogin({
+          firstName: data.user.first_name, lastName: data.user.last_name,
+          email: data.user.email, companyName: data.company.name,
+          logoUrl: data.company.logo_url||"", plan:{name:data.company.plan,id:data.company.plan},
+          access_token: data.access_token, trialEnds: data.company.trial_ends, subscriptionStatus: data.company.subscription_status||"trial",
+          role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
+        });
+      }, 1200);
+    } catch(e) { setError(e.message); }
+    setSaving(false);
+  };
+
+  const card = {maxWidth:420, margin:"80px auto", background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:36, fontFamily:"sans-serif"};
+  const inp = {width:"100%", padding:"11px 14px", borderRadius:9, border:`1px solid ${C.border}`, fontSize:14, fontFamily:"inherit", background:C.bg, color:C.ink, outline:"none", boxSizing:"border-box"};
+
+  if (loading) return <div style={{...card, textAlign:"center", color:C.inkMid}}>Checking invite...</div>;
+
+  if (error && !info) return (
+    <div style={{...card, textAlign:"center"}}>
+      <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.ink,marginBottom:24}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+      <div style={{fontSize:14,color:"#c00",marginBottom:20}}>{error}</div>
+      <button onClick={onSignIn} style={{fontSize:13,color:C.accent,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Go to sign in →</button>
+    </div>
+  );
+
+  if (done) return (
+    <div style={{...card, textAlign:"center"}}>
+      <div style={{fontSize:40,marginBottom:12}}>✅</div>
+      <div style={{fontSize:16,fontWeight:700,color:C.ink}}>Welcome to {info?.company_name}!</div>
+      <div style={{fontSize:13,color:C.inkMid,marginTop:8}}>Signing you in...</div>
+    </div>
+  );
+
+  const roleLabels = {admin:"Admin", accountant:"Accountant", payroll:"Payroll Manager", employee:"Employee"};
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={card}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:C.ink,marginBottom:4}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <div style={{fontSize:15,fontWeight:600,color:C.ink}}>You've been invited to join</div>
+          <div style={{fontSize:20,fontWeight:700,color:C.accent,marginTop:4}}>{info?.company_name}</div>
+          <div style={{display:"inline-block",marginTop:10,padding:"4px 14px",borderRadius:20,background:C.accentLt,color:C.accent,fontSize:12,fontWeight:700}}>
+            Role: {roleLabels[info?.role] || info?.role}
+          </div>
+        </div>
+
+        <div style={{marginBottom:16}}>
+          <div style={{display:"flex",gap:10,marginBottom:12}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>First Name</div>
+              <input value={form.firstName} onChange={e=>setForm(v=>({...v,firstName:e.target.value}))} placeholder="First name" style={inp}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Last Name</div>
+              <input value={form.lastName} onChange={e=>setForm(v=>({...v,lastName:e.target.value}))} placeholder="Last name" style={inp}/>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Email (from invite)</div>
+            <input value={info?.email||""} disabled style={{...inp,color:C.inkMid,cursor:"not-allowed"}}/>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Password</div>
+            <input type="password" value={form.password} onChange={e=>setForm(v=>({...v,password:e.target.value}))} placeholder="Choose a password (6+ chars)" style={inp}/>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.inkMid,marginBottom:5,fontWeight:600}}>Confirm Password</div>
+            <input type="password" value={form.confirm} onChange={e=>setForm(v=>({...v,confirm:e.target.value}))}
+              onKeyDown={e=>e.key==="Enter"&&handleAccept()} placeholder="Confirm password" style={inp}/>
+          </div>
+        </div>
+
+        {error && <div style={{color:"#c00",fontSize:12,marginBottom:12}}>{error}</div>}
+
+        <button onClick={handleAccept} disabled={saving} style={{width:"100%",padding:"13px",border:"none",borderRadius:10,
+          background:saving?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:saving?"wait":"pointer",fontFamily:"inherit",marginBottom:16}}>
+          {saving ? "Creating account..." : "Accept & Create Account"}
+        </button>
+        <div style={{textAlign:"center",fontSize:12,color:C.inkMid}}>
+          Already have an account? <span onClick={onSignIn} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>Sign in</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── TEAM SETTINGS ─────────────────────────────────────────────────────────────
+function TeamSettings({user}) {
+  const [members,    setMembers]    = useState([]);
+  const [invites,    setInvites]    = useState([]);
+  const [auditLog,   setAuditLog]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [inviteForm, setInviteForm] = useState({email:"", role:"accountant"});
+  const [inviting,   setInviting]   = useState(false);
+  const [msg,        setMsg]        = useState("");
+  const [activeView, setActiveView] = useState("members"); // members | log
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [m, inv, log] = await Promise.all([
+        api("/auth/team"),
+        api("/auth/team/invites"),
+        api("/auth/audit-log?limit=30"),
+      ]);
+      setMembers(m); setInvites(inv); setAuditLog(log);
+    } catch(e) { console.warn("Team load error:", e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const sendInvite = async () => {
+    if (!inviteForm.email.trim()) { setMsg("Please enter an email address."); return; }
+    setInviting(true); setMsg("");
+    try {
+      await api("/auth/team/invite", {method:"POST", body:JSON.stringify({email:inviteForm.email.trim(), role:inviteForm.role})});
+      setMsg(`✓ Invitation sent to ${inviteForm.email}`);
+      setInviteForm({email:"", role:"accountant"});
+      load();
+    } catch(e) { setMsg("Error: " + e.message); }
+    setInviting(false);
+  };
+
+  const changeRole = async (memberId, newRole) => {
+    try {
+      await api(`/auth/team/${memberId}`, {method:"PATCH", body:JSON.stringify({role:newRole})});
+      load();
+    } catch(e) { alert(e.message); }
+  };
+
+  const removeMember = async (memberId, email) => {
+    if (!window.confirm(`Remove ${email} from your team?`)) return;
+    try {
+      await api(`/auth/team/${memberId}`, {method:"DELETE"});
+      load();
+    } catch(e) { alert(e.message); }
+  };
+
+  const cancelInvite = async (inviteId) => {
+    try {
+      await api(`/auth/team/invites/${inviteId}`, {method:"DELETE"});
+      load();
+    } catch(e) { alert(e.message); }
+  };
+
+  const isOwnerOrAdmin = user?.role === "owner" || user?.role === "admin";
+  const roleBadge = (role) => {
+    const map = {owner:["#1B3A6B","#E8EEF8"],admin:["#C8401A","#FBF0EC"],accountant:["#00878A","#E0F4F5"],payroll:["#7B2D8B","#F5EAF8"],employee:["#888","#F5F5F5"]};
+    const [fg, bg] = map[role] || ["#888","#F5F5F5"];
+    return <span style={{padding:"2px 9px",borderRadius:20,fontSize:10,fontWeight:700,color:fg,background:bg}}>{role.charAt(0).toUpperCase()+role.slice(1)}</span>;
+  };
+
+  const inp = {padding:"9px 12px",borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"};
+
+  const actionLabel = (action) => {
+    const map = {"team.invite_sent":"Invite sent","team.invite_accepted":"Member joined","team.member_removed":"Member removed","team.role_changed":"Role changed","invoice.created":"Invoice created","expense.created":"Expense added"};
+    return map[action] || action;
+  };
+
+  if (loading) return <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading team...</div>;
+
+  return (
+    <div>
+      {/* View toggle */}
+      <div style={{display:"flex",gap:6,marginBottom:20}}>
+        {[["members","👥 Members & Invites"],["log","📋 Activity Log"]].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setActiveView(id)} style={{padding:"7px 16px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:activeView===id?700:400,background:activeView===id?C.surface:"transparent",color:activeView===id?C.ink:C.inkMid,fontFamily:"inherit",boxShadow:activeView===id?"0 1px 4px rgba(0,0,0,0.08)":"none"}}>{lbl}</button>
+        ))}
+      </div>
+
+      {activeView === "members" && <>
+        {/* Current members */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Team Members ({members.length})</div>
+          {members.map(m=>(
+            <div key={m.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:`1px solid ${C.border}`,last:{borderBottom:"none"}}}>
+              <div style={{width:36,height:36,borderRadius:"50%",background:C.accentLt,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:C.accent}}>
+                {(m.first_name||"?")[0].toUpperCase()}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{m.first_name} {m.last_name} {m.is_self && <span style={{fontSize:10,color:C.inkMid}}>(you)</span>}</div>
+                <div style={{fontSize:11,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.email}</div>
+              </div>
+              {roleBadge(m.role)}
+              {isOwnerOrAdmin && !m.is_self && m.role !== "owner" && (
+                <div style={{display:"flex",gap:6}}>
+                  <select value={m.role} onChange={e=>changeRole(m.id,e.target.value)}
+                    style={{...inp,fontSize:11,padding:"5px 8px",cursor:"pointer"}}>
+                    <option value="admin">Admin</option>
+                    <option value="accountant">Accountant</option>
+                    <option value="employee">Employee</option>
+                  </select>
+                  <button onClick={()=>removeMember(m.id,m.email)}
+                    style={{padding:"5px 10px",borderRadius:7,border:`1px solid ${C.border}`,background:"transparent",color:"#c00",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Pending invites */}
+        {invites.length > 0 && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Pending Invitations ({invites.length})</div>
+            {invites.map(inv=>(
+              <div key={inv.id} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,color:C.ink}}>{inv.email}</div>
+                  <div style={{fontSize:11,color:C.inkMid}}>Expires {new Date(inv.expires_at).toLocaleDateString()}</div>
+                </div>
+                {roleBadge(inv.role)}
+                {isOwnerOrAdmin && (
+                  <button onClick={()=>cancelInvite(inv.id)} style={{padding:"5px 10px",borderRadius:7,border:`1px solid ${C.border}`,background:"transparent",color:C.inkMid,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Invite form */}
+        {isOwnerOrAdmin && (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Invite a Team Member</div>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+              <div style={{flex:2,minWidth:200}}>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:5}}>Email address</div>
+                <input value={inviteForm.email} onChange={e=>setInviteForm(v=>({...v,email:e.target.value}))}
+                  onKeyDown={e=>e.key==="Enter"&&sendInvite()}
+                  placeholder="colleague@example.com" style={{...inp,width:"100%",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{flex:1,minWidth:140}}>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:5}}>Role</div>
+                <select value={inviteForm.role} onChange={e=>setInviteForm(v=>({...v,role:e.target.value}))} style={{...inp,width:"100%"}}>
+                  <option value="admin">Admin</option>
+                  <option value="accountant">Accountant</option>
+                  <option value="payroll">Payroll Manager</option>
+                  <option value="employee">Employee</option>
+                </select>
+              </div>
+              <button onClick={sendInvite} disabled={inviting} style={{padding:"9px 20px",borderRadius:8,border:"none",background:C.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:inviting?"wait":"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                {inviting ? "Sending..." : "Send Invite"}
+              </button>
+            </div>
+            {msg && <div style={{fontSize:12,color:msg.startsWith("✓")?C.teal:"#c00",marginTop:10}}>{msg}</div>}
+          </div>
+        )}
+      </>}
+
+      {activeView === "log" && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Recent Activity</div>
+          {auditLog.length === 0 && <div style={{fontSize:13,color:C.inkMid,textAlign:"center",padding:24}}>No activity yet.</div>}
+          {auditLog.map(entry=>(
+            <div key={entry.id} style={{display:"flex",gap:12,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:C.accent,marginTop:5,flexShrink:0}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,color:C.ink,fontWeight:500}}>{actionLabel(entry.action)}{entry.target_type ? ` — ${entry.target_type} #${entry.target_id||""}` : ""}</div>
+                {entry.detail && <div style={{fontSize:11,color:C.inkMid}}>{entry.detail}</div>}
+              </div>
+              <div style={{fontSize:10,color:C.inkDim,whiteSpace:"nowrap",paddingTop:2}}>
+                {entry.user_email && <div>{entry.user_email}</div>}
+                <div>{new Date(entry.created_at).toLocaleString()}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
 function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange}) {
-  const [settingsTab, setSettingsTab] = useState("company"); // company | templates | developer
+  const [settingsTab, setSettingsTab] = useState("subscription");
   const [form, setForm] = useState({
     companyName:          user?.companyName          || "",
     regNumber:            user?.regNumber            || "",
@@ -5547,10 +7281,34 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     bankingDetails:       user?.bankingDetails       || "",
     payfastMerchantId:    user?.payfastMerchantId    || "",
     payfastMerchantKey:   user?.payfastMerchantKey   || "",
+    payfastPassphrase:    user?.payfastPassphrase    || "",
     logoUrl:              user?.logoUrl              || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
   });
   const [saved, setSaved] = useState(false);
+  const [subInfo, setSubInfo] = useState({status: user?.subscriptionStatus || "trial", trialEnds: user?.trialEnds || null});
+
+  // Pre-fill Settings form from API on mount so credentials persist across logins
+  useEffect(() => {
+    api("/companies/me").then(data => {
+      setForm(f => ({
+        ...f,
+        companyName:          data.name             || f.companyName,
+        regNumber:            data.reg_number        || f.regNumber,
+        industry:             data.industry          || f.industry,
+        vatNumber:            data.vat_number        || f.vatNumber,
+        bankName:             data.bank_name         || f.bankName,
+        bankAccount:          data.bank_account      || f.bankAccount,
+        branchCode:           data.bank_branch       || f.branchCode,
+        payfastMerchantId:    data.payfast_merchant_id  || f.payfastMerchantId,
+        payfastMerchantKey:   data.payfast_merchant_key || f.payfastMerchantKey,
+        payfastPassphrase:    data.payfast_passphrase   || f.payfastPassphrase,
+        logoUrl:              data.logo_url          || f.logoUrl,
+        cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
+      }));
+      setSubInfo({status: data.subscription_status, trialEnds: data.trial_ends, plan: data.plan, billingCycle: data.billing_cycle});
+    }).catch(() => {});
+  }, []);
   const [showUpgrade,  setShowUpgrade]  = useState(false);
   const [showBilling,  setShowBilling]  = useState(false);
   const [upgradeBilling, setUpgradeBilling] = useState("monthly");
@@ -5601,6 +7359,9 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         branch_code:            form.branchCode,
         logo_url:               form.logoUrl || null,
         cipc_registration_date: form.cipcRegistrationDate || null,
+        payfast_merchant_id:    form.payfastMerchantId  || null,
+        payfast_merchant_key:   form.payfastMerchantKey || null,
+        payfast_passphrase:     form.payfastPassphrase  || null,
       })});
     } catch(e) { console.warn("Settings save failed:", e.message); }
     // Update local user context
@@ -5625,75 +7386,188 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   const inputStyle = {width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
   const labelStyle = {fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5};
 
+  // ── Settings tab definitions ─────────────────────────────────────────────
+  const STABS = [
+    {id:"subscription", label:"Subscription", icon:"💳"},
+    {id:"company",      label:"Company",      icon:"🏢"},
+    {id:"security",     label:"Security",     icon:"🔒"},
+    {id:"templates",    label:"Templates",    icon:"🎨"},
+    {id:"developer",    label:"Developer",    icon:"🔑"},
+    ...(["owner","admin"].includes(user?.role) ? [{id:"team", label:"Team", icon:"👥"}] : []),
+  ];
+
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:24}}>
-        <div>
-          <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Settings</h2>
-          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Manage your ZuZan account</p>
-        </div>
-        <div style={{display:"flex",gap:4,background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:4}}>
-          {[["company","⚙️ General"],["templates","🎨 Templates"],["developer","🔑 Developer API"]].map(([id,label])=>(
-            <button key={id} onClick={()=>setSettingsTab(id)} style={{padding:"7px 16px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:settingsTab===id?700:400,background:settingsTab===id?C.surface:"transparent",color:settingsTab===id?C.ink:C.inkMid,fontFamily:"inherit",boxShadow:settingsTab===id?"0 1px 4px rgba(0,0,0,0.08)":"none"}}>{label}</button>
-          ))}
-        </div>
+      {/* Header */}
+      <div style={{marginBottom:28}}>
+        <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:"0 0 4px"}}>Settings</h2>
+        <p style={{fontSize:13,color:C.inkMid,margin:0}}>Manage your Zuzan account</p>
       </div>
 
-      {settingsTab === "developer" ? <Developer/> : settingsTab === "templates" ? (
-        <div>
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div>
-                <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase"}}>Document Templates</div>
-                <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Customise how your invoices and quotes look when printed or shared.</div>
-              </div>
-              <button onClick={()=>{if(onTemplateChange)onTemplateChange(DEFAULT_DOC_TEMPLATE);}} style={{padding:"7px 14px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:11,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Reset to Default</button>
-            </div>
-            <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
-          </div>
-        </div>
-      ) : <>
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Subscription</div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+      {/* Tab bar — large, easy to click */}
+      <div style={{display:"flex",gap:4,marginBottom:28,background:C.bg,border:`1px solid ${C.border}`,borderRadius:14,padding:5,flexWrap:"wrap"}}>
+        {STABS.map(t => (
+          <button key={t.id} onClick={()=>setSettingsTab(t.id)} style={{
+            flex:"1 1 auto", padding:"11px 18px", borderRadius:10, border:"none",
+            cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:settingsTab===t.id?700:500,
+            background:settingsTab===t.id?C.surface:"transparent",
+            color:settingsTab===t.id?C.ink:C.inkMid,
+            boxShadow:settingsTab===t.id?"0 1px 6px rgba(0,0,0,0.09)":"none",
+            transition:"all 0.15s", whiteSpace:"nowrap",
+          }}>
+            {t.icon}&nbsp; {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── SUBSCRIPTION TAB ─────────────────────────────────────────────────── */}
+      {settingsTab === "subscription" && <>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Your Plan</div>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
           <div>
-            <div style={{fontSize:16,fontWeight:700,color:C.ink}}>{user?.plan?.name || "Professional"} Plan</div>
-            <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Trial ends in 9 days</div>
+            <div style={{fontSize:20,fontWeight:800,color:C.ink,textTransform:"capitalize"}}>
+              {subInfo.plan || user?.plan?.name || "Starter"} Plan
+              {subInfo.billingCycle && <span style={{fontSize:12,fontWeight:400,color:C.inkMid,marginLeft:8}}>({subInfo.billingCycle})</span>}
+            </div>
+            <div style={{fontSize:13,color:C.inkMid,marginTop:4}}>
+              {subInfo.status === "trial" && subInfo.trialEnds
+                ? `Trial ends ${new Date(subInfo.trialEnds).toLocaleDateString("en-ZA",{day:"numeric",month:"long",year:"numeric"})}`
+                : subInfo.status === "cancelled" ? "Cancelled — access continues until end of billing period"
+                : subInfo.status === "active"    ? "Active subscription"
+                : subInfo.status === "expired"   ? "Subscription expired" : ""}
+            </div>
           </div>
-          <Badge label="Trial Active" color={C.gold} bg={C.goldLt}/>
+          <Badge
+            label={subInfo.status === "trial" ? "Trial" : subInfo.status === "active" ? "Active" : subInfo.status === "cancelled" ? "Cancelled" : "Expired"}
+            color={subInfo.status === "active" ? C.green : subInfo.status === "trial" ? C.gold : C.red}
+            bg={subInfo.status === "active" ? C.greenLt : subInfo.status === "trial" ? C.goldLt : C.redLt}
+          />
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>setShowUpgrade(true)} style={{padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
-          <button onClick={()=>setShowBilling(true)} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
+
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:20}}>
+          {(subInfo.status === "trial" || subInfo.status === "expired") && (
+            <button onClick={async()=>{
+              try {
+                const res = await api("/billing/subscribe", {method:"POST"});
+                if (res.payfast_url) pfSubmit(res.payfast_url, res.payfast_data);
+              } catch(e) { alert("Could not start subscription. " + (e.message||"")); }
+            }} style={{padding:"10px 22px",background:C.green,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {subInfo.status === "trial" ? "🔑 Subscribe Now" : "🔑 Reactivate Subscription"}
+            </button>
+          )}
+          <button onClick={()=>setShowUpgrade(true)} style={{padding:"10px 22px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
+          <button onClick={()=>setShowBilling(true)} style={{padding:"10px 22px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
         </div>
+
+        {/* Auto-renewal toggle */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 18px",background:C.bg,borderRadius:12,border:`1px solid ${C.border}`,marginBottom:10}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:600,color:C.ink}}>Auto-renewal</div>
+            <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>
+              {subInfo.status === "cancelled"
+                ? "Your subscription will not renew. Re-enable before your period ends to keep access."
+                : "Renews automatically. You'll be notified 7 days before each renewal."}
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              const turningOff = subInfo.status !== "cancelled";
+              if (turningOff && !window.confirm("Turn off auto-renewal? Access continues until end of period.")) return;
+              const newStatus = turningOff ? "cancelled" : "active";
+              try {
+                await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: newStatus})});
+                setSubInfo(s => ({...s, status: newStatus}));
+              } catch(e) { alert("Could not update. Please try again."); }
+            }}
+            style={{width:48,height:26,borderRadius:13,border:"none",cursor:"pointer",
+              background:subInfo.status==="cancelled"?C.border:C.green,
+              position:"relative",flexShrink:0,transition:"background 0.2s"}}>
+            <span style={{position:"absolute",top:4,width:18,height:18,borderRadius:9,background:"#fff",
+              boxShadow:"0 1px 3px rgba(0,0,0,0.2)",transition:"left 0.2s",
+              left:subInfo.status==="cancelled"?4:26}}/>
+          </button>
+        </div>
+
+        {subInfo.status !== "cancelled" && subInfo.status !== "expired" && (
+          <button onClick={async()=>{
+            if(!window.confirm("Cancel your subscription? Access continues until end of billing period.")) return;
+            try {
+              await api("/companies/me",{method:"PUT",body:JSON.stringify({subscription_status:"cancelled"})});
+              setSubInfo(s=>({...s,status:"cancelled"}));
+            } catch(e){ alert("Could not cancel. Email support@solutha.co.za."); }
+          }} style={{fontSize:13,color:C.red,background:"none",border:"none",cursor:"pointer",padding:"6px 0",textDecoration:"underline",fontFamily:"inherit"}}>
+            Cancel subscription
+          </button>
+        )}
       </div>
 
-      {/* Company Logo */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Logo</div>
-        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:12}}>
+      {/* Add-ons */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Add-ons</div>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 20px",border:`1px solid ${user?.payrollEnabled?C.green:C.border}`,borderRadius:12,background:user?.payrollEnabled?C.greenLt:C.bg}}>
+            <div style={{display:"flex",alignItems:"center",gap:16}}>
+              <div style={{fontSize:32}}>👥</div>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Payroll</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>PAYE, UIF &amp; SDL calculations · Payslips · EMP201 reports</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>From <strong style={{color:C.ink}}>R99/month</strong> + R34 per employee</div>
+              </div>
+            </div>
+            {user?.payrollEnabled
+              ? <span style={{padding:"7px 16px",background:C.green,color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
+              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});if(onUserUpdate)onUserUpdate({...user,payrollEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Payroll</button>
+            }
+          </div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 20px",border:`1px solid ${user?.afsEnabled?"#7C3AED":C.border}`,borderRadius:12,background:user?.afsEnabled?"#F5F3FF":C.bg}}>
+            <div style={{display:"flex",alignItems:"center",gap:16}}>
+              <div style={{fontSize:32}}>📑</div>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Annual Financial Statements</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Income Statement · Balance Sheet · Cash Flow · Changes in Equity</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}><strong style={{color:C.ink}}>R1,999/year</strong> — IFRS-compliant, ready for your accountant</div>
+              </div>
+            </div>
+            {user?.afsEnabled
+              ? <span style={{padding:"7px 16px",background:"#7C3AED",color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
+              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});if(onUserUpdate)onUserUpdate({...user,afsEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add AFS — R1,999/yr</button>
+            }
+          </div>
+        </div>
+      </div>
+      </>}
+
+      {/* ── COMPANY TAB ──────────────────────────────────────────────────────── */}
+      {settingsTab === "company" && <>
+      {/* Logo */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Logo</div>
+        <div style={{display:"flex",alignItems:"center",gap:20,marginBottom:4}}>
           {form.logoUrl
-            ? <img src={form.logoUrl} alt="Logo" style={{height:64,maxWidth:200,objectFit:"contain",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff",padding:4}}/>
-            : <div style={{width:120,height:64,borderRadius:8,border:`2px dashed ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:C.inkMid}}>No logo</div>
+            ? <img src={form.logoUrl} alt="Logo" style={{height:72,maxWidth:220,objectFit:"contain",borderRadius:10,border:`1px solid ${C.border}`,background:"#fff",padding:6}}/>
+            : <div style={{width:120,height:72,borderRadius:10,border:`2px dashed ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.inkMid}}>No logo</div>
           }
           <div>
             <input type="file" accept="image/*" id="logo-upload" style={{display:"none"}} onChange={e=>{
               const file=e.target.files[0]; if(!file)return;
-              if(file.size>500000){alert("Logo must be under 500KB. Please resize and try again.");return;}
+              if(file.size>500000){alert("Logo must be under 500KB.");return;}
               const reader=new FileReader();
               reader.onload=ev=>setForm(v=>({...v,logoUrl:ev.target.result}));
               reader.readAsDataURL(file);
             }}/>
-            <label htmlFor="logo-upload" style={{display:"inline-block",padding:"8px 16px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer"}}>Upload Logo</label>
-            {form.logoUrl && <button onClick={()=>setForm(v=>({...v,logoUrl:""}))} style={{marginLeft:8,padding:"8px 14px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>}
-            <div style={{fontSize:11,color:C.inkMid,marginTop:6}}>PNG, JPG or SVG · Max 500KB · Shown on invoices & quotes</div>
+            <label htmlFor="logo-upload" style={{display:"inline-block",padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:13,fontWeight:700,cursor:"pointer"}}>Upload Logo</label>
+            {form.logoUrl && <button onClick={()=>setForm(v=>({...v,logoUrl:""}))} style={{marginLeft:10,padding:"9px 16px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>}
+            <div style={{fontSize:12,color:C.inkMid,marginTop:8}}>PNG, JPG or SVG · Max 500 KB · Appears on invoices &amp; quotes</div>
           </div>
         </div>
       </div>
 
       {/* Company Details */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Company Details</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:20}}>Company Details</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
           {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"Industry",k:"industry"},{l:"VAT Number",k:"vatNumber"},{l:"CIPC Registration Date",k:"cipcRegistrationDate",type:"date",hint:"Used for Annual Return reminders"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}{f.hint&&<span style={{fontWeight:400,textTransform:"none",color:C.inkDim,marginLeft:6}}>{f.hint}</span>}</label>
@@ -5701,8 +7575,9 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
           ))}
         </div>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12,marginTop:4}}>Banking Details (shown on invoices)</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:16}}>
+
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Banking Details <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(shown on invoices)</span></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16,marginBottom:20}}>
           {[{l:"Bank Name",k:"bankName"},{l:"Account Number",k:"bankAccount"},{l:"Branch Code",k:"branchCode"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}</label>
@@ -5710,54 +7585,96 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
           ))}
         </div>
-        <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12,marginTop:4}}>PayFast Online Payments</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
-          {[{l:"PayFast Merchant ID",k:"payfastMerchantId",p:"10000100"},{l:"PayFast Merchant Key",k:"payfastMerchantKey",p:"46f0cd694581a"}].map(f=>(
+
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>PayFast Online Payments</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:14}}>
+          {[{l:"Merchant ID",k:"payfastMerchantId",p:"10000100"},{l:"Merchant Key",k:"payfastMerchantKey",p:"46f0cd694581a"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}</label>
               <input placeholder={f.p} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
             </div>
           ))}
         </div>
-        <div style={{background:C.goldLt,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:11,color:C.inkMid}}>Get your Merchant ID and Key from <strong>payfast.co.za → Account → Settings → API Credentials</strong></div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <button onClick={handleSave} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
-          {saved && <span style={{fontSize:12,color:C.green,fontWeight:600}}>✓ Saved</span>}
+        <div style={{marginBottom:16}}>
+          <label style={labelStyle}>Passphrase <span style={{fontWeight:400,textTransform:"none"}}>(optional)</span></label>
+          <input type="password" placeholder="Leave blank if not set in PayFast" value={form.payfastPassphrase||""} onChange={e=>setForm(v=>({...v,payfastPassphrase:e.target.value}))} style={inputStyle}/>
+        </div>
+        <div style={{background:C.goldLt,borderRadius:10,padding:"12px 16px",marginBottom:20,fontSize:12,color:C.inkMid}}>
+          Get your credentials at <strong>payfast.co.za → Account → Settings → API Credentials</strong>. Each client uses their own PayFast account — Zuzan never touches your funds.
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <button onClick={handleSave} style={{padding:"11px 26px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+          {saved && <span style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Saved</span>}
         </div>
       </div>
+      </>}
 
-      {/* Payroll PIN Security */}
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.ink,letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>🔒 Payroll PIN</div>
-        <p style={{fontSize:12,color:C.inkMid,marginTop:0,marginBottom:16}}>Set a PIN to restrict access to salary and payroll data. Anyone opening Payroll must enter this PIN first.</p>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+      {/* ── SECURITY TAB ─────────────────────────────────────────────────────── */}
+      {settingsTab === "security" && <>
+      {/* Payroll PIN */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+          <div style={{fontSize:28}}>🔒</div>
           <div>
-            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>New PIN (4–8 digits)</label>
+            <div style={{fontSize:16,fontWeight:700,color:C.ink}}>Payroll PIN</div>
+            <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Restrict access to salary data. Anyone opening Payroll must enter this PIN first.</div>
+          </div>
+        </div>
+        <div style={{height:1,background:C.border,margin:"16px 0"}}/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:20,maxWidth:480}}>
+          <div>
+            <label style={labelStyle}>New PIN <span style={{fontWeight:400,textTransform:"none"}}>(4–8 digits)</span></label>
             <input type="password" inputMode="numeric" maxLength={8} placeholder="••••" value={pinForm.newPin}
               onChange={e=>setPinForm(f=>({...f,newPin:e.target.value.replace(/\D/g,"")}))}
-              style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box",letterSpacing:4}}/>
+              style={{...inputStyle,fontSize:20,letterSpacing:8,textAlign:"center",padding:"12px"}}/>
           </div>
           <div>
-            <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Confirm PIN</label>
+            <label style={labelStyle}>Confirm PIN</label>
             <input type="password" inputMode="numeric" maxLength={8} placeholder="••••" value={pinForm.confirmPin}
               onChange={e=>setPinForm(f=>({...f,confirmPin:e.target.value.replace(/\D/g,"")}))}
-              style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box",letterSpacing:4}}/>
+              style={{...inputStyle,fontSize:20,letterSpacing:8,textAlign:"center",padding:"12px"}}/>
           </div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <button onClick={handleSetPin} disabled={pinSaving} style={{padding:"9px 22px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:pinSaving?0.6:1}}>{pinSaving?"Saving...":"Set PIN"}</button>
-          {pinMsg && <span style={{fontSize:12,color:pinMsg.startsWith("✓")?C.green:C.red,fontWeight:600}}>{pinMsg}</span>}
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <button onClick={handleSetPin} disabled={pinSaving} style={{padding:"11px 26px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:pinSaving?0.6:1}}>
+            {pinSaving ? "Saving…" : "Set PIN"}
+          </button>
+          {pinMsg && <span style={{fontSize:13,color:pinMsg.startsWith("✓")?C.green:C.red,fontWeight:600}}>{pinMsg}</span>}
+        </div>
+        <div style={{marginTop:16,fontSize:12,color:C.inkMid,background:C.bg,borderRadius:8,padding:"10px 14px"}}>
+          💡 Forgot your PIN? Simply set a new one here — no old PIN required.
         </div>
       </div>
 
-      {/* Danger Zone */}
-      <div style={{background:C.surface,border:`1px solid ${C.red}40`,borderRadius:16,padding:24}}>
-        <div style={{fontSize:12,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Danger Zone</div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={onLogout} style={{padding:"9px 18px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
-          <button onClick={handleCancelSub} style={{padding:"9px 18px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:8,color:C.red,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
+      {/* Account actions */}
+      <div style={{background:C.surface,border:`1px solid ${C.red}30`,borderRadius:16,padding:28}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Account</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <button onClick={onLogout} style={{padding:"11px 22px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
+          <button onClick={handleCancelSub} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
         </div>
       </div>
+      </>}
+
+      {/* ── TEMPLATES TAB ────────────────────────────────────────────────────── */}
+      {settingsTab === "templates" && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+            <div>
+              <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Document Templates</div>
+              <div style={{fontSize:13,color:C.inkMid}}>Customise how your invoices and quotes look when printed or shared.</div>
+            </div>
+            <button onClick={()=>{if(onTemplateChange)onTemplateChange(DEFAULT_DOC_TEMPLATE);}} style={{padding:"9px 18px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Reset to Default</button>
+          </div>
+          <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
+        </div>
+      )}
+
+      {/* ── DEVELOPER TAB ────────────────────────────────────────────────────── */}
+      {settingsTab === "developer" && <Developer/>}
+
+      {/* ── TEAM TAB ─────────────────────────────────────────────────────────── */}
+      {settingsTab === "team" && <TeamSettings user={user}/>}
       {/* ── Upgrade Plan Modal ── */}
       {showUpgrade && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
@@ -5835,7 +7752,6 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         </div>
       )}
 
-      </>}
     </div>
   );
 }
@@ -5852,6 +7768,7 @@ function Login({onLogin, onRegister}) {
   const [error,   setError]   = useState("");
   const [loading, setLoading] = useState(false);
   const [serverStatus, setServerStatus] = useState("checking"); // checking | ready | sleeping
+  const [showPassword, setShowPassword] = useState(false);
 
   // Ping backend on mount to wake it up before user clicks Sign In
   useEffect(() => {
@@ -5897,8 +7814,10 @@ function Login({onLogin, onRegister}) {
         data = await attempt();
       }
       localStorage.setItem("zuzan_token", data.access_token);
+      const _rawSub = data.company.subscription_status || "trial";
+      const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -5970,9 +7889,15 @@ function Login({onLogin, onRegister}) {
               </div>
               <div style={{marginBottom:8}}>
                 <label style={labelStyle}>Password</label>
-                <input type="password" placeholder="Your password" value={form.password}
-                  onChange={e=>setForm({...form,password:e.target.value})}
-                  onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={inputStyle}/>
+                <div style={{position:"relative"}}>
+                  <input type={showPassword?"text":"password"} placeholder="Your password" value={form.password}
+                    onChange={e=>setForm({...form,password:e.target.value})}
+                    onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={{...inputStyle,paddingRight:44}}/>
+                  <button type="button" onClick={()=>setShowPassword(v=>!v)}
+                    style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",padding:0,color:C.inkMid,fontSize:16,lineHeight:1}}>
+                    {showPassword ? "🙈" : "👁️"}
+                  </button>
+                </div>
               </div>
               <div style={{textAlign:"right",marginBottom:20}}>
                 <span onClick={()=>{setView("forgot");setError("");setMsg("");}} style={{fontSize:12,color:C.accent,cursor:"pointer",fontWeight:600}}>Forgot password?</span>
@@ -6063,12 +7988,39 @@ function Registration({onComplete, onLogin}) {
   const [payment, setPayment] = useState({cardNumber:"",expiry:"",cvv:"",cardName:""});
   const [processing, setProcessing] = useState(false);
   const [complete, setComplete] = useState(false);
+  const [tcAccepted, setTcAccepted] = useState(false);
+  const [errors, setErrors] = useState({});
 
   const planPrice = selectedPlan ? (billing === "monthly" ? selectedPlan.monthly : Math.round(selectedPlan.annual / 12)) : 0;
-  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 17.50)) : 0;
+  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 34)) : 0;
   const totalMonthly = planPrice + payrollCost;
 
+  const validateStep2 = () => {
+    const errs = {};
+    if (!form.companyName.trim()) errs.companyName = "Company name is required";
+    if (!form.firstName.trim()) errs.firstName = "First name is required";
+    if (!form.lastName.trim()) errs.lastName = "Last name is required";
+    if (!form.email.trim()) {
+      errs.email = "Email address is required";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      errs.email = "Enter a valid email address";
+    }
+    if (!form.password) {
+      errs.password = "Password is required";
+    } else if (form.password.length < 8) {
+      errs.password = "Password must be at least 8 characters";
+    }
+    if (!form.confirm) {
+      errs.confirm = "Please confirm your password";
+    } else if (form.confirm !== form.password) {
+      errs.confirm = "Passwords do not match";
+    }
+    return errs;
+  };
+
   const handlePayment = async () => {
+    const errs = validateStep2();
+    if (Object.keys(errs).length > 0) { setErrors(errs); setStep(2); return; }
     setProcessing(true);
     let token = null;
     let userData = {...form, plan:selectedPlan, billing, payroll:payrollEnabled, employees:empCount};
@@ -6079,18 +8031,18 @@ function Registration({onComplete, onLogin}) {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-          company_name:    form.companyName || "My Company",
-          reg_number:      form.regNumber  || "",
-          industry:        form.industry   || "",
-          first_name:      form.firstName  || "User",
-          last_name:       form.lastName   || "",
-          email:           form.email      || `user${Date.now()}@zuzan.co.za`,
-          phone:           form.phone      || "",
-          password:        (form.password  || "Zuzan2025!").slice(0, 50),
-          plan:            selectedPlan ? selectedPlan.id : "starter",
-          billing_cycle:   billing || "monthly",
-          payroll_enabled: payrollEnabled || false,
-          employee_count:  empCount || 0,
+          company_name:    form.companyName.trim(),
+          reg_number:      form.regNumber.trim(),
+          industry:        form.industry.trim(),
+          first_name:      form.firstName.trim(),
+          last_name:       form.lastName.trim(),
+          email:           form.email.trim(),
+          phone:           form.phone.trim(),
+          password:        form.password.slice(0, 50),
+          plan:            selectedPlan.id,
+          billing_cycle:   billing,
+          payroll_enabled: payrollEnabled,
+          employee_count:  empCount,
         }),
       });
       const data = await res.json();
@@ -6187,7 +8139,7 @@ function Registration({onComplete, onLogin}) {
                   <span style={{fontSize:32}}>👥</span>
                   <div>
                     <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:4}}>Payroll Module</div>
-                    <div style={{fontSize:13,color:C.inkMid}}>SARS-compliant PAYE, UIF, SDL - EMP201 and IRP5 - <strong style={{color:C.accent}}>R17.50/employee/month</strong> (min R99/month)</div>
+                    <div style={{fontSize:13,color:C.inkMid}}>SARS-compliant PAYE, UIF, SDL - EMP201 and IRP5 - <strong style={{color:C.accent}}>R34/employee/month</strong> (min R99/month)</div>
                   </div>
                 </div>
                 <button onClick={() => setPayroll(!payrollEnabled)} style={{padding:"8px 18px",borderRadius:8,border:`1.5px solid ${payrollEnabled?C.accent:C.border}`,background:payrollEnabled?C.accentLt:"transparent",color:payrollEnabled?C.accent:C.inkMid,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{payrollEnabled?"Added":"Add Payroll"}</button>
@@ -6200,7 +8152,7 @@ function Registration({onComplete, onLogin}) {
                     <span style={{fontSize:20,fontWeight:700,color:C.ink,minWidth:30,textAlign:"center"}}>{empCount}</span>
                     <button onClick={() => setEmpCount(empCount+1)} style={{width:32,height:32,borderRadius:"50%",border:`1px solid ${C.border}`,background:C.bg,cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>+</button>
                   </div>
-                  <span style={{fontSize:13,color:C.accent,fontWeight:700}}>= {fmt(Math.max(99,empCount*17.50))}/month</span>
+                  <span style={{fontSize:13,color:C.accent,fontWeight:700}}>= {fmt(Math.max(99,empCount*34))}/month</span>
                 </div>
               )}
             </div>
@@ -6224,7 +8176,8 @@ function Registration({onComplete, onLogin}) {
               {[{l:"Company Name",k:"companyName",p:"Acme Pty Ltd"},{l:"Registration Number",k:"regNumber",p:"2020/123456/07"}].map(f => (
                 <div key={f.k} style={{marginBottom:14}}>
                   <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                  <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  <input placeholder={f.p} value={form[f.k]} onChange={e => {setForm({...form,[f.k]:e.target.value});if(errors[f.k])setErrors({...errors,[f.k]:""});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${errors[f.k]?"#EF4444":C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  {errors[f.k] && <div style={{color:"#EF4444",fontSize:11,marginTop:4}}>{errors[f.k]}</div>}
                 </div>
               ))}
             </div>
@@ -6234,20 +8187,22 @@ function Registration({onComplete, onLogin}) {
                 {[{l:"First Name",k:"firstName",p:"John"},{l:"Last Name",k:"lastName",p:"Smith"}].map(f => (
                   <div key={f.k}>
                     <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                    <input placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                    <input placeholder={f.p} value={form[f.k]} onChange={e => {setForm({...form,[f.k]:e.target.value});if(errors[f.k])setErrors({...errors,[f.k]:""});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${errors[f.k]?"#EF4444":C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                    {errors[f.k] && <div style={{color:"#EF4444",fontSize:11,marginTop:4}}>{errors[f.k]}</div>}
                   </div>
                 ))}
               </div>
               {[{l:"Email Address",k:"email",t:"email",p:"john@acme.co.za"},{l:"Password",k:"password",t:"password",p:"Min 8 characters"},{l:"Confirm Password",k:"confirm",t:"password",p:"Repeat password"}].map(f => (
                 <div key={f.k} style={{marginBottom:14}}>
                   <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                  <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e => setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e => {setForm({...form,[f.k]:e.target.value});if(errors[f.k])setErrors({...errors,[f.k]:""});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${errors[f.k]?"#EF4444":C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  {errors[f.k] && <div style={{color:"#EF4444",fontSize:11,marginTop:4}}>{errors[f.k]}</div>}
                 </div>
               ))}
             </div>
             <div style={{display:"flex",gap:12}}>
               <button onClick={() => setStep(1)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-              <button onClick={() => setStep(3)} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Continue</button>
+              <button onClick={() => { const errs = validateStep2(); if (Object.keys(errs).length > 0) { setErrors(errs); } else { setErrors({}); setStep(3); } }} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Continue</button>
             </div>
           </div>
         )}
@@ -6258,20 +8213,19 @@ function Registration({onComplete, onLogin}) {
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
               <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Order Summary</div>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>{selectedPlan ? selectedPlan.name : ""} Plan ({billing})</span><span style={{fontWeight:600}}>{fmt(planPrice)}/mo</span></div>
-              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R17.50)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
+              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R34)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
               <div style={{borderTop:`1px solid ${C.border}`,marginTop:12,paddingTop:12,display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
             </div>
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Card Details</div>
-              {[{l:"Name on Card",k:"cardName",p:"John Smith"},{l:"Card Number",k:"cardNumber",p:"4242 4242 4242 4242"},{l:"Expiry Date",k:"expiry",p:"MM/YY"},{l:"CVV",k:"cvv",p:"123"}].map(f => (
-                <div key={f.k} style={{marginBottom:14}}>
-                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                  <input placeholder={f.p} value={payment[f.k]} onChange={e => setPayment({...payment,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              <div style={{textAlign:"center",padding:"8px 0 4px"}}>
+                <div style={{fontSize:44,marginBottom:12}}>🎉</div>
+                <div style={{fontSize:20,fontWeight:800,color:C.ink,marginBottom:10}}>No card required</div>
+                <div style={{fontSize:14,color:C.inkMid,marginBottom:20,lineHeight:1.6}}>Start your 14-day free trial — no payment details needed. We'll email you before your trial ends with a link to subscribe.</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8,textAlign:"left"}}>
+                  {["✅ Full access to all features during your trial","✅ No card collected until you choose to subscribe","✅ Cancel anytime — no questions asked","✅ Email reminder 3 days before trial expires"].map(item=>(
+                    <div key={item} style={{fontSize:13,color:C.ink,padding:"10px 14px",background:C.greenLt,borderRadius:8}}>{item}</div>
+                  ))}
                 </div>
-              ))}
-              <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 14px",background:C.greenLt,borderRadius:8}}>
-                <span style={{fontSize:14}}>🔒</span>
-                <span style={{fontSize:11,color:C.green}}>256-bit SSL encryption - PCI DSS compliant - Powered by PayFast</span>
               </div>
             </div>
             <div style={{display:"flex",gap:12}}>
@@ -6289,7 +8243,7 @@ function Registration({onComplete, onLogin}) {
                 {label:"Plan",value:`${selectedPlan ? selectedPlan.name : ""} (${billing})`},
                 {label:"Users",value:`Up to ${selectedPlan ? selectedPlan.users : ""}`},
                 {label:"Invoices",value:selectedPlan ? `${selectedPlan.invoices}${selectedPlan.invoices !== "Unlimited" ? " per month" : ""}` : ""},
-                {label:"Payroll",value:payrollEnabled ? `${empCount} employees x R17.50 = ${fmt(payrollCost)}/mo` : "Not included"},
+                {label:"Payroll",value:payrollEnabled ? `${empCount} employees x R34 = ${fmt(payrollCost)}/mo` : "Not included"},
                 {label:"Trial Period",value:"14 days FREE"},
                 {label:"First Charge",value:`${fmt(totalMonthly)}/month after trial`},
               ].map((r,i) => (
@@ -6299,10 +8253,24 @@ function Registration({onComplete, onLogin}) {
                 </div>
               ))}
             </div>
-            <div style={{fontSize:11,color:C.inkDim,marginBottom:20,lineHeight:1.7}}>By starting your trial you agree to ZuZan's Terms of Service and Privacy Policy. Cancel anytime before trial ends.</div>
+            {/* Cooling-off disclosure */}
+            <div style={{background:"#FFF8E1",border:"1px solid #F59E0B",borderRadius:12,padding:"14px 16px",marginBottom:16,fontSize:12,color:"#78350F",lineHeight:1.7}}>
+              <strong>Cooling-off right (CPA s16):</strong> After your 14-day free trial ends and your first payment is processed, you have <strong>7 business days</strong> to cancel and receive a full refund of that payment, no questions asked. To exercise this right email <a href="mailto:support@solutha.co.za" style={{color:"#92400E"}}>support@solutha.co.za</a>.
+            </div>
+            {/* T&C + Privacy Policy acceptance */}
+            <label style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:20,cursor:"pointer",padding:"14px 16px",background:C.surface,border:`1.5px solid ${tcAccepted?C.accent:C.border}`,borderRadius:12}}>
+              <input type="checkbox" checked={tcAccepted} onChange={e=>setTcAccepted(e.target.checked)} style={{marginTop:2,width:16,height:16,accentColor:C.accent,flexShrink:0}}/>
+              <span style={{fontSize:12,color:C.inkMid,lineHeight:1.7}}>
+                I have read and agree to Zuzan's{" "}
+                <a href="https://zuzan.co.za/terms" target="_blank" rel="noreferrer" style={{color:C.accent,fontWeight:600}}>Terms &amp; Conditions</a>
+                {" "}and{" "}
+                <a href="https://zuzan.co.za/privacy" target="_blank" rel="noreferrer" style={{color:C.accent,fontWeight:600}}>Privacy Policy</a>.
+                I understand my subscription will auto-renew monthly (or annually) after the free trial and I can cancel anytime from Settings.
+              </span>
+            </label>
             <div style={{display:"flex",gap:12}}>
               <button onClick={() => setStep(3)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-              <button onClick={handlePayment} disabled={processing} style={{flex:2,padding:"15px",border:"none",borderRadius:10,background:processing?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:processing?"wait":"pointer",fontFamily:"inherit"}}>{processing ? "Processing..." : "Start Free Trial"}</button>
+              <button onClick={handlePayment} disabled={processing||!tcAccepted} title={!tcAccepted?"Please accept the Terms & Conditions to continue":""} style={{flex:2,padding:"15px",border:"none",borderRadius:10,background:(processing||!tcAccepted)?C.inkDim:C.accent,color:"#fff",fontSize:15,fontWeight:700,cursor:(processing||!tcAccepted)?"not-allowed":"pointer",fontFamily:"inherit"}}>{processing ? "Processing..." : "Start Free Trial"}</button>
             </div>
           </div>
         )}
@@ -7079,13 +9047,16 @@ function PurchaseOrders() {
               <div style={{fontWeight:700,fontSize:16,color:C.ink,marginTop:4}}>Total: R{viewing.total_amount.toFixed(2)}</div>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              {!["received","partial","paid","cancelled"].includes(viewing.status) && (
+              {!["received","paid","cancelled"].includes(viewing.status) && (
                 <button onClick={()=>{
+                  // Default each line to the REMAINING quantity (audit fix 2026-07-02):
+                  // partial POs can now take further deliveries, and the backend rejects
+                  // receipts exceeding the outstanding quantity.
                   const init = {};
-                  viewing.items.forEach(it=>{ init[it.id]=it.quantity; });
+                  viewing.items.forEach(it=>{ init[it.id]=Math.max(0,(it.quantity||0)-(it.quantity_received||0)); });
                   setRecvQtys(init); setReceiving(viewing);
                 }} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,fontWeight:600,cursor:"pointer"}}>
-                  📦 Receive Goods
+                  📦 {viewing.status==="partial" ? "Receive Remaining Goods" : "Receive Goods"}
                 </button>
               )}
               {["received","partial"].includes(viewing.status) && (
@@ -7132,28 +9103,33 @@ function PurchaseOrders() {
 
             {/* Line items with received qty */}
             <div style={{background:C.bg,borderRadius:10,padding:14,marginBottom:16}}>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",gap:8,marginBottom:8}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 65px 65px 80px",gap:8,marginBottom:8}}>
                 <div style={{fontSize:11,fontWeight:600,color:C.inkMid}}>Description</div>
                 <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Ordered</div>
-                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Received</div>
+                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>Prior</div>
+                <div style={{fontSize:11,fontWeight:600,color:C.inkMid,textAlign:"right"}}>This delivery</div>
               </div>
-              {receiving.items.map(it=>(
-                <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 80px 80px",gap:8,marginBottom:8,alignItems:"center"}}>
+              {receiving.items.map(it=>{
+                const remaining = Math.max(0, (it.quantity||0) - (it.quantity_received||0));
+                return (
+                <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 65px 65px 80px",gap:8,marginBottom:8,alignItems:"center"}}>
                   <div style={{fontSize:13,color:C.ink}}>{it.description}</div>
                   <div style={{fontSize:13,color:C.inkMid,textAlign:"right"}}>{it.quantity}</div>
+                  <div style={{fontSize:13,color:(it.quantity_received||0)>0?C.green:C.inkDim,textAlign:"right"}}>{it.quantity_received||0}</div>
                   <input
-                    type="number" min="0" max={it.quantity} step="0.01"
-                    value={recvQtys[it.id]??it.quantity}
-                    onChange={e=>setRecvQtys(q=>({...q,[it.id]:parseFloat(e.target.value)||0}))}
+                    type="number" min="0" max={remaining} step="0.01"
+                    value={recvQtys[it.id]??remaining}
+                    onChange={e=>setRecvQtys(q=>({...q,[it.id]:Math.min(remaining,Math.max(0,parseFloat(e.target.value)||0))}))}
                     style={{padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontFamily:"inherit",fontSize:13,textAlign:"right",background:C.surface}}
                   />
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Received total */}
             {(()=>{
-              const recvTotal = receiving.items.reduce((s,it)=>s+(recvQtys[it.id]??it.quantity)*it.unit_price,0);
+              const recvTotal = receiving.items.reduce((s,it)=>s+(recvQtys[it.id]??Math.max(0,(it.quantity||0)-(it.quantity_received||0)))*it.unit_price,0);
               const vatAmt = receiving.vat_amount>0 ? recvTotal*0.15 : 0;
               return (
                 <div style={{background:C.greenLt,borderRadius:8,padding:14,marginBottom:16,textAlign:"right",fontSize:13}}>
@@ -7183,7 +9159,7 @@ function PurchaseOrders() {
               <button onClick={async ()=>{
                 try {
                   const payload = {
-                    items: receiving.items.map(it=>({item_id:it.id, quantity_received: recvQtys[it.id]??it.quantity})),
+                    items: receiving.items.map(it=>({item_id:it.id, quantity_received: recvQtys[it.id]??Math.max(0,(it.quantity||0)-(it.quantity_received||0))})),
                     create_expense: true,
                     expense_category: recvCategory,
                   };
@@ -8653,10 +10629,1283 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
   );
 }
 
+// ── ANNUAL FINANCIAL STATEMENTS ───────────────────────────────────────────────
+function FinancialStatements() {
+  const now   = new Date();
+  // SA FY label = the February the year ends in.
+  // Mar–Dec → next Feb → FY = current year + 1.  Jan–Feb → this Feb → FY = current year.
+  const defFY = now.getMonth() >= 2 ? now.getFullYear() + 1 : now.getFullYear();
+  const [year, setYear]   = useState(defFY);
+  const [data, setData]   = useState(null);
+  const [tab,  setATab]   = useState("is");   // is | bs | cf | notes
+  const [loading, setL]   = useState(false);
+  const [err,  setErr]    = useState(null);
+  const token = localStorage.getItem("zuzan_token");
+
+  const years = Array.from({length:6},(_,i)=>defFY-i);
+
+  useEffect(() => { load(); }, [year]);
+
+  async function load() {
+    setL(true); setErr(null);
+    try {
+      const r = await fetch(`${BASE_URL}/financial-statements/annual?year=${year}`,
+        {headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error((await r.json()).detail || "Failed");
+      setData(await r.json());
+    } catch(e) { setErr(e.message); }
+    finally { setL(false); }
+  }
+
+  const fmt = v => "R " + (v||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const pct = v => (v||0).toFixed(1) + "%";
+  const neg = v => v < 0;
+
+  const Row = ({label, value, bold, indent, hr, sub}) => (
+    <>
+      {hr && <tr><td colSpan={2}><div style={{borderTop:`1px solid ${C.border}`,margin:"4px 0"}}/></td></tr>}
+      <tr style={{background:bold?"#fdf9f7":"transparent"}}>
+        <td style={{padding:"5px 8px",paddingLeft: indent?32:8,fontSize:sub?11:13,color:sub?C.inkMid:C.ink,fontWeight:bold?700:400}}>{label}</td>
+        <td style={{padding:"5px 8px",textAlign:"right",fontSize:sub?11:13,fontWeight:bold?700:400,
+          color:neg(value)?"#C8401A":bold?"#1a1a1a":C.ink,fontFamily:"monospace",whiteSpace:"nowrap"}}>
+          {value !== undefined ? fmt(value) : ""}
+        </td>
+      </tr>
+    </>
+  );
+
+  function renderIS() {
+    if (!data) return null;
+    const is = data.income_statement;
+    return (
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <tbody>
+          <Row label="REVENUE" bold/>
+          {is.revenue_lines.map(l=><Row key={l.code} label={`${l.name}`} value={l.amount} indent sub/>)}
+          <Row label="Total Revenue" value={is.total_revenue} bold hr/>
+          <Row label="COST OF GOODS SOLD" bold/>
+          {is.cogs_lines.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total COGS" value={is.total_cogs} bold hr/>
+          <Row label="Gross Profit" value={is.gross_profit} bold hr/>
+          <tr><td style={{padding:"3px 8px",fontSize:11,color:C.inkMid,fontStyle:"italic"}} colSpan={2}>
+            Gross Margin: {pct(is.gross_margin_pct)}</td></tr>
+          <Row label="OPERATING EXPENSES" bold/>
+          {is.opex_lines.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          {is.depreciation>0 && <Row label="Depreciation" value={is.depreciation} indent sub/>}
+          <Row label="Total Operating Expenses" value={is.total_opex} bold hr/>
+          <Row label="Operating Profit (EBIT)" value={is.ebit} bold hr/>
+          {is.finance_costs>0 && <Row label="Finance Costs (Interest Paid)" value={is.finance_costs} indent/>}
+          {is.finance_costs>0 && <Row label="Profit Before Tax" value={is.profit_before_tax} bold hr/>}
+          <Row label="Income Tax (27%)" value={is.tax_expense} indent/>
+          <Row label="NET PROFIT FOR THE YEAR" value={is.net_profit} bold hr/>
+        </tbody>
+      </table>
+    );
+  }
+
+  function renderBS() {
+    if (!data) return null;
+    const bs = data.balance_sheet;
+    return (
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <tbody>
+          <Row label="ASSETS" bold/>
+          <Row label="Non-Current Assets" bold sub/>
+          {bs.assets.non_current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total Non-Current Assets" value={bs.assets.total_non_current} bold hr/>
+          <Row label="Current Assets" bold sub/>
+          {bs.assets.current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total Current Assets" value={bs.assets.total_current} bold hr/>
+          <Row label="TOTAL ASSETS" value={bs.assets.total} bold hr/>
+
+          <tr><td colSpan={2} style={{height:12}}/></tr>
+          <Row label="EQUITY AND LIABILITIES" bold/>
+          <Row label="Equity" bold sub/>
+          {bs.equity.lines.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Retained Earnings" value={bs.equity.retained_earnings} indent sub/>
+          <Row label="Total Equity" value={bs.equity.total} bold hr/>
+
+          <Row label="Non-Current Liabilities" bold sub/>
+          {bs.liabilities.non_current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          {!bs.liabilities.non_current.length && <Row label="No non-current liabilities" indent sub/>}
+          <Row label="Total Non-Current Liabilities" value={bs.liabilities.total_non_current} bold hr/>
+
+          <Row label="Current Liabilities" bold sub/>
+          {bs.liabilities.current.map(l=><Row key={l.code} label={l.name} value={l.amount} indent sub/>)}
+          <Row label="Total Current Liabilities" value={bs.liabilities.total_current} bold hr/>
+
+          <Row label="TOTAL EQUITY AND LIABILITIES" value={bs.total_equity_and_liabilities} bold hr/>
+          {bs.balanced
+            ? <tr><td colSpan={2} style={{padding:"6px 8px",fontSize:11,color:"#28a745",fontStyle:"italic"}}>✓ Balance sheet balances</td></tr>
+            : <tr><td colSpan={2} style={{padding:"6px 8px",fontSize:11,color:"#C8401A",fontStyle:"italic"}}>⚠ Difference: {fmt(Math.abs(bs.assets.total-bs.total_equity_and_liabilities))} — post journal entries to correct.</td></tr>
+          }
+        </tbody>
+      </table>
+    );
+  }
+
+  function renderCF() {
+    if (!data) return null;
+    const cf = data.cash_flow;
+    return (
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <tbody>
+          <Row label="OPERATING ACTIVITIES" bold/>
+          <Row label="Net profit for the year"         value={cf.operating.net_profit}           indent/>
+          <Row label="Adjustments:"                                                                indent sub/>
+          <Row label="  Add: Depreciation"             value={cf.operating.add_depreciation}     indent sub/>
+          <Row label="Changes in working capital:"                                                 indent sub/>
+          <Row label="  (Increase)/Decrease in trade receivables" value={cf.operating.change_in_ar}      indent sub/>
+          <Row label="  Increase/(Decrease) in trade payables"    value={cf.operating.change_in_ap}      indent sub/>
+          <Row label="  (Increase)/Decrease in inventory"         value={cf.operating.change_in_inventory} indent sub/>
+          <Row label="Net Cash from Operating Activities"         value={cf.operating.total}     bold hr/>
+
+          <tr><td colSpan={2} style={{height:8}}/></tr>
+          <Row label="INVESTING ACTIVITIES" bold/>
+          <Row label="Purchase of property, plant & equipment" value={cf.investing.purchase_of_fa} indent/>
+          {cf.investing.disposal_proceeds!==0 && <Row label="Proceeds from disposal of assets" value={cf.investing.disposal_proceeds} indent/>}
+          <Row label="Net Cash from Investing Activities" value={cf.investing.total} bold hr/>
+
+          <tr><td colSpan={2} style={{height:8}}/></tr>
+          <Row label="FINANCING ACTIVITIES" bold/>
+          <Row label="Proceeds from / repayment of loans" value={0} indent sub/>
+          <Row label="Net Cash from Financing Activities" value={0} bold hr/>
+
+          <tr><td colSpan={2} style={{height:8}}/></tr>
+          <Row label="Net Increase / (Decrease) in Cash" value={cf.net_change} bold hr/>
+          <Row label="Cash at beginning of period"       value={cf.opening_cash} indent/>
+          <Row label="Cash at end of period"             value={cf.closing_cash} bold/>
+        </tbody>
+      </table>
+    );
+  }
+
+  function renderSCE() {
+    if (!data || !data.changes_in_equity) return null;
+    const ce   = data.changes_in_equity;
+    const fmtV = v => v === 0 ? "—" : ("R " + Math.abs(v).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2}));
+    const fmtN = v => v < 0 ? `(${fmtV(v)})` : (v === 0 ? "—" : fmtV(v));
+    const thSt = {padding:"8px 12px",textAlign:"right",fontSize:12,fontWeight:700,color:C.inkMid,borderBottom:`2px solid ${C.accent}`,background:"#f8f5f2"};
+    const td   = (v, bold, color) => <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",fontSize:13,fontWeight:bold?700:400,color:color||(v<0?"#C8401A":C.ink),whiteSpace:"nowrap"}}>{fmtN(v)}</td>;
+    const drwSt = {padding:"7px 12px",textAlign:"right",fontFamily:"monospace",fontSize:13,color:"#C8401A",whiteSpace:"nowrap"};
+    const sep  = <tr><td colSpan={4}><div style={{borderTop:`1px solid ${C.border}`,margin:"2px 0"}}/></td></tr>;
+    const dbl  = <tr><td colSpan={4}><div style={{borderTop:`3px double ${C.ink}`,margin:"2px 0"}}/></td></tr>;
+
+    return (
+      <div>
+        <p style={{fontSize:11,color:C.inkMid,marginBottom:16}}>
+          Statement of Changes in Equity for the year ended {data.meta.period_end} — amounts in ZAR
+        </p>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr>
+                <th style={{...thSt,textAlign:"left",width:"40%"}}>Description</th>
+                <th style={thSt}>Share Capital</th>
+                <th style={thSt}>Retained Earnings</th>
+                <th style={{...thSt,color:C.ink}}>Total Equity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* Opening balance */}
+              <tr style={{background:"#fdf9f7"}}>
+                <td style={{padding:"7px 12px",fontWeight:700,fontSize:13,color:C.ink}}>Balance at {data.meta.period_start}</td>
+                {td(ce.opening_share_capital, true)}
+                {td(ce.opening_retained, true)}
+                {td(ce.opening_total, true, C.accent)}
+              </tr>
+              {sep}
+
+              {/* Net profit */}
+              <tr>
+                <td style={{padding:"7px 12px 7px 24px",color:C.ink}}>Net profit for the year</td>
+                <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:C.inkMid}}>—</td>
+                {td(ce.net_profit)}
+                {td(ce.net_profit)}
+              </tr>
+
+              {/* Contributions */}
+              {ce.contributions > 0 && <tr>
+                <td style={{padding:"7px 12px 7px 24px",color:C.ink}}>Capital contributions by owners</td>
+                {td(ce.contributions)}
+                <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:C.inkMid}}>—</td>
+                {td(ce.contributions)}
+              </tr>}
+
+              {/* Drawings */}
+              {ce.drawings > 0 && <tr>
+                <td style={{padding:"7px 12px 7px 24px",color:C.ink}}>Drawings by owners</td>
+                <td style={drwSt}>({fmtV(ce.drawings)})</td>
+                <td style={{padding:"7px 12px",textAlign:"right",fontFamily:"monospace",color:C.inkMid}}>—</td>
+                <td style={drwSt}>({fmtV(ce.drawings)})</td>
+              </tr>}
+
+              {sep}
+
+              {/* Closing balance */}
+              <tr style={{background:"#fdf9f7"}}>
+                <td style={{padding:"7px 12px",fontWeight:700,fontSize:13,color:C.ink}}>Balance at {data.meta.period_end}</td>
+                {td(ce.closing_share_capital, true)}
+                {td(ce.closing_retained, true)}
+                {td(ce.closing_total, true, C.accent)}
+              </tr>
+              {dbl}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Reconciliation note */}
+        <div style={{marginTop:20,padding:14,background:"#f8f5f2",borderRadius:8,fontSize:12,color:C.inkMid,lineHeight:1.7}}>
+          <strong style={{color:C.ink}}>Note on equity components:</strong>{" "}
+          Share capital represents the net credit balance on equity accounts (code 3xxx).
+          Retained earnings represent the cumulative net profit since inception, not yet distributed.
+          Together these equal total equity as reported in the Balance Sheet.
+        </div>
+      </div>
+    );
+  }
+
+  function renderNotes() {
+    if (!data) return null;
+    const n  = data.notes;
+    const p  = n.accounting_policies;
+    const hr = <div style={{borderTop:`1px solid ${C.border}`,margin:"24px 0"}}/>;
+    const NH = ({num, title}) => (
+      <p style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12,marginTop:0}}>{num}. {title}</p>
+    );
+    const TH = ({cols}) => (
+      <thead><tr style={{background:"#f8f5f2"}}>
+        {cols.map(h=><th key={h} style={{padding:"6px 8px",textAlign:"left",color:C.inkMid,fontWeight:600,fontSize:11,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>)}
+      </tr></thead>
+    );
+    const mono = {fontFamily:"monospace",textAlign:"right"};
+    const nil  = <span style={{color:C.inkMid,fontStyle:"italic"}}>Nil</span>;
+
+    return (
+      <div style={{fontSize:12,lineHeight:1.7}}>
+
+        {/* ── NOTE 1: ACCOUNTING POLICIES ─────────────────────────── */}
+        <NH num={1} title="Accounting Policies"/>
+        {Object.entries(p).map(([k,v])=>(
+          <div key={k} style={{marginBottom:10}}>
+            <span style={{fontWeight:600,color:C.ink,textTransform:"capitalize"}}>{k.replace(/_/g," ")}: </span>
+            <span style={{color:C.inkMid}}>{v}</span>
+          </div>
+        ))}
+
+        {hr}
+
+        {/* ── NOTE 2: PROPERTY, PLANT AND EQUIPMENT ───────────────── */}
+        <NH num={2} title="Property, Plant and Equipment"/>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <TH cols={["No.","Description","Category","Cost","Accum. Dep.","Carrying Value","Method","Life","Status"]}/>
+            <tbody>
+              {n.fixed_assets.length === 0
+                ? <tr><td colSpan={9} style={{padding:16,textAlign:"center",color:C.inkMid}}>No fixed assets registered.</td></tr>
+                : n.fixed_assets.map(fa=>(
+                  <tr key={fa.number} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.number}</td>
+                    <td style={{padding:"5px 8px",fontWeight:600}}>{fa.name}</td>
+                    <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.category}</td>
+                    <td style={{padding:"5px 8px",...mono}}>{fmt(fa.cost)}</td>
+                    <td style={{padding:"5px 8px",...mono,color:"#C8401A"}}>{fmt(fa.accum_dep)}</td>
+                    <td style={{padding:"5px 8px",...mono,fontWeight:700}}>{fmt(fa.carrying)}</td>
+                    <td style={{padding:"5px 8px",color:C.inkMid}}>{fa.dep_method}</td>
+                    <td style={{padding:"5px 8px",color:C.inkMid,textAlign:"right"}}>{fa.useful_life} mo</td>
+                    <td style={{padding:"5px 8px"}}>
+                      <span style={{padding:"2px 7px",borderRadius:20,fontSize:10,fontWeight:700,
+                        background:fa.status==="active"?"#d4edda":"#f8d7da",
+                        color:fa.status==="active"?"#155724":"#721c24"}}>{fa.status}</span>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+
+        {hr}
+
+        {/* ── NOTE 3: TRADE RECEIVABLES ───────────────────────────── */}
+        <NH num={3} title="Trade and Other Receivables"/>
+        <p style={{color:C.inkMid,marginBottom:8}}>
+          At the reporting date, {n.receivables_aging.count} invoice(s) remained outstanding totalling {fmt(n.receivables_aging.total)}.
+          Aging analysis:
+        </p>
+        <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
+          <tbody>
+            {[
+              ["Not yet due (current)", n.receivables_aging.current, false],
+              ["1 – 30 days overdue",   n.receivables_aging.days_1_30,  true],
+              ["31 – 60 days overdue",  n.receivables_aging.days_31_60, true],
+              ["61 – 90 days overdue",  n.receivables_aging.days_61_90, true],
+              ["Over 90 days overdue",  n.receivables_aging.days_90plus, true],
+            ].map(([label, val, red])=>(
+              <tr key={label}>
+                <td style={{padding:"4px 8px",color:C.ink}}>{label}</td>
+                <td style={{padding:"4px 8px",...mono,color:red&&val>0?"#C8401A":C.ink}}>{val > 0 ? fmt(val) : nil}</td>
+              </tr>
+            ))}
+            <tr style={{borderTop:`2px solid ${C.border}`,fontWeight:700}}>
+              <td style={{padding:"5px 8px"}}>Total Trade Receivables</td>
+              <td style={{padding:"5px 8px",...mono}}>{fmt(n.receivables_aging.total)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {hr}
+
+        {/* ── NOTE 4: REVENUE BY CUSTOMER ─────────────────────────── */}
+        <NH num={4} title="Revenue Analysis"/>
+        {n.revenue_by_customer.length === 0
+          ? <p style={{color:C.inkMid}}>No revenue recorded for this financial year.</p>
+          : <>
+            <p style={{color:C.inkMid,marginBottom:8}}>Revenue recognised from the following customers during the year:</p>
+            <table style={{borderCollapse:"collapse",fontSize:12,minWidth:300}}>
+              <TH cols={["Customer","Revenue (ZAR)"]}/>
+              <tbody>
+                {n.revenue_by_customer.map(r=>(
+                  <tr key={r.client} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"5px 8px"}}>{r.client}</td>
+                    <td style={{padding:"5px 8px",...mono}}>{fmt(r.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        }
+
+        {hr}
+
+        {/* ── NOTE 5: EXPENSE ANALYSIS ────────────────────────────── */}
+        <NH num={5} title="Operating Expenses by Category"/>
+        <p style={{color:C.inkMid,marginBottom:8}}>
+          Total expenses for the year (excluding VAT): <strong>{fmt(n.total_expenses_ex_vat)}</strong>
+        </p>
+        {n.expense_by_category.length === 0
+          ? <p style={{color:C.inkMid}}>No expenses recorded for this financial year.</p>
+          : <table style={{borderCollapse:"collapse",fontSize:12,minWidth:300}}>
+              <TH cols={["Category","Total (excl. VAT)"]}/>
+              <tbody>
+                {n.expense_by_category.map(e=>(
+                  <tr key={e.category} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"5px 8px"}}>{e.category}</td>
+                    <td style={{padding:"5px 8px",...mono}}>{fmt(e.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+        }
+
+        {hr}
+
+        {/* ── NOTE 6: EMPLOYEE BENEFITS ───────────────────────────── */}
+        <NH num={6} title="Employee Benefits"/>
+        {n.payroll_summary.periods_count === 0
+          ? <p style={{color:C.inkMid}}>No payroll runs recorded for this financial year.</p>
+          : <>
+            <p style={{color:C.inkMid,marginBottom:8}}>
+              {n.payroll_summary.headcount} employee(s) at reporting date.
+              Payroll processed over {n.payroll_summary.periods_count} period(s) during the year.
+            </p>
+            <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
+              <tbody>
+                {[
+                  ["Gross salaries and wages",   n.payroll_summary.gross_pay],
+                  ["Less: PAYE withheld",        -n.payroll_summary.paye],
+                  ["Less: UIF (employee)",       -n.payroll_summary.uif_employee],
+                  ["Net pay to employees",        n.payroll_summary.net_pay],
+                  ["Employer contributions — UIF", n.payroll_summary.uif_employer],
+                  ["Employer contributions — SDL", n.payroll_summary.sdl],
+                  ["Total employment cost",       n.payroll_summary.total_cost],
+                ].map(([label, val])=>(
+                  <tr key={label} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"4px 8px",color:C.ink}}>{label}</td>
+                    <td style={{padding:"4px 8px",...mono,color:val<0?"#C8401A":C.ink}}>{fmt(Math.abs(val))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        }
+
+        {hr}
+
+        {/* ── NOTE 7: TRADE PAYABLES ──────────────────────────────── */}
+        <NH num={7} title="Trade and Other Payables"/>
+        <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
+          <tbody>
+            <tr>
+              <td style={{padding:"4px 8px"}}>Outstanding purchase orders ({n.payables_summary.open_pos_count})</td>
+              <td style={{padding:"4px 8px",...mono}}>{n.payables_summary.open_pos > 0 ? fmt(n.payables_summary.open_pos) : nil}</td>
+            </tr>
+            <tr>
+              <td style={{padding:"4px 8px"}}>Unpaid credit expenses</td>
+              <td style={{padding:"4px 8px",...mono}}>{n.payables_summary.unpaid_credit_expenses > 0 ? fmt(n.payables_summary.unpaid_credit_expenses) : nil}</td>
+            </tr>
+            <tr style={{borderTop:`2px solid ${C.border}`,fontWeight:700}}>
+              <td style={{padding:"5px 8px"}}>Total Trade Payables</td>
+              <td style={{padding:"5px 8px",...mono}}>{fmt(n.payables_summary.total_payables)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        {hr}
+
+        {/* ── NOTE 8: INVENTORIES ─────────────────────────────────── */}
+        <NH num={8} title="Inventories"/>
+        {n.inventory.item_count === 0
+          ? <p style={{color:C.inkMid}}>No inventory items on hand at the reporting date.</p>
+          : <>
+            <p style={{color:C.inkMid,marginBottom:8}}>
+              Inventories are carried at cost on a FIFO basis.
+              Total inventory value at reporting date: <strong>{fmt(n.inventory.total_value)}</strong> ({n.inventory.item_count} SKU(s)).
+            </p>
+            <table style={{borderCollapse:"collapse",fontSize:11,width:"100%"}}>
+              <TH cols={["SKU","Description","Qty","Unit Cost","Total Value"]}/>
+              <tbody>
+                {n.inventory.items.map(i=>(
+                  <tr key={i.sku||i.name} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"4px 8px",color:C.inkMid}}>{i.sku||"—"}</td>
+                    <td style={{padding:"4px 8px"}}>{i.name}</td>
+                    <td style={{padding:"4px 8px",textAlign:"right"}}>{i.qty}</td>
+                    <td style={{padding:"4px 8px",...mono}}>{fmt(i.unit_cost)}</td>
+                    <td style={{padding:"4px 8px",...mono,fontWeight:600}}>{fmt(i.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        }
+
+        {hr}
+
+        {/* ── NOTE 9: TAXATION ────────────────────────────────────── */}
+        <NH num={9} title="Taxation"/>
+        <table style={{borderCollapse:"collapse",fontSize:12,minWidth:340}}>
+          <tbody>
+            <tr><td style={{padding:"4px 8px"}}>Profit before tax</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.profit_before_tax)}</td></tr>
+            <tr><td style={{padding:"4px 8px"}}>Tax at standard rate ({n.tax_note.tax_rate_pct}%)</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.current_tax)}</td></tr>
+            {n.tax_note.deferred_tax
+              ? <tr><td style={{padding:"4px 8px"}}>Deferred tax</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.deferred_tax)}</td></tr>
+              : <tr><td style={{padding:"4px 8px",color:C.inkMid}}>Deferred tax</td><td style={{padding:"4px 8px",...mono,color:C.inkMid}}>Nil</td></tr>}
+            <tr style={{borderTop:`2px solid ${C.border}`,fontWeight:700}}>
+              <td style={{padding:"5px 8px"}}>Total income tax expense</td>
+              <td style={{padding:"5px 8px",...mono}}>{fmt(n.tax_note.total_tax)}</td>
+            </tr>
+            <tr><td style={{padding:"4px 8px",color:C.inkMid,fontStyle:"italic"}} colSpan={2}>
+              Effective tax rate: {n.tax_note.effective_rate_pct}%
+            </td></tr>
+          </tbody>
+        </table>
+        <p style={{color:C.inkMid,marginTop:8}}>
+          No formal tax assessment has been issued. These amounts represent management's best estimate
+          of the income tax liability for the period. Provisional tax payments should be made in
+          accordance with SARS IRP6 deadlines.
+        </p>
+
+        {hr}
+
+        {/* ── NOTE 10: EVENTS AFTER REPORTING DATE ────────────────── */}
+        <NH num={10} title="Events after the Reporting Date"/>
+        <p style={{color:C.inkMid}}>
+          The directors are not aware of any material events that occurred after the reporting date
+          that require adjustment to or disclosure in these financial statements.
+        </p>
+
+        {hr}
+
+        {/* ── NOTE 11: GOING CONCERN ──────────────────────────────── */}
+        <NH num={11} title="Going Concern"/>
+        <p style={{color:C.inkMid}}>
+          The financial statements have been prepared on the going concern basis. The directors have
+          considered the financial position of the entity and are satisfied that the entity has
+          adequate resources to continue in operational existence for the foreseeable future.
+        </p>
+
+      </div>
+    );
+  }
+
+  const STABS = [
+    {id:"is",    label:"Income Statement"},
+    {id:"bs",    label:"Balance Sheet"},
+    {id:"cf",    label:"Cash Flow Statement"},
+    {id:"sce",   label:"Changes in Equity"},
+    {id:"notes", label:"Notes"},
+  ];
+
+  const meta = data?.meta;
+
+  return (
+    <div>
+      <style>{`@media print {
+        .afs-no-print { display:none!important; }
+        .afs-paper { box-shadow:none!important; border:none!important; }
+      }`}</style>
+
+      {/* Header row */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
+        <div>
+          <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:0}}>Annual Financial Statements</h2>
+          <p style={{fontSize:12,color:C.inkMid,margin:0}}>IFRS for SMEs — SA Financial Year (1 March – 28/29 February)</p>
+        </div>
+        <div style={{marginLeft:"auto",display:"flex",gap:10,alignItems:"center"}} className="afs-no-print">
+          <select value={year} onChange={e=>setYear(Number(e.target.value))}
+            style={{padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.surface,color:C.ink}}>
+            {years.map(y=><option key={y} value={y}>FY {y} (1 Mar {y-1} – 28 Feb {y})</option>)}
+          </select>
+          {data && (
+            <button onClick={()=>window.print()}
+              style={{padding:"8px 16px",background:C.accent,color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+              🖨 Print / PDF
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading && <div style={{textAlign:"center",padding:60,color:C.inkMid}}>Loading financial statements…</div>}
+      {err    && <div style={{textAlign:"center",padding:40,color:"#C8401A",fontSize:14}}>⚠ {err}</div>}
+
+      {data && (
+        <div className="afs-paper" style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          {/* Company header */}
+          <div style={{padding:"28px 32px",borderBottom:`1px solid ${C.border}`,textAlign:"center"}}>
+            <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:C.ink,marginBottom:4}}>{meta.company_name}</div>
+            {meta.reg_number && <div style={{fontSize:11,color:C.inkMid}}>Registration No: {meta.reg_number}</div>}
+            {meta.vat_number && <div style={{fontSize:11,color:C.inkMid}}>VAT No: {meta.vat_number}</div>}
+            <div style={{fontSize:12,fontWeight:600,color:C.ink,marginTop:8}}>Financial Statements for the year ended {meta.period_end}</div>
+            <div style={{fontSize:11,color:C.inkMid}}>Prepared in accordance with {meta.basis} | Currency: {meta.currency}</div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,overflowX:"auto"}} className="afs-no-print">
+            {STABS.map(t=>(
+              <button key={t.id} onClick={()=>setATab(t.id)} style={{
+                flex:1,padding:"12px 8px",border:"none",cursor:"pointer",fontFamily:"inherit",
+                fontSize:12,fontWeight:tab===t.id?700:400,
+                background:tab===t.id?C.bg:"transparent",
+                color:tab===t.id?C.accent:C.inkMid,
+                borderBottom:tab===t.id?`2px solid ${C.accent}`:"2px solid transparent",
+                whiteSpace:"nowrap",
+              }}>{t.label}</button>
+            ))}
+          </div>
+
+          {/* Statement body */}
+          <div style={{padding:"28px 32px"}}>
+            {/* Print shows all 4 sections */}
+            <div className="afs-no-print">
+              {tab==="is"    && renderIS()}
+              {tab==="bs"    && renderBS()}
+              {tab==="cf"    && renderCF()}
+              {tab==="sce"   && renderSCE()}
+              {tab==="notes" && renderNotes()}
+            </div>
+            {/* Print version — all statements */}
+            <div style={{display:"none"}} className="afs-print-all">
+              <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Income Statement</p>
+              {renderIS()}
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Balance Sheet</p>
+                {renderBS()}
+              </div>
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Cash Flow Statement</p>
+                {renderCF()}
+              </div>
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Statement of Changes in Equity</p>
+                {renderSCE()}
+              </div>
+              <div style={{pageBreakBefore:"always",paddingTop:32}}>
+                <p style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:16}}>Notes to the Financial Statements</p>
+                {renderNotes()}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div style={{padding:"16px 32px",borderTop:`1px solid ${C.border}`,fontSize:11,color:C.inkMid,display:"flex",justifyContent:"space-between"}}>
+            <span>Generated by ZuZan on {new Date(meta.generated_at).toLocaleDateString("en-ZA")}</span>
+            <span>These financial statements have not been independently audited or reviewed.</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── DATA IMPORT ───────────────────────────────────────────────────────────────
+function DataImport() {
+  const token = localStorage.getItem("zuzan_token");
+  const [tab,       setTab]       = useState("customers");
+  const [file,      setFile]      = useState(null);
+  const [preview,     setPreview]     = useState(null);   // {headers, rows}
+  const [result,      setResult]      = useState(null);   // {imported, skipped, errors, total_rows}
+  const [importing,   setImporting]   = useState(false);
+  const [err,         setErr]         = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const fileRef = useRef(null);
+
+  const ITABS = [
+    {id:"customers",     label:"Customers",        icon:"👥"},
+    {id:"suppliers",     label:"Suppliers",        icon:"🏭"},
+    {id:"invoices",      label:"Invoices",         icon:"🧾"},
+    {id:"expenses",      label:"Expenses",         icon:"💳"},
+    {id:"trial_balance", label:"Trial Balance",    icon:"⚖️"},
+    {id:"balance_sheet", label:"Balance Sheet",    icon:"📊"},
+    {id:"profit_loss",   label:"Income Statement", icon:"📈"},
+    {id:"general_ledger",label:"General Ledger",   icon:"📒"},
+    {id:"journals",      label:"Journals",         icon:"📓"},
+  ];
+
+  // CSV templates — column headers users should use (or what Xero/QBO exports)
+  const TEMPLATES = {
+    customers:     ["Name","Email","Phone","Address","VAT Number","Payment Terms","Notes"],
+    suppliers:     ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
+    invoices:      ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
+    expenses:      ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
+    trial_balance: ["Code","Account Name","Type","Debit","Credit"],
+    balance_sheet: ["Classification","Code","Account Name","Balance"],
+    profit_loss:   ["Type","Code","Account Name","Amount"],
+    general_ledger:["Date","Reference","Description","Account Code","Account Name","Debit","Credit"],
+    journals:      ["Date","Journal No","Narration","Account Code","Account Name","Debit","Credit"],
+  };
+
+  const REQUIRED = {
+    customers:     "Name*",
+    suppliers:     "Name*",
+    invoices:      "Client Name*",
+    expenses:      "Amount*",
+    trial_balance: "Account Name*",
+    balance_sheet: "Account Name*",
+    profit_loss:   "Account Name*",
+    general_ledger:"Debit* or Credit*",
+    journals:      "Debit* or Credit*",
+  };
+
+  // Xero / QBO aliases shown as hints
+  const HINTS = {
+    customers:     "Xero: Contact Name · QBO: Customer / Display Name",
+    suppliers:     "Xero: Contact Name · QBO: Vendor",
+    invoices:      "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
+    expenses:      "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
+    trial_balance: "Xero: Account Code, Account, Debit, Credit · QBO: Account, Type, Debit Balance, Credit Balance",
+    balance_sheet: "Use Classification column (Asset/Liability/Equity) + Account Name + Balance. Xero/QBO balance sheet exports work directly.",
+    profit_loss:   "Use Type column (Revenue/Expense) + Account Name + Amount. Xero/QBO P&L exports work directly.",
+    general_ledger:"Xero: Date, SourceNo, Account Code, Account, Description, Debit, Credit · QBO: Date, Ref No, Account, Description, Debit, Credit",
+    journals:      "Xero: Date, Journal No, Narration, Account Code, Account, Debit, Credit · QBO: Date, Journal No, Description, Account, Debit, Credit",
+  };
+
+  function switchTab(id) {
+    setTab(id); setFile(null); setPreview(null); setResult(null); setErr(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function downloadTemplate() {
+    const cols    = TEMPLATES[tab];
+    const content = cols.join(",") + "\n";
+    const blob    = new Blob([content], {type:"text/csv"});
+    const url     = URL.createObjectURL(blob);
+    const a       = document.createElement("a");
+    a.href = url; a.download = `zuzan_${tab}_import_template.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Client-side parse for preview only
+  function handleFileChange(e) {
+    const f = e.target.files[0];
+    if (!f) { setFile(null); setPreview(null); setResult(null); return; }
+    setFile(f); setResult(null); setErr(null);
+
+    const ext = f.name.split(".").pop().toLowerCase();
+
+    // Excel files: binary format — skip text preview, let backend parse
+    if (ext === "xlsx" || ext === "xls") {
+      setPreview({headers: [], rows: [], total: null, xlsx: true});
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const text  = ev.target.result.replace(/^﻿/, ""); // strip BOM
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (!lines.length) { setPreview(null); return; }
+
+      // Detect delimiter
+      const first = lines[0];
+      const delim = (first.split(",").length >= first.split(";").length &&
+                     first.split(",").length >= first.split("\t").length) ? ","
+                  : first.split(";").length >= first.split("\t").length   ? ";"
+                  : "\t";
+
+      const parseLine = l => l.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
+      const headers   = parseLine(lines[0]);
+      const rows      = lines.slice(1, 6).map(parseLine);
+      setPreview({headers, rows, total: lines.length - 1, xlsx: false});
+    };
+    reader.readAsText(f);
+  }
+
+  async function handleImport() {
+    if (!file) return;
+    setImporting(true); setErr(null); setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`${BASE_URL}/import/${tab}`, {
+        method: "POST",
+        headers: {Authorization: "Bearer " + token},
+        body: fd,
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || "Import failed");
+      }
+      setResult(await r.json());
+    } catch(e) { setErr(e.message); }
+    finally   { setImporting(false); }
+  }
+
+  function reset() {
+    setFile(null); setPreview(null); setResult(null); setErr(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  const currentTab = ITABS.find(t => t.id === tab);
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{marginBottom:24}}>
+        <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:"0 0 4px"}}>Import Data</h2>
+        <p style={{fontSize:13,color:C.inkMid,margin:0}}>
+          Migrate history from Xero, QuickBooks, or any CSV / Excel export. Duplicates are skipped automatically.
+        </p>
+      </div>
+
+      <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
+
+        {/* ── Left sidebar: entity picker ── */}
+        <div style={{width:190,flexShrink:0,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.8,padding:"6px 10px 10px"}}>Data Type</div>
+          {ITABS.map(t => (
+            <button key={t.id} onClick={()=>switchTab(t.id)} style={{
+              display:"flex",alignItems:"center",gap:10,width:"100%",textAlign:"left",
+              padding:"11px 14px",borderRadius:10,border:"none",cursor:"pointer",
+              fontFamily:"inherit",fontSize:13,marginBottom:2,
+              background:tab===t.id ? C.accentLt : "transparent",
+              color:tab===t.id ? C.accent : C.ink,
+              fontWeight:tab===t.id ? 700 : 400,
+            }}>
+              <span style={{fontSize:16,lineHeight:1}}>{t.icon}</span>
+              <span>{t.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* ── Right panel ── */}
+        <div style={{flex:1,minWidth:0}}>
+
+          {/* Info + template bar */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"18px 22px",marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:15,color:C.ink,marginBottom:6}}>
+                  {currentTab?.icon} {currentTab?.label}
+                </div>
+                <div style={{fontSize:12,color:C.inkMid,lineHeight:1.6,marginBottom:4}}>
+                  <strong style={{color:C.ink}}>Required: </strong>{REQUIRED[tab]}
+                </div>
+                <div style={{fontSize:12,color:C.inkMid,lineHeight:1.6}}>
+                  <strong style={{color:C.ink}}>Column aliases: </strong>{HINTS[tab]}
+                </div>
+              </div>
+              <button onClick={downloadTemplate} style={{
+                display:"flex",alignItems:"center",gap:6,
+                padding:"9px 18px",border:`1px solid ${C.accent}`,borderRadius:10,
+                fontSize:13,cursor:"pointer",color:C.accent,background:"transparent",
+                fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,flexShrink:0,
+              }}>
+                ⬇ Template CSV
+              </button>
+            </div>
+          </div>
+
+          {/* Upload zone — shown until a file is chosen */}
+          {!result && (
+            <div style={{marginBottom:16}}>
+              {!file ? (
+                <label style={{
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                  border:`2px dashed ${C.border}`,borderRadius:14,padding:"40px 24px",
+                  cursor:"pointer",textAlign:"center",background:C.bg,
+                  transition:"border-color 0.15s",
+                }}>
+                  <div style={{fontSize:36,marginBottom:10}}>📂</div>
+                  <div style={{fontWeight:700,fontSize:15,color:C.ink,marginBottom:4}}>
+                    Drop a file here, or click to browse
+                  </div>
+                  <div style={{fontSize:12,color:C.inkMid}}>CSV, Excel (.xlsx / .xls), TSV</div>
+                  <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,.xlsx,.xls"
+                    onChange={handleFileChange} style={{display:"none"}}/>
+                </label>
+              ) : (
+                /* File chosen — show name + clear */
+                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 22px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:14,color:C.ink}}>📄 {file.name}</div>
+                    <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>{(file.size/1024).toFixed(1)} KB</div>
+                  </div>
+                  <button onClick={reset} style={{
+                    padding:"7px 16px",border:`1px solid ${C.border}`,borderRadius:8,
+                    fontSize:13,cursor:"pointer",color:C.inkMid,background:"transparent",fontFamily:"inherit",
+                  }}>✕ Clear</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Preview */}
+          {preview && !result && (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"18px 22px",marginBottom:16}}>
+              {preview.xlsx ? (
+                <div>
+                  <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:6}}>Excel file ready</div>
+                  <div style={{fontSize:13,color:C.inkMid,marginBottom:16}}>
+                    All rows will be parsed server-side. Click Import to continue.
+                  </div>
+                  <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                    <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
+                      padding:"10px 28px",background:importing?"#ccc":C.accent,color:"#fff",
+                      border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+                      cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+                    }}>
+                      {importing ? "Importing…" : "Import Excel file"}
+                    </button>
+                    {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{fontWeight:700,fontSize:14,color:C.ink,marginBottom:12}}>
+                    Preview — {preview.total.toLocaleString()} rows detected <span style={{fontWeight:400,color:C.inkMid,fontSize:12}}>(showing first 5)</span>
+                  </div>
+                  <div style={{overflowX:"auto",borderRadius:8,border:`1px solid ${C.border}`}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead>
+                        <tr style={{background:C.bg}}>
+                          {preview.headers.map((h,i) => (
+                            <th key={i} style={{padding:"8px 12px",textAlign:"left",
+                              color:C.inkMid,fontWeight:600,fontSize:11,
+                              borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.rows.map((row,ri) => (
+                          <tr key={ri} style={{borderBottom:`1px solid ${C.border}30`}}>
+                            {row.map((cell,ci) => (
+                              <td key={ci} style={{padding:"7px 12px",color:C.ink,
+                                maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center"}}>
+                    <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
+                      padding:"10px 28px",background:importing?"#ccc":C.accent,color:"#fff",
+                      border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+                      cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+                    }}>
+                      {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
+                    </button>
+                    {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Results */}
+          {result && (
+            <div style={{background:C.surface,border:`2px solid ${result.errors.filter(e=>!e.message.includes("already exists")).length ? "#C8401A" : "#28a745"}`,borderRadius:14,padding:"20px 24px"}}>
+              <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:16}}>✅ Import Complete</div>
+              <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20}}>
+                {[
+                  {label:"Rows in file",        value:result.total_rows, color:C.inkMid},
+                  {label:"Imported",             value:result.imported,   color:"#28a745"},
+                  {label:"Skipped (duplicate)",  value:result.skipped||0, color:C.inkMid},
+                  {label:"Errors",               value:result.errors.filter(e=>!e.message.includes("already exists")).length, color:"#C8401A"},
+                ].map(k => (
+                  <div key={k.label} style={{flex:1,minWidth:110,background:C.bg,borderRadius:10,padding:"14px 16px",textAlign:"center"}}>
+                    <div style={{fontSize:28,fontWeight:800,color:k.color}}>{k.value}</div>
+                    <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>{k.label}</div>
+                  </div>
+                ))}
+              </div>
+              {result.errors.length > 0 && (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Row notes ({result.errors.length})</div>
+                  <div style={{maxHeight:200,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead>
+                        <tr style={{background:C.bg,position:"sticky",top:0}}>
+                          <th style={{padding:"6px 12px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`,width:60}}>Row</th>
+                          <th style={{padding:"6px 12px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>Note</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.errors.map((e,i) => (
+                          <tr key={i} style={{borderBottom:`1px solid ${C.border}30`,background:e.message.includes("already exists")?"transparent":"#fff0ee"}}>
+                            <td style={{padding:"5px 12px",fontFamily:"monospace",color:C.inkMid}}>{e.row}</td>
+                            <td style={{padding:"5px 12px",color:e.message.includes("already exists")?C.inkMid:"#C8401A"}}>{e.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              <button onClick={reset} style={{
+                padding:"9px 22px",border:`1px solid ${C.border}`,borderRadius:10,
+                fontSize:13,cursor:"pointer",color:C.ink,background:"transparent",fontFamily:"inherit",fontWeight:600,
+              }}>
+                ← Import another file
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Confirmation modal */}
+      {showConfirm && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.surface,borderRadius:16,padding:32,width:"100%",maxWidth:440,boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
+            <div style={{fontSize:18,fontWeight:800,color:C.ink,marginBottom:8}}>Confirm Import</div>
+            <p style={{fontSize:13,color:C.inkMid,margin:"0 0 20px",lineHeight:1.6}}>
+              You're about to import{" "}
+              <strong style={{color:C.ink}}>
+                {preview?.xlsx ? "all rows" : `${preview?.total?.toLocaleString() ?? "all"} rows`}
+              </strong>{" "}
+              of <strong style={{color:C.ink}}>{currentTab?.label}</strong> data from{" "}
+              <strong style={{color:C.ink}}>{file?.name}</strong> into your books.
+              <br/><br/>
+              Duplicates are skipped automatically. This action cannot be undone.
+            </p>
+            <div style={{display:"flex",gap:12}}>
+              <button
+                onClick={async () => { setShowConfirm(false); await handleImport(); }}
+                style={{flex:1,padding:"11px 0",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}
+              >
+                Yes, Import
+              </button>
+              <button
+                onClick={()=>setShowConfirm(false)}
+                style={{flex:1,padding:"11px 0",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── DOCUMENT REPOSITORY ───────────────────────────────────────────────────────
+function DocumentRepository() {
+  const token = localStorage.getItem("zuzan_token");
+  const [docs,     setDocs]    = useState([]);
+  const [loading,  setLoading] = useState(false);
+  const [err,      setErr]     = useState(null);
+  const [catFilter,setCatFilter]= useState("All");
+  const [uploading,setUploading]= useState(false);
+  const [uploadErr,setUploadErr]= useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const fileRef = useRef(null);
+
+  // Upload form state
+  const [uName,    setUName]    = useState("");
+  const [uCat,     setUCat]     = useState("General");
+  const [uDesc,    setUDesc]    = useState("");
+  const [uFile,    setUFile]    = useState(null);
+
+  const CATEGORIES = [
+    "All",
+    "CIPC & Registration",
+    "Tax Documents",
+    "Contracts",
+    "Annual Financial Statements",
+    "Payroll Records",
+    "Insurance",
+    "Banking",
+    "General",
+  ];
+
+  const CAT_ICONS = {
+    "CIPC & Registration":           "🏛",
+    "Tax Documents":                 "📋",
+    "Contracts":                     "📝",
+    "Annual Financial Statements":   "📑",
+    "Payroll Records":               "👥",
+    "Insurance":                     "🛡",
+    "Banking":                       "🏦",
+    "General":                       "📁",
+  };
+
+  useEffect(() => { fetchDocs(); }, [catFilter]);
+
+  async function fetchDocs() {
+    setLoading(true); setErr(null);
+    try {
+      const url = catFilter === "All"
+        ? `${BASE_URL}/documents/`
+        : `${BASE_URL}/documents/?category=${encodeURIComponent(catFilter)}`;
+      const r = await fetch(url, {headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error((await r.json()).detail || "Load failed");
+      setDocs(await r.json());
+    } catch(e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  async function handleUpload(e) {
+    e.preventDefault();
+    if (!uFile) { setUploadErr("Please select a file."); return; }
+    setUploading(true); setUploadErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("name",        uName || uFile.name);
+      fd.append("category",    uCat);
+      fd.append("description", uDesc);
+      fd.append("file",        uFile);
+      const r = await fetch(`${BASE_URL}/documents/upload`, {
+        method:"POST", headers:{Authorization:"Bearer "+token}, body: fd,
+      });
+      if (!r.ok) throw new Error((await r.json()).detail || "Upload failed");
+      setShowForm(false); setUName(""); setUCat("General"); setUDesc(""); setUFile(null);
+      if (fileRef.current) fileRef.current.value = "";
+      fetchDocs();
+    } catch(e) { setUploadErr(e.message); }
+    finally { setUploading(false); }
+  }
+
+  async function handleDownload(doc) {
+    try {
+      const r = await fetch(`${BASE_URL}/documents/${doc.id}/download`,
+        {headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error("Download failed");
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url; a.download = doc.file_name; a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) { alert("Download failed: " + e.message); }
+  }
+
+  async function handleDelete(doc) {
+    if (!window.confirm(`Delete "${doc.name}"? This cannot be undone.`)) return;
+    setDeleting(doc.id);
+    try {
+      const r = await fetch(`${BASE_URL}/documents/${doc.id}`,
+        {method:"DELETE", headers:{Authorization:"Bearer "+token}});
+      if (!r.ok) throw new Error((await r.json()).detail || "Delete failed");
+      setDocs(prev => prev.filter(d => d.id !== doc.id));
+    } catch(e) { alert("Delete failed: " + e.message); }
+    finally { setDeleting(null); }
+  }
+
+  const fmtSize = (bytes) => {
+    if (!bytes) return "—";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
+    return (bytes/1024/1024).toFixed(1) + " MB";
+  };
+
+  const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString("en-ZA") : "—";
+
+  const filtered = catFilter === "All" ? docs : docs.filter(d => d.category === catFilter);
+
+  // Group by category for the "All" view
+  const grouped = {};
+  filtered.forEach(d => {
+    const cat = d.category || "General";
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(d);
+  });
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
+        <div>
+          <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:0}}>Document Repository</h2>
+          <p style={{fontSize:12,color:C.inkMid,margin:0}}>Store and access important company documents securely</p>
+        </div>
+        <button onClick={()=>{setShowForm(true);setUploadErr(null);}}
+          style={{marginLeft:"auto",padding:"8px 18px",background:C.accent,color:"#fff",border:"none",
+            borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>
+          + Upload Document
+        </button>
+      </div>
+
+      {/* Upload form modal */}
+      {showForm && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:C.surface,borderRadius:16,padding:28,width:480,maxWidth:"94vw",boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
+            <h3 style={{margin:"0 0 20px",fontSize:16,fontWeight:700,color:C.ink}}>Upload Document</h3>
+            <form onSubmit={handleUpload}>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>Document Name</label>
+                <input value={uName} onChange={e=>setUName(e.target.value)} placeholder="e.g. Tax Clearance Certificate 2024"
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>Category</label>
+                <select value={uCat} onChange={e=>setUCat(e.target.value)}
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",boxSizing:"border-box",background:C.surface}}>
+                  {CATEGORIES.filter(c=>c!=="All").map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>Description (optional)</label>
+                <input value={uDesc} onChange={e=>setUDesc(e.target.value)} placeholder="Brief description…"
+                  style={{width:"100%",padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{marginBottom:18}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4}}>File <span style={{color:C.inkMid,fontWeight:400}}>(max 10 MB)</span></label>
+                <input ref={fileRef} type="file" onChange={e=>setUFile(e.target.files[0]||null)}
+                  style={{width:"100%",padding:"6px 0",fontSize:13,fontFamily:"inherit"}}/>
+              </div>
+              {uploadErr && <p style={{color:"#C8401A",fontSize:12,margin:"0 0 12px"}}>{uploadErr}</p>}
+              <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                <button type="button" onClick={()=>{setShowForm(false);setUFile(null);if(fileRef.current)fileRef.current.value="";}}
+                  style={{padding:"8px 18px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,cursor:"pointer",background:C.surface,color:C.ink}}>
+                  Cancel
+                </button>
+                <button type="submit" disabled={uploading}
+                  style={{padding:"8px 20px",background:uploading?"#ccc":C.accent,color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:uploading?"not-allowed":"pointer"}}>
+                  {uploading ? "Uploading…" : "Upload"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Category filter pills */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:20}}>
+        {CATEGORIES.map(c=>(
+          <button key={c} onClick={()=>setCatFilter(c)}
+            style={{padding:"5px 14px",borderRadius:20,border:`1px solid ${catFilter===c?C.accent:C.border}`,
+              fontSize:12,cursor:"pointer",fontFamily:"inherit",
+              background:catFilter===c?C.accentLt:"transparent",color:catFilter===c?C.accent:C.inkMid,
+              fontWeight:catFilter===c?700:400}}>
+            {c !== "All" && (CAT_ICONS[c]||"📁") + " "}{c}
+          </button>
+        ))}
+      </div>
+
+      {err    && <div style={{padding:16,background:"#fff0ee",borderRadius:8,color:"#C8401A",fontSize:13,marginBottom:16}}>{err}</div>}
+      {loading && <div style={{padding:60,textAlign:"center",color:C.inkMid}}>Loading documents…</div>}
+
+      {!loading && filtered.length === 0 && (
+        <div style={{padding:48,textAlign:"center",color:C.inkMid,border:`1px dashed ${C.border}`,borderRadius:12}}>
+          <div style={{fontSize:40,marginBottom:12}}>📂</div>
+          <div style={{fontSize:14,marginBottom:8}}>No documents yet{catFilter !== "All" ? ` in "${catFilter}"` : ""}</div>
+          <div style={{fontSize:12}}>Click <strong>Upload Document</strong> to add your first file.</div>
+        </div>
+      )}
+
+      {/* Document list — grouped by category */}
+      {!loading && Object.entries(grouped).map(([cat, items]) => (
+        <div key={cat} style={{marginBottom:28}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+            <span style={{fontSize:18}}>{CAT_ICONS[cat]||"📁"}</span>
+            <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.ink}}>{cat}</h3>
+            <span style={{fontSize:11,color:C.inkMid}}>({items.length})</span>
+          </div>
+          <div style={{border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr style={{background:"#f8f5f2"}}>
+                  <th style={{padding:"10px 14px",textAlign:"left",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Document</th>
+                  <th style={{padding:"10px 14px",textAlign:"left",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>File</th>
+                  <th style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Size</th>
+                  <th style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Uploaded</th>
+                  <th style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontWeight:600,fontSize:12,borderBottom:`1px solid ${C.border}`}}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((doc,i) => (
+                  <tr key={doc.id} style={{background:i%2===0?"transparent":"#fdf9f7",borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"10px 14px"}}>
+                      <div style={{fontWeight:600,color:C.ink}}>{doc.name}</div>
+                      {doc.description && <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{doc.description}</div>}
+                    </td>
+                    <td style={{padding:"10px 14px",color:C.inkMid,fontSize:12,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {doc.file_name}
+                    </td>
+                    <td style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontFamily:"monospace",fontSize:12}}>
+                      {fmtSize(doc.file_size)}
+                    </td>
+                    <td style={{padding:"10px 14px",textAlign:"right",color:C.inkMid,fontSize:12}}>
+                      {fmtDate(doc.uploaded_at)}
+                    </td>
+                    <td style={{padding:"10px 14px",textAlign:"right",whiteSpace:"nowrap"}}>
+                      <button onClick={()=>handleDownload(doc)}
+                        style={{padding:"4px 12px",marginRight:6,border:`1px solid ${C.accent}`,borderRadius:6,
+                          fontSize:12,cursor:"pointer",color:C.accent,background:"transparent",fontFamily:"inherit"}}>
+                        Download
+                      </button>
+                      <button onClick={()=>handleDelete(doc)} disabled={deleting===doc.id}
+                        style={{padding:"4px 12px",border:"1px solid #C8401A",borderRadius:6,
+                          fontSize:12,cursor:deleting===doc.id?"not-allowed":"pointer",
+                          color:"#C8401A",background:"transparent",fontFamily:"inherit",
+                          opacity:deleting===doc.id?0.5:1}}>
+                        {deleting===doc.id?"…":"Delete"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
   const [tab, setTab] = useState("dashboard");
+
+  // ── Site analytics: fire a page-view ping on every tab change ────────────
+  const _sessionId = useRef((() => {
+    try {
+      let sid = localStorage.getItem("_zz_sid");
+      if (!sid) { sid = Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("_zz_sid", sid); }
+      return sid;
+    } catch { return "anon"; }
+  })());
+  useEffect(() => {
+    fetch(`${BASE_URL}/track`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ session_id: _sessionId.current, page: tab, referrer: document.referrer || "" }),
+    }).catch(() => {});
+  }, [tab]);
   const [docTemplate, setDocTemplate] = useState(() => {
     try { const s = localStorage.getItem("zuzan_doc_template"); return s ? {...DEFAULT_DOC_TEMPLATE, ...JSON.parse(s)} : DEFAULT_DOC_TEMPLATE; } catch { return DEFAULT_DOC_TEMPLATE; }
   });
@@ -8664,7 +11913,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     setDocTemplate(tmpl);
     try { localStorage.setItem("zuzan_doc_template", JSON.stringify(tmpl)); } catch {}
   };
-  const [expanded, setExpanded] = useState({sales: true, procurement: false, banking: false});
+  const [expanded, setExpanded] = useState({sales: false, procurement: false, banking: false});
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
   const TABS = [
@@ -8686,7 +11935,10 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"creditors",  label:"Creditors",   icon:"📤"},
     {id:"coa",        label:"Accounts",    icon:"📒"},
     {id:"inventory",    label:"Inventory",   icon:"📦"},
-    {id:"fixed_assets", label:"Fixed Assets", icon:"🏭"},
+    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭"},
+    {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
+    {id:"documents",       label:"Documents",    icon:"📁"},
+    {id:"data_import",     label:"Import Data",  icon:"⬆️"},
     {id:"banking",    label:"Banking",     icon:"🏦", children:[
       {id:"bankimport", label:"Manual Update",   icon:"📄"},
       {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
@@ -8695,6 +11947,13 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
   ];
 
   const toggleGroup = (id) => setExpanded(e => ({...e, [id]: !e[id]}));
+  // Role-gated nav: employees see only dashboard and settings
+  const visibleTabs = TABS.filter(t => {
+    if (user?.role === "employee") return ["dashboard","settings"].includes(t.id);
+    if (user?.role === "payroll") return ["payroll"].includes(t.id);
+    if (user?.role === "accountant") return !["payroll"].includes(t.id);
+    return true; // owner and admin see everything
+  });
 
   const navBtn = (t, isChild=false) => {
     const active = tab === t.id;
@@ -8723,7 +11982,18 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     invoicing:  <Invoicing  live={live} user={user} docTemplate={docTemplate}/>,
     quotes:     <Quotes     live={live} user={user} onNavigate={setTab} docTemplate={docTemplate}/>,
     expenses:   <Expenses   live={live}/>,
-    payroll:    <Payroll    live={live} user={user}/>,
+    payroll:    user?.payrollEnabled
+      ? <Payroll live={live} user={user}/>
+      : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
+          <div style={{fontSize:48,marginBottom:16}}>🔒</div>
+          <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Payroll not activated</h2>
+          <p style={{fontSize:14,color:C.inkMid,maxWidth:380,lineHeight:1.6,margin:"0 0 28px"}}>
+            Your current plan does not include payroll. Add payroll to run PAYE, UIF &amp; SDL calculations, generate payslips, and submit EMP201 reports.
+          </p>
+          <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Add Payroll in Settings →
+          </button>
+        </div>,
     reports:    <Reports    live={live}/>,
     budgeting:  <Budgeting  live={live}/>,
     debtors:    <Debtors    live={live}/>,
@@ -8731,6 +12001,23 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     coa:        <ChartOfAccounts/>,
     inventory:       <Inventory/>,
     fixed_assets:    <FixedAssets/>,
+    fin_statements:  user?.afsEnabled
+      ? <FinancialStatements/>
+      : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
+          <div style={{fontSize:48,marginBottom:16}}>📑</div>
+          <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Annual Financial Statements</h2>
+          <p style={{fontSize:14,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 6px"}}>
+            Generate IFRS-compliant AFS including Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
+          </p>
+          <p style={{fontSize:13,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 28px"}}>
+            <strong style={{color:C.ink}}>R1,999/year</strong> — less than one hour of accountant fees.
+          </p>
+          <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Add Annual AFS in Settings →
+          </button>
+        </div>,
+    documents:       <DocumentRepository/>,
+    data_import:     <DataImport/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
     purchase_orders: <PurchaseOrders/>,
@@ -8754,7 +12041,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
         </div>
         <nav style={{flex:1,padding:"12px 10px",overflowY:"auto"}}>
-          {TABS.map(t => {
+          {visibleTabs.map(t => {
             if (!t.children) return navBtn(t);
             const isOpen = expanded[t.id];
             const childActive = t.children.some(c => c.id === tab);
@@ -8780,11 +12067,32 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         </nav>
         <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`}}>
           <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{user?.firstName||"User"} {user?.lastName||""}</div>
-          <div style={{fontSize:10,color:C.inkDim,marginBottom:8}}>{user?.email||"user@company.co.za"}</div>
+          <div style={{fontSize:10,color:C.inkDim,marginBottom:4}}>{user?.email||"user@company.co.za"}</div>
+          {user?.role && user.role !== "owner" && <span style={{display:"inline-block",marginBottom:8,padding:"2px 8px",borderRadius:20,fontSize:9,fontWeight:700,color:"#00878A",background:"#E0F4F5"}}>{user.role.charAt(0).toUpperCase()+user.role.slice(1)}</span>}
           <button onClick={onLogout} style={{fontSize:11,color:C.inkDim,background:"none",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit"}}>Sign out</button>
         </div>
       </div>
       <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
+        {(()=>{
+          const status = user?.subscriptionStatus;
+          const trialEnds = user?.trialEnds;
+          if (status === "expired") return (
+            <div style={{background:C.red,color:"#fff",borderRadius:12,padding:"12px 20px",marginBottom:24,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}}>
+              <div><strong>Subscription expired.</strong><span style={{fontSize:13,marginLeft:8,opacity:0.9}}>Reactivate to keep using ZuZan.</span></div>
+              <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)pfSubmit(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to reactivate.");}}} style={{background:"#fff",color:C.red,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Reactivate</button>
+            </div>
+          );
+          if (status === "trial" && trialEnds) {
+            const d = Math.max(0, Math.ceil((new Date(trialEnds) - new Date()) / 86400000));
+            if (d <= 5) return (
+              <div style={{background:d===0?C.red:C.gold,color:"#fff",borderRadius:12,padding:"12px 20px",marginBottom:24,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}}>
+                <div><strong>{d===0?"Trial expired.":"Trial ends in "+d+" day"+(d===1?"":"s")+"."}</strong><span style={{fontSize:13,marginLeft:8,opacity:0.9}}>{d===0?"Subscribe to continue.":"Subscribe now to keep your data."}</span></div>
+                <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)pfSubmit(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to subscribe.");}}} style={{background:"#fff",color:d===0?C.red:C.gold,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Subscribe Now</button>
+              </div>
+            );
+          }
+          return null;
+        })()}
         {screens[tab]}
       </div>
       <AIAssistant tab={tab}/>
@@ -8796,6 +12104,12 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
 export default function App() {
   const [screen, setScreen] = useState("loading");
   const [user,   setUser]   = useState(null);
+  // Detect invite token from URL path /accept-invite/<token>
+  const _inviteMatch = window.location.pathname.match(/\/accept-invite\/([A-Za-z0-9_-]{20,})/);
+  const _inviteToken = _inviteMatch ? _inviteMatch[1] : null;
+  // Detect portal token from URL path /portal/<token>
+  const _portalMatch = window.location.pathname.match(/\/portal\/([A-Za-z0-9]{20,})/);
+  const _portalToken = _portalMatch ? _portalMatch[1] : null;
 
   // Keep Render free-tier backend alive — pings /health every 8 min while logged in
   useEffect(() => {
@@ -8806,24 +12120,32 @@ export default function App() {
 
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
+    if (_portalToken) { setScreen("portal"); return; }
+    if (_inviteToken) { setScreen("accept-invite"); return; }
     if (!token || token.startsWith("demo_")) { setScreen("login"); return; }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), 45000); // 45s — Render free cold start can take 40s
     fetch("https://zuzan-backend.onrender.com/auth/me", {
       headers: {"Authorization": "Bearer " + token},
       signal: controller.signal
     })
       .then(r => { clearTimeout(timeout); return r.ok ? r.json() : Promise.reject(); })
       .then(data => {
+        const _meSub = data.company.subscription_status || "trial";
+        const _meStatus = (_meSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _meSub;
         setUser({
           firstName:    data.user.first_name,
           lastName:     data.user.last_name,
           email:        data.user.email,
           companyName:  data.company.name,
           logoUrl:      data.company.logo_url || "",
-          plan:         {name: data.company.plan, id: data.company.plan},
-          access_token: token,
-          trialEnds:    data.company.trial_ends,
+          plan:           {name: data.company.plan, id: data.company.plan},
+          access_token:   token,
+          trialEnds:          data.company.trial_ends,
+          subscriptionStatus: _meStatus,
+          role:               data.user.role || "owner",
+          payrollEnabled: data.company.payroll_enabled || false,
+          afsEnabled:     data.company.afs_enabled || false,
         });
         setScreen("app");
       })
@@ -8835,7 +12157,10 @@ export default function App() {
   const handleRegistrationComplete = userData => {
     const savedToken = localStorage.getItem("zuzan_token");
     if (!savedToken || savedToken.startsWith("demo_")) {
-      localStorage.setItem("zuzan_token", "demo_" + Date.now());
+      // Backend was unreachable during registration — send to login so user can try again
+      localStorage.removeItem("zuzan_token");
+      setScreen("login");
+      return;
     }
     setUser(userData);
     setScreen("app");
@@ -8875,11 +12200,13 @@ export default function App() {
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
       <div style={{textAlign:"center"}}>
         <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:12}}><span style={{color:C.accent}}>Zu</span>Zan</div>
-        <div style={{fontSize:13,color:C.inkMid}}>Loading your account...</div>
+        <div style={{fontSize:13,color:C.inkMid}}>Loading your account... (may take up to 45s if server is waking up)</div>
       </div>
     </div>
   );
 
+  if (screen === "portal")       return <InvoicePortal token={_portalToken}/>;
+  if (screen === "accept-invite") return <AcceptInvite token={_inviteToken} onLogin={handleLogin} onSignIn={()=>setScreen("login")}/>;
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
 
