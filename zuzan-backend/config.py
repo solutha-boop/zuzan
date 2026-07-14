@@ -12,5 +12,5 @@ PLAN_PRICES = {
 }
 
 # Payroll add-on pricing
-PAYROLL_PER_EMP = 17.50   # R per employee per month
+PAYROLL_PER_EMP = 34.00   # R per employee per month
 PAYROLL_MIN     = 99.00   # Minimum payroll add-on fee

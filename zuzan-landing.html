@@ -465,38 +465,6 @@
   .compliance-title { font-size: 14px; font-weight: 600; color: var(--cream); margin-bottom: 8px; }
   .compliance-desc { font-size: 12px; color: rgba(255,255,255,0.4); line-height: 1.6; }
 
-  /* ── TESTIMONIALS ────────────────────────────────────────────── */
-  .testimonials-section { background: var(--cream-dk); }
-
-  .testimonials-grid {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 20px; margin-top: 60px;
-  }
-
-  .testimonial-card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 18px; padding: 30px 28px;
-  }
-
-  .stars { color: var(--gold); font-size: 14px; margin-bottom: 16px; letter-spacing: 2px; }
-
-  .testimonial-text {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 18px; font-style: italic; font-weight: 300;
-    color: var(--ink); line-height: 1.6; margin-bottom: 20px;
-  }
-
-  .testimonial-author { display: flex; align-items: center; gap: 12px; }
-
-  .author-avatar {
-    width: 40px; height: 40px; border-radius: 50%;
-    background: var(--cream-dk); display: flex; align-items: center;
-    justify-content: center; font-size: 18px; border: 1px solid var(--border);
-  }
-
-  .author-name { font-size: 13px; font-weight: 600; color: var(--ink); }
-  .author-biz  { font-size: 11px; color: var(--ink-dim); }
-
   /* ── FAQ ─────────────────────────────────────────────────────── */
   .faq-section { background: var(--surface); }
 
@@ -591,8 +559,7 @@
     .pricing-card.featured { transform: none; }
     .addons-grid { grid-template-columns: repeat(2, 1fr); }
     .compliance-grid { grid-template-columns: repeat(2, 1fr); }
-    .testimonials-grid { grid-template-columns: 1fr; max-width: 500px; margin: 60px auto 0; }
-    .faq-grid { grid-template-columns: 1fr; }
+.faq-grid { grid-template-columns: 1fr; }
     .footer-grid { grid-template-columns: 1fr 1fr; }
   }
 
@@ -837,30 +804,18 @@
   <p class="section-sub">Bank feed is included in all plans. These add-ons extend ZuZan beyond the core suite.</p>
 
   <div class="addons-grid">
-    <div class="addon-card">
-      <div class="addon-icon">👤</div>
-      <div class="addon-name">Extra Users</div>
-      <div class="addon-desc">Add more team members beyond your plan's user limit.</div>
-      <div class="addon-price">R99 <span>/ user / month</span></div>
-    </div>
-    <div class="addon-card">
-      <div class="addon-icon">📊</div>
-      <div class="addon-name">Advanced Analytics</div>
-      <div class="addon-desc">Deep financial insights, forecasting and custom KPI dashboards.</div>
-      <div class="addon-price">R199 <span>/ month</span></div>
-    </div>
     <div class="addon-card" style="border-color:var(--accent)">
       <div class="addon-icon">👥</div>
       <div class="addon-name">Payroll Module</div>
       <div class="addon-desc">Full SARS-compliant payroll — PAYE, UIF, SDL, EMP201 & IRP5. Available as standalone or add-on to any plan.</div>
-      <div class="addon-price">R17.50 <span>/ employee / month</span></div>
+      <div class="addon-price">R34 <span>/ employee / month</span></div>
       <div style="font-size:11px;color:var(--ink-dim);margin-top:6px;">Min R99/month · No setup fee</div>
     </div>
     <div class="addon-card">
-      <div class="addon-icon">🔌</div>
-      <div class="addon-name">API Access</div>
-      <div class="addon-desc">Connect ZuZan to your existing tools via REST API.</div>
-      <div class="addon-price">R499 <span>/ month</span></div>
+      <div class="addon-icon">📑</div>
+      <div class="addon-name">Annual Financial Statements</div>
+      <div class="addon-desc">IFRS-compliant AFS generated directly from your Zuzan data — income statement, balance sheet, cash flow and statement of changes in equity.</div>
+      <div class="addon-price">R1,999 <span>/ year</span></div>
     </div>
   </div>
 </section>
@@ -895,47 +850,6 @@
   </div>
 </section>
 
-<!-- ── TESTIMONIALS ───────────────────────────────────────────────────────── -->
-<section class="testimonials-section">
-  <div class="section-tag">What businesses say</div>
-  <h2 class="section-title">Trusted by South African<br><em>business owners.</em></h2>
-
-  <div class="testimonials-grid">
-    <div class="testimonial-card">
-      <div class="stars">★★★★★</div>
-      <div class="testimonial-text">"ZuZan saved us hours every month on payroll. The PAYE calculations are always accurate and the EMP201 export makes our SARS submissions so much easier."</div>
-      <div class="testimonial-author">
-        <div class="author-avatar">👩</div>
-        <div>
-          <div class="author-name">Priya Naidoo</div>
-          <div class="author-biz">Owner, Cape Town Consulting</div>
-        </div>
-      </div>
-    </div>
-    <div class="testimonial-card">
-      <div class="stars">★★★★★</div>
-      <div class="testimonial-text">"Finally a bookkeeping tool that understands South African business. The invoicing is professional and the bank reconciliation saves my bookkeeper days of work."</div>
-      <div class="testimonial-author">
-        <div class="author-avatar">👨</div>
-        <div>
-          <div class="author-name">Johan van der Berg</div>
-          <div class="author-biz">Director, BuildRight CC</div>
-        </div>
-      </div>
-    </div>
-    <div class="testimonial-card">
-      <div class="stars">★★★★★</div>
-      <div class="testimonial-text">"We switched from a generic accounting package and the difference is night and day. ZuZan just works for our SA business without needing endless customisation."</div>
-      <div class="testimonial-author">
-        <div class="author-avatar">👩</div>
-        <div>
-          <div class="author-name">Nomsa Khumalo</div>
-          <div class="author-biz">MD, Joburg Logistics</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
 
 <!-- ── FAQ ────────────────────────────────────────────────────────────────── -->
 <section class="faq-section" id="faq">
@@ -957,7 +871,7 @@
     </div>
     <div class="faq-item">
       <div class="faq-q">What happens to my data if I cancel?</div>
-      <div class="faq-a">Your data is yours. You can export all your financial records, invoices and reports at any time. After cancellation, your data is kept for 30 days before deletion.</div>
+      <div class="faq-a">Your data is yours. You can export all your financial records, invoices and reports at any time. After cancellation, your data is kept for 60 days before deletion.</div>
     </div>
     <div class="faq-item">
       <div class="faq-q">Can my accountant access ZuZan?</div>
@@ -992,38 +906,34 @@
       <ul>
         <li><a href="#features">Features</a></li>
         <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#addons">Add-ons</a></li>
         <li><a href="#compliance">Compliance</a></li>
-        <li><a href="#">Mobile App</a></li>
-        <li><a href="#">API Docs</a></li>
+        <li><a href="#faq">FAQ</a></li>
       </ul>
     </div>
     <div class="footer-col">
       <h4>Company</h4>
       <ul>
-        <li><a href="#">About Us</a></li>
-        <li><a href="#">Blog</a></li>
-        <li><a href="#">Careers</a></li>
-        <li><a href="#">Contact</a></li>
-        <li><a href="#">Partners</a></li>
+        <li><a href="https://solutha.co.za">Solutha</a></li>
+        <li><a href="mailto:support@solutha.co.za">Contact</a></li>
+        <li><a href="https://zuzan.co.za/privacy">Privacy Policy</a></li>
+        <li><a href="https://zuzan.co.za/terms">Terms &amp; Conditions</a></li>
       </ul>
     </div>
     <div class="footer-col">
       <h4>Support</h4>
       <ul>
-        <li><a href="#faq">FAQ</a></li>
-        <li><a href="#">Help Centre</a></li>
-        <li><a href="#">SARS Resources</a></li>
-        <li><a href="#">Status</a></li>
-        <li><a href="#">Security</a></li>
+        <li><a href="mailto:support@solutha.co.za">support@solutha.co.za</a></li>
+        <li><a href="https://app.zuzan.co.za/register">Start free trial</a></li>
+        <li><a href="https://app.zuzan.co.za">Log in</a></li>
       </ul>
     </div>
   </div>
   <div class="footer-bottom">
-    <div>© 2025 ZuZan (Pty) Ltd · Registered in South Africa</div>
+    <div>© 2026 Solutha (Pty) Ltd · All rights reserved</div>
     <div class="footer-legal">
-      <a href="#">Privacy Policy</a>
-      <a href="#">Terms of Service</a>
-      <a href="#">Cookie Policy</a>
+      <a href="https://zuzan.co.za/privacy">Privacy Policy</a>
+      <a href="https://zuzan.co.za/terms">Terms &amp; Conditions</a>
     </div>
   </div>
 </footer>
