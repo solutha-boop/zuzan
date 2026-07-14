@@ -626,7 +626,7 @@ async def accept_invite(
             "name":                company.name,
             "logo_url":            company.logo_url,
             "plan":                str(company.plan.value),
-            "subscription_status": str(company.subscription_status.value),
+            "subscription_status": effective_subscription_status(company),
             "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
             "payroll_enabled":     company.payroll_enabled,
             "afs_enabled":         company.afs_enabled,
