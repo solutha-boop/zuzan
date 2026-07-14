@@ -45,6 +45,9 @@ class CompanyUpdate(BaseModel):
     payfast_merchant_id:    Optional[str] = None
     payfast_merchant_key:   Optional[str] = None
     payfast_passphrase:     Optional[str] = None
+    # User-initiated subscription transitions only — guarded in update_company.
+    # "cancelled" (cancel / auto-renew off) or "active" (undo a cancellation).
+    subscription_status:    Optional[str] = None
 
 
 def _company_dict(c: Company) -> dict:
@@ -86,6 +89,39 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(requi
             setattr(company, field, encrypt_field(value))
         elif field == "cipc_registration_date":
             setattr(company, field, datetime.fromisoformat(value) if value else None)
+        elif field == "subscription_status":
+            # Launch fix 2026-07-14: this field was previously ignored (not in
+            # CompanyUpdate), so "Cancel subscription" silently no-oped while the
+            # UI showed success. Only user-initiated transitions are allowed here;
+            # activation from trial/expired must come through the PayFast ITN
+            # handler (billing.payfast_notify) after real payment.
+            from database import SubscriptionStatus, SubscriptionPayment
+            cur = company.subscription_status.value if hasattr(company.subscription_status, "value") else str(company.subscription_status)
+            if value == cur:
+                pass  # idempotent
+            elif value == "cancelled" and cur in ("trial", "active"):
+                company.subscription_status = SubscriptionStatus.cancelled
+            elif value == "active" and cur == "cancelled":
+                # Undo cancellation — restore what the company is entitled to:
+                # active if a successful PayFast payment covers the current
+                # period (billing.payfast_notify logs these), otherwise back to
+                # trial if the trial hasn't lapsed, otherwise expired.
+                has_paid = db.query(SubscriptionPayment).filter(
+                    SubscriptionPayment.company_id == company.id,
+                    SubscriptionPayment.status == "success",
+                    SubscriptionPayment.period_end > datetime.utcnow(),
+                ).count() > 0
+                if has_paid:
+                    company.subscription_status = SubscriptionStatus.active
+                elif company.trial_ends and company.trial_ends > datetime.utcnow():
+                    company.subscription_status = SubscriptionStatus.trial
+                else:
+                    company.subscription_status = SubscriptionStatus.expired
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot change subscription from '{cur}' to '{value}'. Use the Subscribe flow to activate.",
+                )
         else:
             setattr(company, field, value)
     db.commit()
@@ -756,28 +792,45 @@ class EmployeeCreate(BaseModel):
     hourly_rate:      Optional[float] = None         # explicit rate for hourly employees
     gross_salary:     float
     employee_number:  Optional[str] = None
-    bank_name:        Optional[str] = None
-    bank_account:     Optional[str] = None
-    account_number:   Optional[str] = None
-    branch_code:      Optional[str] = None
-    account_type:     Optional[str] = None
-    start_date:       Optional[str] = None
+    bank_name:                 Optional[str] = None
+    bank_account:              Optional[str] = None
+    account_number:            Optional[str] = None
+    branch_code:               Optional[str] = None
+    account_type:              Optional[str] = None
+    start_date:                Optional[str] = None
+    pension_fund_employee_pct: Optional[float] = 0.0
+    pension_fund_employer_pct: Optional[float] = 0.0
+    pension_employee_fixed:    Optional[float] = 0.0   # voluntary ZAR top-up on top of %-based contribution
+    pension_employer_fixed:    Optional[float] = 0.0   # employer ZAR add-on on top of %-based contribution
+    medical_aid_employee:      Optional[float] = 0.0
+    medical_aid_employer:      Optional[float] = 0.0
+    medical_aid_dependants:    Optional[int]   = 0
 
 class EmployeeUpdate(BaseModel):
-    position:         Optional[str] = None
-    department:       Optional[str] = None
-    grade:            Optional[str] = None
-    employment_type:  Optional[str] = None
-    hourly_rate:      Optional[float] = None
-    gross_salary:     Optional[float] = None
-    tax_number:       Optional[str] = None
-    address:          Optional[str] = None
-    bank_name:        Optional[str] = None
-    bank_account:     Optional[str] = None
-    account_number:   Optional[str] = None
-    branch_code:      Optional[str] = None
-    account_type:     Optional[str] = None
-    is_active:        Optional[bool] = None
+    position:                  Optional[str] = None
+    department:                Optional[str] = None
+    grade:                     Optional[str] = None
+    employment_type:           Optional[str] = None
+    hourly_rate:               Optional[float] = None
+    gross_salary:              Optional[float] = None
+    tax_number:                Optional[str] = None
+    id_number:                 Optional[str] = None
+    date_of_birth:             Optional[str] = None
+    appointment_date:          Optional[str] = None
+    address:                   Optional[str] = None
+    bank_name:                 Optional[str] = None
+    bank_account:              Optional[str] = None
+    account_number:            Optional[str] = None
+    branch_code:               Optional[str] = None
+    account_type:              Optional[str] = None
+    is_active:                 Optional[bool] = None
+    pension_fund_employee_pct: Optional[float] = None
+    pension_fund_employer_pct: Optional[float] = None
+    pension_employee_fixed:    Optional[float] = None
+    pension_employer_fixed:    Optional[float] = None
+    medical_aid_employee:      Optional[float] = None
+    medical_aid_employer:      Optional[float] = None
+    medical_aid_dependants:    Optional[int]   = None
 
 
 def _employee_dict(e: Employee) -> dict:
@@ -803,6 +856,13 @@ def _employee_dict(e: Employee) -> dict:
         "account_type": e.account_type,
         "start_date": e.start_date.isoformat() if e.start_date else None,
         "is_active": e.is_active,
+        "pension_fund_employee_pct": getattr(e, "pension_fund_employee_pct", 0.0) or 0.0,
+        "pension_fund_employer_pct": getattr(e, "pension_fund_employer_pct", 0.0) or 0.0,
+        "pension_employee_fixed":    getattr(e, "pension_employee_fixed", 0.0) or 0.0,
+        "pension_employer_fixed":    getattr(e, "pension_employer_fixed", 0.0) or 0.0,
+        "medical_aid_employee":      getattr(e, "medical_aid_employee", 0.0) or 0.0,
+        "medical_aid_employer":      getattr(e, "medical_aid_employer", 0.0) or 0.0,
+        "medical_aid_dependants":    getattr(e, "medical_aid_dependants", 0) or 0,
     }
 
 
@@ -857,6 +917,13 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         branch_code=encrypt_field(data.branch_code),
         account_type=data.account_type,
         start_date=datetime.fromisoformat(data.start_date) if data.start_date else datetime.utcnow(),
+        pension_fund_employee_pct=data.pension_fund_employee_pct or 0.0,
+        pension_fund_employer_pct=data.pension_fund_employer_pct or 0.0,
+        pension_employee_fixed=data.pension_employee_fixed or 0.0,
+        pension_employer_fixed=data.pension_employer_fixed or 0.0,
+        medical_aid_employee=data.medical_aid_employee or 0.0,
+        medical_aid_employer=data.medical_aid_employer or 0.0,
+        medical_aid_dependants=data.medical_aid_dependants or 0,
     )
     db.add(emp)
     db.commit()
@@ -871,8 +938,14 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
     emp = db.query(Employee).filter(Employee.id == employee_id, Employee.company_id == current_user.company_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
+    _DATE_FIELDS = {"date_of_birth", "appointment_date"}
     for field, value in data.dict(exclude_none=True).items():
-        setattr(emp, field, encrypt_field(value) if field in _EMPLOYEE_BANK_FIELDS else value)
+        if field in _DATE_FIELDS:
+            setattr(emp, field, datetime.fromisoformat(value) if value else None)
+        elif field in _EMPLOYEE_BANK_FIELDS:
+            setattr(emp, field, encrypt_field(value))
+        else:
+            setattr(emp, field, value)
     db.commit()
     return _employee_dict(emp)
 

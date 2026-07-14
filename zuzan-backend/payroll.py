@@ -150,6 +150,16 @@ SDL_RATE        = 0.01
 PAYROLL_PER_EMP = 34.00
 PAYROLL_MIN     = 99.00
 
+# ── Section 11F — Retirement fund deduction (effective 1 March 2026) ──────────
+# Cap increased from R350,000 → R430,000 (first increase since 2016, Budget 2026)
+S11F_RATE = 0.275    # 27.5% of remuneration or taxable income (whichever is higher)
+S11F_CAP  = 430_000  # annual rand cap
+
+# ── Section 6A — Medical Aid Tax Credits (2026/2027, effective 1 March 2026) ──
+# Increased 3.4% from prior year (R364 → R376; R246 → R254)
+MTC_MAIN_FIRST   = 376  # R/month for main member AND first adult dependant each
+MTC_ADDITIONAL   = 254  # R/month for each further dependant
+
 # ── BCEA (Basic Conditions of Employment Act) overtime constants ──────────────
 # Reference: BCEA No. 75 of 1997 as amended
 BCEA_WEEKLY_HOURS    = 45       # normal maximum working hours per week (s9)
@@ -202,6 +212,22 @@ def calc_overtime(
     }
 
 
+def calc_medical_tax_credit(num_dependants: int = 0) -> float:
+    """
+    Section 6A Medical Scheme Fees Tax Credit (monthly, 2026/2027).
+    num_dependants: people on the plan EXCLUDING the main member.
+      0 → main member only        → R376/month
+      1 → main + first dependant  → R752/month
+      2+ → main + first + additional → R752 + R254*(n-1)/month
+    """
+    if num_dependants == 0:
+        return MTC_MAIN_FIRST
+    elif num_dependants == 1:
+        return MTC_MAIN_FIRST * 2
+    else:
+        return MTC_MAIN_FIRST * 2 + MTC_ADDITIONAL * (num_dependants - 1)
+
+
 def calc_paye(annual_income: float, tax_year: str = None) -> float:
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
     bracket = None
@@ -223,19 +249,36 @@ def calc_payroll(
     sunday_hours: float = 0,
     ph_hours: float = 0,
     explicit_hourly_rate: float = None,
+    # Pension / Provident fund
+    pension_employee_pct: float = 0.0,     # e.g. 0.075 = 7.5% of gross
+    pension_employer_pct: float = 0.0,
+    pension_employee_fixed: float = 0.0,   # optional fixed ZAR/month (voluntary top-up; added to %-based)
+    pension_employer_fixed: float = 0.0,   # optional fixed ZAR/month employer add-on
+    # Medical aid
+    medical_aid_employee: float = 0.0,     # monthly employee contribution (ZAR)
+    medical_aid_employer: float = 0.0,     # monthly employer contribution (ZAR) — fringe benefit
+    medical_aid_dependants: int = 0,       # dependants excl. main member
 ) -> dict:
     """
-    Compute monthly payroll including BCEA overtime.
+    Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
+    and medical aid (s6A MTC).
 
-    annual_payroll_total: sum of ALL employees' gross monthly salary * 12.
-    SDL only applies if annual_payroll_total >= 500_000 (SA law).
-    Pass None to always apply SDL (conservative default for single-employee calculations).
+    Pension contributions are the SUM of (gross × pct) + fixed_amount.  Employees
+    may voluntarily top up beyond the s11F limit — the excess is still deducted from
+    net pay but receives no additional tax relief (contribution comes from after-tax
+    income).  Employers similarly may contribute more than the matched rate.
 
-    overtime_hours : weekday/Saturday OT hours (BCEA s10 — 1.5x)
-    sunday_hours   : Sunday hours worked        (BCEA s16 — 2.0x)
-    ph_hours       : public holiday hours       (BCEA s18 — 2.0x)
-    explicit_hourly_rate: set for hourly employees; salaried employees derive
-                          hourly rate from gross_monthly / (45h × 4.333 weeks).
+    annual_payroll_total: sum of ALL employees' gross_monthly * 12.
+    SDL only applies if annual_payroll_total >= R500,000 (SA law).
+
+    Section 11F (2026/2027): deduction = min(total_pension_employee_annual,
+        27.5% × remuneration, R430,000). Cap increased from R350,000 on 1 March 2026.
+
+    Section 6A MTC (2026/2027): R376/month (main member + first dependant each),
+        R254/month each additional dependant. Applied as a direct PAYE reduction.
+
+    Employer medical aid is a taxable fringe benefit (7th Schedule s2(i)) and is
+    added to remuneration when computing the PAYE base and s11F ceiling.
     """
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
 
@@ -243,37 +286,76 @@ def calc_payroll(
     ot = calc_overtime(gross_monthly, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate)
     total_overtime = ot["total_overtime"]
 
-    # ── Taxable gross = base salary + overtime ────────────────────────────────
+    # ── Cash remuneration (for net pay & SDL) ─────────────────────────────────
     taxable_gross = gross_monthly + total_overtime
 
-    # ── PAYE on taxable gross (annualised) ────────────────────────────────────
-    annual_paye  = calc_paye(taxable_gross * 12, tax_year)
+    # ── Pension / Provident fund: % + optional fixed ZAR top-up ──────────────
+    pension_employee_monthly = round(gross_monthly * pension_employee_pct + pension_employee_fixed, 2)
+    pension_employer_monthly = round(gross_monthly * pension_employer_pct + pension_employer_fixed, 2)
+
+    # ── PAYE base includes employer medical aid fringe benefit ─────────────────
+    paye_base_monthly = taxable_gross + medical_aid_employer
+    paye_base_annual  = paye_base_monthly * 12
+
+    # ── Section 11F deduction (annual, applied pre-PAYE) ─────────────────────
+    # s11F applies to TOTAL employee contribution (% + fixed), capped at
+    # min(total_contribution, 27.5% × remuneration, R430,000/year).
+    # Any excess contribution above the cap is still deducted from pay but
+    # provides no additional PAYE relief.
+    pension_employee_annual = pension_employee_monthly * 12
+    s11f_annual = min(
+        pension_employee_annual,
+        S11F_RATE * paye_base_annual,
+        S11F_CAP,
+    )
+    s11f_monthly = round(s11f_annual / 12, 2)
+    # Track how much of the employee contribution exceeds the s11F cap (post-tax)
+    s11f_excess_annual = max(0.0, pension_employee_annual - s11f_annual)
+
+    # ── PAYE on (PAYE base − s11F deduction) annualised ──────────────────────
+    annual_paye  = calc_paye(paye_base_annual - s11f_annual, tax_year)
     monthly_paye = annual_paye / 12
 
-    # ── UIF on base salary only (overtime is excluded from UIF per SARS) ─────
+    # ── Section 6A MTC: only applies when employee is on medical aid ──────────
+    on_medical_aid = (medical_aid_employee > 0 or medical_aid_employer > 0)
+    mtc = calc_medical_tax_credit(medical_aid_dependants) if on_medical_aid else 0.0
+    paye_after_mtc = max(0.0, monthly_paye - mtc)
+
+    # ── UIF on base salary only (overtime & fringe benefits excluded per SARS) ─
     uif_base     = min(gross_monthly, yr["uif_ceil"])
     uif_employee = uif_base * UIF_RATE
     uif_employer = uif_base * UIF_RATE
 
-    # ── SDL on taxable gross ──────────────────────────────────────────────────
+    # ── SDL on cash remuneration (taxable_gross) ──────────────────────────────
     SDL_THRESHOLD  = 500_000
     sdl_applicable = annual_payroll_total is None or annual_payroll_total >= SDL_THRESHOLD
     sdl = taxable_gross * SDL_RATE if sdl_applicable else 0
 
-    net_pay    = taxable_gross - monthly_paye - uif_employee
-    total_cost = taxable_gross + uif_employer + sdl
+    # ── Net pay: cash the employee receives ───────────────────────────────────
+    net_pay = taxable_gross - paye_after_mtc - uif_employee - pension_employee_monthly - medical_aid_employee
+
+    # ── Total cost to employer ────────────────────────────────────────────────
+    total_cost = taxable_gross + uif_employer + sdl + pension_employer_monthly + medical_aid_employer
 
     return {
-        "gross":           round(gross_monthly, 2),
-        "overtime":        ot,                           # full BCEA breakdown
-        "taxable_gross":   round(taxable_gross, 2),
-        "paye":            round(monthly_paye, 2),
-        "uif_employee":    round(uif_employee, 2),
-        "uif_employer":    round(uif_employer, 2),
-        "sdl":             round(sdl, 2),
-        "net_pay":         round(net_pay, 2),
-        "total_cost":      round(total_cost, 2),
-        "tax_year":        tax_year or CURRENT_TAX_YEAR,
+        "gross":                  round(gross_monthly, 2),
+        "overtime":               ot,
+        "taxable_gross":          round(taxable_gross, 2),
+        "pension_employee":       round(pension_employee_monthly, 2),
+        "pension_employer":       round(pension_employer_monthly, 2),
+        "s11f_deduction":         s11f_monthly,
+        "s11f_excess_monthly":    round(s11f_excess_annual / 12, 2),  # portion above cap (post-tax contribution)
+        "medical_aid_employee":   round(medical_aid_employee, 2),
+        "medical_aid_employer":   round(medical_aid_employer, 2),
+        "medical_tax_credit":     round(mtc, 2),
+        "paye_before_mtc":        round(monthly_paye, 2),
+        "paye":                   round(paye_after_mtc, 2),
+        "uif_employee":           round(uif_employee, 2),
+        "uif_employer":           round(uif_employer, 2),
+        "sdl":                    round(sdl, 2),
+        "net_pay":                round(net_pay, 2),
+        "total_cost":             round(total_cost, 2),
+        "tax_year":               tax_year or CURRENT_TAX_YEAR,
     }
 
 
@@ -304,15 +386,29 @@ async def calculate_all(
 
     results = []
     totals = {
-        "gross": 0, "taxable_gross": 0, "paye": 0, "uif_employee": 0,
-        "uif_employer": 0, "sdl": 0, "net_pay": 0, "total_cost": 0
+        "gross": 0, "taxable_gross": 0,
+        "pension_employee": 0, "pension_employer": 0,
+        "medical_aid_employee": 0, "medical_aid_employer": 0,
+        "medical_tax_credit": 0,
+        "paye": 0, "uif_employee": 0,
+        "uif_employer": 0, "sdl": 0, "net_pay": 0, "total_cost": 0,
     }
 
     annual_payroll_total = sum(e.gross_salary for e in employees) * 12
 
     for emp in employees:
-        c = calc_payroll(emp.gross_salary, annual_payroll_total=annual_payroll_total,
-                         explicit_hourly_rate=emp.hourly_rate)
+        c = calc_payroll(
+            emp.gross_salary,
+            annual_payroll_total=annual_payroll_total,
+            explicit_hourly_rate=getattr(emp, "hourly_rate", None),
+            pension_employee_pct=getattr(emp, "pension_fund_employee_pct", 0.0) or 0.0,
+            pension_employer_pct=getattr(emp, "pension_fund_employer_pct", 0.0) or 0.0,
+            pension_employee_fixed=getattr(emp, "pension_employee_fixed", 0.0) or 0.0,
+            pension_employer_fixed=getattr(emp, "pension_employer_fixed", 0.0) or 0.0,
+            medical_aid_employee=getattr(emp, "medical_aid_employee", 0.0) or 0.0,
+            medical_aid_employer=getattr(emp, "medical_aid_employer", 0.0) or 0.0,
+            medical_aid_dependants=int(getattr(emp, "medical_aid_dependants", 0) or 0),
+        )
         c["employee_id"]      = emp.id
         c["employee_name"]    = f"{emp.first_name} {emp.last_name}"
         c["employee_number"]  = emp.employee_number
@@ -320,10 +416,10 @@ async def calculate_all(
         c["department"]       = emp.department
         c["grade"]            = emp.grade
         c["employment_type"]  = emp.employment_type or "salaried"
-        c["hourly_rate_bcea"] = round(bcea_hourly_rate(emp.gross_salary, emp.hourly_rate), 4)
+        c["hourly_rate_bcea"] = round(bcea_hourly_rate(emp.gross_salary, getattr(emp, "hourly_rate", None)), 4)
         results.append(c)
         for key in totals:
-            totals[key] = round(totals[key] + c[key], 2)
+            totals[key] = round(totals[key] + c.get(key, 0), 2)
 
     zuzan_fee = max(PAYROLL_MIN, len(employees) * PAYROLL_PER_EMP)
 
@@ -378,7 +474,14 @@ async def run_payroll(
             overtime_hours=ot_entry.overtime_hours,
             sunday_hours=ot_entry.sunday_hours,
             ph_hours=ot_entry.ph_hours,
-            explicit_hourly_rate=emp.hourly_rate,
+            explicit_hourly_rate=getattr(emp, "hourly_rate", None),
+            pension_employee_pct=getattr(emp, "pension_fund_employee_pct", 0.0) or 0.0,
+            pension_employer_pct=getattr(emp, "pension_fund_employer_pct", 0.0) or 0.0,
+            pension_employee_fixed=getattr(emp, "pension_employee_fixed", 0.0) or 0.0,
+            pension_employer_fixed=getattr(emp, "pension_employer_fixed", 0.0) or 0.0,
+            medical_aid_employee=getattr(emp, "medical_aid_employee", 0.0) or 0.0,
+            medical_aid_employer=getattr(emp, "medical_aid_employer", 0.0) or 0.0,
+            medical_aid_dependants=int(getattr(emp, "medical_aid_dependants", 0) or 0),
         )
         ot = c["overtime"]
         payslip = Payslip(
@@ -397,6 +500,12 @@ async def run_payroll(
             sunday_amount=ot["sunday_amount"],
             ph_hours=ot["ph_hours"],
             ph_amount=ot["ph_amount"],
+            pension_employee=c["pension_employee"],
+            pension_employer=c["pension_employer"],
+            s11f_deduction=c["s11f_deduction"],
+            medical_aid_employee_ded=c["medical_aid_employee"],
+            medical_aid_employer_con=c["medical_aid_employer"],
+            medical_tax_credit=c["medical_tax_credit"],
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post

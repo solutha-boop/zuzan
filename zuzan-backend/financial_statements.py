@@ -67,6 +67,106 @@ def _inv_total_zar(inv) -> float:
     return round((inv.total_amount or 0) * _inv_rate(inv), 2)
 
 
+# ── Deferred tax (IAS 12 / IFRS for SMEs Section 29) ─────────────────────────
+# Fixed-asset temporary differences: accounting carrying value vs SARS tax base
+# (s11(e) wear-and-tear, Interpretation Note 47). Both sides are computed
+# analytically as at a date so opening and closing balances are consistent for
+# historical financial years. Nothing is posted to the journal — the closing
+# balance is presented as a computed AFS line, like retained earnings.
+# (Audit implementation 2026-07-14, action item L3.)
+
+_CIT_RATE = 0.27
+
+# Fallback IN47 write-off rates (% p.a.), matched by substring on the asset's
+# category when neither wear_and_tear_rate nor sars_category is set.
+# Order matters — first match wins.
+_CATEGORY_WT_RATES = [
+    ("software",  50.0),        # 2 yrs (purchased, off-the-shelf)
+    ("computer",  100.0 / 3),   # 3 yrs
+    ("laptop",    100.0 / 3),   # 3 yrs
+    ("phone",     50.0),        # 2 yrs (smartphones/tablets)
+    ("furniture", 100.0 / 6),   # 6 yrs
+    ("fitting",   100.0 / 6),   # 6 yrs
+    ("truck",     25.0),        # 4 yrs (delivery/heavy)
+    ("vehicle",   20.0),        # 5 yrs (passenger)
+    ("plant",     20.0),        # 5 yrs
+    ("machinery", 20.0),        # 5 yrs
+    ("building",  4.0),         # 25 yrs (s13quin commercial)
+    ("equipment", 20.0),        # 5 yrs (office equipment, general)
+]
+
+
+def _wt_rate_pct(fa):
+    """SARS wear-and-tear rate (% p.a.) for an asset, or None if unmappable.
+    Priority: explicit wear_and_tear_rate → sars_category (IN47 table in
+    fixed_assets.py) → category-name heuristic → None."""
+    if fa.wear_and_tear_rate:
+        return float(fa.wear_and_tear_rate)
+    if fa.sars_category:
+        try:
+            from fixed_assets import SARS_WEAR_TEAR
+            info = SARS_WEAR_TEAR.get(fa.sars_category)
+            if info:
+                years = info.get("years", 0)
+                return 100.0 if years <= 0 else 100.0 / years
+        except Exception:
+            pass
+    cat = (fa.category or "").lower()
+    for key, rate in _CATEGORY_WT_RATES:
+        if key in cat:
+            return rate
+    return None
+
+
+def _months_between(d1, d2) -> int:
+    return max(0, (d2.year - d1.year) * 12 + (d2.month - d1.month))
+
+
+def _deferred_tax_balance(db, cid, as_at) -> float:
+    """Net deferred tax balance (positive = liability, negative = asset) from
+    fixed-asset temporary differences as at a date.
+
+    Per asset: tax base = cost − cumulative straight-line wear-and-tear at the
+    SARS rate (apportioned monthly from purchase date, floored at 0);
+    temporary difference = accounting carrying value − tax base; balance =
+    temporary difference × 27%. Assets with no mappable rate use the accounting
+    carrying value as tax base, so their difference is exactly zero. With no
+    fixed assets or no rate data the result is exactly 0.0 and the AFS output
+    shape is unchanged."""
+    assets = db.query(FixedAsset).filter(
+        FixedAsset.company_id == cid,
+        FixedAsset.purchase_date <= as_at,
+    ).all()
+    balance = 0.0
+    for fa in assets:
+        # Disposed / written off on or before as_at — temporary difference reversed
+        if fa.disposal_date and fa.disposal_date <= as_at:
+            continue
+        cost = float(fa.cost or 0)
+        if cost <= 0:
+            continue
+        months = _months_between(fa.purchase_date, as_at)
+        # Accounting carrying value at as_at (analytic — mirrors the register's
+        # methods so historical FY ends don't use today's accumulated figure)
+        residual = float(fa.residual_value or 0)
+        life = fa.useful_life_months or 0
+        if fa.depreciation_method == "diminishing_balance" and fa.depreciation_rate:
+            carrying = max(residual, cost * (1.0 - float(fa.depreciation_rate)) ** (months / 12.0))
+        elif life > 0:
+            monthly = (cost - residual) / life
+            carrying = max(residual, cost - monthly * months)
+        else:
+            carrying = cost
+        rate = _wt_rate_pct(fa)
+        if rate is None:
+            tax_base = carrying           # unmappable → zero temporary difference
+        else:
+            allowance = min(cost, cost * (rate / 100.0) * (months / 12.0))
+            tax_base = max(0.0, cost - allowance)
+        balance += (carrying - tax_base) * _CIT_RATE
+    return _r(balance)
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.get("/annual")
@@ -128,6 +228,13 @@ def annual_financial_statements(
     tax_expense = _r(max(0.0, profit_before_tax * 0.27))
     net_profit  = _r(profit_before_tax - tax_expense)
 
+    # Deferred tax from fixed-asset temporary differences (audit implementation
+    # 2026-07-14 — IAS 12 / IFRS for SMEs Section 29). Expense = movement in the
+    # computed balance over the period; 0.0 when there are no fixed assets.
+    dt_opening = _deferred_tax_balance(db, cid, start)
+    dt_closing = _deferred_tax_balance(db, cid, end)
+    deferred_tax_expense = _r(dt_closing - dt_opening)
+
     # ── BALANCE SHEET (cumulative to period end) ──────────────────────────────
 
     # Assets (debit-normal: balance = DR - CR)
@@ -170,6 +277,24 @@ def annual_financial_statements(
     cum_expenses = sum(dr - cr for _, _, dr, cr in all_exp)
     retained_earnings = _r(cum_revenue - cum_expenses)
 
+    # Deferred tax presentation (audit implementation 2026-07-14): the closing
+    # balance is a computed AFS line — not a journal posting — with the matching
+    # adjustment made to retained earnings so Assets = Equity + Liabilities holds.
+    if dt_closing > 0.005:
+        non_current_liabilities = non_current_liabilities + [
+            {"code": "2600", "name": "Deferred Tax Liability", "amount": dt_closing}
+        ]
+        total_non_current_liabilities = _r(total_non_current_liabilities + dt_closing)
+        total_liabilities             = _r(total_liabilities + dt_closing)
+        retained_earnings             = _r(retained_earnings - dt_closing)
+    elif dt_closing < -0.005:
+        non_current_assets = non_current_assets + [
+            {"code": "1900", "name": "Deferred Tax Asset", "amount": _r(-dt_closing)}
+        ]
+        total_non_current_assets = _r(total_non_current_assets - dt_closing)
+        total_assets              = _r(total_assets - dt_closing)
+        retained_earnings         = _r(retained_earnings - dt_closing)
+
     equity_capital    = _r(sum(l["amount"] for l in eq_lines))
     total_equity      = _r(equity_capital + retained_earnings)
     total_equity_and_liabilities = _r(total_liabilities + total_equity)
@@ -186,6 +311,10 @@ def annual_financial_statements(
         sum(cr - dr for _, _, dr, cr in open_rev) -
         sum(dr - cr for _, _, dr, cr in open_exp)
     )
+    # Match the balance-sheet presentation: opening retained earnings carry the
+    # opening deferred-tax adjustment, so the equity statement reconciles up to
+    # the period's deferred-tax movement (disclosed as deferred_tax_movement).
+    opening_retained     = _r(opening_retained - dt_opening)
     opening_total_equity = _r(opening_equity_cap + opening_retained)
 
     # Equity movements during the period (e.g. owner contributions and drawings)
@@ -398,14 +527,18 @@ def annual_financial_statements(
         )[:20],
     }
 
-    # Note 9 — Taxation
+    # Note 9 — Taxation (deferred tax computed from fixed-asset temporary
+    # differences — audit implementation 2026-07-14)
+    total_tax = _r(tax_expense + deferred_tax_expense)
     tax_note = {
         "profit_before_tax": _r(profit_before_tax),
         "tax_rate_pct":      27.0,
         "current_tax":       _r(tax_expense),
-        "deferred_tax":      0.0,
-        "total_tax":         _r(tax_expense),
-        "effective_rate_pct": round(tax_expense / profit_before_tax * 100, 1) if profit_before_tax > 0 else 0.0,
+        "deferred_tax":      deferred_tax_expense,
+        "total_tax":         total_tax,
+        "effective_rate_pct": round(total_tax / profit_before_tax * 100, 1) if profit_before_tax > 0 else 0.0,
+        "deferred_tax_opening_balance": dt_opening,
+        "deferred_tax_closing_balance": dt_closing,
     }
 
     return {
@@ -473,6 +606,10 @@ def annual_financial_statements(
             "closing_share_capital":  equity_capital,
             "closing_retained":       retained_earnings,
             "closing_total":          total_equity,
+            # Non-cash deferred-tax movement (negative = charge) — explains the
+            # difference between opening + profit + contributions − drawings and
+            # closing when deferred tax is non-zero.
+            "deferred_tax_movement":  _r(-deferred_tax_expense),
         },
         "cash_flow": {
             "operating": {
@@ -529,8 +666,11 @@ def annual_financial_statements(
                     "Short-term employee benefits are expensed as the related service is provided. "
                     "Contributions to UIF and SDL are expensed in the period in which they arise.",
                 "income_tax":
-                    f"Income tax is calculated at the standard corporate rate of 27% on taxable profit. "
-                    f"Deferred tax is not separately disclosed in these condensed statements.",
+                    "Income tax is calculated at the standard corporate rate of 27% on taxable profit. "
+                    "Deferred tax is recognised on temporary differences between the carrying value of "
+                    "property, plant and equipment and its tax base (SARS section 11(e) wear-and-tear "
+                    "allowances, Interpretation Note 47), measured at the corporate rate of 27% "
+                    "(Section 29 of the IFRS for SMEs Standard).",
             },
         },
     }

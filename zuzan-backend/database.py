@@ -64,6 +64,10 @@ class Company(Base):
     payfast_merchant_key=Column(String,nullable=True)
     payfast_passphrase=Column(String,nullable=True)
     cipc_registration_date=Column(DateTime,nullable=True)   # Company anniversary for CIPC AR reminder
+    # Billing lifecycle tracking
+    trial_warning_sent_at=Column(DateTime,nullable=True)    # When 3-day warning email was sent
+    trial_expiry_email_sent_at=Column(DateTime,nullable=True) # When "trial ended" email was sent
+    overdue_reminders_enabled=Column(Boolean,default=True)  # Whether auto overdue reminders fire
     created_at=Column(DateTime,default=datetime.utcnow)
     users=relationship("User",back_populates="company")
     invoices=relationship("Invoice",back_populates="company")
@@ -87,6 +91,8 @@ class Company(Base):
     stitch_connection=relationship("StitchConnection",foreign_keys="StitchConnection.company_id",uselist=False)
     stitch_bank_accounts=relationship("StitchBankAccount",foreign_keys="StitchBankAccount.company_id")
     stitch_transactions=relationship("StitchTransaction",foreign_keys="StitchTransaction.company_id")
+    recurring_invoices=relationship("RecurringInvoice",back_populates="company")
+    credit_notes=relationship("CreditNote",back_populates="company")
 
 class User(Base):
     __tablename__ = "users"
@@ -148,6 +154,16 @@ class Employee(Base):
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
     hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
+    # Pension / Provident fund (s11F — cap R430,000/year from 1 March 2026)
+    # Use pct OR fixed_amount (or both — they add up). s11F relief applies to the total, capped.
+    pension_fund_employee_pct=Column(Float,default=0.0)     # e.g. 0.075 = 7.5% of gross salary
+    pension_fund_employer_pct=Column(Float,default=0.0)     # e.g. 0.075 = 7.5% of gross salary
+    pension_employee_fixed=Column(Float,default=0.0)        # optional fixed monthly ZAR top-up (voluntary)
+    pension_employer_fixed=Column(Float,default=0.0)        # optional fixed monthly ZAR employer add-on
+    # Medical aid (s6A MTC: R376/month main+first dependant, R254 additional — 2026/2027)
+    medical_aid_employee=Column(Float,default=0.0)       # employee monthly contribution (ZAR)
+    medical_aid_employer=Column(Float,default=0.0)       # employer monthly contribution (ZAR) — taxable fringe benefit
+    medical_aid_dependants=Column(Integer,default=0)     # dependants excluding main member
     bank_name=Column(String); bank_account=Column(String)
     account_number=Column(String); branch_code=Column(String); account_type=Column(String)
     is_active=Column(Boolean,default=True)
@@ -186,6 +202,14 @@ class Payslip(Base):
     sunday_amount=Column(Float,default=0)
     ph_hours=Column(Float,default=0)         # public holiday hours (2x)
     ph_amount=Column(Float,default=0)
+    # Pension / Provident fund
+    pension_employee=Column(Float,default=0.0)       # employee monthly contribution (ZAR)
+    pension_employer=Column(Float,default=0.0)       # employer monthly contribution (ZAR)
+    s11f_deduction=Column(Float,default=0.0)         # s11F monthly deduction applied
+    # Medical aid
+    medical_aid_employee_ded=Column(Float,default=0.0)  # employee deduction
+    medical_aid_employer_con=Column(Float,default=0.0)  # employer contribution (fringe benefit)
+    medical_tax_credit=Column(Float,default=0.0)        # s6A MTC applied (reduces PAYE)
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -421,6 +445,7 @@ class FixedAsset(Base):
     disposal_notes          = Column(Text, nullable=True)
     # SARS tax depreciation (s11(e) / IN47 — for deferred tax)
     sars_category           = Column(String, nullable=True)    # SARS IN47 category name
+    wear_and_tear_rate      = Column(Float, nullable=True)     # % p.a. s11(e)/IN47 override, e.g. 33.33
     # Audit
     created_at              = Column(DateTime, default=datetime.utcnow)
     updated_at              = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -845,6 +870,48 @@ class CategoryRule(Base):
     company     = relationship("Company", back_populates="category_rules")
 
 
+class RecurringInvoice(Base):
+    """Template for invoices that are generated automatically on a schedule."""
+    __tablename__ = "recurring_invoices"
+    id                  = Column(Integer, primary_key=True, index=True)
+    company_id          = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    client_name         = Column(String, nullable=False)
+    client_email        = Column(String, nullable=True)
+    description         = Column(Text, nullable=True)
+    amount              = Column(Float, nullable=False)   # excl. VAT
+    vat_applicable      = Column(Boolean, default=True)
+    currency            = Column(String, default="ZAR")
+    frequency           = Column(String, nullable=False)  # weekly|monthly|quarterly|annually
+    start_date          = Column(DateTime, nullable=False)
+    next_run_date       = Column(DateTime, nullable=True)
+    last_run_date       = Column(DateTime, nullable=True)
+    is_active           = Column(Boolean, default=True)
+    invoices_generated  = Column(Integer, default=0)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    company             = relationship("Company", back_populates="recurring_invoices")
+
+
+class CreditNote(Base):
+    """Credit note — issued against a paid or sent invoice to reduce the amount owed."""
+    __tablename__ = "credit_notes"
+    id                  = Column(Integer, primary_key=True, index=True)
+    company_id          = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    invoice_id          = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    credit_note_number  = Column(String, nullable=False)
+    client_name         = Column(String, nullable=False)
+    description         = Column(Text, nullable=True)
+    amount              = Column(Float, nullable=False)   # excl. VAT
+    vat_amount          = Column(Float, default=0)
+    total_amount        = Column(Float, nullable=False)   # incl. VAT
+    currency            = Column(String, default="ZAR")
+    issue_date          = Column(DateTime, default=datetime.utcnow)
+    notes               = Column(Text, nullable=True)
+    journal_entry_id    = Column(Integer, nullable=True)
+    created_at          = Column(DateTime, default=datetime.utcnow)
+    company             = relationship("Company", back_populates="credit_notes")
+    invoice             = relationship("Invoice")
+
+
 class SiteVisit(Base):
     """Anonymous site visit / engagement tracking — no PII stored."""
     __tablename__ = "site_visits"
@@ -1202,6 +1269,64 @@ def init_db():
             )""",
             "CREATE INDEX IF NOT EXISTS ix_site_visits_timestamp ON site_visits (timestamp)",
             "CREATE INDEX IF NOT EXISTS ix_site_visits_session ON site_visits (session_id)",
+            # ── Billing lifecycle columns (2026-07) ───────────────────────────
+            "ALTER TABLE companies ADD COLUMN trial_warning_sent_at TIMESTAMP",
+            "ALTER TABLE companies ADD COLUMN trial_expiry_email_sent_at TIMESTAMP",
+            "ALTER TABLE companies ADD COLUMN overdue_reminders_enabled BOOLEAN DEFAULT TRUE",
+            # ── Recurring invoices (2026-07) ──────────────────────────────────
+            """CREATE TABLE IF NOT EXISTS recurring_invoices (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER NOT NULL REFERENCES companies(id),
+                client_name VARCHAR NOT NULL,
+                client_email VARCHAR,
+                description TEXT,
+                amount FLOAT NOT NULL,
+                vat_applicable BOOLEAN DEFAULT TRUE,
+                currency VARCHAR DEFAULT 'ZAR',
+                frequency VARCHAR NOT NULL,
+                start_date TIMESTAMP NOT NULL,
+                next_run_date TIMESTAMP,
+                last_run_date TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE,
+                invoices_generated INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_recurring_invoices_company ON recurring_invoices (company_id)",
+            "CREATE INDEX IF NOT EXISTS ix_recurring_invoices_next_run ON recurring_invoices (next_run_date)",
+            # ── Credit notes (2026-07) ────────────────────────────────────────
+            """CREATE TABLE IF NOT EXISTS credit_notes (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER NOT NULL REFERENCES companies(id),
+                invoice_id INTEGER REFERENCES invoices(id),
+                credit_note_number VARCHAR NOT NULL,
+                client_name VARCHAR NOT NULL,
+                description TEXT,
+                amount FLOAT NOT NULL,
+                vat_amount FLOAT DEFAULT 0,
+                total_amount FLOAT NOT NULL,
+                currency VARCHAR DEFAULT 'ZAR',
+                issue_date TIMESTAMP DEFAULT NOW(),
+                notes TEXT,
+                journal_entry_id INTEGER,
+                created_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_credit_notes_company ON credit_notes (company_id)",
+            # ── Deferred tax: per-asset SARS wear-and-tear rate override (2026-07-14) ──
+            "ALTER TABLE fixed_assets ADD COLUMN wear_and_tear_rate FLOAT",
+            # ── Pension / Medical aid on employees + payslips (2026-07) ──────────
+            "ALTER TABLE employees ADD COLUMN pension_fund_employee_pct FLOAT DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN pension_fund_employer_pct FLOAT DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN pension_employee_fixed FLOAT DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN pension_employer_fixed FLOAT DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN medical_aid_employee FLOAT DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN medical_aid_employer FLOAT DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN medical_aid_dependants INTEGER DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN pension_employee FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN pension_employer FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN s11f_deduction FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN medical_aid_employee_ded FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN medical_aid_employer_con FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN medical_tax_credit FLOAT DEFAULT 0",
         ]:
             try:
                 conn.execute(text(sql))

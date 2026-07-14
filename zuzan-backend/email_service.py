@@ -174,6 +174,7 @@ def send_welcome_email(
     plan: str,
     billing_cycle: str,
     trial_ends_str: str,
+    payroll_enabled: bool = False,
 ):
     info  = PLAN_DETAILS.get(plan, PLAN_DETAILS["starter"])
     price = info.get(f"price_{billing_cycle}", info["price_monthly"])
@@ -182,6 +183,99 @@ def send_welcome_email(
         f"<li style='padding:5px 0;color:#444;'>✓ &nbsp;{f}</li>"
         for f in info["features"]
     )
+
+    # ── Payroll section (shown when payroll is enabled) ────────────────────────
+    payroll_section = ""
+    if payroll_enabled:
+        payroll_section = f"""
+      <!-- Payroll explainer -->
+      <div style="background:#fff;border-radius:8px;padding:24px;border:1px solid #e0d9d0;margin-bottom:24px;">
+        <p style="color:#C8401A;font-weight:bold;font-size:13px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.5px;">
+          🏦 &nbsp;Your Payroll Add-on is Active
+        </p>
+        <p style="color:#444;line-height:1.7;margin:0 0 16px;">
+          ZuZan Payroll handles South African payroll end-to-end — add your employees under
+          <strong>Payroll → Employees</strong>, then run payroll each month.
+          Here's what happens automatically:
+        </p>
+        <ul style="margin:0;padding-left:0;list-style:none;">
+          <li style="padding:6px 0;color:#444;border-bottom:1px solid #f0ece6;">
+            <strong style="color:#1a1a1a;">PAYE</strong> — calculated on the SARS sliding scale,
+            annualised and split monthly. Includes the primary rebate and age rebates.
+          </li>
+          <li style="padding:6px 0;color:#444;border-bottom:1px solid #f0ece6;">
+            <strong style="color:#1a1a1a;">UIF</strong> — 1% employee + 1% employer on basic pay
+            (capped at the R17,712/month UIF ceiling).
+          </li>
+          <li style="padding:6px 0;color:#444;border-bottom:1px solid #f0ece6;">
+            <strong style="color:#1a1a1a;">SDL</strong> — 1% Skills Development Levy on gross payroll
+            (applies once your annual payroll exceeds R500,000).
+          </li>
+          <li style="padding:6px 0;color:#444;border-bottom:1px solid #f0ece6;">
+            <strong style="color:#1a1a1a;">Overtime (BCEA)</strong> — weekday overtime at 1.5×,
+            Sundays at 2×, and public holidays at 2× are calculated automatically
+            from the hours you enter.
+          </li>
+          <li style="padding:6px 0;color:#444;border-bottom:1px solid #f0ece6;">
+            <strong style="color:#1a1a1a;">Pension / Provident Fund (Section 11F)</strong> — set
+            employer and employee contribution percentages (plus optional fixed ZAR top-ups) per
+            employee. ZuZan calculates the tax-deductible portion under s11F
+            (up to 27.5% of remuneration or R430,000/year — whichever is lower).
+            Contributions above the cap are still processed and deducted from net pay.
+          </li>
+          <li style="padding:6px 0;color:#444;border-bottom:1px solid #f0ece6;">
+            <strong style="color:#1a1a1a;">Medical Aid (Section 6A MTC)</strong> — enter employee
+            and employer medical aid contributions and the number of dependants. ZuZan applies the
+            Medical Tax Credit (R376/month for main member + first dependant, R254/month for each
+            additional dependant) as a direct reduction of PAYE.
+          </li>
+          <li style="padding:6px 0;color:#444;">
+            <strong style="color:#1a1a1a;">Payslips &amp; EMP201</strong> — every payroll run
+            generates a detailed digital payslip per employee and an EMP201 summary
+            you can submit directly to SARS.
+          </li>
+        </ul>
+        <p style="color:#888;font-size:13px;margin:16px 0 0;line-height:1.6;">
+          Leave management (annual, sick, and family responsibility leave) is also built in —
+          see <strong>Payroll → Leave</strong>.
+          To get started: add your employees, set their salary and benefit details, then hit
+          <strong>Run Payroll</strong> at month-end.
+        </p>
+      </div>
+    """
+    else:
+        # ── Add-ons section (shown when payroll is NOT enabled) ────────────────
+        payroll_section = f"""
+      <!-- Available add-ons -->
+      <div style="background:#fff8f6;border-radius:8px;padding:24px;border:1px solid #e0d9d0;margin-bottom:24px;">
+        <p style="color:#C8401A;font-weight:bold;font-size:13px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.5px;">
+          ➕ &nbsp;Available Add-ons
+        </p>
+        <p style="color:#444;line-height:1.7;margin:0 0 16px;">
+          Extend ZuZan with powerful modules that plug straight into your existing data:
+        </p>
+
+        <!-- Payroll add-on card -->
+        <div style="background:#fff;border-radius:6px;padding:16px;border:1px solid #e0d9d0;margin-bottom:12px;">
+          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 6px;">🏦 &nbsp;Payroll Manager</p>
+          <p style="color:#555;line-height:1.7;margin:0 0 8px;font-size:14px;">
+            Full South African payroll — PAYE (SARS sliding scale), UIF, SDL, BCEA overtime,
+            pension/provident fund with Section 11F relief (R430k cap), medical aid with
+            Medical Tax Credits, digital payslips, and your monthly EMP201 report —
+            all calculated automatically per payroll run.
+          </p>
+          <p style="color:#888;font-size:13px;margin:0;">
+            To enable: go to <strong>Settings → Subscription</strong> and add the Payroll module.
+          </p>
+        </div>
+
+        <p style="color:#888;font-size:12px;margin:4px 0 0;line-height:1.6;">
+          More add-ons are on the way. Email
+          <a href="mailto:{SUPPORT_EMAIL}" style="color:#C8401A;">{SUPPORT_EMAIL}</a>
+          if there's a specific feature you'd like to see.
+        </p>
+      </div>
+    """
 
     body = f"""
       <h2 style="color:#1a1a1a;margin:0 0 8px;">Welcome to ZuZan, {first_name}!</h2>
@@ -203,6 +297,8 @@ def send_welcome_email(
           {features_html}
         </ul>
       </div>
+
+      {payroll_section}
 
       <!-- Support box -->
       <div style="background:#fff8f6;border-radius:8px;padding:20px;border-left:4px solid #C8401A;margin-bottom:24px;">
@@ -359,6 +455,177 @@ def send_invite_email(invitee_email: str, company_name: str, inviter_name: str, 
         f"You've been invited to join {company_name} on ZuZan",
         _wrap(body, invitee_email, transactional=True),
         from_email=FROM_SUPPORT_EMAIL,
+    )
+
+
+# ── 6. Trial ending soon warning ──────────────────────────────────────────────
+def send_trial_warning_email(
+    first_name: str,
+    email: str,
+    company_name: str,
+    days_left: int,
+    subscribe_url: str,
+):
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 12px;">Your ZuZan trial ends in {days_left} day{'s' if days_left != 1 else ''}</h2>
+      <p style="color:#555;line-height:1.7;margin:0 0 24px;">
+        Hi {first_name}, your free trial for <strong>{company_name}</strong> is almost up.
+        Subscribe now to keep your data and continue using ZuZan without interruption.
+      </p>
+
+      <div style="background:#FFF8E1;border:1px solid #F59E0B;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <p style="color:#78350F;font-weight:700;margin:0 0 6px;">What happens when the trial ends?</p>
+        <p style="color:#92400E;margin:0;font-size:13px;line-height:1.7;">
+          Your data is safe. You'll need an active subscription to continue creating invoices,
+          running payroll, and accessing your reports. Subscribe before the deadline to keep
+          everything running smoothly.
+        </p>
+      </div>
+
+      {_btn("Subscribe Now", subscribe_url)}
+
+      <p style="color:#aaa;font-size:12px;text-align:center;">
+        Questions? Email us at <a href="mailto:{SUPPORT_EMAIL}" style="color:#C8401A;">{SUPPORT_EMAIL}</a>
+      </p>
+    """
+    send_email(
+        email,
+        f"⚠️ Your ZuZan trial ends in {days_left} day{'s' if days_left != 1 else ''} — subscribe to keep access",
+        _wrap(body, email, transactional=True),
+        from_email=FROM_SUPPORT_EMAIL,
+    )
+
+
+# ── 7. Trial expired ───────────────────────────────────────────────────────────
+def send_trial_expired_email(
+    first_name: str,
+    email: str,
+    company_name: str,
+    subscribe_url: str,
+):
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 12px;">Your ZuZan trial has ended</h2>
+      <p style="color:#555;line-height:1.7;margin:0 0 24px;">
+        Hi {first_name}, your 14-day free trial for <strong>{company_name}</strong> has ended.
+        Your data is safely stored — subscribe to regain full access.
+      </p>
+
+      <div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <p style="color:#991B1B;font-weight:700;margin:0 0 6px;">Your account is currently paused</p>
+        <p style="color:#7F1D1D;margin:0;font-size:13px;line-height:1.7;">
+          All your invoices, expenses, employees, and reports are still there.
+          Choose a plan below to restore access instantly.
+        </p>
+      </div>
+
+      {_btn("Reactivate My Account", subscribe_url)}
+
+      <p style="color:#555;font-size:13px;text-align:center;margin:16px 0 0;">
+        Need help choosing a plan? Email us at
+        <a href="mailto:{SUPPORT_EMAIL}" style="color:#C8401A;">{SUPPORT_EMAIL}</a>
+        and we'll assist you personally.
+      </p>
+    """
+    send_email(
+        email,
+        f"Your ZuZan trial has ended — reactivate {company_name}",
+        _wrap(body, email, transactional=True),
+        from_email=FROM_SUPPORT_EMAIL,
+    )
+
+
+# ── 8. Subscription activated ──────────────────────────────────────────────────
+def send_subscription_active_email(
+    first_name: str,
+    email: str,
+    company_name: str,
+    plan: str,
+    amount: float,
+):
+    info = PLAN_DETAILS.get(plan, PLAN_DETAILS["starter"])
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 8px;">Your ZuZan subscription is active 🎉</h2>
+      <p style="color:#555;line-height:1.7;margin:0 0 24px;">
+        Hi {first_name}, payment received for <strong>{company_name}</strong>.
+        Your <strong>{info['name']} plan</strong> is now active.
+      </p>
+
+      <div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Plan</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{info['name']}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Amount paid</td>
+            <td style="padding:6px 0;font-weight:700;color:#C8401A;text-align:right;">R{amount:,.2f}</td>
+          </tr>
+        </table>
+      </div>
+
+      {_btn("Open ZuZan", FRONTEND_URL)}
+    """
+    send_email(
+        email,
+        f"Payment confirmed — ZuZan {info['name']} plan active",
+        _wrap(body, email, transactional=True),
+        from_email=FROM_SUPPORT_EMAIL,
+    )
+
+
+# ── 9. Overdue invoice reminder (to client) ───────────────────────────────────
+def send_overdue_invoice_reminder(
+    client_email: str,
+    client_name: str,
+    company_name: str,
+    invoice_number: str,
+    amount: float,
+    days_overdue: int,
+    portal_url: str = None,
+):
+    pay_btn = _btn("View &amp; Pay Invoice", portal_url) if portal_url else ""
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 4px;">Overdue Invoice Reminder</h2>
+      <p style="color:#888;margin:0 0 24px;font-size:13px;">From <strong>{company_name}</strong></p>
+
+      <p style="color:#555;margin:0 0 16px;">Dear <strong>{client_name}</strong>,</p>
+      <p style="color:#555;margin:0 0 24px;line-height:1.7;">
+        This is a friendly reminder that invoice <strong>{invoice_number}</strong> from
+        <strong>{company_name}</strong> is now <strong>{days_overdue} day{'s' if days_overdue != 1 else ''} overdue</strong>.
+      </p>
+
+      <div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Invoice</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{invoice_number}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Amount Due</td>
+            <td style="padding:6px 0;font-weight:700;font-size:18px;color:#C8401A;text-align:right;">R{amount:,.2f}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Days Overdue</td>
+            <td style="padding:6px 0;font-weight:700;color:#991B1B;text-align:right;">{days_overdue} days</td>
+          </tr>
+        </table>
+      </div>
+
+      <p style="color:#555;margin:0 0 24px;font-size:13px;">
+        Please settle this invoice at your earliest convenience to avoid any disruption to services.
+        If you have already made payment, please disregard this notice.
+      </p>
+
+      {pay_btn}
+
+      <p style="color:#aaa;font-size:11px;margin:20px 0 0;">
+        If you have any queries, please reply to this email or contact {company_name} directly.
+      </p>
+    """
+    send_email(
+        client_email,
+        f"Payment Reminder: Invoice {invoice_number} from {company_name} — {days_overdue} days overdue",
+        _wrap(body, client_email, transactional=True),
     )
 
 

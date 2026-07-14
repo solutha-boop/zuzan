@@ -277,6 +277,7 @@ async def verify_email(token: str, background_tasks: BackgroundTasks, db: Sessio
             send_welcome_email,
             user.first_name, user.email, company.name,
             str(company.plan.value), str(company.billing_cycle.value), trial_ends_fmt,
+            bool(company.payroll_enabled),
         )
 
     html = f"""<html><body style="font-family:Arial;text-align:center;padding:60px;background:#FAF7F2;">

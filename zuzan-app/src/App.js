@@ -28,6 +28,22 @@ const BASE_URL = "https://zuzan-backend.onrender.com";
 const fmt = n => `R${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2})}`;
 const fmtDate = d => new Date(d).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"});
 
+// ── PAYFAST FORM SUBMIT ───────────────────────────────────────────────────────
+// PayFast requires a POST form with all params as hidden inputs.
+// A bare redirect (GET) doesn't carry the params, so the checkout fails.
+function pfSubmit(payfast_url, payfast_data) {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = payfast_url;
+  Object.entries(payfast_data).forEach(([k, v]) => {
+    const inp = document.createElement("input");
+    inp.type = "hidden"; inp.name = k; inp.value = v;
+    form.appendChild(inp);
+  });
+  document.body.appendChild(form);
+  form.submit();
+}
+
 // ── API HELPER ────────────────────────────────────────────────────────────────
 async function api(path, options = {}) {
   const token = localStorage.getItem("zuzan_token");
@@ -166,24 +182,91 @@ function calcOvertime(grossMonthly, otHours=0, sunHours=0, phHours=0, explicitHo
            total: Math.round((otAmt + sunAmt + phAmt)*100)/100 };
 }
 
-function calcPayroll(salary, taxYear, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null) {
+// Section 11F and Medical Tax Credit constants (2026/2027)
+const S11F_RATE = 0.275;      // 27.5%
+const S11F_CAP  = 430_000;    // R430,000/year (increased from R350,000, effective 1 March 2026)
+const MTC_MAIN_FIRST = 376;   // R/month — main member + first dependant each
+const MTC_ADDITIONAL = 254;   // R/month — each additional dependant
+
+function calcMedicalTaxCredit(numDependants = 0) {
+  // numDependants = people on the plan EXCLUDING the main member
+  if (numDependants === 0) return MTC_MAIN_FIRST;
+  if (numDependants === 1) return MTC_MAIN_FIRST * 2;
+  return MTC_MAIN_FIRST * 2 + MTC_ADDITIONAL * (numDependants - 1);
+}
+
+function calcPayroll(
+  salary,
+  taxYear,
+  otHours = 0,
+  sunHours = 0,
+  phHours = 0,
+  explicitHourlyRate = null,
+  pensionEmployeePct = 0,
+  pensionEmployerPct = 0,
+  medicalAidEmployee = 0,
+  medicalAidEmployer = 0,
+  medicalAidDependants = 0,
+  pensionEmployeeFixed = 0,   // optional fixed ZAR/month voluntary top-up
+  pensionEmployerFixed = 0,   // optional fixed ZAR/month employer add-on
+) {
   const yr = TAX_YEARS[taxYear || CURRENT_TAX_YEAR] || TAX_YEARS[CURRENT_TAX_YEAR];
   const ot = calcOvertime(salary, otHours, sunHours, phHours, explicitHourlyRate);
   const taxableGross = salary + ot.total;
-  const paye = calcPAYE(taxableGross*12, taxYear)/12;
-  // UIF on base salary only (SARS excludes overtime from UIF)
-  const uifBase = Math.min(salary, yr.uifCeil);
-  const uifEmp = uifBase*0.01, uifEmpr = uifBase*0.01, sdl = taxableGross*0.01;
+
+  // Pension/provident: % of gross + optional fixed top-up (both add to total contribution)
+  const pensionEmployee = salary * pensionEmployeePct + pensionEmployeeFixed;
+  const pensionEmployer = salary * pensionEmployerPct + pensionEmployerFixed;
+
+  // PAYE base: cash remuneration + employer medical aid fringe benefit (7th Schedule s2(i))
+  const payeBaseMonthly = taxableGross + medicalAidEmployer;
+  const payeBaseAnnual  = payeBaseMonthly * 12;
+
+  // Section 11F: min(total employee contributions, 27.5% × remuneration, R430,000)
+  // Excess above the cap is still deducted from pay but gives no additional PAYE relief.
+  const pensionEmployeeAnnual = pensionEmployee * 12;
+  const s11fAnnual = Math.min(pensionEmployeeAnnual, S11F_RATE * payeBaseAnnual, S11F_CAP);
+  const s11fMonthly = s11fAnnual / 12;
+  const s11fExcessMonthly = Math.max(0, pensionEmployee - s11fMonthly); // post-tax excess
+
+  // PAYE before MTC
+  const payeBeforeMtc = calcPAYE(payeBaseAnnual - s11fAnnual, taxYear) / 12;
+
+  // Medical Tax Credit (Section 6A) — only applies if employee is on medical aid
+  const onMedicalAid = (medicalAidEmployee > 0 || medicalAidEmployer > 0);
+  const mtc = onMedicalAid ? calcMedicalTaxCredit(medicalAidDependants) : 0;
+  const paye = Math.max(0, payeBeforeMtc - mtc);
+
+  // UIF on base salary only (SARS excludes overtime and fringe benefits)
+  const uifBase  = Math.min(salary, yr.uifCeil);
+  const uifEmp   = uifBase * 0.01;
+  const uifEmpr  = uifBase * 0.01;
+  const sdl      = taxableGross * 0.01;
+
+  // Net pay: cash earnings minus employee-side deductions (fringe benefit excluded from cash)
+  const netPay = taxableGross - paye - uifEmp - pensionEmployee - medicalAidEmployee;
+
+  // Total employer cost
+  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer;
+
   return {
-    gross:salary,
+    gross: salary,
     overtime: ot,
-    taxableGross: Math.round(taxableGross),
-    paye:Math.round(paye),
-    uifEmployee:Math.round(uifEmp),
-    uifEmployer:Math.round(uifEmpr),
-    sdl:Math.round(sdl),
-    netPay:Math.round(taxableGross-paye-uifEmp),
-    totalCost:Math.round(taxableGross+uifEmpr+sdl)
+    taxableGross:   Math.round(taxableGross),
+    pensionEmployee: Math.round(pensionEmployee),
+    pensionEmployer: Math.round(pensionEmployer),
+    s11fDeduction:      Math.round(s11fMonthly),
+    s11fExcessMonthly:  Math.round(s11fExcessMonthly), // contribution above cap (post-tax, no extra relief)
+    medicalAidEmployee: Math.round(medicalAidEmployee),
+    medicalAidEmployer: Math.round(medicalAidEmployer),
+    medicalTaxCredit:   Math.round(mtc),
+    payeBeforeMtc:  Math.round(payeBeforeMtc),
+    paye:           Math.round(paye),
+    uifEmployee:    Math.round(uifEmp),
+    uifEmployer:    Math.round(uifEmpr),
+    sdl:            Math.round(sdl),
+    netPay:         Math.round(netPay),
+    totalCost:      Math.round(totalCost),
   };
 }
 
@@ -1191,6 +1274,212 @@ function DocumentTemplateSettings({template, onChange}) {
   );
 }
 
+// ── RECURRING INVOICES TAB ────────────────────────────────────────────────────
+function RecurringInvoicesTab() {
+  const [items, setItems] = useState([]);
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({client_name:"",client_email:"",description:"",amount:"",vat_applicable:true,currency:"ZAR",frequency:"monthly",start_date:new Date().toISOString().slice(0,10)});
+  const [saving, setSaving] = useState(false);
+  const load = () => api("/recurring-invoices").then(setItems).catch(()=>{});
+  useEffect(load, []);
+  const FREQ = {weekly:"Weekly",monthly:"Monthly",quarterly:"Quarterly",annually:"Annually"};
+  const handleCreate = async () => {
+    if(!form.client_name||!form.amount){alert("Client name and amount required.");return;}
+    setSaving(true);
+    try { await api("/recurring-invoices",{method:"POST",body:JSON.stringify({...form,amount:+form.amount})}); setShowNew(false); setForm({client_name:"",client_email:"",description:"",amount:"",vat_applicable:true,currency:"ZAR",frequency:"monthly",start_date:new Date().toISOString().slice(0,10)}); load(); }
+    catch(e){alert("Failed to create.");}
+    finally{setSaving(false);}
+  };
+  const handleDelete = async (id) => {
+    if(!window.confirm("Delete recurring invoice?"))return;
+    await api(`/recurring-invoices/${id}`,{method:"DELETE"}).catch(()=>{});
+    load();
+  };
+  const handleToggle = async (item) => {
+    await api(`/recurring-invoices/${item.id}`,{method:"PUT",body:JSON.stringify({is_active:!item.is_active})}).catch(()=>{});
+    load();
+  };
+  const handleRunNow = async (id) => {
+    try { await api(`/recurring-invoices/${id}/run`,{method:"POST"}); alert("Invoice generated!"); load(); }
+    catch(e){alert("Failed to run.");}
+  };
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:20,fontWeight:800,fontFamily:"serif",color:C.ink}}>Recurring Invoices</div>
+          <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Auto-generate invoices on a schedule</div>
+        </div>
+        <button onClick={()=>setShowNew(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New Recurring</button>
+      </div>
+      {showNew && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.surface,borderRadius:20,width:"100%",maxWidth:600,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px #00000030"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 28px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>New Recurring Invoice</h3>
+              <button onClick={()=>setShowNew(false)} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:C.inkMid,lineHeight:1}}>×</button>
+            </div>
+            <div style={{overflowY:"auto",padding:"20px 28px",flex:1}}>
+              {[{l:"Client Name",k:"client_name",p:"Client name"},{l:"Client Email",k:"client_email",p:"client@example.com"},{l:"Description",k:"description",p:"Monthly retainer"},{l:"Amount (excl. VAT)",k:"amount",p:"0.00",type:"number"},{l:"Start Date",k:"start_date",type:"date"}].map(f=>(
+                <div key={f.k} style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.type||"text"} placeholder={f.p||""} value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div style={{marginBottom:14}}>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Frequency</label>
+                <select value={form.frequency} onChange={e=>setForm({...form,frequency:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annually">Annually</option>
+                </select>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+                <input type="checkbox" checked={form.vat_applicable} onChange={e=>setForm({...form,vat_applicable:e.target.checked})} id="vat-recur" style={{width:16,height:16,accentColor:C.accent}}/>
+                <label htmlFor="vat-recur" style={{fontSize:13,color:C.ink,cursor:"pointer"}}>Add VAT (15%)</label>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
+              <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Create"}</button>
+              <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {items.length===0 ? (
+        <div style={{textAlign:"center",padding:"60px 20px",color:C.inkMid}}>
+          <div style={{fontSize:48,marginBottom:16}}>🔁</div>
+          <div style={{fontSize:16,fontWeight:600,color:C.ink,marginBottom:8}}>No recurring invoices yet</div>
+          <div style={{fontSize:13}}>Set up a recurring invoice to auto-generate invoices for retainers and subscriptions.</div>
+        </div>
+      ) : (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr style={{background:C.bg}}>
+              {["Client","Description","Amount","Frequency","Next Run","Status","Actions"].map(h=>(
+                <th key={h} style={{padding:"11px 16px",textAlign:"left",fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase"}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {items.map((item,i)=>(
+                <tr key={item.id} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?C.surface:C.bg}}>
+                  <td style={{padding:"12px 16px",fontWeight:600}}>{item.client_name}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid,fontSize:12}}>{item.description||"—"}</td>
+                  <td style={{padding:"12px 16px",fontWeight:700}}>{fmt(item.amount)}</td>
+                  <td style={{padding:"12px 16px",textTransform:"capitalize"}}>{FREQ[item.frequency]||item.frequency}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid}}>{item.next_run_date?new Date(item.next_run_date).toLocaleDateString("en-ZA"):"—"}</td>
+                  <td style={{padding:"12px 16px"}}>
+                    <span style={{padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:item.is_active?C.greenLt:C.border,color:item.is_active?C.green:C.inkMid}}>{item.is_active?"Active":"Paused"}</span>
+                  </td>
+                  <td style={{padding:"12px 16px"}}>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>handleToggle(item)} style={{background:item.is_active?C.goldLt:C.greenLt,color:item.is_active?C.gold:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{item.is_active?"Pause":"Resume"}</button>
+                      <button onClick={()=>handleRunNow(item.id)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Run Now</button>
+                      <button onClick={()=>handleDelete(item.id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CREDIT NOTES TAB ──────────────────────────────────────────────────────────
+function CreditNotesTab() {
+  const [items, setItems] = useState([]);
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:new Date().toISOString().slice(0,10)});
+  const [saving, setSaving] = useState(false);
+  const load = () => api("/credit-notes").then(setItems).catch(()=>{});
+  useEffect(load, []);
+  const handleCreate = async () => {
+    if(!form.client_name||!form.amount){alert("Client name and amount required.");return;}
+    setSaving(true);
+    try { await api("/credit-notes",{method:"POST",body:JSON.stringify({...form,amount:+form.amount,vat_rate:+form.vat_rate})}); setShowNew(false); setForm({client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:new Date().toISOString().slice(0,10)}); load(); }
+    catch(e){alert("Failed to create credit note.");}
+    finally{setSaving(false);}
+  };
+  const handleDelete = async (id) => {
+    if(!window.confirm("Delete this credit note?"))return;
+    await api(`/credit-notes/${id}`,{method:"DELETE"}).catch(()=>{});
+    load();
+  };
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:20,fontWeight:800,fontFamily:"serif",color:C.ink}}>Credit Notes</div>
+          <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Issue credit notes to reduce amounts owed by clients</div>
+        </div>
+        <button onClick={()=>setShowNew(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New Credit Note</button>
+      </div>
+      {showNew && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:C.surface,borderRadius:20,width:"100%",maxWidth:560,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px #00000030"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 28px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>New Credit Note</h3>
+              <button onClick={()=>setShowNew(false)} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:C.inkMid,lineHeight:1}}>×</button>
+            </div>
+            <div style={{overflowY:"auto",padding:"20px 28px",flex:1}}>
+              {[{l:"Client Name",k:"client_name",p:"Client name"},{l:"Description",k:"description",p:"Reason for credit note"},{l:"Amount (excl. VAT)",k:"amount",p:"0.00",type:"number"},{l:"Issue Date",k:"issue_date",type:"date"},{l:"Notes",k:"notes",p:"Optional additional notes"}].map(f=>(
+                <div key={f.k} style={{marginBottom:14}}>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.type||"text"} placeholder={f.p||""} value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+              <div style={{marginBottom:14}}>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>VAT Rate</label>
+                <select value={form.vat_rate} onChange={e=>setForm({...form,vat_rate:+e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value={0.15}>15% VAT</option>
+                  <option value={0}>No VAT (0%)</option>
+                </select>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
+              <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Issue Credit Note"}</button>
+              <button onClick={()=>setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {items.length===0 ? (
+        <div style={{textAlign:"center",padding:"60px 20px",color:C.inkMid}}>
+          <div style={{fontSize:48,marginBottom:16}}>📋</div>
+          <div style={{fontSize:16,fontWeight:600,color:C.ink,marginBottom:8}}>No credit notes yet</div>
+          <div style={{fontSize:13}}>Issue a credit note to reduce the amount owed on an invoice.</div>
+        </div>
+      ) : (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr style={{background:C.bg}}>
+              {["Number","Client","Description","Amount","Total incl. VAT","Date","Actions"].map(h=>(
+                <th key={h} style={{padding:"11px 16px",textAlign:"left",fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase"}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {items.map((cn,i)=>(
+                <tr key={cn.id} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?C.surface:C.bg}}>
+                  <td style={{padding:"12px 16px",fontWeight:700,color:C.accent}}>{cn.credit_note_number}</td>
+                  <td style={{padding:"12px 16px",fontWeight:500}}>{cn.client_name}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid,fontSize:12}}>{cn.description||"—"}</td>
+                  <td style={{padding:"12px 16px",fontWeight:700,color:C.red}}>{fmt(cn.amount)}</td>
+                  <td style={{padding:"12px 16px",fontWeight:700,color:C.red}}>{fmt(cn.total_amount)}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid}}>{cn.issue_date?new Date(cn.issue_date).toLocaleDateString("en-ZA"):"—"}</td>
+                  <td style={{padding:"12px 16px"}}>
+                    <button onClick={()=>handleDelete(cn.id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── INVOICING ─────────────────────────────────────────────────────────────────
 function Invoicing({live = {}, user = {}, docTemplate}) {
   const liveInvoices = live.invoices;
@@ -1204,6 +1493,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
   const [filterStatus, setFilterStatus] = useState(null);   // null | "paid" | "sent" | "overdue"
   const [form, setForm] = useState({client:"",amount:"",desc:"",due:"",vatApplicable:true,currency:"ZAR",exchangeRate:"18.5",vatAmount:"0"});
   const [saving, setSaving] = useState(false);
+  const [invTab, setInvTab] = useState("invoices");
   const [customers, setCustomers] = useState([]);
   useEffect(()=>{ api("/customers/").then(setCustomers).catch(()=>{}); },[]);
 
@@ -1274,7 +1564,16 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
 
   return (
     <div>
-      <SectionHeader title="Invoicing" sub="Manage your client invoices" action="+ New Invoice" onAction={() => setShowNew(true)}/>
+      <div style={{display:"flex",gap:0,marginBottom:24,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
+        <div style={{flex:1,paddingBottom:10}}>
+          <div style={{fontSize:22,fontWeight:800,fontFamily:"serif",color:C.ink}}>Invoicing</div>
+        </div>
+        {[{id:"invoices",label:"Invoices"},{id:"recurring",label:"Recurring"},{id:"credit_notes",label:"Credit Notes"}].map(t=>(
+          <button key={t.id} onClick={()=>setInvTab(t.id)} style={{padding:"8px 18px 11px",border:"none",borderRadius:0,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:invTab===t.id?700:400,background:"transparent",color:invTab===t.id?C.accent:C.inkMid,borderBottom:invTab===t.id?`2px solid ${C.accent}`:"2px solid transparent",marginBottom:-1}}>{t.label}</button>
+        ))}
+        {invTab==="invoices" && <button onClick={()=>setShowNew(true)} style={{marginLeft:16,background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginBottom:8}}>+ New Invoice</button>}
+      </div>
+      {invTab==="invoices" && <>
       <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
         <KPI label="Paid"    value={fmt(totalPaid)}    color={C.green} icon="✅" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"}/>
         <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
@@ -1473,6 +1772,9 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
           </table>
         </div>
       )}
+      </>}
+      {invTab==="recurring" && <RecurringInvoicesTab/>}
+      {invTab==="credit_notes" && <CreditNotesTab/>}
     </div>
   );
 }
@@ -1977,17 +2279,20 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           <div style={{marginBottom:20}}>
             <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:10,borderBottom:`1px solid ${C.border}`,paddingBottom:4}}>Deductions</div>
             {[
-              ["PAYE (Income Tax)",     p.paye,        C.red],
+              p.s11fDeduction > 0 && ["Pension / Provident (s11F deductible)", p.pensionEmployee || p.pension_employee, C.red],
+              p.medicalAidEmployee > 0 && ["Medical Aid (Employee Contribution)", p.medicalAidEmployee || p.medical_aid_employee_ded, C.red],
+              ["PAYE (Income Tax)", p.paye, C.red],
+              p.medicalTaxCredit > 0 && ["  ↳ Medical Tax Credit (s6A)", -(p.medicalTaxCredit || p.medical_tax_credit), C.green],
               ["UIF (Employee Contribution)", p.uifEmployee, C.gold],
-            ].map(([l,v,c]) => (
+            ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
-                <span style={{fontWeight:600,color:c}}>({fmt(v)})</span>
+                <span style={{fontWeight:600,color:c}}>{v < 0 ? `+${fmt(Math.abs(v))}` : `(${fmt(v)})`}</span>
               </div>
             ))}
             <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",fontSize:14,fontWeight:800,borderTop:`2px solid ${C.border}`,marginTop:8}}>
               <span>Total Deductions</span>
-              <span style={{color:C.red}}>({fmt(p.paye + p.uifEmployee)})</span>
+              <span style={{color:C.red}}>({fmt(p.paye + p.uifEmployee + (p.pensionEmployee||p.pension_employee||0) + (p.medicalAidEmployee||p.medical_aid_employee_ded||0))})</span>
             </div>
           </div>
 
@@ -2006,9 +2311,11 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           <div style={{marginBottom:20}}>
             <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:10,borderBottom:`1px solid ${C.border}`,paddingBottom:4}}>Employer Contributions (for info)</div>
             {[
+              (p.pensionEmployer||p.pension_employer) > 0 && ["Pension / Provident (Employer)", p.pensionEmployer||p.pension_employer, C.blue],
+              (p.medicalAidEmployer||p.medical_aid_employer_con) > 0 && ["Medical Aid (Employer Contribution)", p.medicalAidEmployer||p.medical_aid_employer_con, C.blue],
               ["UIF (Employer Contribution)", p.uifEmployer, C.blue],
-              ["SDL (Skills Development Levy)", p.sdl,        C.blue],
-            ].map(([l,v,c]) => (
+              ["SDL (Skills Development Levy)", p.sdl, C.blue],
+            ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
                 <span style={{fontWeight:600,color:c}}>{fmt(v)}</span>
@@ -2024,6 +2331,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           <div style={{background:C.bg,borderRadius:10,padding:"12px 16px",fontSize:11,color:C.inkMid,lineHeight:1.8}}>
             <strong style={{color:C.ink}}>SARS Reference (2026/2027)</strong><br/>
             PAYE calculated on annualised taxable gross of {fmt((p.taxableGross||p.gross) * 12)} — Primary rebate R17,820/year<br/>
+            {(p.s11fDeduction||p.s11f_deduction) > 0 && <>Section 11F deduction: {fmt((p.s11fDeduction||p.s11f_deduction)*12)}/year (27.5% of remuneration, capped at R430,000)<br/></>}
+            {(p.medicalTaxCredit||p.medical_tax_credit) > 0 && <>Section 6A Medical Tax Credit: R{p.medicalTaxCredit||p.medical_tax_credit}/month (direct PAYE reduction)<br/></>}
             UIF: 1% employee + 1% employer — capped at R17,712/month (on basic salary only)<br/>
             SDL: 1% of taxable gross payroll<br/>
             {p.overtime && p.overtime.total > 0 && `BCEA Overtime: Weekday/Sat 1.5× · Sunday 2× · Public Holiday 2× · Hourly rate: ${fmt(p.overtime.hourly_rate||p.overtime.hourlyRate)}/hr`}
@@ -2480,7 +2789,7 @@ function Payroll({live = {}, user = {}}) {
   const [payrollRun, setPayrollRun] = useState(false);
   const [showOtModal, setShowOtModal] = useState(false);
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:""});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
@@ -2506,7 +2815,7 @@ function Payroll({live = {}, user = {}}) {
     };
     setEmployees([...employees, newEmp]);
     setShowNew(false);
-    setForm({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque"});
+    setForm({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:""});
     try {
       const token = localStorage.getItem("zuzan_token");
       if (token && !token.startsWith("demo_")) {
@@ -2515,24 +2824,31 @@ function Payroll({live = {}, user = {}}) {
       await api("/employees/", {
         method: "POST",
         body: JSON.stringify({
-          first_name:       firstName,
-          last_name:        lastName,
-          position:         form.position,
-          department:       form.dept,
-          grade:            form.grade || null,
-          employment_type:  form.employmentType || "salaried",
-          hourly_rate:      form.hourlyRate ? +form.hourlyRate : null,
-          gross_salary:     +form.salary,
-          employee_number:  form.empNo,
-          id_number:        form.idNumber,
-          tax_number:       form.taxNumber,
-          date_of_birth:    form.dob || null,
-          appointment_date: form.appointmentDate || null,
-          address:          form.address,
-          bank_name:        form.bankName,
-          account_number:   form.accountNumber,
-          branch_code:      form.branchCode,
-          account_type:     form.accountType,
+          first_name:                 firstName,
+          last_name:                  lastName,
+          position:                   form.position,
+          department:                 form.dept,
+          grade:                      form.grade || null,
+          employment_type:            form.employmentType || "salaried",
+          hourly_rate:                form.hourlyRate ? +form.hourlyRate : null,
+          gross_salary:               +form.salary,
+          employee_number:            form.empNo,
+          id_number:                  form.idNumber,
+          tax_number:                 form.taxNumber,
+          date_of_birth:              form.dob || null,
+          appointment_date:           form.appointmentDate || null,
+          address:                    form.address,
+          bank_name:                  form.bankName,
+          account_number:             form.accountNumber,
+          branch_code:                form.branchCode,
+          account_type:               form.accountType,
+          pension_fund_employee_pct:  form.pensionEmployeePct ? +form.pensionEmployeePct / 100 : 0,
+          pension_fund_employer_pct:  form.pensionEmployerPct ? +form.pensionEmployerPct / 100 : 0,
+          pension_employee_fixed:     form.pensionEmployeeFixed ? +form.pensionEmployeeFixed : 0,
+          pension_employer_fixed:     form.pensionEmployerFixed ? +form.pensionEmployerFixed : 0,
+          medical_aid_employee:       form.medicalAidEmployee ? +form.medicalAidEmployee : 0,
+          medical_aid_employer:       form.medicalAidEmployer ? +form.medicalAidEmployer : 0,
+          medical_aid_dependants:     form.medicalAidDependants ? +form.medicalAidDependants : 0,
         }),
       });
       if (live && live.reload) live.reload();
@@ -2547,22 +2863,29 @@ function Payroll({live = {}, user = {}}) {
     const lastName  = nameParts.slice(1).join(" ") || "";
     const updated = {
       ...editEmp,
-      name:             editForm.name,
-      position:         editForm.position,
-      salary:           +editForm.salary || editEmp.salary,
-      dept:             editForm.dept,
-      grade:            editForm.grade,
-      employment_type:  editForm.employmentType,
-      hourly_rate:      editForm.hourlyRate ? +editForm.hourlyRate : null,
-      id_number:        editForm.idNumber,
-      tax_number:       editForm.taxNumber,
-      date_of_birth:    editForm.dob,
-      appointment_date: editForm.appointmentDate,
-      address:          editForm.address,
-      bank_name:        editForm.bankName,
-      account_number:   editForm.accountNumber,
-      branch_code:      editForm.branchCode,
-      account_type:     editForm.accountType,
+      name:                       editForm.name,
+      position:                   editForm.position,
+      salary:                     +editForm.salary || editEmp.salary,
+      dept:                       editForm.dept,
+      grade:                      editForm.grade,
+      employment_type:            editForm.employmentType,
+      hourly_rate:                editForm.hourlyRate ? +editForm.hourlyRate : null,
+      id_number:                  editForm.idNumber,
+      tax_number:                 editForm.taxNumber,
+      date_of_birth:              editForm.dob,
+      appointment_date:           editForm.appointmentDate,
+      address:                    editForm.address,
+      bank_name:                  editForm.bankName,
+      account_number:             editForm.accountNumber,
+      branch_code:                editForm.branchCode,
+      account_type:               editForm.accountType,
+      pension_fund_employee_pct:  editForm.pensionEmployeePct ? +editForm.pensionEmployeePct / 100 : 0,
+      pension_fund_employer_pct:  editForm.pensionEmployerPct ? +editForm.pensionEmployerPct / 100 : 0,
+      pension_employee_fixed:     editForm.pensionEmployeeFixed ? +editForm.pensionEmployeeFixed : 0,
+      pension_employer_fixed:     editForm.pensionEmployerFixed ? +editForm.pensionEmployerFixed : 0,
+      medical_aid_employee:       editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
+      medical_aid_employer:       editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
+      medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
     };
     setEmployees(employees.map(e => e.id === editEmp.id ? updated : e));
     setEditEmp(null);
@@ -2572,23 +2895,30 @@ function Payroll({live = {}, user = {}}) {
         await api(`/employees/${editEmp.id}`, {
           method: "PUT",
           body: JSON.stringify({
-            first_name:       firstName,
-            last_name:        lastName,
-            position:         editForm.position,
-            department:       editForm.dept,
-            grade:            editForm.grade || null,
-            employment_type:  editForm.employmentType || "salaried",
-            hourly_rate:      editForm.hourlyRate ? +editForm.hourlyRate : null,
-            gross_salary:     +editForm.salary,
-            id_number:        editForm.idNumber,
-            tax_number:       editForm.taxNumber,
-            date_of_birth:    editForm.dob || null,
-            appointment_date: editForm.appointmentDate || null,
-            address:          editForm.address,
-            bank_name:        editForm.bankName,
-            account_number:   editForm.accountNumber,
-            branch_code:      editForm.branchCode,
-            account_type:     editForm.accountType,
+            first_name:                 firstName,
+            last_name:                  lastName,
+            position:                   editForm.position,
+            department:                 editForm.dept,
+            grade:                      editForm.grade || null,
+            employment_type:            editForm.employmentType || "salaried",
+            hourly_rate:                editForm.hourlyRate ? +editForm.hourlyRate : null,
+            gross_salary:               +editForm.salary,
+            id_number:                  editForm.idNumber,
+            tax_number:                 editForm.taxNumber,
+            date_of_birth:              editForm.dob || null,
+            appointment_date:           editForm.appointmentDate || null,
+            address:                    editForm.address,
+            bank_name:                  editForm.bankName,
+            account_number:             editForm.accountNumber,
+            branch_code:                editForm.branchCode,
+            account_type:               editForm.accountType,
+            pension_fund_employee_pct:  editForm.pensionEmployeePct ? +editForm.pensionEmployeePct / 100 : 0,
+            pension_fund_employer_pct:  editForm.pensionEmployerPct ? +editForm.pensionEmployerPct / 100 : 0,
+            pension_employee_fixed:     editForm.pensionEmployeeFixed ? +editForm.pensionEmployeeFixed : 0,
+            pension_employer_fixed:     editForm.pensionEmployerFixed ? +editForm.pensionEmployerFixed : 0,
+            medical_aid_employee:       editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
+            medical_aid_employer:       editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
+            medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
           }),
         });
         if (live && live.reload) live.reload();
@@ -3117,6 +3447,52 @@ function Payroll({live = {}, user = {}}) {
             </div>
           </div>
 
+          {/* Benefits */}
+          <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Pension / Provident Fund &amp; Medical Aid</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+            {[
+              {l:"Employee Pension %",             k:"pensionEmployeePct",   p:"7.5",  t:"number", tip:"% of gross salary — standard/mandatory rate"},
+              {l:"Employee Pension Fixed (ZAR/mo)",k:"pensionEmployeeFixed",  p:"500",  t:"number", tip:"Optional voluntary top-up (ZAR/month, added to % above). No limit — excess above s11F cap is post-tax."},
+              {l:"Employer Pension %",             k:"pensionEmployerPct",   p:"7.5",  t:"number", tip:"% of gross salary contributed by employer"},
+              {l:"Employer Pension Fixed (ZAR/mo)",k:"pensionEmployerFixed",  p:"500",  t:"number", tip:"Optional employer add-on (ZAR/month). Contribution has no SARS cap — only s11F employee relief is capped."},
+              {l:"Medical Aid — Employee (ZAR/mo)",k:"medicalAidEmployee",   p:"1500", t:"number", tip:"Employee's own monthly medical aid contribution"},
+              {l:"Medical Aid — Employer (ZAR/mo)",k:"medicalAidEmployer",   p:"1500", t:"number", tip:"Employer's monthly contribution (taxable fringe benefit — added to PAYE base)"},
+              {l:"Medical Aid Dependants",          k:"medicalAidDependants", p:"1",    t:"number", tip:"Dependants EXCLUDING the main member (s6A MTC: R376 main+first, R254 each additional)"},
+            ].map(f=>(
+              <div key={f.k}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                <input type={f.t} placeholder={f.p} value={form[f.k]} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                <div style={{fontSize:10,color:C.inkDim,marginTop:3}}>{f.tip}</div>
+              </div>
+            ))}
+          </div>
+          {/* Live pension/medical preview */}
+          {form.salary && (form.pensionEmployeePct || form.pensionEmployeeFixed || form.medicalAidEmployee || form.medicalAidEmployer) && (()=>{
+            const p = calcPayroll(+form.salary, null, 0, 0, 0, null,
+              form.pensionEmployeePct ? +form.pensionEmployeePct/100 : 0,
+              form.pensionEmployerPct ? +form.pensionEmployerPct/100 : 0,
+              form.medicalAidEmployee ? +form.medicalAidEmployee : 0,
+              form.medicalAidEmployer ? +form.medicalAidEmployer : 0,
+              form.medicalAidDependants ? +form.medicalAidDependants : 0,
+              form.pensionEmployeeFixed ? +form.pensionEmployeeFixed : 0,
+              form.pensionEmployerFixed ? +form.pensionEmployerFixed : 0,
+            );
+            const hasExcess = p.s11fExcessMonthly > 0;
+            return (
+              <div style={{background:C.blueLt,border:`1px solid ${hasExcess?C.gold:C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12}}>
+                <strong style={{color:C.blue}}>Live preview: </strong>
+                <span style={{color:C.ink}}>
+                  PAYE {fmt(p.paye)} · s11F relief {fmt(p.s11fDeduction)}/mo · MTC R{p.medicalTaxCredit} · Net Pay {fmt(p.netPay)} · Employer Cost {fmt(p.totalCost)}
+                </span>
+                {hasExcess && (
+                  <div style={{marginTop:6,fontSize:11,color:C.gold,fontWeight:600}}>
+                    ⚠️ {fmt(p.s11fExcessMonthly)}/month ({fmt(p.s11fExcessMonthly*12)}/year) of employee contributions exceed the s11F cap — this portion is deducted from after-tax income with no additional PAYE relief. Contributions are still processed in full.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Bank Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:20}}>
@@ -3177,7 +3553,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : ""});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                     </div>
                   </td>
@@ -3344,6 +3720,50 @@ function Payroll({live = {}, user = {}}) {
                 <input placeholder="123 Main St, Johannesburg, 2000" value={editForm.address} onChange={e=>setEditForm(v=>({...v,address:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
               </div>
             </div>
+
+            {/* Benefits */}
+            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Pension / Provident Fund &amp; Medical Aid</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
+              {[
+                {l:"Employee Pension %",              k:"pensionEmployeePct",   p:"7.5",  t:"number"},
+                {l:"Employee Fixed Top-up (ZAR/mo)", k:"pensionEmployeeFixed",  p:"500",  t:"number"},
+                {l:"Employer Pension %",              k:"pensionEmployerPct",   p:"7.5",  t:"number"},
+                {l:"Employer Fixed Add-on (ZAR/mo)", k:"pensionEmployerFixed",  p:"500",  t:"number"},
+                {l:"Medical Aid — Employee (ZAR/mo)",k:"medicalAidEmployee",   p:"1500", t:"number"},
+                {l:"Medical Aid — Employer (ZAR/mo)",k:"medicalAidEmployer",   p:"1500", t:"number"},
+                {l:"Medical Aid Dependants",          k:"medicalAidDependants", p:"1",    t:"number"},
+              ].map(f=>(
+                <div key={f.k}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
+                  <input type={f.t} placeholder={f.p} value={editForm[f.k]||""} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              ))}
+            </div>
+            {editForm.salary && (editForm.pensionEmployeePct || editForm.pensionEmployeeFixed || editForm.medicalAidEmployee || editForm.medicalAidEmployer) && (()=>{
+              const p = calcPayroll(+editForm.salary, null, 0, 0, 0, null,
+                editForm.pensionEmployeePct ? +editForm.pensionEmployeePct/100 : 0,
+                editForm.pensionEmployerPct ? +editForm.pensionEmployerPct/100 : 0,
+                editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
+                editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
+                editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
+                editForm.pensionEmployeeFixed ? +editForm.pensionEmployeeFixed : 0,
+                editForm.pensionEmployerFixed ? +editForm.pensionEmployerFixed : 0,
+              );
+              const hasExcess = p.s11fExcessMonthly > 0;
+              return (
+                <div style={{background:C.blueLt,border:`1px solid ${hasExcess?C.gold:C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12}}>
+                  <strong style={{color:C.blue}}>Live preview: </strong>
+                  <span style={{color:C.ink}}>
+                    PAYE {fmt(p.paye)} · s11F relief {fmt(p.s11fDeduction)}/mo · MTC R{p.medicalTaxCredit} · Net Pay {fmt(p.netPay)} · Employer Cost {fmt(p.totalCost)}
+                  </span>
+                  {hasExcess && (
+                    <div style={{marginTop:6,fontSize:11,color:C.gold,fontWeight:600}}>
+                      ⚠️ {fmt(p.s11fExcessMonthly)}/month above s11F cap — deducted from after-tax income (contribution is still processed in full, no additional PAYE relief on the excess).
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Bank Details */}
             <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
@@ -6579,7 +6999,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
           firstName: data.user.first_name, lastName: data.user.last_name,
           email: data.user.email, companyName: data.company.name,
           logoUrl: data.company.logo_url||"", plan:{name:data.company.plan,id:data.company.plan},
-          access_token: data.access_token, trialEnds: data.company.trial_ends,
+          access_token: data.access_token, trialEnds: data.company.trial_ends, subscriptionStatus: data.company.subscription_status||"trial",
           role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
         });
       }, 1200);
@@ -7027,6 +7447,16 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         </div>
 
         <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:20}}>
+          {(subInfo.status === "trial" || subInfo.status === "expired") && (
+            <button onClick={async()=>{
+              try {
+                const res = await api("/billing/subscribe", {method:"POST"});
+                if (res.payfast_url) pfSubmit(res.payfast_url, res.payfast_data);
+              } catch(e) { alert("Could not start subscription. " + (e.message||"")); }
+            }} style={{padding:"10px 22px",background:C.green,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {subInfo.status === "trial" ? "🔑 Subscribe Now" : "🔑 Reactivate Subscription"}
+            </button>
+          )}
           <button onClick={()=>setShowUpgrade(true)} style={{padding:"10px 22px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
           <button onClick={()=>setShowBilling(true)} style={{padding:"10px 22px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
         </div>
@@ -7384,7 +7814,7 @@ function Login({onLogin, onRegister}) {
       }
       localStorage.setItem("zuzan_token", data.access_token);
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:data.company.subscription_status||"trial", role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -7778,16 +8208,15 @@ function Registration({onComplete, onLogin}) {
               <div style={{borderTop:`1px solid ${C.border}`,marginTop:12,paddingTop:12,display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
             </div>
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Card Details</div>
-              {[{l:"Name on Card",k:"cardName",p:"John Smith"},{l:"Card Number",k:"cardNumber",p:"4242 4242 4242 4242"},{l:"Expiry Date",k:"expiry",p:"MM/YY"},{l:"CVV",k:"cvv",p:"123"}].map(f => (
-                <div key={f.k} style={{marginBottom:14}}>
-                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                  <input placeholder={f.p} value={payment[f.k]} onChange={e => setPayment({...payment,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              <div style={{textAlign:"center",padding:"8px 0 4px"}}>
+                <div style={{fontSize:44,marginBottom:12}}>🎉</div>
+                <div style={{fontSize:20,fontWeight:800,color:C.ink,marginBottom:10}}>No card required</div>
+                <div style={{fontSize:14,color:C.inkMid,marginBottom:20,lineHeight:1.6}}>Start your 14-day free trial — no payment details needed. We'll email you before your trial ends with a link to subscribe.</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8,textAlign:"left"}}>
+                  {["✅ Full access to all features during your trial","✅ No card collected until you choose to subscribe","✅ Cancel anytime — no questions asked","✅ Email reminder 3 days before trial expires"].map(item=>(
+                    <div key={item} style={{fontSize:13,color:C.ink,padding:"10px 14px",background:C.greenLt,borderRadius:8}}>{item}</div>
+                  ))}
                 </div>
-              ))}
-              <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 14px",background:C.greenLt,borderRadius:8}}>
-                <span style={{fontSize:14}}>🔒</span>
-                <span style={{fontSize:11,color:C.green}}>256-bit SSL encryption - PCI DSS compliant - Powered by PayFast</span>
               </div>
             </div>
             <div style={{display:"flex",gap:12}}>
@@ -10648,7 +11077,9 @@ function FinancialStatements() {
           <tbody>
             <tr><td style={{padding:"4px 8px"}}>Profit before tax</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.profit_before_tax)}</td></tr>
             <tr><td style={{padding:"4px 8px"}}>Tax at standard rate ({n.tax_note.tax_rate_pct}%)</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.current_tax)}</td></tr>
-            <tr><td style={{padding:"4px 8px",color:C.inkMid}}>Deferred tax</td><td style={{padding:"4px 8px",...mono,color:C.inkMid}}>Nil</td></tr>
+            {n.tax_note.deferred_tax
+              ? <tr><td style={{padding:"4px 8px"}}>Deferred tax</td><td style={{padding:"4px 8px",...mono}}>{fmt(n.tax_note.deferred_tax)}</td></tr>
+              : <tr><td style={{padding:"4px 8px",color:C.inkMid}}>Deferred tax</td><td style={{padding:"4px 8px",...mono,color:C.inkMid}}>Nil</td></tr>}
             <tr style={{borderTop:`2px solid ${C.border}`,fontWeight:700}}>
               <td style={{padding:"5px 8px"}}>Total income tax expense</td>
               <td style={{padding:"5px 8px",...mono}}>{fmt(n.tax_note.total_tax)}</td>
@@ -11633,6 +12064,26 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         </div>
       </div>
       <div style={{marginLeft:230,flex:1,padding:"36px",maxWidth:"calc(100vw - 230px)",overflowY:"auto",minHeight:"100vh"}}>
+        {(()=>{
+          const status = user?.subscriptionStatus;
+          const trialEnds = user?.trialEnds;
+          if (status === "expired") return (
+            <div style={{background:C.red,color:"#fff",borderRadius:12,padding:"12px 20px",marginBottom:24,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}}>
+              <div><strong>Subscription expired.</strong><span style={{fontSize:13,marginLeft:8,opacity:0.9}}>Reactivate to keep using ZuZan.</span></div>
+              <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)pfSubmit(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to reactivate.");}}} style={{background:"#fff",color:C.red,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Reactivate</button>
+            </div>
+          );
+          if (status === "trial" && trialEnds) {
+            const d = Math.max(0, Math.ceil((new Date(trialEnds) - new Date()) / 86400000));
+            if (d <= 5) return (
+              <div style={{background:d===0?C.red:C.gold,color:"#fff",borderRadius:12,padding:"12px 20px",marginBottom:24,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}}>
+                <div><strong>{d===0?"Trial expired.":"Trial ends in "+d+" day"+(d===1?"":"s")+"."}</strong><span style={{fontSize:13,marginLeft:8,opacity:0.9}}>{d===0?"Subscribe to continue.":"Subscribe now to keep your data."}</span></div>
+                <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)pfSubmit(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to subscribe.");}}} style={{background:"#fff",color:d===0?C.red:C.gold,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Subscribe Now</button>
+              </div>
+            );
+          }
+          return null;
+        })()}
         {screens[tab]}
       </div>
       <AIAssistant tab={tab}/>
@@ -11679,8 +12130,9 @@ export default function App() {
           logoUrl:      data.company.logo_url || "",
           plan:           {name: data.company.plan, id: data.company.plan},
           access_token:   token,
-          trialEnds:      data.company.trial_ends,
-          role:           data.user.role || "owner",
+          trialEnds:          data.company.trial_ends,
+          subscriptionStatus: data.company.subscription_status || "trial",
+          role:               data.user.role || "owner",
           payrollEnabled: data.company.payroll_enabled || false,
           afsEnabled:     data.company.afs_enabled || false,
         });

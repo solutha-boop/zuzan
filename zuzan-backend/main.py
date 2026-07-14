@@ -70,6 +70,21 @@ async def lifespan(app: FastAPI):
         db.close()
     except Exception as e:
         logger.warning(f"PO received_date backfill failed (non-fatal): {e}")
+    # Run trial expiry checks and overdue invoice reminders
+    try:
+        from billing import check_trial_expirations, send_overdue_reminders
+        check_trial_expirations()
+        send_overdue_reminders()
+        logger.info("Billing checks complete")
+    except Exception as e:
+        logger.warning(f"Billing checks failed (non-fatal): {e}")
+    # Generate any due recurring invoices
+    try:
+        from recurring_invoices import generate_due_recurring_invoices
+        generate_due_recurring_invoices()
+        logger.info("Recurring invoice generation complete")
+    except Exception as e:
+        logger.warning(f"Recurring invoice generation failed (non-fatal): {e}")
     # Encrypt any existing plain-text bank fields
     try:
         from crypto import encrypt_field, _is_fernet_token, encryption_enabled
@@ -107,7 +122,42 @@ async def lifespan(app: FastAPI):
             logger.warning("Skipping bank field migration — FIELD_ENCRYPTION_KEY not set")
     except Exception as e:
         logger.warning(f"Bank field encryption migration failed (non-fatal): {e}")
+
+    # Daily maintenance loop (launch fix 2026-07-14): trial-expiry checks,
+    # overdue reminders, recurring invoices and due auto-reversals previously
+    # ran only at process startup, so on a long-running server a trial could
+    # expire without any email until the next deploy/restart. Re-runs every
+    # 24h; all callees are idempotent (send-once timestamps on the company
+    # row, next_run_date on recurring invoices, reversal_date checks).
+    import asyncio as _asyncio
+
+    async def _daily_maintenance_loop():
+        while True:
+            await _asyncio.sleep(24 * 60 * 60)
+            try:
+                from billing import check_trial_expirations, send_overdue_reminders
+                check_trial_expirations()
+                send_overdue_reminders()
+                logger.info("Daily billing checks complete")
+            except Exception as e:
+                logger.warning(f"Daily billing check failed (non-fatal): {e}")
+            try:
+                from recurring_invoices import generate_due_recurring_invoices
+                generate_due_recurring_invoices()
+            except Exception as e:
+                logger.warning(f"Daily recurring-invoice run failed (non-fatal): {e}")
+            try:
+                from journal import process_pending_reversals
+                db = SessionLocal()
+                for co in db.query(Company).all():
+                    process_pending_reversals(co.id, db)
+                db.close()
+            except Exception as e:
+                logger.warning(f"Daily auto-reversal run failed (non-fatal): {e}")
+
+    _maintenance_task = _asyncio.create_task(_daily_maintenance_loop())
     yield
+    _maintenance_task.cancel()
 
 
 app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan)
@@ -178,6 +228,9 @@ from documents import router as documents_router
 from csv_import import router as csv_import_router
 from category_rules import router as category_rules_router
 from analytics import router as analytics_router
+from billing import billing_router
+from recurring_invoices import recurring_router
+from credit_notes import credit_notes_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -210,6 +263,9 @@ app.include_router(documents_router,     prefix="/documents",            tags=["
 app.include_router(csv_import_router,    prefix="/import",               tags=["CSV Import"])
 app.include_router(category_rules_router,                                tags=["Category Rules"])
 app.include_router(analytics_router,                                     tags=["Analytics"])
+app.include_router(billing_router,         prefix="/billing",            tags=["Billing"])
+app.include_router(recurring_router,       prefix="/recurring-invoices", tags=["Recurring Invoices"])
+app.include_router(credit_notes_router,    prefix="/credit-notes",       tags=["Credit Notes"])
 
 
 @app.get("/")
