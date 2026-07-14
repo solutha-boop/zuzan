@@ -276,7 +276,8 @@ class _SubscriptionGateMiddleware:
                         user = db.query(User).filter(User.id == user_id).first()
                         if user:
                             company = db.query(Company).filter(Company.id == user.company_id).first()
-                            if company and company.subscription_status == SubscriptionStatus.expired:
+                            from auth import effective_subscription_status
+                            if company and effective_subscription_status(company) == "expired":
                                 body = _json.dumps({
                                     "detail": "Your subscription has expired. Please reactivate to continue using ZuZan."
                                 }).encode()

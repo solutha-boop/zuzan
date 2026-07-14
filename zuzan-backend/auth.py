@@ -29,6 +29,18 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
+
+def effective_subscription_status(company) -> str:
+    """
+    Return the company's real subscription status.
+    If the DB says 'expired' but trial_ends is still in the future, return 'trial'.
+    This corrects stale status without requiring a DB write at login time.
+    """
+    raw = company.subscription_status.value if company.subscription_status else "trial"
+    if raw == "expired" and company.trial_ends and company.trial_ends > datetime.utcnow():
+        return "trial"
+    return raw
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 router = APIRouter()
@@ -185,7 +197,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
             "name":                company.name,
             "logo_url":            company.logo_url,
             "plan":                str(company.plan.value),
-            "subscription_status": str(company.subscription_status.value),
+            "subscription_status": effective_subscription_status(company),
             "trial_ends":          company.trial_ends.isoformat(),
             "payroll_enabled":     company.payroll_enabled,
             "afs_enabled":         company.afs_enabled,
@@ -218,7 +230,7 @@ async def login(request: Request, data: LoginRequest, db: Session = Depends(get_
             "name":                company.name,
             "logo_url":            company.logo_url,
             "plan":                str(company.plan.value),
-            "subscription_status": str(company.subscription_status.value),
+            "subscription_status": effective_subscription_status(company),
             "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
             "payroll_enabled":     company.payroll_enabled,
             "afs_enabled":         company.afs_enabled,
@@ -245,7 +257,7 @@ async def get_me(
             "name":                company.name,
             "logo_url":            company.logo_url,
             "plan":                str(company.plan.value),
-            "subscription_status": str(company.subscription_status.value),
+            "subscription_status": effective_subscription_status(company),
             "payroll_enabled":     company.payroll_enabled,
             "afs_enabled":         company.afs_enabled,
             "payroll_employees":   company.payroll_employees,
