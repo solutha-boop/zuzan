@@ -7768,6 +7768,7 @@ function Login({onLogin, onRegister}) {
   const [error,   setError]   = useState("");
   const [loading, setLoading] = useState(false);
   const [serverStatus, setServerStatus] = useState("checking"); // checking | ready | sleeping
+  const [showPassword, setShowPassword] = useState(false);
 
   // Ping backend on mount to wake it up before user clicks Sign In
   useEffect(() => {
@@ -7886,9 +7887,15 @@ function Login({onLogin, onRegister}) {
               </div>
               <div style={{marginBottom:8}}>
                 <label style={labelStyle}>Password</label>
-                <input type="password" placeholder="Your password" value={form.password}
-                  onChange={e=>setForm({...form,password:e.target.value})}
-                  onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={inputStyle}/>
+                <div style={{position:"relative"}}>
+                  <input type={showPassword?"text":"password"} placeholder="Your password" value={form.password}
+                    onChange={e=>setForm({...form,password:e.target.value})}
+                    onKeyDown={e=>e.key==="Enter"&&handleLogin()} style={{...inputStyle,paddingRight:44}}/>
+                  <button type="button" onClick={()=>setShowPassword(v=>!v)}
+                    style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",padding:0,color:C.inkMid,fontSize:16,lineHeight:1}}>
+                    {showPassword ? "🙈" : "👁️"}
+                  </button>
+                </div>
               </div>
               <div style={{textAlign:"right",marginBottom:20}}>
                 <span onClick={()=>{setView("forgot");setError("");setMsg("");}} style={{fontSize:12,color:C.accent,cursor:"pointer",fontWeight:600}}>Forgot password?</span>
