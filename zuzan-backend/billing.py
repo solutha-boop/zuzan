@@ -299,6 +299,18 @@ def check_trial_expirations():
             Company.subscription_status == SubscriptionStatus.trial
         ).all()
 
+        # Self-correct: reset any "expired" accounts whose trial hasn't ended yet
+        # (can happen if status was set manually or via testing)
+        stale_expired = db.query(Company).filter(
+            Company.subscription_status == SubscriptionStatus.expired,
+            Company.trial_ends > now,
+        ).all()
+        for co in stale_expired:
+            co.subscription_status = SubscriptionStatus.trial
+            logger.info(f"Auto-corrected stale expired→trial for company {co.id} ({co.name})")
+        if stale_expired:
+            db.commit()
+
         warned = 0
         expired = 0
 

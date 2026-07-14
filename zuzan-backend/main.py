@@ -123,6 +123,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Bank field encryption migration failed (non-fatal): {e}")
 
+    # Correct stale "expired" status: accounts whose trial_ends is still in the
+    # future but whose subscription_status was set to "expired" during testing.
+    try:
+        from database import SessionLocal as _SL2, Company as _Co2, SubscriptionStatus as _SS2
+        from datetime import datetime as _dt2
+        _db2 = _SL2()
+        _now2 = _dt2.utcnow()
+        _stale = _db2.query(_Co2).filter(
+            _Co2.subscription_status == _SS2.expired,
+            _Co2.trial_ends > _now2,
+        ).all()
+        for _co2 in _stale:
+            _co2.subscription_status = _SS2.trial
+            logger.info(f"Corrected stale expired→trial for company {_co2.id} ({_co2.name}), trial_ends={_co2.trial_ends}")
+        if _stale:
+            _db2.commit()
+        _db2.close()
+    except Exception as e:
+        logger.warning(f"Stale expired-status fix failed (non-fatal): {e}")
+
     # Daily maintenance loop (launch fix 2026-07-14): trial-expiry checks,
     # overdue reminders, recurring invoices and due auto-reversals previously
     # ran only at process startup, so on a long-running server a trial could
