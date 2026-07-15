@@ -1,3 +1,15 @@
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+sentry_sdk.init(
+    dsn="https://845e5daf86c2d7efa1a3e44d3c412a46@o4511737932021760.ingest.de.sentry.io/4511737977241680",
+    integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+    traces_sample_rate=0.1,
+    environment="production",
+    send_default_pii=False,   # never send request bodies — financial data privacy
+)
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -304,7 +316,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}

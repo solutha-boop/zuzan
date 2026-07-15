@@ -300,6 +300,59 @@ def send_welcome_email(
 
       {payroll_section}
 
+      <!-- Team access section -->
+      <div style="background:#fff;border-radius:8px;padding:24px;border:1px solid #e0d9d0;margin-bottom:24px;">
+        <p style="color:#C8401A;font-weight:bold;font-size:13px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.5px;">
+          👥 &nbsp;Invite Your Team
+        </p>
+        <p style="color:#444;line-height:1.7;margin:0 0 16px;">
+          Go to <strong>Settings → Team</strong> to invite colleagues. Each person gets their own
+          login and sees only what their role allows — no shared passwords needed.
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:#f9f5f2;">
+              <th style="text-align:left;padding:8px 12px;color:#1a1a1a;font-weight:700;border-bottom:2px solid #e0d9d0;">Role</th>
+              <th style="text-align:left;padding:8px 12px;color:#1a1a1a;font-weight:700;border-bottom:2px solid #e0d9d0;">What they can access</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #f0ece6;">
+              <td style="padding:10px 12px;font-weight:700;color:#1a1a1a;white-space:nowrap;">Owner / Admin</td>
+              <td style="padding:10px 12px;color:#444;line-height:1.6;">
+                Full access — all modules, settings, billing, and team management.
+              </td>
+            </tr>
+            <tr style="border-bottom:1px solid #f0ece6;background:#fdfaf8;">
+              <td style="padding:10px 12px;font-weight:700;color:#1a1a1a;white-space:nowrap;">Accountant</td>
+              <td style="padding:10px 12px;color:#444;line-height:1.6;">
+                Everything except Payroll — invoices, expenses, reports, bank feeds, general ledger,
+                budgets, and fixed assets. Ideal for your bookkeeper or external accountant.
+              </td>
+            </tr>
+            <tr style="border-bottom:1px solid #f0ece6;">
+              <td style="padding:10px 12px;font-weight:700;color:#1a1a1a;white-space:nowrap;">Payroll</td>
+              <td style="padding:10px 12px;color:#444;line-height:1.6;">
+                Payroll only — run payroll, manage employees, approve leave requests, and download
+                EMP201 reports. No access to financial statements or invoicing.
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:10px 12px;font-weight:700;color:#1a1a1a;white-space:nowrap;">Employee</td>
+              <td style="padding:10px 12px;color:#444;line-height:1.6;">
+                Self-service only — can view their own dashboard and update their profile.
+                Useful for staff who need to submit leave or view their payslips.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p style="color:#888;font-size:12px;margin:14px 0 0;line-height:1.6;">
+          The number of team members you can invite depends on your plan
+          (Starter: 2 users &nbsp;·&nbsp; Professional: 5 users &nbsp;·&nbsp; Business: 20 users).
+          Invited users receive an email with a secure link to set their own password.
+        </p>
+      </div>
+
       <!-- Support box -->
       <div style="background:#fff8f6;border-radius:8px;padding:20px;border-left:4px solid #C8401A;margin-bottom:24px;">
         <p style="color:#C8401A;font-weight:bold;margin:0 0 8px;">💬 &nbsp;Need Help?</p>
@@ -347,7 +400,12 @@ def send_admin_signup_notification(
       </div>
       {_btn("View Admin Dashboard", dashboard_url)}
     """
-    send_email(admin_email, f"New sign-up: {company_name} ({info['name']} plan)", _wrap(body))
+    send_email(
+        admin_email,
+        f"New sign-up: {company_name} ({info['name']} plan)",
+        _wrap(body, transactional=True),
+        from_email=FROM_SUPPORT_EMAIL,
+    )
 
 
 # ── 4. Password reset ──────────────────────────────────────────────────────────

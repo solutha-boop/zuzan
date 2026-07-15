@@ -1,6 +1,22 @@
 // ZuZan App v2.1 — PO module: retry, draft, pay
 import { useState, useEffect, useRef } from "react";
+import * as Sentry from "@sentry/react";
 import * as XLSX from "xlsx";
+
+// ── Sentry error monitoring ────────────────────────────────────────────────────
+Sentry.init({
+  dsn: "https://4a7fc4a5cc7f0900e7c70acf636d638c@o4511737932021760.ingest.de.sentry.io/4511737981108304",
+  integrations: [Sentry.browserTracingIntegration()],
+  tracesSampleRate: 0.1,          // capture 10% of transactions for performance
+  environment: "production",
+  // Session Replay deliberately disabled — financial data privacy (POPIA)
+  replaysSessionSampleRate: 0,
+  replaysOnErrorSampleRate: 0,
+  beforeSend(event) {
+    if (window.location.hostname === "localhost") return null; // silence local dev noise
+    return event;
+  },
+});
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 
 const C = {
@@ -12446,12 +12462,17 @@ export default function App() {
           payrollEnabled: data.company.payroll_enabled || false,
           afsEnabled:     data.company.afs_enabled || false,
         });
+        Sentry.setUser({ email: data.user.email, username: data.company.name });
         setScreen("app");
       })
       .catch(() => { clearTimeout(timeout); localStorage.removeItem("zuzan_token"); setScreen("login"); });
   }, []);
 
-  const handleLogin = userData => { setUser(userData); setScreen("app"); };
+  const handleLogin = userData => {
+    Sentry.setUser({ email: userData.email, username: userData.companyName });
+    setUser(userData);
+    setScreen("app");
+  };
 
   const handleRegistrationComplete = userData => {
     const savedToken = localStorage.getItem("zuzan_token");
@@ -12466,6 +12487,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    Sentry.setUser(null);
     localStorage.removeItem("zuzan_token");
     setUser(null);
     setScreen("login");
@@ -12509,5 +12531,20 @@ export default function App() {
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
 
-  return <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>;
+  return (
+    <Sentry.ErrorBoundary fallback={
+      <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"sans-serif"}}>
+        <div style={{textAlign:"center",maxWidth:420,padding:40}}>
+          <div style={{fontFamily:"serif",fontSize:36,fontWeight:800,color:C.ink,marginBottom:16}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <h2 style={{color:C.ink,margin:"0 0 12px"}}>Something went wrong</h2>
+          <p style={{color:C.inkMid,lineHeight:1.6,margin:"0 0 24px"}}>An unexpected error occurred. Our team has been notified automatically.</p>
+          <button onClick={()=>window.location.reload()} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Reload ZuZan
+          </button>
+        </div>
+      </div>
+    }>
+      <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>
+    </Sentry.ErrorBoundary>
+  );
 }

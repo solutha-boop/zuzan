@@ -172,6 +172,11 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
             admin_email, data.first_name, data.last_name,
             data.email, data.company_name, data.plan, data.billing_cycle,
         )
+    else:
+        import logging as _logging
+        _logging.getLogger("zuzan.auth").warning(
+            "ADMIN_EMAIL env var not set — admin signup notification skipped for %s", data.email
+        )
 
     # Initialise chart of accounts for the new company
     try:
