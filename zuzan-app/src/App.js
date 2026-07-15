@@ -12134,6 +12134,43 @@ function DocumentRepository() {
   );
 }
 
+// ── PLAN FEATURE GATING ───────────────────────────────────────────────────────
+const PLAN_LEVEL = { starter: 1, professional: 2, business: 3 };
+const PLAN_LABEL = { professional: "Professional", business: "Business" };
+const PLAN_PRICE = { professional: "R899/mo", business: "R1 499/mo" };
+
+function getPlanLevel(user) {
+  const id = (user?.plan?.id || "starter").toLowerCase();
+  return PLAN_LEVEL[id] || 1;
+}
+
+function canAccess(user, requiredPlan) {
+  return getPlanLevel(user) >= (PLAN_LEVEL[requiredPlan] || 1);
+}
+
+function UpgradeWall({ requiredPlan, onNavigateSettings }) {
+  const label = PLAN_LABEL[requiredPlan] || "Professional";
+  const price = PLAN_PRICE[requiredPlan] || "R899/mo";
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
+      <div style={{fontSize:52,marginBottom:16}}>🔒</div>
+      <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>{label} Plan Feature</h2>
+      <p style={{fontSize:14,color:C.inkMid,maxWidth:400,lineHeight:1.7,margin:"0 0 6px"}}>
+        This feature is available on the <strong style={{color:C.ink}}>{label}</strong> plan and above.
+      </p>
+      <p style={{fontSize:13,color:C.inkMid,maxWidth:400,lineHeight:1.6,margin:"0 0 28px"}}>
+        Upgrade to {label} at <strong style={{color:C.ink}}>{price}</strong> to unlock this feature.
+      </p>
+      <button
+        onClick={onNavigateSettings}
+        style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}
+      >
+        Upgrade in Settings →
+      </button>
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
@@ -12172,24 +12209,24 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
       {id:"customers",       label:"Customers",       icon:"👥"},
     ]},
     {id:"procurement", label:"Procurement", icon:"🛒", children:[
-      {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
+      {id:"purchase_orders", label:"Purchase Orders", icon:"📋", minPlan:"professional"},
       {id:"suppliers",       label:"Suppliers",       icon:"🏭"},
     ]},
     {id:"expenses",   label:"Expenses",    icon:"💳"},
     {id:"payroll",    label:"Payroll",     icon:"👥"},
     {id:"reports",    label:"Reports",     icon:"📊"},
-    {id:"budgeting",  label:"Budgeting",   icon:"🎯"},
-    {id:"debtors",    label:"Debtors",     icon:"📥"},
-    {id:"creditors",  label:"Creditors",   icon:"📤"},
-    {id:"coa",        label:"Accounts",    icon:"📒"},
-    {id:"inventory",    label:"Inventory",   icon:"📦"},
-    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭"},
-    {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
-    {id:"documents",       label:"Documents",    icon:"📁"},
-    {id:"data_import",     label:"Import Data",  icon:"⬆️"},
-    {id:"banking",    label:"Banking",     icon:"🏦", children:[
-      {id:"bankimport", label:"Manual Update",   icon:"📄"},
-      {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
+    {id:"budgeting",  label:"Budgeting",   icon:"🎯", minPlan:"business"},
+    {id:"debtors",    label:"Debtors",     icon:"📥", minPlan:"professional"},
+    {id:"creditors",  label:"Creditors",   icon:"📤", minPlan:"professional"},
+    {id:"coa",        label:"Accounts",    icon:"📒", minPlan:"professional"},
+    {id:"inventory",    label:"Inventory",   icon:"📦", minPlan:"professional"},
+    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭", minPlan:"professional"},
+    {id:"fin_statements",  label:"Annual AFS",   icon:"📑", minPlan:"professional"},
+    {id:"documents",       label:"Documents",    icon:"📁", minPlan:"professional"},
+    {id:"data_import",     label:"Import Data",  icon:"⬆️", minPlan:"professional"},
+    {id:"banking",    label:"Banking",     icon:"🏦", minPlan:"professional", children:[
+      {id:"bankimport", label:"Manual Update",   icon:"📄", minPlan:"professional"},
+      {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗", minPlan:"professional"},
     ]},
     {id:"settings",   label:"Settings",    icon:"⚙️"},
   ];
@@ -12205,6 +12242,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
 
   const navBtn = (t, isChild=false) => {
     const active = tab === t.id;
+    const locked = t.minPlan && !canAccess(user, t.minPlan);
+    const lockLabel = t.minPlan === "business" ? "Biz" : "Pro";
     return (
       <button key={t.id} onClick={()=>setTab(t.id)} style={{
         width:"100%", display:"flex", alignItems:"center", gap:10,
@@ -12214,11 +12253,15 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         fontWeight: active ? 700 : 400,
         marginBottom:2,
         background: active ? C.accentLt : "transparent",
-        color: active ? C.accent : isChild ? C.inkMid : C.inkMid,
+        color: active ? C.accent : locked ? C.inkDim : C.inkMid,
         textAlign:"left",
+        opacity: locked ? 0.75 : 1,
       }}>
         <span style={{fontSize: isChild ? 14 : 17}}>{t.icon}</span>{t.label}
-        {active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
+        {locked
+          ? <span style={{marginLeft:"auto",fontSize:9,fontWeight:700,color:"#fff",background:t.minPlan==="business"?"#7C3AED":C.accent,borderRadius:4,padding:"1px 5px",letterSpacing:0.3}}>🔒 {lockLabel}</span>
+          : active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>
+        }
       </button>
     );
   };
@@ -12243,34 +12286,36 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           </button>
         </div>,
     reports:    <Reports    live={live}/>,
-    budgeting:  <Budgeting  live={live}/>,
-    debtors:    <Debtors    live={live}/>,
-    creditors:  <Creditors  live={live}/>,
-    coa:        <ChartOfAccounts/>,
-    inventory:       <Inventory/>,
-    fixed_assets:    <FixedAssets/>,
-    fin_statements:  user?.afsEnabled
-      ? <FinancialStatements/>
-      : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
-          <div style={{fontSize:48,marginBottom:16}}>📑</div>
-          <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Annual Financial Statements</h2>
-          <p style={{fontSize:14,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 6px"}}>
-            Generate IFRS-compliant AFS including Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
-          </p>
-          <p style={{fontSize:13,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 28px"}}>
-            <strong style={{color:C.ink}}>R1,999/year</strong> — less than one hour of accountant fees.
-          </p>
-          <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-            Add Annual AFS in Settings →
-          </button>
-        </div>,
-    documents:       <DocumentRepository/>,
-    data_import:     <DataImport/>,
+    budgeting:  canAccess(user,"business") ? <Budgeting  live={live}/> : <UpgradeWall requiredPlan="business" onNavigateSettings={()=>setTab("settings")}/>,
+    debtors:    canAccess(user,"professional") ? <Debtors    live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    creditors:  canAccess(user,"professional") ? <Creditors  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    coa:        canAccess(user,"professional") ? <ChartOfAccounts/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    inventory:       canAccess(user,"professional") ? <Inventory/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    fixed_assets:    canAccess(user,"professional") ? <FixedAssets/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    fin_statements:  !canAccess(user,"professional")
+      ? <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>
+      : user?.afsEnabled
+        ? <FinancialStatements/>
+        : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:16}}>📑</div>
+            <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Annual Financial Statements</h2>
+            <p style={{fontSize:14,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 6px"}}>
+              Generate IFRS-compliant AFS including Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
+            </p>
+            <p style={{fontSize:13,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 28px"}}>
+              <strong style={{color:C.ink}}>R1,999/year</strong> — less than one hour of accountant fees.
+            </p>
+            <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              Add Annual AFS in Settings →
+            </button>
+          </div>,
+    documents:       canAccess(user,"professional") ? <DocumentRepository/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    data_import:     canAccess(user,"professional") ? <DataImport/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
-    purchase_orders: <PurchaseOrders/>,
-    bankimport:      <BankImport live={live} onNavigate={setTab}/>,
-    bankfeeds:       <BankFeeds/>,
+    purchase_orders: canAccess(user,"professional") ? <PurchaseOrders/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    bankimport:      canAccess(user,"professional") ? <BankImport live={live} onNavigate={setTab}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    bankfeeds:       canAccess(user,"professional") ? <BankFeeds/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange}/>,
   };
 
@@ -12284,7 +12329,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         </div>
         <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`}}>
           <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user?.companyName||"Your Company"}</div>
-          <div style={{fontSize:10,color:C.inkDim}}>{user?.plan?.name||"Professional"} Plan</div>
+          <div style={{fontSize:10,color:C.inkDim}}>{(user?.plan?.name||"starter").charAt(0).toUpperCase()+(user?.plan?.name||"starter").slice(1)} Plan</div>
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
         </div>
@@ -12293,6 +12338,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
             if (!t.children) return navBtn(t);
             const isOpen = expanded[t.id];
             const childActive = t.children.some(c => c.id === tab);
+            const groupLocked = t.minPlan && !canAccess(user, t.minPlan);
+            const groupLockLabel = t.minPlan === "business" ? "Biz" : "Pro";
             return (
               <div key={t.id}>
                 <button onClick={()=>toggleGroup(t.id)} style={{
@@ -12301,12 +12348,16 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
                   fontFamily:"inherit", fontSize:13, marginBottom:2,
                   fontWeight: childActive ? 700 : 400,
                   background: childActive ? C.accentLt : "transparent",
-                  color: childActive ? C.accent : C.inkMid,
+                  color: childActive ? C.accent : groupLocked ? C.inkDim : C.inkMid,
                   textAlign:"left",
+                  opacity: groupLocked ? 0.75 : 1,
                 }}>
                   <span style={{fontSize:17}}>{t.icon}</span>
                   {t.label}
-                  <span style={{marginLeft:"auto",fontSize:10,opacity:.5}}>{isOpen ? "▾" : "▸"}</span>
+                  {groupLocked
+                    ? <span style={{marginLeft:"auto",fontSize:9,fontWeight:700,color:"#fff",background:t.minPlan==="business"?"#7C3AED":C.accent,borderRadius:4,padding:"1px 5px",letterSpacing:0.3}}>🔒 {groupLockLabel}</span>
+                    : <span style={{marginLeft:"auto",fontSize:10,opacity:.5}}>{isOpen ? "▾" : "▸"}</span>
+                  }
                 </button>
                 {isOpen && t.children.map(c => navBtn(c, true))}
               </div>
