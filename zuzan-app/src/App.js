@@ -2758,6 +2758,12 @@ function Payroll({live = {}, user = {}}) {
   const [emp201Data,    setEmp201Data]    = useState(null);
   const [emp201Loading, setEmp201Loading] = useState(false);
   const [emp201Period,  setEmp201Period]  = useState(new Date().toISOString().slice(0,7));
+  // Annual returns (IRP5 / EMP501)
+  const [annualView,    setAnnualView]    = useState("monthly"); // monthly | annual
+  const [irp5Data,      setIrp5Data]      = useState(null);
+  const [emp501Data,    setEmp501Data]    = useState(null);
+  const [annualLoading, setAnnualLoading] = useState(false);
+  const [annualTaxYear, setAnnualTaxYear] = useState(()=>{const n=new Date();return String(n.getMonth()>=2?n.getFullYear()+1:n.getFullYear());});
 
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
@@ -2989,6 +2995,7 @@ function Payroll({live = {}, user = {}}) {
 
   // EMP201 / IRP5 sub-tab — confidential, behind PIN gate
   if (payrollSection === "emp201") {
+    // ── Monthly EMP201 helpers ─────────────────────────────────────────────
     const loadEmp201 = async () => {
       setEmp201Loading(true);
       try {
@@ -3005,9 +3012,214 @@ function Payroll({live = {}, user = {}}) {
     const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
     const dueDate   = e ? e.due_date : "7 "+new Date(nowD.getFullYear(),nowD.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
     const empList   = e ? e.employees : employees.map(emp=>{const p=calcPayroll(emp.salary||emp.gross_salary, taxYear);return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
+
+    // ── Annual IRP5 / EMP501 helpers ──────────────────────────────────────
+    const loadAnnual = async () => {
+      setAnnualLoading(true);
+      try {
+        const [irp5, e501] = await Promise.all([
+          api(`/payroll/irp5?tax_year=${annualTaxYear}`),
+          api(`/payroll/emp501?tax_year=${annualTaxYear}`),
+        ]);
+        setIrp5Data(irp5);
+        setEmp501Data(e501);
+      } catch(err) { /* silently keep old data */ }
+      setAnnualLoading(false);
+    };
+
+    // Inner view toggle
+    const InnerToggle = () => (
+      <div style={{display:"flex",gap:0,marginBottom:20,background:C.bg,borderRadius:8,border:"1px solid "+C.border,width:"fit-content"}}>
+        {[["monthly","Monthly EMP201"],["annual","Annual IRP5 / EMP501"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setAnnualView(v)}
+            style={{background:annualView===v?C.accent:"transparent",color:annualView===v?"#fff":C.inkMid,border:"none",borderRadius:7,padding:"7px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+    );
+
+    // ── ANNUAL VIEW ────────────────────────────────────────────────────────
+    if (annualView === "annual") {
+      const irp5 = irp5Data;
+      const e501 = emp501Data;
+      const irp5Emps = irp5 ? irp5.employees : [];
+      return (
+        <div>
+          <SectionTabs/>
+          <InnerToggle/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+            <div>
+              <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Annual Returns — IRP5 &amp; EMP501</h2>
+              <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>
+                Tax Year {annualTaxYear}: {irp5?irp5.period_from:""} – {irp5?irp5.period_to:""}
+              </p>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <select value={annualTaxYear} onChange={ev=>{setAnnualTaxYear(ev.target.value);setIrp5Data(null);setEmp501Data(null);}}
+                style={{padding:"7px 12px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",fontWeight:700}}>
+                {[String(new Date().getFullYear()+2),String(new Date().getFullYear()+1),String(new Date().getFullYear()),String(new Date().getFullYear()-1)].map(y=>(
+                  <option key={y} value={y}>Tax Year {y}</option>
+                ))}
+              </select>
+              <button onClick={loadAnnual} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                {annualLoading?"Loading…":"Load"}
+              </button>
+              {irp5Emps.length>0 && (
+                <ExcelBtn filename={`irp5_${annualTaxYear}.csv`} data={irp5Emps.map(r=>({
+                  Employee:`${r.first_name} ${r.last_name}`, EmpNo:r.employee_number, IDNo:r.id_number, TaxNo:r.tax_number,
+                  Gross:r.gross_remuneration, "3601_Salary":r.code_3601_salary, "3713_MedFringe":r.code_3713_med_fringe,
+                  "3801_Overtime":r.code_3801_overtime, "4001_PAYE":r.code_4001_paye, "4002_UIF_Emp":r.code_4002_uif_employee,
+                  "4005_Pension":r.code_4005_pension, "MedTaxCredit":r.medical_tax_credit, NetPay:r.net_pay_annual,
+                  "4003_UIF_Empr":r.code_4003_uif_employer, "4474_SDL":r.code_4474_sdl, "7002_PensionEmpr":r.code_7002_pension_empr,
+                }))}/>
+              )}
+              {irp5Emps.length>0 && (
+                <button onClick={async()=>{
+                  try {
+                    const token = localStorage.getItem("zuzan_token");
+                    const res = await fetch(`https://zuzan-backend.onrender.com/payroll/easyfile-export?tax_year=${annualTaxYear}&mode=TEST`, {
+                      headers:{Authorization:`Bearer ${token}`}
+                    });
+                    if (!res.ok) { const e=await res.json(); alert("e@syFile export failed: "+(e.detail||res.status)); return; }
+                    const blob = await res.blob();
+                    const url  = URL.createObjectURL(blob);
+                    const a    = document.createElement("a");
+                    a.href = url; a.download = `easyfile_irp5_${annualTaxYear}_TEST.txt`; a.click();
+                    URL.revokeObjectURL(url);
+                  } catch(err) { alert("Download failed. Make sure PAYE Reference is saved in Settings → Company."); }
+                }} style={{background:"#1a7f37",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  ⬇ e@syFile Import (.txt)
+                </button>
+              )}
+              <PrintBtn onClick={()=>{const el=document.getElementById("annual-print");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
+            </div>
+          </div>
+
+          <div id="annual-print">
+            {/* EMP501 Summary */}
+            {e501 && (
+              <div style={{marginBottom:24}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:12}}>EMP501 — Employer Reconciliation Declaration</div>
+                <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+                  <KPI label="Total Employees"    value={e501.total_employees}            color={C.blue}   icon="👥" sub={`${e501.months_submitted} months submitted`}/>
+                  <KPI label="Total Remuneration" value={fmt(e501.total_gross_remuneration)} color={C.ink}    icon="💰" sub="Gross payroll for year"/>
+                  <KPI label="Total PAYE"         value={fmt(e501.total_paye)}            color={C.red}    icon="💼" sub="Income tax withheld"/>
+                  <KPI label="Total UIF"          value={fmt(e501.total_uif)}             color={C.gold}   icon="🛡️" sub="Emp + employer"/>
+                  <KPI label="Total SDL"          value={fmt(e501.total_sdl)}             color={C.blue}   icon="📚" sub="Skills levy"/>
+                  <KPI label="Total Due SARS"     value={fmt(e501.total_due_sars)}        color={C.accent} icon="🏛️" sub="PAYE + UIF + SDL"/>
+                </div>
+                {/* Monthly breakdown */}
+                <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:12,overflow:"hidden",marginBottom:20}}>
+                  <div style={{padding:"12px 18px",borderBottom:"1px solid "+C.border,fontSize:12,fontWeight:700,color:C.ink}}>Monthly EMP201 Reconciliation</div>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                    <thead>
+                      <tr style={{background:C.bg}}>
+                        {["Period","Employees","Gross","PAYE","UIF","SDL","Total SARS"].map(h=>(
+                          <th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {e501.monthly_breakdown.map((m,i)=>(
+                        <tr key={i} style={{borderBottom:"1px solid "+C.border+"20"}}>
+                          <td style={{padding:"9px 14px",fontWeight:600,color:C.ink}}>{m.period}</td>
+                          <td style={{padding:"9px 14px",color:C.inkMid}}>{m.employee_count}</td>
+                          <td style={{padding:"9px 14px"}}>{fmt(m.gross)}</td>
+                          <td style={{padding:"9px 14px",color:C.red}}>{fmt(m.paye)}</td>
+                          <td style={{padding:"9px 14px",color:C.gold}}>{fmt(m.uif)}</td>
+                          <td style={{padding:"9px 14px",color:C.blue}}>{fmt(m.sdl)}</td>
+                          <td style={{padding:"9px 14px",fontWeight:700}}>{fmt(m.paye+m.uif+m.sdl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
+                        <td colSpan={2} style={{padding:"9px 14px",fontWeight:800,color:C.ink}}>ANNUAL TOTAL</td>
+                        <td style={{padding:"9px 14px",fontWeight:800}}>{fmt(e501.total_gross_remuneration)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.red}}>{fmt(e501.total_paye)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.gold}}>{fmt(e501.total_uif)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.blue}}>{fmt(e501.total_sdl)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.accent}}>{fmt(e501.total_due_sars)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:10,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:700,color:C.red}}>Submit EMP501 on SARS eFiling</div>
+                    <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>Interim reconciliation: Aug–Sep. Annual reconciliation: May–Jun. Use the figures above to complete your eFiling submission.</div>
+                  </div>
+                  <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling</a>
+                </div>
+              </div>
+            )}
+
+            {/* IRP5 per employee */}
+            <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,overflow:"hidden"}}>
+              <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink}}>IRP5 Employee Tax Certificates — Tax Year {annualTaxYear}</div>
+                <div style={{fontSize:11,color:C.inkMid}}>Give each employee their IRP5 by 31 May. Codes follow SARS IT3(a) format.</div>
+              </div>
+              {irp5Emps.length === 0 ? (
+                <div style={{padding:32,textAlign:"center",color:C.inkMid,fontSize:13}}>
+                  {irp5 ? "No payslips found for this tax year." : "Click Load to generate IRP5 certificates."}
+                </div>
+              ) : (
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                  <thead>
+                    <tr style={{background:C.bg}}>
+                      {["Employee","ID / Tax No","Months","3601 Salary","3713 Med Fringe","3801 OT","4001 PAYE","4002 UIF","4005 Pension","MTC","Net Pay (Annual)","4474 SDL*"].map(h=>(
+                        <th key={h} style={{padding:"9px 12px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:.4,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {irp5Emps.map((emp,i)=>(
+                      <tr key={i} style={{borderBottom:"1px solid "+C.border+"20"}}>
+                        <td style={{padding:"10px 12px",fontWeight:600,color:C.ink,whiteSpace:"nowrap"}}>{emp.first_name} {emp.last_name}</td>
+                        <td style={{padding:"10px 12px",color:C.inkMid,fontSize:10}}>{emp.id_number||"—"} / {emp.tax_number||"—"}</td>
+                        <td style={{padding:"10px 12px",textAlign:"center",color:C.inkMid}}>{emp.periods_count}</td>
+                        <td style={{padding:"10px 12px"}}>{fmt(emp.code_3601_salary)}</td>
+                        <td style={{padding:"10px 12px",color:emp.code_3713_med_fringe>0?C.gold:"inherit"}}>{fmt(emp.code_3713_med_fringe)}</td>
+                        <td style={{padding:"10px 12px",color:emp.code_3801_overtime>0?C.blue:"inherit"}}>{fmt(emp.code_3801_overtime)}</td>
+                        <td style={{padding:"10px 12px",color:C.red,fontWeight:600}}>{fmt(emp.code_4001_paye)}</td>
+                        <td style={{padding:"10px 12px",color:C.gold}}>{fmt(emp.code_4002_uif_employee)}</td>
+                        <td style={{padding:"10px 12px"}}>{fmt(emp.code_4005_pension)}</td>
+                        <td style={{padding:"10px 12px",color:C.green}}>{fmt(emp.medical_tax_credit)}</td>
+                        <td style={{padding:"10px 12px",fontWeight:700,color:C.green}}>{fmt(emp.net_pay_annual)}</td>
+                        <td style={{padding:"10px 12px",color:C.inkMid,fontSize:10}}>{fmt(emp.code_4474_sdl)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
+                      <td colSpan={3} style={{padding:"10px 12px",fontWeight:800,color:C.ink}}>TOTALS</td>
+                      <td style={{padding:"10px 12px",fontWeight:800}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3601_salary||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3713_med_fringe||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.blue}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3801_overtime||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.red}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4001_paye||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4002_uif_employee||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4005_pension||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.green}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.medical_tax_credit||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.green}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.net_pay_annual||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.inkMid}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4474_sdl||0),0))}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+            <p style={{fontSize:10,color:C.inkMid,marginTop:8}}>* SDL (code 4474) is an employer cost — shown for reconciliation, not deducted from employee net pay. MTC = Medical Tax Credit (s6A).</p>
+          </div>
+        </div>
+      );
+    }
+
+    // ── MONTHLY EMP201 VIEW ────────────────────────────────────────────────
     return (
       <div>
         <SectionTabs/>
+        <InnerToggle/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
           <div>
             <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>EMP201 Monthly Employer Return</h2>
@@ -3038,7 +3250,7 @@ function Payroll({live = {}, user = {}}) {
             <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling</a>
           </div>
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,overflow:"hidden"}}>
-            <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,fontSize:13,fontWeight:700,color:C.ink}}>Employee Tax Certificates (IRP5)</div>
+            <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,fontSize:13,fontWeight:700,color:C.ink}}>Employee Breakdown</div>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead>
                 <tr style={{background:C.bg,borderBottom:"1px solid "+C.border}}>
@@ -7284,6 +7496,12 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     payfastPassphrase:    user?.payfastPassphrase    || "",
     logoUrl:              user?.logoUrl              || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
+    // SARS e@syFile fields
+    payeRef:     "",
+    sdlRef:      "",
+    uifRef:      "",
+    sic7Code:    "",
+    contactName: "",
   });
   const [saved, setSaved] = useState(false);
   const [subInfo, setSubInfo] = useState({status: user?.subscriptionStatus || "trial", trialEnds: user?.trialEnds || null});
@@ -7305,6 +7523,11 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         payfastPassphrase:    data.payfast_passphrase   || f.payfastPassphrase,
         logoUrl:              data.logo_url          || f.logoUrl,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
+        payeRef:     data.paye_ref     || f.payeRef,
+        sdlRef:      data.sdl_ref      || f.sdlRef,
+        uifRef:      data.uif_ref      || f.uifRef,
+        sic7Code:    data.sic7_code    || f.sic7Code,
+        contactName: data.contact_name || f.contactName,
       }));
       setSubInfo({status: data.subscription_status, trialEnds: data.trial_ends, plan: data.plan, billingCycle: data.billing_cycle});
     }).catch(() => {});
@@ -7362,6 +7585,11 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         payfast_merchant_id:    form.payfastMerchantId  || null,
         payfast_merchant_key:   form.payfastMerchantKey || null,
         payfast_passphrase:     form.payfastPassphrase  || null,
+        paye_ref:     form.payeRef     || null,
+        sdl_ref:      form.sdlRef      || null,
+        uif_ref:      form.uifRef      || null,
+        sic7_code:    form.sic7Code    || null,
+        contact_name: form.contactName || null,
       })});
     } catch(e) { console.warn("Settings save failed:", e.message); }
     // Update local user context
@@ -7602,6 +7830,26 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         <div style={{background:C.goldLt,borderRadius:10,padding:"12px 16px",marginBottom:20,fontSize:12,color:C.inkMid}}>
           Get your credentials at <strong>payfast.co.za → Account → Settings → API Credentials</strong>. Each client uses their own PayFast account — Zuzan never touches your funds.
         </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>SARS Returns <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(IRP5 / EMP501 / e@syFile export)</span></div>
+        <div style={{background:C.accentLt,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:C.inkMid}}>
+          Required to generate e@syFile-compatible IRP5 import files. PAYE Reference is mandatory — SDL and UIF refs only needed if registered. SIC7 code: your industry classification (e.g. <strong>85100</strong> for accounting). Contact name appears on the EMP501.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+          {[
+            {l:"PAYE Reference Number",k:"payeRef",  p:"7000000000",   hint:"10 digits, starts with 7 — mandatory"},
+            {l:"Contact Name (SARS)",   k:"contactName",p:"Jane Smith",hint:"Person responsible for payroll"},
+            {l:"SDL Reference Number",  k:"sdlRef",   p:"L000000000",   hint:"Starts with L — if registered"},
+            {l:"UIF Reference Number",  k:"uifRef",   p:"U000000000",   hint:"Starts with U — if registered"},
+            {l:"SIC7 Industry Code",    k:"sic7Code", p:"85100",        hint:"5-char SARS industry code"},
+          ].map(f=>(
+            <div key={f.k}>
+              <label style={labelStyle}>{f.l} <span style={{fontWeight:400,textTransform:"none",color:C.inkDim}}>{f.hint}</span></label>
+              <input placeholder={f.p} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
+            </div>
+          ))}
+        </div>
+
         <div style={{display:"flex",alignItems:"center",gap:14}}>
           <button onClick={handleSave} style={{padding:"11px 26px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
           {saved && <span style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Saved</span>}

@@ -33,6 +33,11 @@ DEFAULT_ACCOUNTS = [
     {"code": "2200", "name": "PAYE Payable",                 "type": AccountType.liability},
     {"code": "2210", "name": "UIF Payable",                  "type": AccountType.liability},
     {"code": "2220", "name": "SDL Payable",                  "type": AccountType.liability},
+    # Payroll deduction liabilities (audit fix 2026-07-15) — employee-deducted and
+    # employer pension/medical amounts held until paid over to the fund/scheme.
+    # init_accounts upserts, so existing companies get these on the next payroll run.
+    {"code": "2230", "name": "Pension Fund Payable",         "type": AccountType.liability},
+    {"code": "2240", "name": "Medical Aid Payable",          "type": AccountType.liability},
     {"code": "2126", "name": "Income Tax Payable",           "type": AccountType.liability},
     {"code": "2127", "name": "Provisional Tax Payable",      "type": AccountType.liability},
     # Equity
@@ -43,6 +48,9 @@ DEFAULT_ACCOUNTS = [
     {"code": "5000", "name": "Cost of Sales",                "type": AccountType.expense},
     {"code": "5100", "name": "Salaries (Gross)",             "type": AccountType.expense},
     {"code": "5110", "name": "Payroll Levies (UIF/SDL)",     "type": AccountType.expense},
+    # Employer staff-cost contributions (audit fix 2026-07-15)
+    {"code": "5120", "name": "Pension Contributions (Employer)",     "type": AccountType.expense},
+    {"code": "5130", "name": "Medical Aid Contributions (Employer)", "type": AccountType.expense},
     {"code": "5200", "name": "Utilities",                    "type": AccountType.expense},
     {"code": "5210", "name": "Telecoms",                     "type": AccountType.expense},
     {"code": "5220", "name": "Office Expenses",              "type": AccountType.expense},
@@ -359,13 +367,22 @@ def post_bank_income(company_id: int, txn, db: Session) -> JournalEntry:
 
 def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     """
-    Payroll run for one employee:
-      DR Salaries (Gross)      (gross_salary)
-      DR Payroll Levies        (uif_employer + sdl)
-      CR PAYE Payable          (paye)
-      CR UIF Payable           (uif_employee + uif_employer)
-      CR SDL Payable           (sdl)
-      CR Bank / Cash           (net_pay)
+    Payroll run for one employee (audit fix 2026-07-15 — overtime, pension and
+    medical aid were previously missing, leaving the entry unbalanced and
+    blocking the payroll run whenever any of them were present):
+      DR Salaries (Gross)              (gross_salary + overtime amounts)
+      DR Payroll Levies                (uif_employer + sdl)
+      DR Pension Contributions (ER)    (pension_employer)
+      DR Medical Aid Contributions (ER)(medical_aid_employer_con)
+      CR PAYE Payable                  (paye, after MTC)
+      CR UIF Payable                   (uif_employee + uif_employer)
+      CR SDL Payable                   (sdl)
+      CR Pension Fund Payable          (pension_employee + pension_employer)
+      CR Medical Aid Payable           (medical_aid_employee_ded + medical_aid_employer_con)
+      CR Bank / Cash                   (net_pay)
+
+    Balances for every input combination because
+    net_pay = (gross + overtime) − paye − uif_employee − pension_employee − medical_aid_employee.
     """
     cid = employee.company_id
     entry = _make_entry(cid, payslip.generated_at or datetime.utcnow(),
@@ -379,16 +396,49 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     sdl_acct  = get_account(cid, "2220", db)
     bank  = get_account(cid, "1000", db)
 
+    # Cash remuneration = base gross + all BCEA overtime categories.
+    # payslip.gross_salary stores the base only; overtime is stored per category.
+    overtime_total = round(
+        (getattr(payslip, "overtime_amount", 0) or 0)
+        + (getattr(payslip, "sunday_amount", 0) or 0)
+        + (getattr(payslip, "ph_amount", 0) or 0), 2)
+    gross_incl_ot = round((payslip.gross_salary or 0) + overtime_total, 2)
+
     employer_contrib = round((payslip.uif_employer or 0) + (payslip.sdl or 0), 2)
 
+    # Pension / medical (columns added 2026-07; getattr keeps backfill of older
+    # payslips working even if a row predates the migration)
+    pension_ee = round(getattr(payslip, "pension_employee", 0) or 0, 2)
+    pension_er = round(getattr(payslip, "pension_employer", 0) or 0, 2)
+    medical_ee = round(getattr(payslip, "medical_aid_employee_ded", 0) or 0, 2)
+    medical_er = round(getattr(payslip, "medical_aid_employer_con", 0) or 0, 2)
+
     lines = [
-        _line(entry.id, sal,  debit=payslip.gross_salary,                        description="Gross salary"),
+        _line(entry.id, sal,  debit=gross_incl_ot,                               description="Gross salary incl. overtime"),
         _line(entry.id, levy, debit=employer_contrib,                             description="Employer UIF + SDL"),
         _line(entry.id, paye_acct, credit=round(payslip.paye or 0, 2),           description="PAYE to SARS"),
         _line(entry.id, uif_acct,  credit=round((payslip.uif_employee or 0) + (payslip.uif_employer or 0), 2), description="UIF"),
         _line(entry.id, sdl_acct,  credit=round(payslip.sdl or 0, 2),            description="SDL"),
         _line(entry.id, bank,      credit=round(payslip.net_pay or 0, 2),        description="Net pay"),
     ]
+    if pension_ee or pension_er:
+        pen_exp = get_account(cid, "5120", db)
+        pen_pay = get_account(cid, "2230", db)
+        if pension_er:
+            lines.append(_line(entry.id, pen_exp, debit=pension_er,              description="Employer pension contribution"))
+        lines.append(_line(entry.id, pen_pay, credit=round(pension_ee + pension_er, 2), description="Pension fund payable"))
+    if medical_ee or medical_er:
+        med_exp = get_account(cid, "5130", db)
+        med_pay = get_account(cid, "2240", db)
+        if medical_er:
+            lines.append(_line(entry.id, med_exp, debit=medical_er,              description="Employer medical aid contribution"))
+        lines.append(_line(entry.id, med_pay, credit=round(medical_ee + medical_er, 2), description="Medical aid payable"))
+    # Fold pure rounding residue (≤ 5c) into the salary debit: payslip fields are
+    # rounded independently, so cent-level drift is possible and must never
+    # hard-block a payroll run via _assert_balanced.
+    residue = round(sum(l.credit for l in lines) - sum(l.debit for l in lines), 2)
+    if 0 < abs(residue) <= 0.05:
+        lines[0].debit = round((lines[0].debit or 0) + residue, 2)
     _assert_balanced(lines)
     for l in lines: db.add(l)
     return entry

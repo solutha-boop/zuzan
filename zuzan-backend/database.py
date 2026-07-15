@@ -64,6 +64,12 @@ class Company(Base):
     payfast_merchant_key=Column(String,nullable=True)
     payfast_passphrase=Column(String,nullable=True)
     cipc_registration_date=Column(DateTime,nullable=True)   # Company anniversary for CIPC AR reminder
+    # ── SARS e@syFile / IRP5 fields (BRS v25.3.0) ────────────────────────────
+    paye_ref=Column(String,nullable=True)             # PAYE Reference Number (10 digits, starts 7)
+    sdl_ref=Column(String,nullable=True)              # SDL Reference Number (starts L)
+    uif_ref=Column(String,nullable=True)              # UIF Reference Number (starts U)
+    sic7_code=Column(String,nullable=True)            # Standard Industrial Classification code
+    contact_name=Column(String,nullable=True)         # Contact person name for SARS submissions
     # Billing lifecycle tracking
     trial_warning_sent_at=Column(DateTime,nullable=True)    # When 3-day warning email was sent
     trial_expiry_email_sent_at=Column(DateTime,nullable=True) # When "trial ended" email was sent
@@ -1327,6 +1333,12 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN medical_aid_employee_ded FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN medical_aid_employer_con FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN medical_tax_credit FLOAT DEFAULT 0",
+            # ── SARS e@syFile fields on companies (2026-07) ───────────────────
+            "ALTER TABLE companies ADD COLUMN paye_ref VARCHAR",
+            "ALTER TABLE companies ADD COLUMN sdl_ref VARCHAR",
+            "ALTER TABLE companies ADD COLUMN uif_ref VARCHAR",
+            "ALTER TABLE companies ADD COLUMN sic7_code VARCHAR",
+            "ALTER TABLE companies ADD COLUMN contact_name VARCHAR",
         ]:
             try:
                 conn.execute(text(sql))

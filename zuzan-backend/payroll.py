@@ -3,7 +3,7 @@ ZuZan - Payroll Engine, Reports and PayFast Payment Gateway
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
@@ -271,14 +271,17 @@ def calc_payroll(
     annual_payroll_total: sum of ALL employees' gross_monthly * 12.
     SDL only applies if annual_payroll_total >= R500,000 (SA law).
 
-    Section 11F (2026/2027): deduction = min(total_pension_employee_annual,
-        27.5% × remuneration, R430,000). Cap increased from R350,000 on 1 March 2026.
+    Section 11F (2026/2027): deduction = min(total annual contribution
+        (employee + employer-deemed per para 12D), 27.5% × remuneration, R430,000).
+        Cap increased from R350,000 on 1 March 2026.
 
     Section 6A MTC (2026/2027): R376/month (main member + first dependant each),
         R254/month each additional dependant. Applied as a direct PAYE reduction.
 
-    Employer medical aid is a taxable fringe benefit (7th Schedule s2(i)) and is
-    added to remuneration when computing the PAYE base and s11F ceiling.
+    Employer medical aid (7th Schedule s2(i)) and employer pension/provident
+    contributions (para 2(l)/12D, since 1 Mar 2016) are taxable fringe benefits,
+    added to remuneration for the PAYE base and s11F ceiling; the employer pension
+    portion is also deemed an employee contribution for the s11F deduction.
     """
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
 
@@ -293,24 +296,32 @@ def calc_payroll(
     pension_employee_monthly = round(gross_monthly * pension_employee_pct + pension_employee_fixed, 2)
     pension_employer_monthly = round(gross_monthly * pension_employer_pct + pension_employer_fixed, 2)
 
-    # ── PAYE base includes employer medical aid fringe benefit ─────────────────
-    paye_base_monthly = taxable_gross + medical_aid_employer
+    # ── PAYE base includes employer fringe benefits ───────────────────────────
+    # Employer medical aid: taxable fringe benefit (7th Schedule s2(i)).
+    # Employer pension/provident: taxable fringe benefit since 1 Mar 2016
+    # (7th Schedule para 2(l) / 12D) — added to remuneration AND deemed an
+    # employee contribution for s11F (audit fix 2026-07-15). Below the s11F
+    # caps the two effects cancel (tax-neutral); once the 27.5%/R430k cap
+    # binds, PAYE correctly increases.
+    paye_base_monthly = taxable_gross + medical_aid_employer + pension_employer_monthly
     paye_base_annual  = paye_base_monthly * 12
 
     # ── Section 11F deduction (annual, applied pre-PAYE) ─────────────────────
-    # s11F applies to TOTAL employee contribution (% + fixed), capped at
+    # s11F applies to the TOTAL contribution: employee (% + fixed) PLUS the
+    # employer contribution deemed to be the employee's (para 12D), capped at
     # min(total_contribution, 27.5% × remuneration, R430,000/year).
     # Any excess contribution above the cap is still deducted from pay but
-    # provides no additional PAYE relief.
-    pension_employee_annual = pension_employee_monthly * 12
+    # provides no additional PAYE relief in the month (SARS carries excess
+    # forward on assessment).
+    pension_total_annual = (pension_employee_monthly + pension_employer_monthly) * 12
     s11f_annual = min(
-        pension_employee_annual,
+        pension_total_annual,
         S11F_RATE * paye_base_annual,
         S11F_CAP,
     )
     s11f_monthly = round(s11f_annual / 12, 2)
-    # Track how much of the employee contribution exceeds the s11F cap (post-tax)
-    s11f_excess_annual = max(0.0, pension_employee_annual - s11f_annual)
+    # Track how much of the total contribution exceeds the s11F cap (post-tax)
+    s11f_excess_annual = max(0.0, pension_total_annual - s11f_annual)
 
     # ── PAYE on (PAYE base − s11F deduction) annualised ──────────────────────
     annual_paye  = calc_paye(paye_base_annual - s11f_annual, tax_year)
@@ -321,8 +332,11 @@ def calc_payroll(
     mtc = calc_medical_tax_credit(medical_aid_dependants) if on_medical_aid else 0.0
     paye_after_mtc = max(0.0, monthly_paye - mtc)
 
-    # ── UIF on base salary only (overtime & fringe benefits excluded per SARS) ─
-    uif_base     = min(gross_monthly, yr["uif_ceil"])
+    # ── UIF on cash remuneration incl. overtime, capped at the ceiling ────────
+    # Audit fix 2026-07-15: UIF remuneration INCLUDES overtime (commission is
+    # the notable exclusion — SARS UIF-GEN-01-G01). Previously overtime was
+    # wrongly excluded, understating UIF for sub-ceiling earners.
+    uif_base     = min(taxable_gross, yr["uif_ceil"])
     uif_employee = uif_base * UIF_RATE
     uif_employer = uif_base * UIF_RATE
 
@@ -541,6 +555,373 @@ async def run_payroll(
         "payslips_created": len(created),
         "message":          f"Payroll processed for {len(created)} employees.",
     }
+
+
+# ── IRP5 / EMP501 Annual Returns ──────────────────────────────────────────────
+
+def _tax_year_periods(tax_year: int):
+    """Return list of 'YYYY-MM' strings for SA tax year (1 Mar prev → 28 Feb year)."""
+    periods = [f"{tax_year - 1}-{m:02d}" for m in range(3, 13)]
+    periods += [f"{tax_year}-{m:02d}" for m in range(1, 3)]
+    return periods
+
+
+def _default_tax_year() -> int:
+    now = datetime.utcnow()
+    return now.year + 1 if now.month >= 3 else now.year
+
+
+@payroll_router.get("/irp5")
+async def get_irp5(
+    tax_year: int = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Annual IRP5 certificates for all active employees (aggregated from payslips)."""
+    cid = current_user.company_id
+    ty = tax_year or _default_tax_year()
+    periods = _tax_year_periods(ty)
+
+    employees = (
+        db.query(Employee)
+        .filter(Employee.company_id == cid, Employee.is_active == True)
+        .all()
+    )
+
+    irp5_list = []
+    for emp in employees:
+        payslips = (
+            db.query(Payslip)
+            .filter(Payslip.employee_id == emp.id, Payslip.period.in_(periods))
+            .all()
+        )
+        if not payslips:
+            continue
+
+        gross           = sum(p.gross_salary or 0 for p in payslips)
+        paye            = sum(p.paye or 0 for p in payslips)
+        uif_emp         = sum(p.uif_employee or 0 for p in payslips)
+        uif_empr        = sum(p.uif_employer or 0 for p in payslips)
+        sdl             = sum(p.sdl or 0 for p in payslips)
+        net_pay         = sum(p.net_pay or 0 for p in payslips)
+        pension_emp     = sum(p.pension_employee or 0 for p in payslips)
+        pension_empr    = sum(p.pension_employer or 0 for p in payslips)
+        s11f            = sum(p.s11f_deduction or 0 for p in payslips)
+        med_emp         = sum(p.medical_aid_employee_ded or 0 for p in payslips)
+        med_empr        = sum(p.medical_aid_employer_con or 0 for p in payslips)
+        med_tc          = sum(p.medical_tax_credit or 0 for p in payslips)
+        overtime        = sum(
+            (p.overtime_amount or 0) + (p.sunday_amount or 0) + (p.ph_amount or 0)
+            for p in payslips
+        )
+
+        # Source codes
+        code_3601 = max(0, gross - overtime - med_empr)
+        code_3713 = med_empr   # employer medical fringe benefit
+        code_3801 = overtime   # overtime / variable pay
+
+        irp5_list.append({
+            "employee_id":     emp.id,
+            "employee_number": emp.employee_number or str(emp.id),
+            "first_name":      emp.first_name,
+            "last_name":       emp.last_name,
+            "id_number":       emp.id_number or "",
+            "tax_number":      emp.tax_number or "",
+            "periods_count":   len(payslips),
+            # Income
+            "gross_remuneration":      round(gross, 2),
+            "code_3601_salary":        round(code_3601, 2),
+            "code_3713_med_fringe":    round(code_3713, 2),
+            "code_3801_overtime":      round(code_3801, 2),
+            # Employee deductions
+            "code_4001_paye":          round(paye, 2),
+            "code_4002_uif_employee":  round(uif_emp, 2),
+            "code_4005_pension":       round(s11f, 2),
+            "medical_employee_ded":    round(med_emp, 2),
+            "medical_tax_credit":      round(med_tc, 2),
+            "net_pay_annual":          round(net_pay, 2),
+            # Employer contributions (informational)
+            "code_4003_uif_employer":  round(uif_empr, 2),
+            "code_4474_sdl":           round(sdl, 2),
+            "code_7002_pension_empr":  round(pension_empr, 2),
+        })
+
+    company = db.query(Company).filter(Company.id == cid).first()
+    return {
+        "tax_year":    ty,
+        "period_from": f"01 March {ty - 1}",
+        "period_to":   f"28 February {ty}",
+        "company_name": company.name if company else "",
+        "employees":   irp5_list,
+    }
+
+
+@payroll_router.get("/emp501")
+async def get_emp501(
+    tax_year: int = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """EMP501 annual employer reconciliation — totals + monthly breakdown."""
+    cid = current_user.company_id
+    ty = tax_year or _default_tax_year()
+    periods = _tax_year_periods(ty)
+
+    emp_ids = [e.id for e in db.query(Employee.id).filter(Employee.company_id == cid).all()]
+    all_ps = (
+        db.query(Payslip)
+        .filter(Payslip.employee_id.in_(emp_ids), Payslip.period.in_(periods))
+        .all()
+    )
+
+    monthly = {}
+    for period in periods:
+        ps = [p for p in all_ps if p.period == period]
+        if ps:
+            monthly[period] = {
+                "period":         period,
+                "employee_count": len(ps),
+                "gross":          round(sum(p.gross_salary or 0 for p in ps), 2),
+                "paye":           round(sum(p.paye or 0 for p in ps), 2),
+                "uif":            round(sum((p.uif_employee or 0) + (p.uif_employer or 0) for p in ps), 2),
+                "sdl":            round(sum(p.sdl or 0 for p in ps), 2),
+            }
+
+    total_paye = sum(p.paye or 0 for p in all_ps)
+    total_uif  = sum((p.uif_employee or 0) + (p.uif_employer or 0) for p in all_ps)
+    total_sdl  = sum(p.sdl or 0 for p in all_ps)
+    total_gross = sum(p.gross_salary or 0 for p in all_ps)
+
+    company = db.query(Company).filter(Company.id == cid).first()
+    return {
+        "tax_year":                   ty,
+        "period_from":                f"01 March {ty - 1}",
+        "period_to":                  f"28 February {ty}",
+        "company_name":               company.name if company else "",
+        "total_employees":            len(set(p.employee_id for p in all_ps)),
+        "months_submitted":           len(monthly),
+        "total_gross_remuneration":   round(total_gross, 2),
+        "total_paye":                 round(total_paye, 2),
+        "total_uif":                  round(total_uif, 2),
+        "total_sdl":                  round(total_sdl, 2),
+        "total_due_sars":             round(total_paye + total_uif + total_sdl, 2),
+        "monthly_breakdown":          sorted(monthly.values(), key=lambda x: x["period"]),
+    }
+
+
+
+@payroll_router.get("/easyfile-export")
+async def get_easyfile_export(
+    tax_year: int = None,
+    mode: str = "TEST",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a SARS BRS v25.3.0 e@syFile Employer import file (.txt).
+    Produces employer header + one IRP5 certificate per employee + trailer record.
+    mode: "TEST" (safe to import and delete) or "LIVE" (for actual submission).
+    """
+    import math
+
+    cid = current_user.company_id
+    ty = tax_year or _default_tax_year()
+    periods = _tax_year_periods(ty)
+
+    company = db.query(Company).filter(Company.id == cid).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    paye_ref = (getattr(company, "paye_ref", None) or "").strip()
+    if not paye_ref:
+        raise HTTPException(
+            status_code=400,
+            detail="PAYE Reference Number not set. Go to Settings → Company → SARS Returns to add it.",
+        )
+
+    sdl_ref      = (getattr(company, "sdl_ref",      None) or "").strip()
+    uif_ref      = (getattr(company, "uif_ref",      None) or "").strip()
+    sic7_code    = (getattr(company, "sic7_code",    None) or "00001").strip()
+    contact_name = (getattr(company, "contact_name", None) or company.name or "").strip()
+    phone        = (company.phone or "0000000000").strip()[:15]
+    address      = (company.address or "").strip()
+
+    contact_parts    = contact_name.split(" ", 1)
+    contact_first    = contact_parts[0][:50]
+    contact_surname  = (contact_parts[1] if len(contact_parts) > 1 else contact_parts[0])[:50]
+
+    # Parse freeform address into street / city parts
+    addr_parts  = [p.strip() for p in address.replace("\n", ",").split(",") if p.strip()]
+    addr_street = (addr_parts[0] if addr_parts else "N/A")[:26]
+    addr_city   = (addr_parts[1] if len(addr_parts) > 1 else (addr_parts[0] if addr_parts else "N/A"))[:21]
+
+    def q(val):
+        return f'"{str(val)}"'
+
+    def fmt_amt(val, cents=False):
+        """BRS rule: no cents for most codes; cents required for specific codes."""
+        if cents:
+            return f"{val:.2f}"
+        return str(int(math.floor(max(0, val))))
+
+    lines = []
+
+    # ── EMPLOYER HEADER RECORD ────────────────────────────────────────────────
+    lines.append(f"2010,{q(company.name[:90])}")
+    lines.append(f"2015,{q(mode.upper())}")
+    lines.append(f"2020,{paye_ref}")
+    if sdl_ref:
+        lines.append(f"2022,{sdl_ref}")
+    if uif_ref:
+        lines.append(f"2024,{uif_ref}")
+    lines.append(f"2025,{q(contact_first)}")
+    lines.append(f"2036,{q(contact_surname)}")
+    lines.append(f"2026,{q(phone)}")
+    lines.append(f'2028,"ZuZan"')
+    lines.append(f'2029,"ZuZan Payroll"')
+    lines.append(f"2030,{ty}")
+    lines.append(f"2031,{ty}02")        # Period of recon end: CCYYMM — February = 02
+    lines.append(f'2037,"N"')           # No diplomatic indemnity
+    lines.append(f"2082,{q(sic7_code)}")
+    lines.append(f"2064,{q(addr_street)}")
+    lines.append(f"2066,{q(addr_city)}")
+    lines.append(f'2081,"ZA"')
+    lines.append("9999")
+
+    # ── EMPLOYEE CERTIFICATE RECORDS ──────────────────────────────────────────
+    employees = (
+        db.query(Employee)
+        .filter(Employee.company_id == cid, Employee.is_active == True)
+        .all()
+    )
+
+    period_start = f"{ty - 1}0301"     # CCYYMMDD: 01 March prior year
+    period_end   = f"{ty}0228"         # CCYYMMDD: 28 February tax year
+
+    cert_count       = 0
+    total_all_amounts = 0.0
+
+    for emp in employees:
+        payslips = (
+            db.query(Payslip)
+            .filter(Payslip.employee_id == emp.id, Payslip.period.in_(periods))
+            .all()
+        )
+        if not payslips:
+            continue
+
+        gross        = sum(p.gross_salary          or 0 for p in payslips)
+        paye_amt     = sum(p.paye                  or 0 for p in payslips)
+        sdl_amt      = sum(p.sdl                   or 0 for p in payslips)
+        s11f         = sum(p.s11f_deduction        or 0 for p in payslips)
+        med_empr     = sum(p.medical_aid_employer_con or 0 for p in payslips)
+        pension_empr = sum(p.pension_employer      or 0 for p in payslips)
+        overtime     = sum(
+            (p.overtime_amount or 0) + (p.sunday_amount or 0) + (p.ph_amount or 0)
+            for p in payslips
+        )
+
+        code_3601 = max(0.0, gross - overtime - med_empr)
+        code_3713 = med_empr
+        code_3801 = overtime
+        code_3699 = gross   # Gross employment income = sum of all income codes
+
+        # Certificate number: PAYE_REF(10) + YEAR(4) + MONTH(2) + EMP_ID(14 zero-padded)
+        paye_padded = paye_ref.ljust(10)[:10]
+        cert_num    = f"{paye_padded}{ty}02{str(emp.id).zfill(14)}"
+        cert_num    = cert_num[:30].ljust(30)   # must be exactly 30 chars
+
+        # Nature of person: A = individual with SA ID, B = without SA ID
+        has_id = bool(emp.id_number and emp.id_number.strip())
+        nature = "A" if has_id else "B"
+
+        emp_lines = []
+        emp_lines.append(f"3010,{q(cert_num)}")
+        emp_lines.append(f'3015,"IRP5"')
+        emp_lines.append(f"3020,{q(nature)}")
+        emp_lines.append(f"3025,{ty}")
+        emp_lines.append(f"3030,{q((emp.last_name or '').strip()[:120])}")
+        emp_lines.append(f"3040,{q((emp.first_name or '').strip()[:90])}")
+        initials = "".join(n[0].upper() for n in (emp.first_name or "").split() if n)[:5]
+        emp_lines.append(f"3050,{q(initials or 'X')}")
+        if has_id:
+            emp_lines.append(f"3060,{emp.id_number.strip()}")
+        if emp.tax_number and emp.tax_number.strip():
+            emp_lines.append(f"3100,{emp.tax_number.strip()}")
+        # Business tel — mandatory for nature A/B; fall back to company phone
+        emp_lines.append(f"3136,{q(phone)}")
+        # Work address — mandatory; fall back to company address
+        emp_addr = (emp.address or address or "").strip()
+        emp_parts  = [p.strip() for p in emp_addr.replace("\n", ",").split(",") if p.strip()]
+        emp_street = (emp_parts[0] if emp_parts else addr_street)[:26]
+        emp_city   = (emp_parts[1] if len(emp_parts) > 1 else (emp_parts[0] if emp_parts else addr_city))[:21]
+        emp_lines.append(f"3147,{q(emp_street)}")
+        emp_lines.append(f"3149,{q(emp_city)}")
+        emp_lines.append(f'3151,"ZA"')
+        if emp.employee_number:
+            emp_lines.append(f"3160,{q(str(emp.employee_number)[:25])}")
+        emp_lines.append(f"3170,{period_start}")
+        emp_lines.append(f"3180,{period_end}")
+        emp_lines.append(f'3195,"N"')
+        emp_lines.append(f"3200,12.0000")
+        emp_lines.append(f"3210,{len(payslips)}.0000")
+        # Residential address (use same as work address; postal structure 1 = same)
+        emp_lines.append(f"3214,{q(emp_street)}")
+        emp_lines.append(f"3216,{q(emp_city)}")
+        emp_lines.append(f'3285,"ZA"')
+        emp_lines.append(f'3220,"N"')   # Fixed rate taxation indicator
+        emp_lines.append(f"3240,0")     # Not EFT (0 = not paid electronically)
+        # SIC7 per employee (mandatory from period 201402)
+        emp_lines.append(f"3263,{q(sic7_code)}")
+        emp_lines.append(f'3279,"N"')   # Care of address indicator
+        emp_lines.append(f"3288,1")     # Postal structure = residential
+
+        # ── Income codes (omit zero values per BRS) ───────────────────────────
+        if code_3601 > 0:
+            emp_lines.append(f"3601,{fmt_amt(code_3601)}")
+        if code_3713 > 0:
+            emp_lines.append(f"3713,{fmt_amt(code_3713)}")
+        if code_3801 > 0:
+            emp_lines.append(f"3801,{fmt_amt(code_3801)}")
+        emp_lines.append(f"3699,{fmt_amt(code_3699)}")  # Mandatory from 2017
+
+        # ── Tax / deduction codes ─────────────────────────────────────────────
+        emp_lines.append(f"4101,0.00")          # SITE — always include with cents (0.00 post-2013)
+        emp_lines.append(f"4102,{fmt_amt(paye_amt, cents=True)}")   # PAYE — cents mandatory
+        if s11f > 0:
+            emp_lines.append(f"4005,{fmt_amt(s11f)}")      # Pension/provident (s11F)
+        if sdl_amt > 0:
+            emp_lines.append(f"4474,{fmt_amt(sdl_amt)}")   # SDL (employer, informational)
+        if pension_empr > 0:
+            emp_lines.append(f"7002,{fmt_amt(pension_empr, cents=True)}")  # Pension employer — cents
+
+        emp_lines.append("9999")
+
+        lines.extend(emp_lines)
+        cert_count += 1
+        total_all_amounts += (
+            code_3601 + code_3713 + code_3801 + code_3699 + paye_amt + s11f + sdl_amt + pension_empr
+        )
+
+    if cert_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No payslips found for tax year {ty}. Run payroll first.",
+        )
+
+    # ── TRAILER RECORD ────────────────────────────────────────────────────────
+    lines.append(f"5001,{cert_count}")
+    lines.append(f"5010,{fmt_amt(total_all_amounts)}")
+    lines.append("9999")
+
+    content  = "\r\n".join(lines)
+    filename = f"easyfile_irp5_{ty}_{mode.upper()}.txt"
+
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # REPORTS ROUTER

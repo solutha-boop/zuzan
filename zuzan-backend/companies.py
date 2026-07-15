@@ -48,6 +48,12 @@ class CompanyUpdate(BaseModel):
     # User-initiated subscription transitions only — guarded in update_company.
     # "cancelled" (cancel / auto-renew off) or "active" (undo a cancellation).
     subscription_status:    Optional[str] = None
+    # SARS e@syFile fields
+    paye_ref:               Optional[str] = None
+    sdl_ref:                Optional[str] = None
+    uif_ref:                Optional[str] = None
+    sic7_code:              Optional[str] = None
+    contact_name:           Optional[str] = None
 
 
 def _company_dict(c: Company) -> dict:
@@ -68,6 +74,11 @@ def _company_dict(c: Company) -> dict:
         "payfast_merchant_key": decrypt_field(c.payfast_merchant_key) if c.payfast_merchant_key else "",
         "payfast_passphrase":   decrypt_field(c.payfast_passphrase)   if c.payfast_passphrase   else "",
         "cipc_registration_date": c.cipc_registration_date.isoformat() if c.cipc_registration_date else None,
+        "paye_ref": c.paye_ref or "",
+        "sdl_ref":  c.sdl_ref  or "",
+        "uif_ref":  c.uif_ref  or "",
+        "sic7_code":     c.sic7_code     or "",
+        "contact_name":  c.contact_name  or "",
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 

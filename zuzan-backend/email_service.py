@@ -318,8 +318,7 @@ def send_welcome_email(
     send_email(
         email,
         f"Welcome to ZuZan — Your {info['name']} plan is active",
-        _wrap(body, email),  # welcome = marketing, no transactional flag
-        from_email=FROM_SUPPORT_EMAIL,
+        _wrap(body, email, transactional=True),
     )
 
 
