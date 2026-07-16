@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import * as Sentry from "@sentry/react";
 import * as XLSX from "xlsx";
+import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 
 // ── Sentry error monitoring ────────────────────────────────────────────────────
 Sentry.init({
@@ -17,7 +18,6 @@ Sentry.init({
     return event;
   },
 });
-import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from "recharts";
 
 const C = {
   bg:"#FAF7F2", surface:"#FFFFFF", card:"#FDFCFA", border:"#E8E0D5",

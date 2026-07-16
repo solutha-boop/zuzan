@@ -204,9 +204,35 @@ def annual_financial_statements(
     finance_lines = [l for l in expense_lines if _is_finance_cost(l)]
     finance_costs = _r(sum(l["amount"] for l in finance_lines))
 
-    # Split COGS (51xx) from OPEX
-    cogs_lines = [l for l in expense_lines if l["code"].startswith("51") and not _is_finance_cost(l)]
-    opex_lines  = [l for l in expense_lines if not l["code"].startswith("51") and not _is_finance_cost(l)]
+    # Split COGS from OPEX (audit fix 2026-07-16, F1).
+    # Previously `startswith("51")` — which presented the journal's staff-cost
+    # accounts (5100 Salaries, 5110 Payroll Levies, 5120/5130 employer
+    # pension/medical) as cost of sales while the actual Cost of Sales account
+    # (5000, debited by post_invoice_cogs / post_po_received) sat in opex,
+    # misstating gross profit. Net profit was unaffected.
+    # Staff costs are detected by name so they always land in opex; remaining
+    # 51xx codes stay COGS for imported charts of accounts that use the
+    # 51xx-as-COGS convention (e.g. 5110 Purchases, 5140 Direct Labour), and
+    # name-matched "cost of sales/goods" covers imports on other codes
+    # (e.g. "6000 - Cost of Sales").
+    def _is_staff_cost(l):
+        nm = l["name"].lower()
+        return any(k in nm for k in
+                   ("salar", "wage", "payroll", "pension", "medical aid", "staff cost"))
+
+    def _is_cogs(l):
+        if _is_finance_cost(l) or _is_staff_cost(l):
+            return False
+        nm = l["name"].lower()
+        return (l["code"].startswith("50")
+                or l["code"].startswith("51")
+                or "cost of sales" in nm
+                or "cost of goods" in nm
+                or "inventory adjust" in nm
+                or "stock adjust" in nm)
+
+    cogs_lines = [l for l in expense_lines if _is_cogs(l)]
+    opex_lines = [l for l in expense_lines if not _is_cogs(l) and not _is_finance_cost(l)]
 
     total_cogs    = sum(l["amount"] for l in cogs_lines)
     gross_profit  = _r(total_revenue - total_cogs)
