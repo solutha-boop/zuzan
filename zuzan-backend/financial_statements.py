@@ -519,25 +519,62 @@ def annual_financial_statements(
     }
 
     # Note 7 — Trade payables (as at period end)
-    # Open POs (received/partial, not yet fully paid) + unpaid credit expenses
-    open_pos = db.query(PurchaseOrder).filter(
-        PurchaseOrder.company_id == cid,
-        PurchaseOrder.status.in_(["received", "partial"]),
-    ).all()
+    # Open POs (received/partial, not yet fully paid) + unpaid credit expenses.
+    # As-at filter (audit fix 2026-07-17 L1): only POs received on or before the
+    # FY end — previously POs received after `end` leaked into that year's note.
+    # NULL-safe: legacy POs without received_date fall back to order_date /
+    # created_at (same chain as /reports/creditors-aging) rather than dropping out.
+    open_pos = [
+        po for po in db.query(PurchaseOrder).filter(
+            PurchaseOrder.company_id == cid,
+            PurchaseOrder.status.in_(["received", "partial"]),
+        ).all()
+        if ((po.received_date or po.order_date or po.created_at) or end) <= end
+    ]
+    # Reversal-/delivered-aware PO amounts (audit fix 2026-07-17 M1): use the
+    # journal-netted AP credits per PO (credit − debit on account 2000, incl.
+    # "purchase_order_reversal" entries, dated on or before `end`) — the same
+    # lookup as /reports/creditors-aging — instead of po.total_amount, which
+    # overstated partial/reversed POs and broke reconciliation with the
+    # balance-sheet 2000 line this note supports. Fallback: po.total_amount
+    # when no journal entry exists yet.
+    po_ap_amounts: dict = {}
+    ap_acct = db.query(Account).filter(
+        Account.company_id == cid, Account.code == "2000"
+    ).first()
+    if ap_acct and open_pos:
+        rows = (
+            db.query(JournalEntry.source_id,
+                     func.sum(JournalLine.credit - JournalLine.debit))
+            .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+            .filter(
+                JournalEntry.company_id == cid,
+                JournalEntry.source.in_(["purchase_order", "purchase_order_reversal"]),
+                JournalEntry.source_id.in_([po.id for po in open_pos]),
+                JournalEntry.date <= end,
+                JournalLine.account_id == ap_acct.id,
+            )
+            .group_by(JournalEntry.source_id)
+            .all()
+        )
+        for po_id, net_credit in rows:
+            po_ap_amounts[po_id] = round(net_credit or 0, 2)
+    open_pos_total = _r(sum(
+        po_ap_amounts.get(po.id, round(po.total_amount or 0, 2))
+        for po in open_pos
+    ))
     unpaid_credit_expenses = db.query(Expense).filter(
         Expense.company_id == cid,
         Expense.is_on_credit == True,
         Expense.paid_at == None,
         Expense.expense_date <= end,
     ).all()
+    credit_exp_total = _r(sum(e.amount or 0 for e in unpaid_credit_expenses))
     payables_summary = {
-        "open_pos":               _r(sum(po.total_amount or 0 for po in open_pos)),
+        "open_pos":               open_pos_total,
         "open_pos_count":         len(open_pos),
-        "unpaid_credit_expenses": _r(sum(e.amount or 0 for e in unpaid_credit_expenses)),
-        "total_payables":         _r(
-            sum(po.total_amount or 0 for po in open_pos) +
-            sum(e.amount or 0 for e in unpaid_credit_expenses)
-        ),
+        "unpaid_credit_expenses": credit_exp_total,
+        "total_payables":         _r(open_pos_total + credit_exp_total),
     }
 
     # Note 8 — Inventory detail

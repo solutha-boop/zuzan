@@ -316,7 +316,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -512,7 +512,7 @@ ZuZan's modules and how they work:
 
 SA tax rules you know:
 - VAT: Standard rate 15%. VAT201 due monthly or bi-monthly. Late = 10% penalty + interest. Zero-rated: basic foods, exports.
-- PAYE: Withheld monthly. EMP201 due 7th of following month. 2025/2026 primary rebate R17,235.
+- PAYE: Withheld monthly. EMP201 due 7th of following month. 2026/2027 primary rebate R17,820.
 - UIF: 1% employee + 1% employer, capped at R177.12/month each (R17,712 monthly gross ceiling).
 - SDL: 1% of gross payroll if annual payroll exceeds R500,000.
 - Provisional tax (IRP6): Twice yearly — 31 August and 28 February.

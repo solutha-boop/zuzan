@@ -139,7 +139,20 @@ TAX_YEARS = {
     },
 }
 
-CURRENT_TAX_YEAR = "2026/2027"
+def _current_tax_year(today=None) -> str:
+    """SA tax year label for a date: 1 March Y – 28/29 Feb Y+1 is 'Y/Y+1'.
+    Falls back to the latest TAX_YEARS entry if the derived year has no table
+    yet (e.g. before the annual rates update lands), so payroll never KeyErrors
+    on 1 March — it just keeps using the newest known table until updated
+    (audit fix 2026-07-17 L3: was a hard-coded constant needing a manual bump)."""
+    today = today or datetime.utcnow()
+    y = today.year if today.month >= 3 else today.year - 1
+    label = f"{y}/{y + 1}"
+    if label in TAX_YEARS:
+        return label
+    return max(TAX_YEARS.keys(), key=lambda k: int(k.split("/")[0]))
+
+CURRENT_TAX_YEAR = _current_tax_year()
 
 # Active tables (current year)
 PAYE_BRACKETS = TAX_YEARS[CURRENT_TAX_YEAR]["brackets"]
