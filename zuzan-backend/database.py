@@ -486,6 +486,19 @@ class DepreciationEntry(Base):
     company        = relationship("Company", foreign_keys=[company_id])
 
 
+class AfsPayment(Base):
+    """Once-off AFS unlock fee — one row per company per financial year."""
+    __tablename__ = "afs_payments"
+    id                  = Column(Integer, primary_key=True, index=True)
+    company_id          = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    financial_year      = Column(Integer, nullable=False)          # e.g. 2026
+    amount              = Column(Float, nullable=False, default=1999.0)
+    payfast_payment_id  = Column(String, nullable=True)
+    status              = Column(String, default="success")        # success | failed
+    paid_at             = Column(DateTime, default=datetime.utcnow)
+    company             = relationship("Company", foreign_keys=[company_id])
+
+
 class SubscriptionPayment(Base):
     """ZuZan's own revenue ledger — one row per subscription fee collected."""
     __tablename__ = "subscription_payments"
@@ -1359,6 +1372,17 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN mandate_signed_name VARCHAR",
             "ALTER TABLE companies ADD COLUMN mandate_signed_at TIMESTAMP",
             "ALTER TABLE companies ADD COLUMN mandate_signed BOOLEAN DEFAULT FALSE",
+            # ── AFS once-off payments (2026-07) ───────────────────────────────
+            """CREATE TABLE IF NOT EXISTS afs_payments (
+                id SERIAL PRIMARY KEY,
+                company_id INTEGER REFERENCES companies(id),
+                financial_year INTEGER NOT NULL,
+                amount FLOAT NOT NULL DEFAULT 1999.0,
+                payfast_payment_id VARCHAR,
+                status VARCHAR DEFAULT 'success',
+                paid_at TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_afs_payments_company ON afs_payments (company_id)",
         ]:
             try:
                 conn.execute(text(sql))

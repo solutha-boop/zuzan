@@ -7496,7 +7496,7 @@ function TeamSettings({user}) {
 }
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
-function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange}) {
+function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange, onNavigate}) {
   const [settingsTab, setSettingsTab] = useState("subscription");
   const [form, setForm] = useState({
     companyName:          user?.companyName          || "",
@@ -7521,6 +7521,9 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   });
   const [saved, setSaved] = useState(false);
   const [subInfo, setSubInfo] = useState({status: user?.subscriptionStatus || "trial", trialEnds: user?.trialEnds || null});
+  const [showPayrollForm, setShowPayrollForm] = useState(false);
+  const [payrollEmpCount, setPayrollEmpCount] = useState(5);
+  const [activatingPayroll, setActivatingPayroll] = useState(false);
 
   // Pre-fill Settings form from API on mount so credentials persist across logins
   useEffect(() => {
@@ -7762,7 +7765,33 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
             {user?.payrollEnabled
               ? <span style={{padding:"7px 16px",background:C.green,color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
-              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});if(onUserUpdate)onUserUpdate({...user,payrollEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Payroll</button>
+              : showPayrollForm
+                ? <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div>
+                      <div style={{fontSize:11,color:C.inkMid,marginBottom:4}}>Employees</div>
+                      <input type="number" min={1} max={500} value={payrollEmpCount} onChange={e=>setPayrollEmpCount(+e.target.value)} style={{width:70,padding:"8px 10px",border:`1.5px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",textAlign:"center"}}/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,color:C.inkMid,marginBottom:4}}>Cost/mo</div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,payrollEmpCount*34)}</div>
+                    </div>
+                    <button
+                      disabled={activatingPayroll}
+                      onClick={async()=>{
+                        setActivatingPayroll(true);
+                        try{
+                          await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true,payroll_employees:payrollEmpCount})});
+                          if(onUserUpdate)onUserUpdate({...user,payrollEnabled:true,payrollEmployees:payrollEmpCount});
+                          setShowPayrollForm(false);
+                        }catch(e){alert("Could not activate payroll.");}
+                        setActivatingPayroll(false);
+                      }}
+                      style={{padding:"9px 16px",background:activatingPayroll?C.inkDim:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                      {activatingPayroll?"Activating…":"Confirm"}
+                    </button>
+                    <button onClick={()=>setShowPayrollForm(false)} style={{padding:"9px 12px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+                  </div>
+                : <button onClick={()=>setShowPayrollForm(true)} style={{padding:"9px 20px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Payroll</button>
             }
           </div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 20px",border:`1px solid ${user?.afsEnabled?"#7C3AED":C.border}`,borderRadius:12,background:user?.afsEnabled?"#F5F3FF":C.bg}}>
@@ -7774,10 +7803,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}><strong style={{color:C.ink}}>R1,999/year</strong> — IFRS-compliant, ready for your accountant</div>
               </div>
             </div>
-            {user?.afsEnabled
-              ? <span style={{padding:"7px 16px",background:"#7C3AED",color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
-              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});if(onUserUpdate)onUserUpdate({...user,afsEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add AFS — R1,999/yr</button>
-            }
+            <button onClick={()=>onNavigate&&onNavigate("fin_statements")} style={{padding:"9px 20px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Open AFS →</button>
           </div>
         </div>
       </div>
@@ -10969,6 +10995,72 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
   );
 }
 
+// ── AFS PAYMENT GATE ─────────────────────────────────────────────────────────
+function AfsPaymentGate() {
+  const now = new Date();
+  // SA financial year ends in February — FY label = the year containing February
+  const fy = now.getMonth() < 2 ? now.getFullYear() : now.getFullYear() + 1;
+  const [status, setStatus] = useState(null); // null=loading, true=paid, false=not paid
+  const [paying, setPaying]  = useState(false);
+  const [error,  setError]   = useState("");
+
+  useEffect(() => {
+    api(`/billing/afs-status?year=${fy}`)
+      .then(d => setStatus(d.paid))
+      .catch(() => setStatus(false));
+  }, [fy]);
+
+  const handleUnlock = async () => {
+    setPaying(true); setError("");
+    try {
+      const res = await api("/billing/afs-initiate", {
+        method: "POST",
+        body: JSON.stringify({financial_year: fy}),
+      });
+      pfSubmit(res.payfast_url, res.payfast_data);
+    } catch(e) {
+      setError(e.message || "Payment failed — please try again.");
+      setPaying(false);
+    }
+  };
+
+  if (status === null) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:300}}>
+      <div style={{color:C.inkMid,fontSize:14}}>Checking AFS status…</div>
+    </div>
+  );
+
+  if (status === true) return <FinancialStatements/>;
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:480,padding:40,textAlign:"center"}}>
+      <div style={{fontSize:56,marginBottom:20}}>📑</div>
+      <h2 style={{fontFamily:"serif",fontSize:28,color:C.ink,margin:"0 0 12px"}}>Annual Financial Statements</h2>
+      <p style={{fontSize:14,color:C.inkMid,maxWidth:460,lineHeight:1.7,margin:"0 0 8px"}}>
+        Generate IFRS-compliant AFS for <strong>FY{fy}</strong> — Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
+      </p>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:"20px 32px",margin:"24px 0",display:"inline-block"}}>
+        <div style={{fontSize:13,color:C.inkMid,marginBottom:4}}>Once-off fee for FY{fy}</div>
+        <div style={{fontSize:36,fontWeight:800,color:C.accent}}>R1,999</div>
+        <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Unlocks AFS for the full {fy} financial year</div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:28,textAlign:"left",maxWidth:360}}>
+        {["✅ Income Statement","✅ Balance Sheet","✅ Cash Flow Statement","✅ Statement of Changes in Equity","✅ IFRS-compliant notes","✅ PDF download ready"].map(f=>(
+          <div key={f} style={{fontSize:13,color:C.ink,padding:"8px 14px",background:C.greenLt,borderRadius:8}}>{f}</div>
+        ))}
+      </div>
+      {error && <div style={{color:C.red,fontSize:13,marginBottom:12}}>{error}</div>}
+      <button
+        onClick={handleUnlock}
+        disabled={paying}
+        style={{background:paying?C.inkDim:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"15px 40px",fontSize:16,fontWeight:700,cursor:paying?"not-allowed":"pointer",fontFamily:"inherit"}}>
+        {paying ? "Redirecting to payment…" : `Unlock AFS for FY${fy} — R1,999`}
+      </button>
+      <p style={{fontSize:11,color:C.inkDim,marginTop:12}}>Secure payment via PayFast · Instant unlock on payment confirmation</p>
+    </div>
+  );
+}
+
 // ── ANNUAL FINANCIAL STATEMENTS ───────────────────────────────────────────────
 function FinancialStatements() {
   const now   = new Date();
@@ -12313,7 +12405,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"coa",        label:"Accounts",    icon:"📒", minPlan:"professional"},
     {id:"inventory",    label:"Inventory",   icon:"📦", minPlan:"professional"},
     {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭", minPlan:"professional"},
-    {id:"fin_statements",  label:"Annual AFS",   icon:"📑", minPlan:"professional"},
+    {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
     {id:"documents",       label:"Documents",    icon:"📁", minPlan:"professional"},
     {id:"data_import",     label:"Import Data",  icon:"⬆️", minPlan:"professional"},
     {id:"banking",    label:"Banking",     icon:"🏦", minPlan:"professional", children:[
@@ -12384,23 +12476,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     coa:        canAccess(user,"professional") ? <ChartOfAccounts/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     inventory:       canAccess(user,"professional") ? <Inventory/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     fixed_assets:    canAccess(user,"professional") ? <FixedAssets/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
-    fin_statements:  !canAccess(user,"professional")
-      ? <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>
-      : user?.afsEnabled
-        ? <FinancialStatements/>
-        : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
-            <div style={{fontSize:48,marginBottom:16}}>📑</div>
-            <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Annual Financial Statements</h2>
-            <p style={{fontSize:14,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 6px"}}>
-              Generate IFRS-compliant AFS including Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
-            </p>
-            <p style={{fontSize:13,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 28px"}}>
-              <strong style={{color:C.ink}}>R1,999/year</strong> — less than one hour of accountant fees.
-            </p>
-            <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              Add Annual AFS in Settings →
-            </button>
-          </div>,
+    fin_statements:  <AfsPaymentGate/>,
     documents:       canAccess(user,"professional") ? <DocumentRepository/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     data_import:     canAccess(user,"professional") ? <DataImport/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     customers:       <Customers/>,
@@ -12408,7 +12484,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     purchase_orders: canAccess(user,"professional") ? <PurchaseOrders/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     bankimport:      canAccess(user,"professional") ? <BankImport live={live} onNavigate={setTab}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     bankfeeds:       canAccess(user,"professional") ? <BankFeeds/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
-    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange}/>,
+    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange} onNavigate={setTab}/>,
   };
 
   return (

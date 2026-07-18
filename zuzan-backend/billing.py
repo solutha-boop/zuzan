@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from database import (
     get_db, Company, Invoice, InvoiceStatus, SubscriptionStatus,
-    SubscriptionPayment, User, SessionLocal
+    SubscriptionPayment, AfsPayment, User, SessionLocal
 )
 from auth import get_current_user
 from crypto import decrypt_field
@@ -351,6 +351,119 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
             logger.warning(f"Subscription active email failed: {e}")
 
     logger.info(f"Subscription activated for company {co.id} ({co.name}), amount R{amount_gross}")
+    return {"ok": True}
+
+
+# ── AFS once-off payment ──────────────────────────────────────────────────────
+AFS_PRICE = 1999.00
+
+@billing_router.get("/afs-status")
+async def afs_status(
+    year: int = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return whether the company has paid for AFS for the given financial year."""
+    from datetime import date
+    fy = year or date.today().year
+    paid = db.query(AfsPayment).filter(
+        AfsPayment.company_id == current_user.company_id,
+        AfsPayment.financial_year == fy,
+        AfsPayment.status == "success",
+    ).first()
+    return {"paid": bool(paid), "financial_year": fy, "price": AFS_PRICE}
+
+
+@billing_router.post("/afs-initiate")
+async def afs_initiate(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Build PayFast params for a once-off AFS payment."""
+    from datetime import date
+    body = await request.json()
+    fy = int(body.get("financial_year", date.today().year))
+
+    # Check not already paid
+    existing = db.query(AfsPayment).filter(
+        AfsPayment.company_id == current_user.company_id,
+        AfsPayment.financial_year == fy,
+        AfsPayment.status == "success",
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"AFS already unlocked for FY{fy}")
+
+    co = db.query(Company).filter(Company.id == current_user.company_id).first()
+    m_payment_id = f"afs-{co.id}-{fy}"
+
+    merchant_id  = co.payfast_merchant_id  or PAYFAST_MERCHANT_ID
+    merchant_key = co.payfast_merchant_key or PAYFAST_MERCHANT_KEY
+    passphrase   = co.payfast_passphrase   or PAYFAST_PASSPHRASE
+
+    data = {
+        "merchant_id":   merchant_id,
+        "merchant_key":  merchant_key,
+        "return_url":    f"{FRONTEND_URL}/#afs-success",
+        "cancel_url":    f"{FRONTEND_URL}/#afs-cancel",
+        "notify_url":    f"{BACKEND_URL}/billing/afs-notify",
+        "name_first":    current_user.first_name or "",
+        "name_last":     current_user.last_name  or "",
+        "email_address": current_user.email,
+        "m_payment_id":  m_payment_id,
+        "amount":        f"{AFS_PRICE:.2f}",
+        "item_name":     f"ZuZan AFS FY{fy}",
+        "item_description": f"Annual Financial Statements for financial year {fy}",
+    }
+    data["signature"] = _pf_signature(data, passphrase)
+
+    return {"payfast_url": PAYFAST_URL, "payfast_data": data}
+
+
+@billing_router.post("/afs-notify")
+async def afs_notify(request: Request, db: Session = Depends(get_db)):
+    """PayFast ITN for AFS once-off payment (no auth — called by PayFast)."""
+    form = await request.form()
+    data = dict(form)
+
+    if not PAYFAST_SANDBOX:
+        if not _pf_verify_itn(data, PAYFAST_PASSPHRASE):
+            logger.warning(f"AFS PayFast ITN: signature mismatch — {data.get('m_payment_id')}")
+            return {"ok": True}
+
+    if data.get("payment_status") != "COMPLETE":
+        return {"ok": True}
+
+    m_payment_id = data.get("m_payment_id", "")  # "afs-{company_id}-{year}"
+    pf_payment_id = data.get("pf_payment_id", "")
+
+    try:
+        parts = m_payment_id.split("-")  # ["afs", company_id, year]
+        company_id = int(parts[1])
+        financial_year = int(parts[2])
+    except Exception:
+        logger.warning(f"AFS ITN: could not parse m_payment_id={m_payment_id}")
+        return {"ok": True}
+
+    # Idempotency: skip if already recorded
+    existing = db.query(AfsPayment).filter(
+        AfsPayment.company_id == company_id,
+        AfsPayment.financial_year == financial_year,
+        AfsPayment.status == "success",
+    ).first()
+    if existing:
+        return {"ok": True}
+
+    db.add(AfsPayment(
+        company_id=company_id,
+        financial_year=financial_year,
+        amount=float(data.get("amount_gross", AFS_PRICE)),
+        payfast_payment_id=pf_payment_id,
+        status="success",
+        paid_at=datetime.utcnow(),
+    ))
+    db.commit()
+    logger.info(f"AFS unlocked for company {company_id} FY{financial_year}")
     return {"ok": True}
 
 
