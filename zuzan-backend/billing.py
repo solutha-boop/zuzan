@@ -18,7 +18,7 @@ from email_service import (
     send_subscription_active_email,
     send_overdue_invoice_reminder,
 )
-import os, hashlib, logging
+import os, hashlib, logging, io
 from urllib.parse import quote_plus
 
 logger = logging.getLogger("zuzan.billing")
@@ -43,6 +43,94 @@ PLAN_PRICES = {
 
 PAYROLL_PER_EMP  = 45   # R45/employee/month (matches companies.py)
 PAYROLL_MIN_COST = 99   # minimum payroll add-on fee
+
+
+def generate_mandate_pdf(company_name: str, mandate: dict) -> bytes:
+    """Generate a debit order mandate PDF and return raw bytes."""
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4,
+                                leftMargin=20*mm, rightMargin=20*mm,
+                                topMargin=20*mm, bottomMargin=20*mm)
+        styles = getSampleStyleSheet()
+        ACCENT = colors.HexColor("#C8401A")
+
+        title_style   = ParagraphStyle("t", parent=styles["Heading1"], fontSize=18, textColor=ACCENT, spaceAfter=4)
+        sub_style     = ParagraphStyle("s", parent=styles["Normal"],  fontSize=10, textColor=colors.HexColor("#6B5E4E"), spaceAfter=12)
+        label_style   = ParagraphStyle("l", parent=styles["Normal"],  fontSize=9,  textColor=colors.HexColor("#6B5E4E"), spaceBefore=8)
+        value_style   = ParagraphStyle("v", parent=styles["Normal"],  fontSize=11, textColor=colors.HexColor("#1A1209"), spaceAfter=2)
+        body_style    = ParagraphStyle("b", parent=styles["Normal"],  fontSize=9,  textColor=colors.HexColor("#1A1209"), leading=14, spaceAfter=8)
+        sig_style     = ParagraphStyle("sg", parent=styles["Normal"], fontSize=11, textColor=ACCENT, spaceAfter=2)
+
+        col_day_label = {"1": "1st", "15": "15th", "25": "25th", "last": "Last day"}.get(mandate.get("collectionDay","1"), mandate.get("collectionDay","1"))
+        acc_type_label = {"current": "Current / Cheque", "savings": "Savings", "transmission": "Transmission"}.get(mandate.get("accountType","current"), mandate.get("accountType","current"))
+
+        elements = [
+            Paragraph("ZuZan — Debit Order Mandate", title_style),
+            Paragraph("Solutha (Pty) Ltd  |  support@solutha.co.za  |  zuzan.co.za", sub_style),
+            HRFlowable(width="100%", thickness=1, color=ACCENT, spaceAfter=14),
+
+            Paragraph("SUBSCRIBER DETAILS", label_style),
+            Paragraph(company_name, value_style),
+            Spacer(1, 6),
+
+            Paragraph("BANK ACCOUNT DETAILS", label_style),
+        ]
+
+        bank_data = [
+            ["Account Holder",  mandate.get("accountHolder","")],
+            ["Bank",            mandate.get("bank","")],
+            ["Account Number",  mandate.get("accountNumber","")],
+            ["Branch Code",     mandate.get("branchCode","")],
+            ["Account Type",    acc_type_label],
+            ["Collection Day",  col_day_label + " of each month"],
+        ]
+        t = Table(bank_data, colWidths=[50*mm, 110*mm])
+        t.setStyle(TableStyle([
+            ("FONTSIZE",   (0,0), (-1,-1), 10),
+            ("TEXTCOLOR",  (0,0), (0,-1), colors.HexColor("#6B5E4E")),
+            ("TEXTCOLOR",  (1,0), (1,-1), colors.HexColor("#1A1209")),
+            ("FONTNAME",   (0,0), (0,-1), "Helvetica"),
+            ("FONTNAME",   (1,0), (1,-1), "Helvetica-Bold"),
+            ("TOPPADDING", (0,0), (-1,-1), 5),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("ROWBACKGROUNDS", (0,0), (-1,-1), [colors.HexColor("#FAF7F2"), colors.white]),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.HexColor("#E8E0D5")),
+        ]))
+        elements.append(t)
+        elements.append(Spacer(1, 14))
+
+        elements.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#E8E0D5"), spaceAfter=10))
+        elements.append(Paragraph("AUTHORISATION", label_style))
+        elements.append(Paragraph(
+            f"I, <b>{mandate.get('signedName','')}</b>, authorise Solutha (Pty) Ltd (ZuZan) "
+            f"to debit the above bank account on the {col_day_label} of each month "
+            f"for the monthly subscription fee applicable to my ZuZan plan. "
+            f"This authority will remain in force until cancelled in writing. "
+            f"I understand that ZuZan will provide 20 days' notice of any change to the debit amount.",
+            body_style
+        ))
+        elements.append(Spacer(1, 16))
+
+        signed_at = mandate.get("signedAt", "")
+        elements += [
+            Paragraph(f"Signed (electronically): <b>{mandate.get('signedName','')}</b>", sig_style),
+            Paragraph(f"Date: {signed_at}", body_style),
+            Paragraph("IP-based e-signature — accepted under the Electronic Communications and Transactions Act 25 of 2002.", body_style),
+        ]
+
+        doc.build(elements)
+        return buf.getvalue()
+
+    except ImportError:
+        logger.warning("reportlab not installed — returning empty mandate PDF bytes")
+        return b""
 
 
 def _pf_signature(data: dict, passphrase: str = "") -> str:

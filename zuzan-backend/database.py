@@ -70,6 +70,16 @@ class Company(Base):
     uif_ref=Column(String,nullable=True)              # UIF Reference Number (starts U)
     sic7_code=Column(String,nullable=True)            # Standard Industrial Classification code
     contact_name=Column(String,nullable=True)         # Contact person name for SARS submissions
+    # ── Debit order mandate ────────────────────────────────────────────────────
+    mandate_account_holder=Column(String,nullable=True)
+    mandate_bank=Column(String,nullable=True)
+    mandate_account_number=Column(String,nullable=True)   # stored encrypted via crypto helper
+    mandate_branch_code=Column(String,nullable=True)
+    mandate_account_type=Column(String,nullable=True)     # current | savings | transmission
+    mandate_collection_day=Column(String,nullable=True)   # "1" | "15" | "25" | "last"
+    mandate_signed_name=Column(String,nullable=True)      # typed full name as e-signature
+    mandate_signed_at=Column(DateTime,nullable=True)
+    mandate_signed=Column(Boolean,default=False)
     # Billing lifecycle tracking
     trial_warning_sent_at=Column(DateTime,nullable=True)    # When 3-day warning email was sent
     trial_expiry_email_sent_at=Column(DateTime,nullable=True) # When "trial ended" email was sent
@@ -1339,6 +1349,16 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN uif_ref VARCHAR",
             "ALTER TABLE companies ADD COLUMN sic7_code VARCHAR",
             "ALTER TABLE companies ADD COLUMN contact_name VARCHAR",
+            # ── Debit order mandate (2026-07) ─────────────────────────────────
+            "ALTER TABLE companies ADD COLUMN mandate_account_holder VARCHAR",
+            "ALTER TABLE companies ADD COLUMN mandate_bank VARCHAR",
+            "ALTER TABLE companies ADD COLUMN mandate_account_number VARCHAR",
+            "ALTER TABLE companies ADD COLUMN mandate_branch_code VARCHAR",
+            "ALTER TABLE companies ADD COLUMN mandate_account_type VARCHAR",
+            "ALTER TABLE companies ADD COLUMN mandate_collection_day VARCHAR",
+            "ALTER TABLE companies ADD COLUMN mandate_signed_name VARCHAR",
+            "ALTER TABLE companies ADD COLUMN mandate_signed_at TIMESTAMP",
+            "ALTER TABLE companies ADD COLUMN mandate_signed BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 conn.execute(text(sql))

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import secrets
 from typing import Optional
 from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus
-from email_service import send_verification_email, send_welcome_email, send_password_reset_email, send_admin_signup_notification, send_invite_email
+from email_service import send_verification_email, send_welcome_email, send_password_reset_email, send_admin_signup_notification, send_invite_email, send_mandate_email
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -59,6 +59,15 @@ class RegisterRequest(BaseModel):
     billing_cycle:   str = "monthly"
     payroll_enabled: bool = False
     employee_count:  int = 0
+    # Debit order mandate (optional — collected at signup step 3)
+    mandate_account_holder:  Optional[str] = None
+    mandate_bank:            Optional[str] = None
+    mandate_account_number:  Optional[str] = None
+    mandate_branch_code:     Optional[str] = None
+    mandate_account_type:    Optional[str] = None
+    mandate_collection_day:  Optional[str] = None
+    mandate_signed_name:     Optional[str] = None
+    mandate_signed:          bool = False
 
 
 class LoginRequest(BaseModel):
@@ -128,6 +137,15 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
         trial_ends=datetime.utcnow() + timedelta(days=14),
         payroll_enabled=data.payroll_enabled,
         payroll_employees=data.employee_count,
+        mandate_account_holder=data.mandate_account_holder,
+        mandate_bank=data.mandate_bank,
+        mandate_account_number=data.mandate_account_number,
+        mandate_branch_code=data.mandate_branch_code,
+        mandate_account_type=data.mandate_account_type,
+        mandate_collection_day=data.mandate_collection_day,
+        mandate_signed_name=data.mandate_signed_name,
+        mandate_signed=data.mandate_signed,
+        mandate_signed_at=datetime.utcnow() if data.mandate_signed else None,
     )
     db.add(company)
     db.flush()
@@ -165,6 +183,30 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
     background_tasks.add_task(
         send_verification_email, data.first_name, data.email, verify_token
     )
+
+    # If mandate was signed at signup, generate PDF and email it
+    if data.mandate_signed and data.mandate_account_number:
+        mandate_dict = {
+            "accountHolder":  data.mandate_account_holder or "",
+            "bank":           data.mandate_bank or "",
+            "accountNumber":  data.mandate_account_number or "",
+            "branchCode":     data.mandate_branch_code or "",
+            "accountType":    data.mandate_account_type or "current",
+            "collectionDay":  data.mandate_collection_day or "1",
+            "signedName":     data.mandate_signed_name or "",
+            "signedAt":       datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        }
+        def _send_mandate_bg(email, first_name, company_name, mandate):
+            try:
+                from billing import generate_mandate_pdf
+                pdf = generate_mandate_pdf(company_name, mandate)
+                send_mandate_email(email, first_name, company_name, mandate, pdf)
+            except Exception as exc:
+                import logging as _log
+                _log.getLogger("zuzan.auth").warning("Mandate PDF/email failed: %s", exc)
+        background_tasks.add_task(
+            _send_mandate_bg, data.email, data.first_name, data.company_name, mandate_dict
+        )
     admin_email = os.environ.get("ADMIN_EMAIL", "")
     if admin_email:
         background_tasks.add_task(

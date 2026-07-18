@@ -124,19 +124,29 @@ def _btn(text: str, url: str) -> str:
 
 
 # ── Core send ──────────────────────────────────────────────────────────────────
-def send_email(to: str, subject: str, html: str, from_email: str = None) -> bool:
+def send_email(to: str, subject: str, html: str, from_email: str = None, attachments: list = None) -> bool:
     if not RESEND_API_KEY:
         logger.warning(f"[EMAIL skipped — no RESEND_API_KEY] To: {to} | {subject}")
         return False
     sender = from_email or FROM_EMAIL
     try:
+        import base64
+        payload: dict = {"from": sender, "to": [to], "subject": subject, "html": html}
+        if attachments:
+            payload["attachments"] = [
+                {
+                    "filename": a["Name"],
+                    "content": base64.b64encode(a["Content"]).decode() if isinstance(a["Content"], bytes) else a["Content"],
+                }
+                for a in attachments
+            ]
         resp = httpx.post(
             "https://api.resend.com/emails",
             headers={
                 "Authorization": f"Bearer {RESEND_API_KEY}",
                 "Content-Type": "application/json",
             },
-            json={"from": sender, "to": [to], "subject": subject, "html": html},
+            json=payload,
             timeout=10,
         )
         if resp.status_code in (200, 201):
@@ -755,4 +765,68 @@ def send_invoice_email(
         client_email,
         f"Invoice {invoice_number} from {company_name} — {cur_sym}{total_amount:,.2f} due {due_str}",
         _wrap(body, client_email, transactional=True),
+    )
+
+
+# ── 10. Debit order mandate confirmation ─────────────────────────────────────
+def send_mandate_email(
+    email: str,
+    first_name: str,
+    company_name: str,
+    mandate: dict,
+    pdf_bytes: bytes = b"",
+):
+    """Send mandate confirmation email with PDF attachment."""
+    col_day_label = {"1": "1st", "15": "15th", "25": "25th", "last": "last day"}.get(
+        mandate.get("collectionDay", "1"), mandate.get("collectionDay", "1")
+    )
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 4px;">Debit Order Mandate Confirmed</h2>
+      <p style="color:#888;margin:0 0 24px;font-size:13px;">ZuZan subscription billing</p>
+
+      <p style="color:#555;margin:0 0 16px;">Hi <strong>{first_name}</strong>,</p>
+      <p style="color:#555;margin:0 0 24px;line-height:1.7;">
+        Thank you for signing your debit order mandate. Your ZuZan subscription will be
+        collected automatically on the <strong>{col_day_label} of each month</strong>
+        from the account below, once your 14-day free trial ends.
+      </p>
+
+      <div style="background:#F9FAFB;border:1px solid #E8E0D5;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Account Holder</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{mandate.get("accountHolder","")}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Bank</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{mandate.get("bank","")}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Account Number</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{"*" * (len(mandate.get("accountNumber","")) - 4) + mandate.get("accountNumber","")[-4:] if len(mandate.get("accountNumber","")) > 4 else "****"}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Collection Day</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{col_day_label} of each month</td>
+          </tr>
+        </table>
+      </div>
+
+      <p style="color:#555;font-size:13px;margin:0 0 8px;">
+        Your signed mandate document is attached to this email for your records.
+        To cancel or update your mandate, email <a href="mailto:support@solutha.co.za" style="color:#C8401A;">support@solutha.co.za</a>.
+      </p>
+    """
+    attachments = []
+    if pdf_bytes:
+        attachments.append({
+            "Name": f"ZuZan_Mandate_{company_name.replace(' ','_')}.pdf",
+            "Content": pdf_bytes,
+            "ContentType": "application/pdf",
+        })
+    send_email(
+        email,
+        "ZuZan Debit Order Mandate — Confirmed",
+        _wrap(body, email, transactional=True),
+        attachments=attachments,
     )

@@ -8249,7 +8249,8 @@ function Registration({onComplete, onLogin}) {
   const [payrollEnabled, setPayroll] = useState(false);
   const [empCount, setEmpCount] = useState(5);
   const [form, setForm] = useState({companyName:"",regNumber:"",industry:"",firstName:"",lastName:"",email:"",phone:"",password:"",confirm:""});
-  const [payment, setPayment] = useState({cardNumber:"",expiry:"",cvv:"",cardName:""});
+  const [mandate, setMandate] = useState({accountHolder:"",bank:"",accountNumber:"",branchCode:"",accountType:"current",collectionDay:"1",signedName:"",mandateAccepted:false});
+  const SA_BANK_BRANCHES = {"FNB":"250655","ABSA":"632005","Standard Bank":"051001","Nedbank":"198765","Capitec":"470010","African Bank":"430000","Investec":"580105","TymeBank":"678910","Discovery Bank":"679000","Bidvest":"462005"};
   const [processing, setProcessing] = useState(false);
   const [complete, setComplete] = useState(false);
   const [tcAccepted, setTcAccepted] = useState(false);
@@ -8301,12 +8302,20 @@ function Registration({onComplete, onLogin}) {
           first_name:      form.firstName.trim(),
           last_name:       form.lastName.trim(),
           email:           form.email.trim(),
-          phone:           form.phone.trim(),
-          password:        form.password.slice(0, 50),
-          plan:            selectedPlan.id,
-          billing_cycle:   billing,
-          payroll_enabled: payrollEnabled,
-          employee_count:  empCount,
+          phone:                   form.phone.trim(),
+          password:                form.password.slice(0, 50),
+          plan:                    selectedPlan.id,
+          billing_cycle:           billing,
+          payroll_enabled:         payrollEnabled,
+          employee_count:          empCount,
+          mandate_account_holder:  mandate.accountHolder || `${form.firstName} ${form.lastName}`.trim(),
+          mandate_bank:            mandate.bank,
+          mandate_account_number:  mandate.accountNumber,
+          mandate_branch_code:     mandate.branchCode,
+          mandate_account_type:    mandate.accountType,
+          mandate_collection_day:  mandate.collectionDay,
+          mandate_signed_name:     mandate.signedName,
+          mandate_signed:          mandate.mandateAccepted,
         }),
       });
       const data = await res.json();
@@ -8472,29 +8481,95 @@ function Registration({onComplete, onLogin}) {
         )}
         {step === 3 && (
           <div style={{maxWidth:560,margin:"0 auto"}}>
-            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:6}}>Payment details</h1>
-            <p style={{color:C.inkMid,fontSize:15,marginBottom:24}}>14-day free trial. No charge until trial ends.</p>
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Order Summary</div>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>{selectedPlan ? selectedPlan.name : ""} Plan ({billing})</span><span style={{fontWeight:600}}>{fmt(planPrice)}/mo</span></div>
-              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R34)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
-              <div style={{borderTop:`1px solid ${C.border}`,marginTop:12,paddingTop:12,display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
+            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:6}}>Debit order mandate</h1>
+            <p style={{color:C.inkMid,fontSize:15,marginBottom:24}}>Your subscription will be collected monthly after your 14-day free trial.</p>
+
+            {/* Order summary */}
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:20,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12}}>Order Summary</div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:14}}><span style={{color:C.inkMid}}>{selectedPlan ? selectedPlan.name : ""} Plan ({billing})</span><span style={{fontWeight:600}}>{fmt(planPrice)}/mo</span></div>
+              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R34)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
+              <div style={{borderTop:`1px solid ${C.border}`,marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
             </div>
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
-              <div style={{textAlign:"center",padding:"8px 0 4px"}}>
-                <div style={{fontSize:44,marginBottom:12}}>🎉</div>
-                <div style={{fontSize:20,fontWeight:800,color:C.ink,marginBottom:10}}>No card required</div>
-                <div style={{fontSize:14,color:C.inkMid,marginBottom:20,lineHeight:1.6}}>Start your 14-day free trial — no payment details needed. We'll email you before your trial ends with a link to subscribe.</div>
-                <div style={{display:"flex",flexDirection:"column",gap:8,textAlign:"left"}}>
-                  {["✅ Full access to all features during your trial","✅ No card collected until you choose to subscribe","✅ Cancel anytime — no questions asked","✅ Email reminder 3 days before trial expires"].map(item=>(
-                    <div key={item} style={{fontSize:13,color:C.ink,padding:"10px 14px",background:C.greenLt,borderRadius:8}}>{item}</div>
-                  ))}
+
+            {/* Bank account details */}
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Bank Account Details</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+
+                <div style={{gridColumn:"1/-1"}}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Holder Name</label>
+                  <input value={mandate.accountHolder} onChange={e=>setMandate({...mandate,accountHolder:e.target.value})} placeholder={`${form.firstName} ${form.lastName}`} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+
+                <div style={{gridColumn:"1/-1"}}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Bank</label>
+                  <select value={mandate.bank} onChange={e=>{const b=e.target.value;setMandate({...mandate,bank:b,branchCode:SA_BANK_BRANCHES[b]||"",});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                    <option value="">Select bank…</option>
+                    {Object.keys(SA_BANK_BRANCHES).map(b=><option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Number</label>
+                  <input value={mandate.accountNumber} onChange={e=>setMandate({...mandate,accountNumber:e.target.value})} placeholder="e.g. 62012345678" style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Branch Code</label>
+                  <input value={mandate.branchCode} onChange={e=>setMandate({...mandate,branchCode:e.target.value})} placeholder="Auto-filled" style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:mandate.branchCode?C.ink:C.inkDim,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Type</label>
+                  <select value={mandate.accountType} onChange={e=>setMandate({...mandate,accountType:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                    <option value="current">Current / Cheque</option>
+                    <option value="savings">Savings</option>
+                    <option value="transmission">Transmission</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Collection Day</label>
+                  <select value={mandate.collectionDay} onChange={e=>setMandate({...mandate,collectionDay:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                    <option value="1">1st of the month</option>
+                    <option value="15">15th of the month</option>
+                    <option value="25">25th of the month</option>
+                    <option value="last">Last day of the month</option>
+                  </select>
                 </div>
               </div>
             </div>
+
+            {/* Authorisation */}
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Authorisation</div>
+              <p style={{fontSize:13,color:C.inkMid,lineHeight:1.7,marginBottom:16}}>
+                I authorise <strong>Solutha (Pty) Ltd (ZuZan)</strong> to debit the above account on the selected day each month for my ZuZan subscription. This authority remains in force until cancelled in writing. I will receive 20 days' notice of any change to the debit amount.
+              </p>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Full Name (e-signature)</label>
+                <input value={mandate.signedName} onChange={e=>setMandate({...mandate,signedName:e.target.value})} placeholder="Type your full name to sign" style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${mandate.signedName?C.accent:C.border}`,borderRadius:10,fontSize:13,fontFamily:"serif",fontStyle:"italic",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+              <label style={{display:"flex",alignItems:"flex-start",gap:12,cursor:"pointer"}}>
+                <input type="checkbox" checked={mandate.mandateAccepted} onChange={e=>setMandate({...mandate,mandateAccepted:e.target.checked})} style={{marginTop:2,width:16,height:16,accentColor:C.accent,flexShrink:0}}/>
+                <span style={{fontSize:12,color:C.inkMid,lineHeight:1.7}}>I confirm that I am authorised to sign this debit order mandate on behalf of <strong>{form.companyName || "my company"}</strong> and that the banking details above are correct. A signed mandate PDF will be emailed to me for my records.</span>
+              </label>
+            </div>
+
             <div style={{display:"flex",gap:12}}>
               <button onClick={() => setStep(2)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-              <button onClick={() => setStep(4)} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Review Order</button>
+              <button
+                onClick={() => {
+                  if (!mandate.bank || !mandate.accountNumber || !mandate.signedName || !mandate.mandateAccepted) {
+                    alert("Please complete all mandate fields and sign to continue.");
+                    return;
+                  }
+                  setStep(4);
+                }}
+                style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Review &amp; Confirm
+              </button>
             </div>
           </div>
         )}
@@ -8510,6 +8585,7 @@ function Registration({onComplete, onLogin}) {
                 {label:"Payroll",value:payrollEnabled ? `${empCount} employees x R34 = ${fmt(payrollCost)}/mo` : "Not included"},
                 {label:"Trial Period",value:"14 days FREE"},
                 {label:"First Charge",value:`${fmt(totalMonthly)}/month after trial`},
+                {label:"Debit Order",value:mandate.bank ? `${mandate.bank} · ****${mandate.accountNumber.slice(-4)} · ${{"1":"1st","15":"15th","25":"25th","last":"Last day"}[mandate.collectionDay]||mandate.collectionDay} of month` : "Not provided"},
               ].map((r,i) => (
                 <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"11px 0",borderBottom:i<6?`1px solid ${C.border}30`:"none",fontSize:13}}>
                   <span style={{color:C.inkMid}}>{r.label}</span>
