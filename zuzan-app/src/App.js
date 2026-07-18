@@ -2247,6 +2247,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
                 ["Department",    employee.dept || "General"],
                 ...(employee.grade ? [["Grade / Pay Band", employee.grade]] : []),
                 ...(employee.employment_type ? [["Employment Type", employee.employment_type === "hourly" ? "Hourly" : "Salaried"]] : []),
+                ...(employee.security_grade ? [["Security Grade", `Grade ${employee.security_grade} — ${employee.security_area==="3"?"Area 3 (Rural)":"Area 1&2 (Urban)"}`]] : []),
+                ...(employee.psira_number ? [["PSIRA Registration", employee.psira_number]] : []),
               ].map(([l,v]) => (
                 <div key={l}>
                   <div style={{fontSize:10,color:C.inkMid,marginBottom:2}}>{l}</div>
@@ -2287,6 +2289,15 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
                   <span style={{color:C.inkMid}}>Taxable Gross (incl. OT)</span>
                   <span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span>
                 </div>
+              </>
+            )}
+            {/* NBCPSS security allowances — only rendered if present in payslip */}
+            {(p.night_shift_allowance > 0 || p.special_allowance_amount > 0 || p.cleaning_allowance > 0) && (
+              <>
+                {p.night_shift_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🌙 Night Shift Allowance ({p.night_shift_shifts} shifts × R8.00)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.night_shift_allowance)}</span></div>}
+                {p.special_allowance_amount > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🔒 Special Duty Allowance ({p.special_allowance_shifts} shifts × R10.50)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.special_allowance_amount)}</span></div>}
+                {p.cleaning_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🧹 Cleaning Allowance</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.cleaning_allowance)}</span></div>}
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}><span style={{color:C.inkMid}}>Taxable Gross (incl. Security Allowances)</span><span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span></div>
               </>
             )}
           </div>
@@ -2331,6 +2342,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               (p.medicalAidEmployer||p.medical_aid_employer_con) > 0 && ["Medical Aid (Employer Contribution)", p.medicalAidEmployer||p.medical_aid_employer_con, C.blue],
               ["UIF (Employer Contribution)", p.uifEmployer, C.blue],
               ["SDL (Skills Development Levy)", p.sdl, C.blue],
+              p.bc_levy_employer > 0 && ["NBCPSS BC Levy (Bargaining Council)", p.bc_levy_employer, "#c2410c"],
+              p.psira_levy_employer > 0 && ["PSIRA Registration Levy", p.psira_levy_employer, "#c2410c"],
             ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
@@ -2811,7 +2824,8 @@ function Payroll({live = {}, user = {}}) {
   const [payrollRun, setPayrollRun] = useState(false);
   const [showOtModal, setShowOtModal] = useState(false);
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:""});
+  const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"1_2",shiftType:"day",specialAllowanceType:"none"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
@@ -2871,6 +2885,11 @@ function Payroll({live = {}, user = {}}) {
           medical_aid_employee:       form.medicalAidEmployee ? +form.medicalAidEmployee : 0,
           medical_aid_employer:       form.medicalAidEmployer ? +form.medicalAidEmployer : 0,
           medical_aid_dependants:     form.medicalAidDependants ? +form.medicalAidDependants : 0,
+          psira_number:               form.psiraNumber || null,
+          security_grade:             form.securityGrade || null,
+          security_area:              form.securityArea || "1_2",
+          shift_type:                 form.shiftType || "day",
+          special_allowance_type:     form.specialAllowanceType || "none",
         }),
       });
       if (live && live.reload) live.reload();
@@ -2941,6 +2960,11 @@ function Payroll({live = {}, user = {}}) {
             medical_aid_employee:       editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
             medical_aid_employer:       editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
             medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
+            psira_number:               editForm.psiraNumber || null,
+            security_grade:             editForm.securityGrade || null,
+            security_area:              editForm.securityArea || "1_2",
+            shift_type:                 editForm.shiftType || "day",
+            special_allowance_type:     editForm.specialAllowanceType || "none",
           }),
         });
         if (live && live.reload) live.reload();
@@ -3360,7 +3384,7 @@ function Payroll({live = {}, user = {}}) {
         <div style={{position:"fixed",inset:0,background:"#00000070",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:760,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px #00000030"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — Overtime Entry</h3>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {user?.industry==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
             <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
@@ -3433,7 +3457,10 @@ function Payroll({live = {}, user = {}}) {
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:20}}>
               <thead>
                 <tr style={{background:C.bg}}>
-                  {["Employee","Grade","BCEA Hourly Rate","Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview"].map(h=>(
+                  {[
+                    "Employee","Grade","BCEA Hourly Rate","Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview",
+                    ...(user?.industry==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
+                  ].map(h=>(
                     <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
                   ))}
                 </tr>
@@ -3467,6 +3494,24 @@ function Payroll({live = {}, user = {}}) {
                       <td style={{padding:"10px 12px",fontWeight:700,color:preview.total>0?C.green:C.inkMid}}>
                         {preview.total > 0 ? `+ ${fmt(preview.total)}` : "—"}
                       </td>
+                      {user?.industry==="private_security" && (()=>{
+                        const sec = secData[emp.id] || {nightShifts:0,specialShifts:0};
+                        const setSec = (k,v) => setSecData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
+                        const nightPrev = (+sec.nightShifts||0) * 8.00;
+                        const specPrev  = (+sec.specialShifts||0) * 10.50;
+                        const secTotal  = nightPrev + specPrev + (emp.security_grade ? 32.00 : 0);
+                        return (<>
+                          <td style={{padding:"10px 12px"}}>
+                            <input style={inpStyle} type="number" min="0" step="1" value={sec.nightShifts||""} placeholder="0" onChange={e=>setSec("nightShifts",e.target.value)}/>
+                          </td>
+                          <td style={{padding:"10px 12px"}}>
+                            <input style={inpStyle} type="number" min="0" step="1" value={sec.specialShifts||""} placeholder="0" onChange={e=>setSec("specialShifts",e.target.value)}/>
+                          </td>
+                          <td style={{padding:"10px 12px",fontWeight:700,color:secTotal>0?"#c2410c":C.inkMid}}>
+                            {secTotal > 0 ? `+ ${fmt(secTotal)}` : "—"}
+                          </td>
+                        </>);
+                      })()}
                     </tr>
                   );
                 })}
@@ -3481,7 +3526,11 @@ function Payroll({live = {}, user = {}}) {
                     const ot = otData[emp.id] || {};
                     return { employee_id: emp.id, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
                   }).filter(e => e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
-                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload})});
+                  const secPayload = employees.map(emp => {
+                    const sec = secData[emp.id] || {};
+                    return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0 };
+                  }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0);
+                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload})});
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); }
                 setPayrollRun(true);
@@ -3721,6 +3770,68 @@ function Payroll({live = {}, user = {}}) {
             );
           })()}
 
+          {/* NBCPSS Private Security Section — only shown for private_security industry */}
+          {user?.industry === "private_security" && (()=>{
+            const NBCPSS_MIN = {"1_2":{"A":8184,"B":7607,"C":7003,"D":7003,"E":7003},"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
+            const minWage = NBCPSS_MIN[form.securityArea||"1_2"]?.[form.securityGrade] || 0;
+            const belowMin = form.salary && form.securityGrade && +form.salary < minWage;
+            return (
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#c2410c",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🔒 NBCPSS — Private Security Sector (1 Mar 2026 – 28 Feb 2027)</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:8}}>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>PSIRA Number</label>
+                    <input placeholder="e.g. 1234567890" value={form.psiraNumber} onChange={e=>setForm(v=>({...v,psiraNumber:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Security Grade</label>
+                    <select value={form.securityGrade} onChange={e=>{const g=e.target.value;setForm(v=>({...v,securityGrade:g,pensionEmployeePct:g?"7.5":v.pensionEmployeePct,pensionEmployerPct:g?"7.5":v.pensionEmployerPct}));}} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="">-- Select --</option>
+                      <option value="A">Grade A — Armed/Supervisory</option>
+                      <option value="B">Grade B — Armed Response/Supervisor</option>
+                      <option value="C">Grade C — Armed Guard</option>
+                      <option value="D">Grade D — Unarmed/Access Control</option>
+                      <option value="E">Grade E — Entry Level/Car Guard</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Area</label>
+                    <select value={form.securityArea||"1_2"} onChange={e=>setForm(v=>({...v,securityArea:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="1_2">Area 1 & 2 — Metro / Urban</option>
+                      <option value="3">Area 3 — Rural / All other districts</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Shift Type</label>
+                    <select value={form.shiftType||"day"} onChange={e=>setForm(v=>({...v,shiftType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="day">Day Shift</option>
+                      <option value="night">Night Shift (R8.00/shift allowance)</option>
+                      <option value="rotating">Rotating (Day &amp; Night)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Special Allowance</label>
+                    <select value={form.specialAllowanceType||"none"} onChange={e=>setForm(v=>({...v,specialAllowanceType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="none">None</option>
+                      <option value="armed">Armed Security Officer (R10.50/shift)</option>
+                      <option value="armed_response">Armed Response Officer (R10.50/shift)</option>
+                      <option value="nkp">National Key Point Officer (R10.50/shift)</option>
+                      <option value="control_centre">Control/Comm Centre Operator (R10.50/shift)</option>
+                      <option value="canine">Canine / Dog Handler (R10.50/shift)</option>
+                      <option value="mobile_supervisor">Mobile Supervisor (R10.50/shift)</option>
+                    </select>
+                  </div>
+                </div>
+                {form.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12}}>
+                  {belowMin
+                    ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+form.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {form.securityGrade} in {form.securityArea==="3"?"Area 3 (rural)":"Area 1&2 (urban)"}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
+                    : <span style={{color:"#166534"}}>✓ Salary meets NBCPSS minimum for Grade {form.securityGrade}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Cleaning allowance (R32/mo), BC levy (R9.40/mo) and PSIRA fee (R5.00/mo) will be applied automatically. Provident fund set to 7.5% each.</span>
+                  }
+                </div>}
+              </div>
+            );
+          })()}
+
           {/* Bank Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:20}}>
@@ -3769,7 +3880,16 @@ function Payroll({live = {}, user = {}}) {
               const p = calcPayroll(emp.salary, taxYear);
               return (
                 <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
-                  <td style={{padding:"13px 14px"}}><div style={{fontWeight:600,color:C.ink}}>{emp.name}</div><div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div></td>
+                  <td style={{padding:"13px 14px"}}>
+                    <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
+                    <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
+                    {user?.industry==="private_security" && emp.security_grade && (()=>{
+                      const NBCPSS_MIN={"1_2":{"A":8184,"B":7607,"C":7003,"D":7003,"E":7003},"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
+                      const minW=NBCPSS_MIN[emp.security_area||"1_2"]?.[emp.security_grade]||0;
+                      const below=minW>0&&emp.salary<minW;
+                      return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#166534",fontWeight:600}}>{below?`⚠️ Below NBCPSS min (R${minW.toLocaleString("en-ZA")})`:`🔒 Grade ${emp.security_grade} · R${minW.toLocaleString("en-ZA")} min`}</div>;
+                    })()}
+                  </td>
                   <td style={{padding:"13px 14px"}}>{emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid,fontSize:11}}>—</span>}</td>
                   <td style={{padding:"13px 14px",color:C.inkMid}}>{emp.position}</td>
                   <td style={{padding:"13px 14px"}}><Badge label={emp.dept||"General"} color={C.blue} bg={C.blueLt}/></td>
@@ -3781,7 +3901,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : ""});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"1_2",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                     </div>
                   </td>
@@ -3808,6 +3928,7 @@ function Payroll({live = {}, user = {}}) {
         UIF: 1% employee + 1% employer · Capped at R17,712/month · Overtime excluded from UIF base<br/>
         SDL: 1% of gross payroll · Payable if annual payroll ≥ R500,000<br/>
         <strong style={{color:C.ink}}>BCEA Overtime (s9/s10/s16/s18):</strong> Normal week = 45 hrs · OT max 10 hrs/week · Weekday/Sat OT = 1.5× · Sunday = 2× · Public holiday = 2× · Hourly rate derived from salary ÷ 195 hrs/month
+        {user?.industry==="private_security" && <><br/><strong style={{color:"#c2410c"}}>🔒 NBCPSS (1 Mar 2026 – 28 Feb 2027):</strong> Night shift R8.00/shift · Special allowance R10.50/shift · Cleaning R32.00/month · BC levy R9.40/month (employer) · PSIRA fee R5.00/month (employer) · PSSPF 7.5% each · All allowances are taxable income.</>}
       </div>
 
       {viewPayslip && (
@@ -3989,6 +4110,68 @@ function Payroll({live = {}, user = {}}) {
                       ⚠️ {fmt(p.s11fExcessMonthly)}/month above s11F cap — deducted from after-tax income (contribution is still processed in full, no additional PAYE relief on the excess).
                     </div>
                   )}
+                </div>
+              );
+            })()}
+
+            {/* NBCPSS Private Security Section — edit employee */}
+            {user?.industry === "private_security" && (()=>{
+              const NBCPSS_MIN = {"1_2":{"A":8184,"B":7607,"C":7003,"D":7003,"E":7003},"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
+              const minWage = NBCPSS_MIN[editForm.securityArea||"1_2"]?.[editForm.securityGrade] || 0;
+              const belowMin = editForm.salary && editForm.securityGrade && +editForm.salary < minWage;
+              return (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#c2410c",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🔒 NBCPSS — Private Security Sector (1 Mar 2026 – 28 Feb 2027)</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:8}}>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>PSIRA Number</label>
+                      <input placeholder="e.g. 1234567890" value={editForm.psiraNumber||""} onChange={e=>setEditForm(v=>({...v,psiraNumber:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Security Grade</label>
+                      <select value={editForm.securityGrade||""} onChange={e=>{const g=e.target.value;setEditForm(v=>({...v,securityGrade:g,pensionEmployeePct:g?"7.5":v.pensionEmployeePct,pensionEmployerPct:g?"7.5":v.pensionEmployerPct}));}} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="">-- Select --</option>
+                        <option value="A">Grade A — Armed/Supervisory</option>
+                        <option value="B">Grade B — Armed Response/Supervisor</option>
+                        <option value="C">Grade C — Armed Guard</option>
+                        <option value="D">Grade D — Unarmed/Access Control</option>
+                        <option value="E">Grade E — Entry Level/Car Guard</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Area</label>
+                      <select value={editForm.securityArea||"1_2"} onChange={e=>setEditForm(v=>({...v,securityArea:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="1_2">Area 1 & 2 — Metro / Urban</option>
+                        <option value="3">Area 3 — Rural / All other districts</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Shift Type</label>
+                      <select value={editForm.shiftType||"day"} onChange={e=>setEditForm(v=>({...v,shiftType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="day">Day Shift</option>
+                        <option value="night">Night Shift (R8.00/shift allowance)</option>
+                        <option value="rotating">Rotating (Day &amp; Night)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Special Allowance</label>
+                      <select value={editForm.specialAllowanceType||"none"} onChange={e=>setEditForm(v=>({...v,specialAllowanceType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="none">None</option>
+                        <option value="armed">Armed Security Officer (R10.50/shift)</option>
+                        <option value="armed_response">Armed Response Officer (R10.50/shift)</option>
+                        <option value="nkp">National Key Point Officer (R10.50/shift)</option>
+                        <option value="control_centre">Control/Comm Centre Operator (R10.50/shift)</option>
+                        <option value="canine">Canine / Dog Handler (R10.50/shift)</option>
+                        <option value="mobile_supervisor">Mobile Supervisor (R10.50/shift)</option>
+                      </select>
+                    </div>
+                  </div>
+                  {editForm.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12,marginBottom:8}}>
+                    {belowMin
+                      ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+editForm.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {editForm.securityGrade} in {editForm.securityArea==="3"?"Area 3 (rural)":"Area 1&2 (urban)"}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
+                      : <span style={{color:"#166534"}}>✓ Salary meets NBCPSS minimum for Grade {editForm.securityGrade}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Cleaning allowance (R32/mo), BC levy (R9.40/mo) and PSIRA fee (R5.00/mo) will be applied automatically. Provident fund set to 7.5% each.</span>
+                    }
+                  </div>}
                 </div>
               );
             })()}
@@ -7838,12 +8021,32 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:20}}>Company Details</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
-          {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"Industry",k:"industry"},{l:"VAT Number",k:"vatNumber"},{l:"CIPC Registration Date",k:"cipcRegistrationDate",type:"date",hint:"Used for Annual Return reminders"}].map(f=>(
+          {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"VAT Number",k:"vatNumber"},{l:"CIPC Registration Date",k:"cipcRegistrationDate",type:"date",hint:"Used for Annual Return reminders"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}{f.hint&&<span style={{fontWeight:400,textTransform:"none",color:C.inkDim,marginLeft:6}}>{f.hint}</span>}</label>
               <input type={f.type||"text"} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
             </div>
           ))}
+          <div>
+            <label style={labelStyle}>Industry</label>
+            <select value={form.industry||""} onChange={e=>setForm(v=>({...v,industry:e.target.value}))} style={inputStyle}>
+              <option value="">General</option>
+              <option value="private_security">Private Security (NBCPSS)</option>
+              <option value="construction">Construction</option>
+              <option value="retail">Retail</option>
+              <option value="hospitality">Hospitality</option>
+              <option value="transport">Transport &amp; Logistics</option>
+              <option value="healthcare">Healthcare</option>
+              <option value="agriculture">Agriculture</option>
+              <option value="mining">Mining</option>
+              <option value="manufacturing">Manufacturing</option>
+              <option value="financial_services">Financial Services</option>
+              <option value="it_technology">IT &amp; Technology</option>
+              <option value="professional_services">Professional Services</option>
+              <option value="other">Other</option>
+            </select>
+            {form.industry==="private_security" && <div style={{marginTop:6,padding:"8px 12px",background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,fontSize:12,color:"#c2410c"}}>🔒 NBCPSS mode active — payroll enforces National Bargaining Council for the Private Security Sector requirements (minimum wages, allowances, levies). Rates effective 1 March 2026 – 28 February 2027.</div>}
+          </div>
         </div>
 
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Banking Details <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(shown on invoices)</span></div>
@@ -12613,6 +12816,7 @@ export default function App() {
           role:               data.user.role || "owner",
           payrollEnabled: data.company.payroll_enabled || false,
           afsEnabled:     data.company.afs_enabled || false,
+          industry:       data.company.industry || "",
         });
         Sentry.setUser({ email: data.user.email, username: data.company.name });
         setScreen("app");

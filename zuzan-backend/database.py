@@ -167,6 +167,12 @@ class Employee(Base):
     appointment_date=Column(DateTime); address=Column(String)
     position=Column(String); department=Column(String)
     grade=Column(String,nullable=True)                # e.g. "A", "B", "Senior", "Grade 7"
+    # NBCPSS private security fields (active when company.industry = 'private_security')
+    psira_number=Column(String,nullable=True)          # PSIRA registration number
+    security_grade=Column(String,nullable=True)        # A, B, C, D, or E (NBCPSS grading)
+    security_area=Column(String,nullable=True)         # "1_2" (metro/urban) or "3" (rural)
+    shift_type=Column(String,nullable=True)            # "day", "night", or "rotating"
+    special_allowance_type=Column(String,nullable=True) # "none","armed","nkp","control_centre","canine","mobile_supervisor","armed_response"
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
     hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
@@ -226,6 +232,14 @@ class Payslip(Base):
     medical_aid_employee_ded=Column(Float,default=0.0)  # employee deduction
     medical_aid_employer_con=Column(Float,default=0.0)  # employer contribution (fringe benefit)
     medical_tax_credit=Column(Float,default=0.0)        # s6A MTC applied (reduces PAYE)
+    # NBCPSS security allowances (2026-07)
+    night_shift_shifts=Column(Float,default=0.0)         # number of night shifts worked this period
+    night_shift_allowance=Column(Float,default=0.0)      # R8.00/shift (taxable income)
+    special_allowance_shifts=Column(Float,default=0.0)   # shifts qualifying for special allowance
+    special_allowance_amount=Column(Float,default=0.0)   # R10.50/shift (taxable income)
+    cleaning_allowance=Column(Float,default=0.0)         # R32.00/month (taxable income)
+    bc_levy_employer=Column(Float,default=0.0)           # BC levy R9.40/month (employer cost)
+    psira_levy_employer=Column(Float,default=0.0)        # PSIRA fee R5.00/month (employer cost)
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -1383,6 +1397,19 @@ def init_db():
                 paid_at TIMESTAMP DEFAULT NOW()
             )""",
             "CREATE INDEX IF NOT EXISTS ix_afs_payments_company ON afs_payments (company_id)",
+            # ── NBCPSS private security payroll (2026-07) ─────────────────────
+            "ALTER TABLE employees ADD COLUMN psira_number VARCHAR",
+            "ALTER TABLE employees ADD COLUMN security_grade VARCHAR",
+            "ALTER TABLE employees ADD COLUMN security_area VARCHAR",
+            "ALTER TABLE employees ADD COLUMN shift_type VARCHAR",
+            "ALTER TABLE employees ADD COLUMN special_allowance_type VARCHAR",
+            "ALTER TABLE payslips ADD COLUMN night_shift_shifts FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN night_shift_allowance FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN special_allowance_shifts FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN special_allowance_amount FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN cleaning_allowance FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN bc_levy_employer FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN psira_levy_employer FLOAT DEFAULT 0",
         ]:
             try:
                 conn.execute(text(sql))

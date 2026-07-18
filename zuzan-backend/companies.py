@@ -816,6 +816,12 @@ class EmployeeCreate(BaseModel):
     medical_aid_employee:      Optional[float] = 0.0
     medical_aid_employer:      Optional[float] = 0.0
     medical_aid_dependants:    Optional[int]   = 0
+    # NBCPSS private security fields
+    psira_number:              Optional[str]   = None
+    security_grade:            Optional[str]   = None  # A, B, C, D, E
+    security_area:             Optional[str]   = "1_2" # "1_2" = metro/urban, "3" = rural
+    shift_type:                Optional[str]   = "day" # "day", "night", "rotating"
+    special_allowance_type:    Optional[str]   = "none"
 
 class EmployeeUpdate(BaseModel):
     position:                  Optional[str] = None
@@ -842,6 +848,12 @@ class EmployeeUpdate(BaseModel):
     medical_aid_employee:      Optional[float] = None
     medical_aid_employer:      Optional[float] = None
     medical_aid_dependants:    Optional[int]   = None
+    # NBCPSS private security fields
+    psira_number:              Optional[str]   = None
+    security_grade:            Optional[str]   = None
+    security_area:             Optional[str]   = None
+    shift_type:                Optional[str]   = None
+    special_allowance_type:    Optional[str]   = None
 
 
 def _employee_dict(e: Employee) -> dict:
@@ -874,6 +886,12 @@ def _employee_dict(e: Employee) -> dict:
         "medical_aid_employee":      getattr(e, "medical_aid_employee", 0.0) or 0.0,
         "medical_aid_employer":      getattr(e, "medical_aid_employer", 0.0) or 0.0,
         "medical_aid_dependants":    getattr(e, "medical_aid_dependants", 0) or 0,
+        # NBCPSS private security
+        "psira_number":           getattr(e, "psira_number", None),
+        "security_grade":         getattr(e, "security_grade", None),
+        "security_area":          getattr(e, "security_area", None) or "1_2",
+        "shift_type":             getattr(e, "shift_type", None) or "day",
+        "special_allowance_type": getattr(e, "special_allowance_type", None) or "none",
     }
 
 
@@ -935,6 +953,11 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         medical_aid_employee=data.medical_aid_employee or 0.0,
         medical_aid_employer=data.medical_aid_employer or 0.0,
         medical_aid_dependants=data.medical_aid_dependants or 0,
+        psira_number=data.psira_number,
+        security_grade=data.security_grade,
+        security_area=data.security_area or "1_2",
+        shift_type=data.shift_type or "day",
+        special_allowance_type=data.special_allowance_type or "none",
     )
     db.add(emp)
     db.commit()

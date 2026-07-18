@@ -182,6 +182,46 @@ BCEA_OT_RATE_SUNDAY  = 2.0      # Sunday work multiplier (s16)
 BCEA_OT_RATE_PH      = 2.0      # public holiday work multiplier (s18)
 BCEA_MAX_OT_WEEKLY   = 10       # max overtime hours per week (s10)
 
+# ── NBCPSS — Private Security Sector Minimum Wages (1 March 2026 – 28 Feb 2027) ──
+# Source: NBCPSS Circular 08 February 2026 + Illustrative Pricing Guide 2023-2027
+# Area 1 & 2: Alberton, Bellville, Benoni, Boksburg, Bloemfontein, Brakpan, Camperdown,
+#   Chatsworth, Durban, East London, Germiston, Goodwood, Inanda, Johannesburg,
+#   Kempton Park, Kimberley, Klerksdorp, Krugersdorp, Kuilsrivier, Mitchell's Plain,
+#   Nigel, Oberholzer, Paarl, Pietermaritzburg, Pinetown, Gqeberha/Port Elizabeth,
+#   Tshwane/Pretoria, Randburg, Randfontein, Roodepoort, Sasolburg, Simon's Town,
+#   Somerset West, Springs, Stellenbosch, Strand, The Cape, Uitenhage,
+#   Vanderbijlpark, Vereeniging, Westonaria, Wonderboom, Wynberg.
+# Area 3: All other magisterial districts.
+NBCPSS_MINIMUM_MONTHLY = {
+    "1_2": {"A": 8184.00, "B": 7607.00, "C": 7003.00, "D": 7003.00, "E": 7003.00},
+    "3":   {"A": 7142.00, "B": 6726.00, "C": 6726.00, "D": 6726.00, "E": 6726.00},
+}
+NBCPSS_NIGHT_SHIFT_PER_SHIFT    = 8.00    # R/shift (effective 1 March 2026)
+NBCPSS_SPECIAL_ALLOW_PER_SHIFT  = 10.50   # R/shift — Armed SO, Armed Response, NKP,
+                                           #           Control Centre, Canine, Mobile Supervisor
+NBCPSS_CLEANING_ALLOWANCE       = 32.00   # R/month (all employees)
+NBCPSS_BC_LEVY                  = 9.40    # R/employee/month — employer pays to NBCPSS
+NBCPSS_PSIRA_FEE                = 5.00    # R/SO/month — employer PSIRA registration fee
+NBCPSS_PROVIDENT_RATE           = 0.075   # 7.5% each (employer + employee) — PSSPF
+NBCPSS_VALID_UNTIL              = "28 February 2027"
+
+NBCPSS_SPECIAL_CATEGORIES = {
+    "armed":            "Armed Security Officer",
+    "armed_response":   "Armed Response Officer",
+    "nkp":              "National Key Point Officer",
+    "control_centre":   "Control/Communication Centre Operator",
+    "canine":           "Canine/Dog Handler",
+    "mobile_supervisor":"Mobile Supervisor",
+}
+
+
+def nbcpss_minimum(grade: str, area: str) -> float:
+    """Return the NBCPSS minimum monthly salary for a given grade and area.
+    Grade must be A–E; area must be '1_2' or '3'.  Returns 0 if not found."""
+    g = (grade or "").upper()
+    a = area or "1_2"
+    return NBCPSS_MINIMUM_MONTHLY.get(a, {}).get(g, 0.0)
+
 
 def bcea_hourly_rate(gross_monthly: float, explicit_hourly_rate: float = None) -> float:
     """
@@ -271,6 +311,12 @@ def calc_payroll(
     medical_aid_employee: float = 0.0,     # monthly employee contribution (ZAR)
     medical_aid_employer: float = 0.0,     # monthly employer contribution (ZAR) — fringe benefit
     medical_aid_dependants: int = 0,       # dependants excl. main member
+    # NBCPSS private security allowances (only used when company.industry == 'private_security')
+    night_shift_shifts: float = 0.0,       # number of night shifts worked this period
+    special_allowance_shifts: float = 0.0, # shifts qualifying for special allowance
+    is_security: bool = False,             # True → add cleaning allowance + BC levy + PSIRA fee
+    security_grade: str = None,            # A–E (used for minimum wage warning only)
+    security_area: str = None,             # "1_2" or "3"
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -302,8 +348,18 @@ def calc_payroll(
     ot = calc_overtime(gross_monthly, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate)
     total_overtime = ot["total_overtime"]
 
+    # ── NBCPSS security allowances (taxable income added to gross) ───────────
+    night_allow  = round(night_shift_shifts * NBCPSS_NIGHT_SHIFT_PER_SHIFT, 2)   if is_security else 0.0
+    special_allow= round(special_allowance_shifts * NBCPSS_SPECIAL_ALLOW_PER_SHIFT, 2) if is_security else 0.0
+    cleaning_allow = NBCPSS_CLEANING_ALLOWANCE if is_security else 0.0
+    bc_levy_emp  = NBCPSS_BC_LEVY  if is_security else 0.0   # employer cost only
+    psira_levy   = NBCPSS_PSIRA_FEE if is_security else 0.0  # employer cost only
+    # NBCPSS minimum wage warning (does not modify pay — just a flag)
+    nbcpss_min   = nbcpss_minimum(security_grade, security_area) if is_security else 0.0
+    below_min    = is_security and nbcpss_min > 0 and gross_monthly < nbcpss_min
+
     # ── Cash remuneration (for net pay & SDL) ─────────────────────────────────
-    taxable_gross = gross_monthly + total_overtime
+    taxable_gross = gross_monthly + total_overtime + night_allow + special_allow + cleaning_allow
 
     # ── Pension / Provident fund: % + optional fixed ZAR top-up ──────────────
     pension_employee_monthly = round(gross_monthly * pension_employee_pct + pension_employee_fixed, 2)
@@ -362,7 +418,7 @@ def calc_payroll(
     net_pay = taxable_gross - paye_after_mtc - uif_employee - pension_employee_monthly - medical_aid_employee
 
     # ── Total cost to employer ────────────────────────────────────────────────
-    total_cost = taxable_gross + uif_employer + sdl + pension_employer_monthly + medical_aid_employer
+    total_cost = taxable_gross + uif_employer + sdl + pension_employer_monthly + medical_aid_employer + bc_levy_emp + psira_levy
 
     return {
         "gross":                  round(gross_monthly, 2),
@@ -371,7 +427,7 @@ def calc_payroll(
         "pension_employee":       round(pension_employee_monthly, 2),
         "pension_employer":       round(pension_employer_monthly, 2),
         "s11f_deduction":         s11f_monthly,
-        "s11f_excess_monthly":    round(s11f_excess_annual / 12, 2),  # portion above cap (post-tax contribution)
+        "s11f_excess_monthly":    round(s11f_excess_annual / 12, 2),
         "medical_aid_employee":   round(medical_aid_employee, 2),
         "medical_aid_employer":   round(medical_aid_employer, 2),
         "medical_tax_credit":     round(mtc, 2),
@@ -383,6 +439,16 @@ def calc_payroll(
         "net_pay":                round(net_pay, 2),
         "total_cost":             round(total_cost, 2),
         "tax_year":               tax_year or CURRENT_TAX_YEAR,
+        # NBCPSS security fields
+        "night_shift_shifts":     night_shift_shifts,
+        "night_shift_allowance":  round(night_allow, 2),
+        "special_allowance_shifts": special_allowance_shifts,
+        "special_allowance_amount": round(special_allow, 2),
+        "cleaning_allowance":     round(cleaning_allow, 2),
+        "bc_levy_employer":       round(bc_levy_emp, 2),
+        "psira_levy_employer":    round(psira_levy, 2),
+        "nbcpss_minimum":         nbcpss_min,
+        "below_nbcpss_minimum":   below_min,
     }
 
 
@@ -397,8 +463,15 @@ class OvertimeEntry(BaseModel):
     ph_hours:       float = 0   # public holiday hours (BCEA s18 — 2.0x)
 
 
+class SecurityAllowanceEntry(BaseModel):
+    employee_id:            int
+    night_shift_shifts:     float = 0  # number of night shifts worked this period
+    special_allowance_shifts: float = 0  # shifts qualifying for special allowance
+
+
 class RunPayrollRequest(BaseModel):
     overtime: list[OvertimeEntry] = []
+    security: list[SecurityAllowanceEntry] = []
 
 
 @payroll_router.get("/calculate")
@@ -422,8 +495,13 @@ async def calculate_all(
     }
 
     annual_payroll_total = sum(e.gross_salary for e in employees) * 12
+    company = db.query(__import__("database").Company).filter_by(id=current_user.company_id).first()
+    is_security_co = getattr(company, "industry", None) == "private_security"
 
     for emp in employees:
+        sec_grade = getattr(emp, "security_grade", None)
+        sec_area  = getattr(emp, "security_area", None) or "1_2"
+        is_sec    = is_security_co and bool(sec_grade)
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
@@ -435,15 +513,23 @@ async def calculate_all(
             medical_aid_employee=getattr(emp, "medical_aid_employee", 0.0) or 0.0,
             medical_aid_employer=getattr(emp, "medical_aid_employer", 0.0) or 0.0,
             medical_aid_dependants=int(getattr(emp, "medical_aid_dependants", 0) or 0),
+            is_security=is_sec,
+            security_grade=sec_grade,
+            security_area=sec_area,
         )
-        c["employee_id"]      = emp.id
-        c["employee_name"]    = f"{emp.first_name} {emp.last_name}"
-        c["employee_number"]  = emp.employee_number
-        c["position"]         = emp.position
-        c["department"]       = emp.department
-        c["grade"]            = emp.grade
-        c["employment_type"]  = emp.employment_type or "salaried"
-        c["hourly_rate_bcea"] = round(bcea_hourly_rate(emp.gross_salary, getattr(emp, "hourly_rate", None)), 4)
+        c["employee_id"]           = emp.id
+        c["employee_name"]         = f"{emp.first_name} {emp.last_name}"
+        c["employee_number"]       = emp.employee_number
+        c["position"]              = emp.position
+        c["department"]            = emp.department
+        c["grade"]                 = emp.grade
+        c["security_grade"]        = sec_grade
+        c["security_area"]         = sec_area
+        c["psira_number"]          = getattr(emp, "psira_number", None)
+        c["shift_type"]            = getattr(emp, "shift_type", None)
+        c["special_allowance_type"]= getattr(emp, "special_allowance_type", None)
+        c["employment_type"]       = emp.employment_type or "salaried"
+        c["hourly_rate_bcea"]      = round(bcea_hourly_rate(emp.gross_salary, getattr(emp, "hourly_rate", None)), 4)
         results.append(c)
         for key in totals:
             totals[key] = round(totals[key] + c.get(key, 0), 2)
@@ -456,12 +542,24 @@ async def calculate_all(
         "employee_count": len(employees),
         "zuzan_fee":      round(zuzan_fee, 2),
         "period":         datetime.utcnow().strftime("%B %Y"),
+        "industry":       getattr(company, "industry", "general") or "general",
         "bcea": {
             "normal_weekly_hours": BCEA_WEEKLY_HOURS,
             "max_ot_weekly":       BCEA_MAX_OT_WEEKLY,
             "ot_rate_weekday":     BCEA_OT_RATE_WEEKDAY,
             "ot_rate_sunday":      BCEA_OT_RATE_SUNDAY,
             "ot_rate_ph":          BCEA_OT_RATE_PH,
+        },
+        "nbcpss": {
+            "active":               is_security_co,
+            "valid_until":          NBCPSS_VALID_UNTIL,
+            "night_shift_rate":     NBCPSS_NIGHT_SHIFT_PER_SHIFT,
+            "special_allow_rate":   NBCPSS_SPECIAL_ALLOW_PER_SHIFT,
+            "cleaning_allowance":   NBCPSS_CLEANING_ALLOWANCE,
+            "bc_levy":              NBCPSS_BC_LEVY,
+            "psira_fee":            NBCPSS_PSIRA_FEE,
+            "provident_rate":       NBCPSS_PROVIDENT_RATE,
+            "minimums":             NBCPSS_MINIMUM_MONTHLY,
         },
     }
 
@@ -480,12 +578,15 @@ async def run_payroll(
     if not employees:
         raise HTTPException(status_code=400, detail="No active employees found")
 
-    # Build overtime lookup keyed by employee_id
-    ot_map = {entry.employee_id: entry for entry in (data.overtime or [])}
+    # Build lookup maps keyed by employee_id
+    ot_map  = {entry.employee_id: entry for entry in (data.overtime or [])}
+    sec_map = {entry.employee_id: entry for entry in (data.security or [])}
 
     period = datetime.utcnow().strftime("%Y-%m")
     created = []
     annual_payroll_total = sum(e.gross_salary for e in employees) * 12
+    company = db.query(__import__("database").Company).filter_by(id=current_user.company_id).first()
+    is_security_co = getattr(company, "industry", None) == "private_security"
 
     for emp in employees:
         existing = db.query(Payslip).filter(
@@ -494,7 +595,11 @@ async def run_payroll(
         ).first()
         if existing:
             continue
-        ot_entry = ot_map.get(emp.id, OvertimeEntry(employee_id=emp.id))
+        ot_entry  = ot_map.get(emp.id, OvertimeEntry(employee_id=emp.id))
+        sec_entry = sec_map.get(emp.id, SecurityAllowanceEntry(employee_id=emp.id))
+        sec_grade = getattr(emp, "security_grade", None)
+        sec_area  = getattr(emp, "security_area", None) or "1_2"
+        is_sec    = is_security_co and bool(sec_grade)
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
@@ -509,6 +614,11 @@ async def run_payroll(
             medical_aid_employee=getattr(emp, "medical_aid_employee", 0.0) or 0.0,
             medical_aid_employer=getattr(emp, "medical_aid_employer", 0.0) or 0.0,
             medical_aid_dependants=int(getattr(emp, "medical_aid_dependants", 0) or 0),
+            night_shift_shifts=sec_entry.night_shift_shifts,
+            special_allowance_shifts=sec_entry.special_allowance_shifts,
+            is_security=is_sec,
+            security_grade=sec_grade,
+            security_area=sec_area,
         )
         ot = c["overtime"]
         payslip = Payslip(
@@ -533,6 +643,13 @@ async def run_payroll(
             medical_aid_employee_ded=c["medical_aid_employee"],
             medical_aid_employer_con=c["medical_aid_employer"],
             medical_tax_credit=c["medical_tax_credit"],
+            night_shift_shifts=c["night_shift_shifts"],
+            night_shift_allowance=c["night_shift_allowance"],
+            special_allowance_shifts=c["special_allowance_shifts"],
+            special_allowance_amount=c["special_allowance_amount"],
+            cleaning_allowance=c["cleaning_allowance"],
+            bc_levy_employer=c["bc_levy_employer"],
+            psira_levy_employer=c["psira_levy_employer"],
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post
