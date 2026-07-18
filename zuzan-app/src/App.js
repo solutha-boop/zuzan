@@ -122,8 +122,8 @@ function useLiveData() {
 }
 
 const PLANS = [
-  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Payroll (PAYE/UIF/SDL)","Bank feed (all SA banks)","Basic P&L report","Email support"] },
-  { id:"professional", name:"Professional", monthly:899,  annual:8990,  usdMonthly:49, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Double-entry general ledger","Trial balance & journal viewer","Balance sheet reconciliation","Advanced reports","Priority support"] },
+  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Payroll add-on (in-app, no 3rd party)","Bank feed (all SA banks)","Double-entry general ledger","Trial balance & journal viewer","Basic reports","Email support"] },
+  { id:"professional", name:"Professional", monthly:899,  annual:8990,  usdMonthly:49, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Balance sheet reconciliation","Purchase orders & inventory","Fixed assets & depreciation","Budgeting","Advanced reports & VAT201","Priority support"] },
   { id:"business",     name:"Business",     monthly:1499, annual:14990, usdMonthly:82, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Budgeting vs actuals","Cash flow forecast","Department budgets","API access","Dedicated account manager"] },
 ];
 
@@ -12605,7 +12605,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     {id:"budgeting",  label:"Budgeting",   icon:"🎯", minPlan:"professional"},
     {id:"debtors",    label:"Debtors",     icon:"📥", minPlan:"professional"},
     {id:"creditors",  label:"Creditors",   icon:"📤", minPlan:"professional"},
-    {id:"coa",        label:"Accounts",    icon:"📒", minPlan:"professional"},
+    {id:"coa",        label:"Accounts",    icon:"📒"},
     {id:"inventory",    label:"Inventory",   icon:"📦", minPlan:"professional"},
     {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭", minPlan:"professional"},
     {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
@@ -12676,7 +12676,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
     budgeting:  canAccess(user,"professional") ? <Budgeting  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     debtors:    canAccess(user,"professional") ? <Debtors    live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     creditors:  canAccess(user,"professional") ? <Creditors  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
-    coa:        canAccess(user,"professional") ? <ChartOfAccounts/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    coa:        <ChartOfAccounts/>,
     inventory:       canAccess(user,"professional") ? <Inventory/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     fixed_assets:    canAccess(user,"professional") ? <FixedAssets/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     fin_statements:  <AfsPaymentGate/>,

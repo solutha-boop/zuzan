@@ -849,18 +849,21 @@
     <div class="pricing-card">
       <div class="plan-name">Starter</div>
       <div class="plan-desc">Perfect for sole proprietors and micro businesses just getting started.</div>
-      <div class="plan-price" id="price-starter"><sup>R</sup>299</div>
+      <div class="plan-price" id="price-starter"><sup>R</sup>399</div>
       <div class="plan-period" id="period-starter">per month, up to 2 users · 20 invoices</div>
-      <div class="plan-usd" id="usd-starter">≈ $16 USD / month</div>
+      <div class="plan-usd" id="usd-starter">≈ $22 USD / month</div>
       <div class="plan-divider"></div>
       <ul class="plan-features">
         <li><span class="check">✓</span> Up to 2 users</li><li><span class="check">✓</span> 20 invoices per month</li>
-        <li><span class="check">✓</span> Expense tracking</li>
-        <li><span class="check">✓</span> Bank feed (FNB, ABSA, Nedbank, Standard Bank, Capitec)</li>
+        <li><span class="check">✓</span> Invoicing, quotes &amp; expense tracking</li>
+        <li><span class="check">✓</span> Bank feed (all major SA banks)</li>
         <li><span class="check">✓</span> Bank reconciliation</li>
-        <li><span class="check">✓</span> Basic reports (P&L, expenses)</li>
-        <li><span class="check">✓</span> Email support</li>
+        <li><span class="check">✓</span> Double-entry general ledger</li>
+        <li><span class="check">✓</span> Trial balance &amp; journal viewer</li>
+        <li><span class="check">✓</span> P&amp;L, VAT201 &amp; basic reports</li>
+        <li><span class="check">✓</span> Payroll add-on available (in-app, no 3rd party needed)</li>
         <li><span class="check">✓</span> Mobile app access</li>
+        <li><span class="check">✓</span> Email support</li>
       </ul>
       <button class="plan-btn">Start Free Trial</button>
     </div>
@@ -870,17 +873,18 @@
       <div class="popular-badge">Most Popular</div>
       <div class="plan-name">Professional</div>
       <div class="plan-desc">For growing businesses with employees and more complex needs.</div>
-      <div class="plan-price" id="price-pro"><sup>R</sup>699</div>
+      <div class="plan-price" id="price-pro"><sup>R</sup>899</div>
       <div class="plan-period" id="period-pro">per month, up to 5 users · 50 invoices</div>
-      <div class="plan-usd" id="usd-pro">≈ $38 USD / month</div>
+      <div class="plan-usd" id="usd-pro">≈ $49 USD / month</div>
       <div class="plan-divider"></div>
       <ul class="plan-features">
         <li><span class="check">✓</span> Up to 5 users</li><li><span class="check">✓</span> 50 invoices per month</li>
         <li><span class="check">✓</span> Everything in Starter</li>
-
-        <li><span class="check">✓</span> Bank feed — all major SA banks</li>
-        <li><span class="check">✓</span> Auto bank reconciliation</li>
-        <li><span class="check">✓</span> Advanced reports</li>
+        <li><span class="check">✓</span> Balance sheet reconciliation</li>
+        <li><span class="check">✓</span> Purchase orders &amp; inventory</li>
+        <li><span class="check">✓</span> Fixed assets &amp; depreciation</li>
+        <li><span class="check">✓</span> Budgeting</li>
+        <li><span class="check">✓</span> Advanced reports &amp; VAT201</li>
         <li><span class="check">✓</span> Priority email + chat support</li>
       </ul>
       <button class="plan-btn">Start Free Trial</button>
@@ -890,9 +894,9 @@
     <div class="pricing-card">
       <div class="plan-name">Business</div>
       <div class="plan-desc">For medium businesses with multiple departments and complex reporting needs.</div>
-      <div class="plan-price" id="price-biz"><sup>R</sup>1,299</div>
+      <div class="plan-price" id="price-biz"><sup>R</sup>1,499</div>
       <div class="plan-period" id="period-biz">per month, up to 20 users · unlimited invoices</div>
-      <div class="plan-usd" id="usd-biz">≈ $70 USD / month</div>
+      <div class="plan-usd" id="usd-biz">≈ $81 USD / month</div>
       <div class="plan-divider"></div>
       <ul class="plan-features">
         <li><span class="check">✓</span> Up to 20 users</li><li><span class="check">✓</span> Unlimited invoices</li>
@@ -1063,8 +1067,8 @@
 <script>
   // ── Billing Toggle ────────────────────────────────────────────────────────
   const PRICES = {
-    monthly: { starter: 'R299', pro: 'R699', biz: 'R1,299', starterUSD: '≈ $16 USD / month', proUSD: '≈ $38 USD / month', bizUSD: '≈ $70 USD / month', period: 'per month' },
-    annual:  { starter: 'R2,990', pro: 'R6,990', biz: 'R12,990', starterUSD: '≈ $160 USD / year', proUSD: '≈ $380 USD / year', bizUSD: '≈ $700 USD / year', period: 'per year' },
+    monthly: { starter: 'R399', pro: 'R899', biz: 'R1,499', starterUSD: '≈ $22 USD / month', proUSD: '≈ $49 USD / month', bizUSD: '≈ $81 USD / month', period: 'per month' },
+    annual:  { starter: 'R3,990', pro: 'R8,990', biz: 'R14,990', starterUSD: '≈ $216 USD / year', proUSD: '≈ $486 USD / year', bizUSD: '≈ $810 USD / year', period: 'per year' },
   };
 
   function setBilling(type, btn) {
