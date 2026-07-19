@@ -109,6 +109,8 @@ TAX_YEARS = {
             {"min": 1817001,  "max": 9999999,  "rate": 0.45, "base": 644489},
         ],
         "primary_rebate": 17235,
+        "secondary_rebate": 9444,   # age 65+ (additional to primary)
+        "tertiary_rebate": 3145,    # age 75+ (additional to primary + secondary)
         "uif_ceil": 17712,
     },
     "2025/2026": {
@@ -122,6 +124,8 @@ TAX_YEARS = {
             {"min": 1817001,  "max": 9999999,  "rate": 0.45, "base": 644489},
         ],
         "primary_rebate": 17235,
+        "secondary_rebate": 9444,
+        "tertiary_rebate": 3145,
         "uif_ceil": 17712,
     },
     "2026/2027": {
@@ -135,7 +139,30 @@ TAX_YEARS = {
             {"min": 1878601,  "max": 9999999,  "rate": 0.45, "base": 666339},
         ],
         "primary_rebate": 17820,
+        "secondary_rebate": 9765,   # 2026/2027 (Budget 2026)
+        "tertiary_rebate": 3249,
         "uif_ceil": 17712,
+    },
+    # ── PROVISIONAL (added 2026-07-19) ────────────────────────────────────────
+    # Copy of 2026/2027 so the date-derived selector finds an explicit entry on
+    # 1 March 2027 instead of relying on the newest-table fallback.
+    # MUST be replaced with the actual 2027/2028 rates after Budget Feb 2027
+    # (standing annual task) — then restart the backend.
+    "2027/2028": {
+        "brackets": [
+            {"min": 0,        "max": 245100,   "rate": 0.18, "base": 0},
+            {"min": 245101,   "max": 383100,   "rate": 0.26, "base": 44118},
+            {"min": 383101,   "max": 530200,   "rate": 0.31, "base": 79998},
+            {"min": 530201,   "max": 695800,   "rate": 0.36, "base": 125599},
+            {"min": 695801,   "max": 887000,   "rate": 0.39, "base": 185215},
+            {"min": 887001,   "max": 1878600,  "rate": 0.41, "base": 259783},
+            {"min": 1878601,  "max": 9999999,  "rate": 0.45, "base": 666339},
+        ],
+        "primary_rebate": 17820,
+        "secondary_rebate": 9765,
+        "tertiary_rebate": 3249,
+        "uif_ceil": 17712,
+        "provisional": True,   # flag: carried forward from 2026/2027, pending Budget 2027
     },
 }
 
@@ -281,7 +308,26 @@ def calc_medical_tax_credit(num_dependants: int = 0) -> float:
         return MTC_MAIN_FIRST * 2 + MTC_ADDITIONAL * (num_dependants - 1)
 
 
-def calc_paye(annual_income: float, tax_year: str = None) -> float:
+def age_at_tax_year_end(date_of_birth, tax_year: str = None):
+    """Age on the last day (28/29 Feb) of the tax year, or None if no DOB.
+    SARS grants the secondary (65+) / tertiary (75+) rebates if the taxpayer
+    reaches that age at any point in the year of assessment — i.e. by its
+    last day (audit fix 2026-07-19: age rebates)."""
+    if not date_of_birth:
+        return None
+    ty = tax_year or CURRENT_TAX_YEAR
+    end_year = int(ty.split("/")[1])
+    leap = end_year % 4 == 0 and (end_year % 100 != 0 or end_year % 400 == 0)
+    end = datetime(end_year, 2, 29 if leap else 28)
+    return end.year - date_of_birth.year - (
+        (end.month, end.day) < (date_of_birth.month, date_of_birth.day)
+    )
+
+
+def calc_paye(annual_income: float, tax_year: str = None, age: int = None) -> float:
+    """Annual PAYE after rebates. age = age at tax-year end (None → primary
+    rebate only). Secondary/tertiary rebates are cumulative on the primary
+    (audit fix 2026-07-19)."""
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
     bracket = None
     for b in yr["brackets"]:
@@ -290,7 +336,13 @@ def calc_paye(annual_income: float, tax_year: str = None) -> float:
             break
     if not bracket:
         return 0
-    tax = bracket["base"] + (annual_income - bracket["min"]) * bracket["rate"] - yr["primary_rebate"]
+    rebate = yr["primary_rebate"]
+    if age is not None:
+        if age >= 65:
+            rebate += yr.get("secondary_rebate", 0)
+        if age >= 75:
+            rebate += yr.get("tertiary_rebate", 0)
+    tax = bracket["base"] + (annual_income - bracket["min"]) * bracket["rate"] - rebate
     return max(0, tax)
 
 
@@ -317,6 +369,9 @@ def calc_payroll(
     is_security: bool = False,             # True → add cleaning allowance + BC levy + PSIRA fee
     security_grade: str = None,            # A–E (used for minimum wage warning only)
     security_area: str = None,             # "1_2" or "3"
+    # Age-based rebates + s11F carry-forward (audit fixes 2026-07-19)
+    age: int = None,                       # age at tax-year end → secondary/tertiary rebates
+    s11f_carry_forward_annual: float = 0.0,  # unclaimed prior-year s11F excess (rand)
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -383,17 +438,29 @@ def calc_payroll(
     # provides no additional PAYE relief in the month (SARS carries excess
     # forward on assessment).
     pension_total_annual = (pension_employee_monthly + pension_employer_monthly) * 12
+    # s11F(3) carry-forward (audit fix 2026-07-19): contributions disallowed by
+    # the cap in earlier years roll over and are deductible in later years,
+    # subject to the same annual limits. The deductible pool = this year's
+    # contributions + unclaimed prior-year excess. Because the engine
+    # annualises each month, the pool is consumed asymptotically (each month
+    # grants ≤ pool/12 extra relief) — it can never over-deduct; SARS finalises
+    # the exact relief on assessment.
+    carry_in = max(0.0, s11f_carry_forward_annual or 0.0)
+    deductible_pool_annual = pension_total_annual + carry_in
     s11f_annual = min(
-        pension_total_annual,
+        deductible_pool_annual,
         S11F_RATE * paye_base_annual,
         S11F_CAP,
     )
     s11f_monthly = round(s11f_annual / 12, 2)
-    # Track how much of the total contribution exceeds the s11F cap (post-tax)
+    # NEW excess arising from this period's contributions only (the untouched
+    # carry-in balance stays in the pool — it must not be re-recorded as excess)
     s11f_excess_annual = max(0.0, pension_total_annual - s11f_annual)
+    # Portion of the relief funded by the carry-forward pool (consumes the pool)
+    s11f_carry_used_annual = max(0.0, s11f_annual - pension_total_annual)
 
     # ── PAYE on (PAYE base − s11F deduction) annualised ──────────────────────
-    annual_paye  = calc_paye(paye_base_annual - s11f_annual, tax_year)
+    annual_paye  = calc_paye(paye_base_annual - s11f_annual, tax_year, age=age)
     monthly_paye = annual_paye / 12
 
     # ── Section 6A MTC: only applies when employee is on medical aid ──────────
@@ -428,6 +495,8 @@ def calc_payroll(
         "pension_employer":       round(pension_employer_monthly, 2),
         "s11f_deduction":         s11f_monthly,
         "s11f_excess_monthly":    round(s11f_excess_annual / 12, 2),
+        "s11f_carry_used_monthly": round(s11f_carry_used_annual / 12, 2),
+        "age":                    age,
         "medical_aid_employee":   round(medical_aid_employee, 2),
         "medical_aid_employer":   round(medical_aid_employer, 2),
         "medical_tax_credit":     round(mtc, 2),
@@ -450,6 +519,24 @@ def calc_payroll(
         "nbcpss_minimum":         nbcpss_min,
         "below_nbcpss_minimum":   below_min,
     }
+
+
+def s11f_carry_forward_balance(db, employee_id: int, tax_year: str = None) -> float:
+    """Unclaimed s11F excess (rand) available from PRIOR tax years for an
+    employee (audit fix 2026-07-19). Pool = Σ s11f_excess recorded on payslips
+    in earlier tax years − Σ s11f_carry_used ever consumed (current-year usage
+    included). Current-year excess only enters the pool from 1 March
+    (s11F(3): excess rolls to succeeding years of assessment)."""
+    ty = tax_year or CURRENT_TAX_YEAR
+    ty_start = ty.split("/")[0] + "-03"   # Payslip.period is "YYYY-MM"
+    prior_excess = db.query(func.sum(Payslip.s11f_excess)).filter(
+        Payslip.employee_id == employee_id,
+        Payslip.period < ty_start,
+    ).scalar() or 0.0
+    used = db.query(func.sum(Payslip.s11f_carry_used)).filter(
+        Payslip.employee_id == employee_id,
+    ).scalar() or 0.0
+    return round(max(0.0, prior_excess - used), 2)
 
 
 # PAYROLL ROUTER
@@ -516,6 +603,8 @@ async def calculate_all(
             is_security=is_sec,
             security_grade=sec_grade,
             security_area=sec_area,
+            age=age_at_tax_year_end(getattr(emp, "date_of_birth", None)),
+            s11f_carry_forward_annual=s11f_carry_forward_balance(db, emp.id),
         )
         c["employee_id"]           = emp.id
         c["employee_name"]         = f"{emp.first_name} {emp.last_name}"
@@ -619,6 +708,8 @@ async def run_payroll(
             is_security=is_sec,
             security_grade=sec_grade,
             security_area=sec_area,
+            age=age_at_tax_year_end(getattr(emp, "date_of_birth", None)),
+            s11f_carry_forward_annual=s11f_carry_forward_balance(db, emp.id),
         )
         ot = c["overtime"]
         payslip = Payslip(
@@ -640,6 +731,8 @@ async def run_payroll(
             pension_employee=c["pension_employee"],
             pension_employer=c["pension_employer"],
             s11f_deduction=c["s11f_deduction"],
+            s11f_excess=c["s11f_excess_monthly"],
+            s11f_carry_used=c["s11f_carry_used_monthly"],
             medical_aid_employee_ded=c["medical_aid_employee"],
             medical_aid_employer_con=c["medical_aid_employer"],
             medical_tax_credit=c["medical_tax_credit"],
@@ -737,6 +830,8 @@ async def get_irp5(
         pension_emp     = sum(p.pension_employee or 0 for p in payslips)
         pension_empr    = sum(p.pension_employer or 0 for p in payslips)
         s11f            = sum(p.s11f_deduction or 0 for p in payslips)
+        s11f_excess     = sum(p.s11f_excess or 0 for p in payslips)
+        s11f_carry_used = sum(p.s11f_carry_used or 0 for p in payslips)
         med_emp         = sum(p.medical_aid_employee_ded or 0 for p in payslips)
         med_empr        = sum(p.medical_aid_employer_con or 0 for p in payslips)
         med_tc          = sum(p.medical_tax_credit or 0 for p in payslips)
@@ -767,6 +862,14 @@ async def get_irp5(
             "code_4001_paye":          round(paye, 2),
             "code_4002_uif_employee":  round(uif_emp, 2),
             "code_4005_pension":       round(s11f, 2),
+            # s11F carry-forward disclosure (audit fix 2026-07-19): excess
+            # contributions above the cap this year roll to future years;
+            # carry_used shows prior-year excess absorbed this year.
+            "s11f_excess_this_year":   round(s11f_excess, 2),
+            "s11f_carry_used_this_year": round(s11f_carry_used, 2),
+            "s11f_carry_forward_balance": s11f_carry_forward_balance(
+                db, emp.id, f"{ty}/{ty + 1}"
+            ),
             "medical_employee_ded":    round(med_emp, 2),
             "medical_tax_credit":      round(med_tc, 2),
             "net_pay_annual":          round(net_pay, 2),

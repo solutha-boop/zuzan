@@ -228,6 +228,8 @@ class Payslip(Base):
     pension_employee=Column(Float,default=0.0)       # employee monthly contribution (ZAR)
     pension_employer=Column(Float,default=0.0)       # employer monthly contribution (ZAR)
     s11f_deduction=Column(Float,default=0.0)         # s11F monthly deduction applied
+    s11f_excess=Column(Float,default=0.0)            # NEW excess above the s11F cap this month (rolls forward, s11F(3))
+    s11f_carry_used=Column(Float,default=0.0)        # prior-year excess absorbed as relief this month
     # Medical aid
     medical_aid_employee_ded=Column(Float,default=0.0)  # employee deduction
     medical_aid_employer_con=Column(Float,default=0.0)  # employer contribution (fringe benefit)
@@ -1367,6 +1369,9 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN pension_employee FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN pension_employer FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN s11f_deduction FLOAT DEFAULT 0",
+            # ── s11F excess carry-forward (audit fix 2026-07-19) ──────────────
+            "ALTER TABLE payslips ADD COLUMN s11f_excess FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN s11f_carry_used FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN medical_aid_employee_ded FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN medical_aid_employer_con FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN medical_tax_credit FLOAT DEFAULT 0",

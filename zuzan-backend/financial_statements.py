@@ -75,7 +75,13 @@ def _inv_total_zar(inv) -> float:
 # balance is presented as a computed AFS line, like retained earnings.
 # (Audit implementation 2026-07-14, action item L3.)
 
-_CIT_RATE = 0.27
+# Single source of truth for the CIT rate: fixed_assets.SA_CIT_RATE (unified
+# 2026-07-19 — the two deferred-tax calculators previously kept separate 27%
+# constants). Fallback keeps the AFS importable standalone.
+try:
+    from fixed_assets import SA_CIT_RATE as _CIT_RATE
+except Exception:
+    _CIT_RATE = 0.27
 
 # Fallback IN47 write-off rates (% p.a.), matched by substring on the asset's
 # category when neither wear_and_tear_rate nor sars_category is set.

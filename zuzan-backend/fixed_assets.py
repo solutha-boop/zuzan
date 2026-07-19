@@ -82,6 +82,14 @@ def _calc_tax_base(asset, now: datetime = None) -> dict:
     """
     Compute SARS tax base and deferred tax for a fixed asset.
 
+    UNIFIED with the AFS deferred-tax helper (audit fix 2026-07-19): the SARS
+    wear-and-tear rate now comes from financial_statements._wt_rate_pct — the
+    single rate resolver used by the Annual Financial Statements — with
+    priority: explicit wear_and_tear_rate → SARS IN47 category → category-name
+    heuristic → None. Previously this register only handled sars_category,
+    silently excluding assets with an explicit rate override, and could
+    disagree with the AFS Note 9 figures.
+
     Tax base  = cost − cumulative SARS allowance claimed to date (floored at 0).
     Accounting carrying value is taken from asset.cost - accumulated_depreciation (IAS 16).
 
@@ -89,29 +97,32 @@ def _calc_tax_base(asset, now: datetime = None) -> dict:
       positive (CV > tax base) → Taxable temp diff → Deferred Tax Liability (DTL)
       negative (CV < tax base) → Deductible temp diff → Deferred Tax Asset (DTA)
 
-    Returns None if no SARS category is assigned to the asset.
+    Returns None if no wear-and-tear rate is mappable for the asset.
     """
-    if not asset.sars_category:
-        return None
-    sars_info = SARS_WEAR_TEAR.get(asset.sars_category)
-    if not sars_info:
+    from financial_statements import _wt_rate_pct  # lazy — avoids import cycle
+    rate = _wt_rate_pct(asset)
+    if rate is None or rate <= 0:
         return None
 
     if now is None:
         now = datetime.utcnow()
 
     cost       = asset.cost
-    sars_years = sars_info["years"]
+    sars_info  = SARS_WEAR_TEAR.get(asset.sars_category) if asset.sars_category else None
+    sars_years = round(100.0 / rate, 2)
 
-    if sars_years <= 0:
-        # Immediate 100% write-off (e.g. certain renewable energy assets)
-        accumulated_allowance = cost
-        monthly_allowance     = cost
+    # Rate source disclosure (mirrors _wt_rate_pct priority)
+    if asset.wear_and_tear_rate:
+        rate_source = "explicit_rate"
+    elif sars_info:
+        rate_source = "sars_category"
     else:
-        monthly_allowance = round(cost / (sars_years * 12), 2)
-        months_elapsed    = max(0, (now.year  - asset.purchase_date.year) * 12
-                                  + (now.month - asset.purchase_date.month))
-        accumulated_allowance = round(min(months_elapsed * monthly_allowance, cost), 2)
+        rate_source = "category_heuristic"
+
+    monthly_allowance = round(cost * (rate / 100.0) / 12.0, 2)
+    months_elapsed    = max(0, (now.year  - asset.purchase_date.year) * 12
+                              + (now.month - asset.purchase_date.month))
+    accumulated_allowance = round(min(months_elapsed * monthly_allowance, cost), 2)
 
     tax_base       = round(max(0.0, cost - accumulated_allowance), 2)
     # IAS 16 carrying value (ignoring residual cap — tax base comparison uses gross)
@@ -129,8 +140,10 @@ def _calc_tax_base(asset, now: datetime = None) -> dict:
     return {
         "sars_category":             asset.sars_category,
         "sars_years":                sars_years,
-        "section":                   sars_info["section"],
-        "note":                      sars_info.get("note"),
+        "wt_rate_pct":               round(rate, 2),
+        "rate_source":               rate_source,
+        "section":                   sars_info["section"] if sars_info else "11(e)",
+        "note":                      sars_info.get("note") if sars_info else None,
         "monthly_tax_allowance":     monthly_allowance,
         "accumulated_allowance":     accumulated_allowance,
         "tax_base":                  tax_base,
@@ -511,7 +524,9 @@ async def get_deferred_tax(
     db: Session = Depends(get_db),
 ):
     """
-    Return deferred tax schedule for all active assets with a SARS category assigned.
+    Return deferred tax schedule for all active assets with a mappable SARS
+    wear-and-tear rate (explicit rate, IN47 category, or category-name
+    heuristic — unified with the AFS helper, audit fix 2026-07-19).
 
     Each row shows:
       - Accounting carrying value (IAS 16)
@@ -526,7 +541,6 @@ async def get_deferred_tax(
         .filter(
             FixedAsset.company_id == current_user.company_id,
             FixedAsset.status     == "active",
-            FixedAsset.sars_category.isnot(None),
         )
         .all()
     )
@@ -565,15 +579,9 @@ async def get_deferred_tax(
             "net_position": net,                   # positive = net DTL; negative = net DTA
             "net_type":    "DTL" if net > 0.01 else ("DTA" if net < -0.01 else "Nil"),
         },
-        "unclassified_count": (
-            db.query(FixedAsset)
-            .filter(
-                FixedAsset.company_id  == current_user.company_id,
-                FixedAsset.status      == "active",
-                FixedAsset.sars_category.is_(None),
-            )
-            .count()
-        ),
+        # Active assets with NO mappable rate at all (excluded from the schedule;
+        # their tax base is deemed equal to carrying value → zero difference)
+        "unclassified_count": len(assets) - len(rows),
     }
 
 
