@@ -8,21 +8,21 @@
 <style>
   /* ── TOKENS ──────────────────────────────────────────────────── */
   :root {
-    --ink:       #1A1209;
-    --ink-mid:   #6B5E4E;
-    --ink-dim:   #B5A898;
-    --cream:     #FAF7F2;
-    --cream-dk:  #F0EBE3;
+    --ink:       #0B1526;
+    --ink-mid:   #4A5778;
+    --ink-dim:   #8C97B8;
+    --cream:     #EFF5FF;
+    --cream-dk:  #E0EAFF;
     --surface:   #FFFFFF;
-    --accent:    #C8401A;
-    --accent-lt: #C8401A12;
-    --gold:      #C4920A;
-    --gold-lt:   #C4920A12;
-    --green:     #2A6B3C;
-    --green-lt:  #2A6B3C12;
-    --blue:      #1A3A6B;
-    --border:    #E8E0D5;
-    --shadow:    0 2px 40px rgba(26,18,9,0.08);
+    --accent:    #2563EB;
+    --accent-lt: #2563EB12;
+    --gold:      #0EA5E9;
+    --gold-lt:   #0EA5E912;
+    --green:     #059669;
+    --green-lt:  #05966912;
+    --blue:      #1E3A8A;
+    --border:    #D1DCF0;
+    --shadow:    0 2px 40px rgba(11,21,38,0.08);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -76,7 +76,7 @@
     font-size: 26px; font-weight: 700;
     color: var(--ink); letter-spacing: -0.5px;
   }
-  .nav-logo span { color: var(--accent); }
+  .nav-logo span { color: inherit; }
 
   .nav-links {
     display: flex; align-items: center; gap: 36px; list-style: none;
@@ -105,8 +105,8 @@
   .hero-bg {
     position: absolute; inset: 0;
     background:
-      radial-gradient(ellipse 60% 50% at 70% 40%, rgba(200,64,26,0.06) 0%, transparent 70%),
-      radial-gradient(ellipse 40% 60% at 20% 80%, rgba(196,146,10,0.05) 0%, transparent 60%);
+      radial-gradient(ellipse 60% 50% at 70% 40%, rgba(37,99,235,0.07) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 60% at 20% 80%, rgba(14,165,233,0.05) 0%, transparent 60%);
   }
 
   .hero-grid {
