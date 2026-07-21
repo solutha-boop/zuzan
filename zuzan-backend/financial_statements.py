@@ -254,10 +254,10 @@ def annual_financial_statements(
     ]
     total_depreciation = _r(sum(d.amount for d in dep_period))
 
-    # SA corporate tax (27%) — on profit before tax, i.e. after finance costs
+    # SA corporate tax (_CIT_RATE) — on profit before tax, i.e. after finance costs
     # (audit fix 2026-07-13; previously taxed EBIT with finance_costs stubbed 0.0)
     profit_before_tax = _r(ebit - finance_costs)
-    tax_expense = _r(max(0.0, profit_before_tax * 0.27))
+    tax_expense = _r(max(0.0, profit_before_tax * _CIT_RATE))
     net_profit  = _r(profit_before_tax - tax_expense)
 
     # Deferred tax from fixed-asset temporary differences (audit implementation
@@ -601,7 +601,7 @@ def annual_financial_statements(
     total_tax = _r(tax_expense + deferred_tax_expense)
     tax_note = {
         "profit_before_tax": _r(profit_before_tax),
-        "tax_rate_pct":      27.0,
+        "tax_rate_pct":      round(_CIT_RATE * 100, 2),
         "current_tax":       _r(tax_expense),
         "deferred_tax":      deferred_tax_expense,
         "total_tax":         total_tax,
@@ -638,7 +638,7 @@ def annual_financial_statements(
             "finance_costs":   finance_costs,
             "profit_before_tax": profit_before_tax,
             "tax_expense":     tax_expense,
-            "tax_rate_pct":    27.0,
+            "tax_rate_pct":    round(_CIT_RATE * 100, 2),
             "net_profit":      net_profit,
         },
         "balance_sheet": {
