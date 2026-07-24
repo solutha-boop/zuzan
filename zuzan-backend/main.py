@@ -316,7 +316,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -1144,20 +1144,20 @@ function renderTable(data) {
 }
 
 async function extendTrial(companyId, companyName, currentEnds) {
-  const daysStr = prompt(\`Extend trial for \${companyName}\\nCurrent trial ends: \${currentEnds||'unknown'}\\n\\nAdd how many days?\`, '14');
+  const daysStr = prompt('Extend trial for ' + companyName + '\nCurrent trial ends: ' + (currentEnds||'unknown') + '\n\nAdd how many days?', '14');
   if (!daysStr) return;
   const days = parseInt(daysStr);
   if (isNaN(days) || days < 1) { alert('Enter a valid number of days.'); return; }
   try {
-    const res = await fetch(\`/admin/api/clients/\${companyId}/extend-trial\`, {
+    const res = await fetch('/admin/api/clients/' + companyId + '/extend-trial', {
       method: 'POST',
       headers: { 'X-Admin-Secret': secret, 'Content-Type': 'application/json' },
       body: JSON.stringify({ days })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Failed');
-    alert(\`✓ Trial extended!\\n\${data.company} trial now ends \${data.trial_ends}\`);
-    loadClients(); // refresh the table
+    alert('Trial extended! ' + data.company + ' trial now ends ' + data.trial_ends);
+    loadClients();
   } catch(e) { alert('Error: ' + e.message); }
 }
 
