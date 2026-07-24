@@ -1,7 +1,23 @@
 // ZuZan App v2.1 — PO module: retry, draft, pay
 import { useState, useEffect, useRef } from "react";
+import * as Sentry from "@sentry/react";
 import * as XLSX from "xlsx";
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from "recharts";
+
+// ── Sentry error monitoring ────────────────────────────────────────────────────
+Sentry.init({
+  dsn: "https://4a7fc4a5cc7f0900e7c70acf636d638c@o4511737932021760.ingest.de.sentry.io/4511737981108304",
+  integrations: [Sentry.browserTracingIntegration()],
+  tracesSampleRate: 0.1,          // capture 10% of transactions for performance
+  environment: "production",
+  // Session Replay deliberately disabled — financial data privacy (POPIA)
+  replaysSessionSampleRate: 0,
+  replaysOnErrorSampleRate: 0,
+  beforeSend(event) {
+    if (window.location.hostname === "localhost") return null; // silence local dev noise
+    return event;
+  },
+});
 
 const C = {
   bg:"#FAF7F2", surface:"#FFFFFF", card:"#FDFCFA", border:"#E8E0D5",
@@ -106,8 +122,8 @@ function useLiveData() {
 }
 
 const PLANS = [
-  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Payroll (PAYE/UIF/SDL)","Bank feed (all SA banks)","Basic P&L report","Email support"] },
-  { id:"professional", name:"Professional", monthly:899,  annual:8990,  usdMonthly:49, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Double-entry general ledger","Trial balance & journal viewer","Balance sheet reconciliation","Advanced reports","Priority support"] },
+  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Payroll add-on (in-app, no 3rd party)","Bank feed (all SA banks)","Double-entry general ledger","Trial balance & journal viewer","Basic reports","Email support"] },
+  { id:"professional", name:"Professional", monthly:899,  annual:8990,  usdMonthly:49, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Balance sheet reconciliation","Purchase orders & inventory","Fixed assets & depreciation","Budgeting","Advanced reports & VAT201","Priority support"] },
   { id:"business",     name:"Business",     monthly:1499, annual:14990, usdMonthly:82, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Budgeting vs actuals","Cash flow forecast","Department budgets","API access","Dedicated account manager"] },
 ];
 
@@ -2231,6 +2247,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
                 ["Department",    employee.dept || "General"],
                 ...(employee.grade ? [["Grade / Pay Band", employee.grade]] : []),
                 ...(employee.employment_type ? [["Employment Type", employee.employment_type === "hourly" ? "Hourly" : "Salaried"]] : []),
+                ...(employee.security_grade ? [["Security Grade", `Grade ${employee.security_grade} — ${employee.security_area==="3"?"Area 3 (Rural)":"Area 1&2 (Urban)"}`]] : []),
+                ...(employee.psira_number ? [["PSIRA Registration", employee.psira_number]] : []),
               ].map(([l,v]) => (
                 <div key={l}>
                   <div style={{fontSize:10,color:C.inkMid,marginBottom:2}}>{l}</div>
@@ -2271,6 +2289,15 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
                   <span style={{color:C.inkMid}}>Taxable Gross (incl. OT)</span>
                   <span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span>
                 </div>
+              </>
+            )}
+            {/* NBCPSS security allowances — only rendered if present in payslip */}
+            {(p.night_shift_allowance > 0 || p.special_allowance_amount > 0 || p.cleaning_allowance > 0) && (
+              <>
+                {p.night_shift_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🌙 Night Shift Allowance ({p.night_shift_shifts} shifts × R8.00)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.night_shift_allowance)}</span></div>}
+                {p.special_allowance_amount > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🔒 Special Duty Allowance ({p.special_allowance_shifts} shifts × R10.50)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.special_allowance_amount)}</span></div>}
+                {p.cleaning_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🧹 Cleaning Allowance</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.cleaning_allowance)}</span></div>}
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}><span style={{color:C.inkMid}}>Taxable Gross (incl. Security Allowances)</span><span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span></div>
               </>
             )}
           </div>
@@ -2315,6 +2342,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               (p.medicalAidEmployer||p.medical_aid_employer_con) > 0 && ["Medical Aid (Employer Contribution)", p.medicalAidEmployer||p.medical_aid_employer_con, C.blue],
               ["UIF (Employer Contribution)", p.uifEmployer, C.blue],
               ["SDL (Skills Development Levy)", p.sdl, C.blue],
+              p.bc_levy_employer > 0 && ["NBCPSS BC Levy (Bargaining Council)", p.bc_levy_employer, "#c2410c"],
+              p.psira_levy_employer > 0 && ["PSIRA Registration Levy", p.psira_levy_employer, "#c2410c"],
             ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
@@ -2758,6 +2787,12 @@ function Payroll({live = {}, user = {}}) {
   const [emp201Data,    setEmp201Data]    = useState(null);
   const [emp201Loading, setEmp201Loading] = useState(false);
   const [emp201Period,  setEmp201Period]  = useState(new Date().toISOString().slice(0,7));
+  // Annual returns (IRP5 / EMP501)
+  const [annualView,    setAnnualView]    = useState("monthly"); // monthly | annual
+  const [irp5Data,      setIrp5Data]      = useState(null);
+  const [emp501Data,    setEmp501Data]    = useState(null);
+  const [annualLoading, setAnnualLoading] = useState(false);
+  const [annualTaxYear, setAnnualTaxYear] = useState(()=>{const n=new Date();return String(n.getMonth()>=2?n.getFullYear()+1:n.getFullYear());});
 
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
@@ -2789,7 +2824,8 @@ function Payroll({live = {}, user = {}}) {
   const [payrollRun, setPayrollRun] = useState(false);
   const [showOtModal, setShowOtModal] = useState(false);
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:""});
+  const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"1_2",shiftType:"day",specialAllowanceType:"none"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
@@ -2849,6 +2885,11 @@ function Payroll({live = {}, user = {}}) {
           medical_aid_employee:       form.medicalAidEmployee ? +form.medicalAidEmployee : 0,
           medical_aid_employer:       form.medicalAidEmployer ? +form.medicalAidEmployer : 0,
           medical_aid_dependants:     form.medicalAidDependants ? +form.medicalAidDependants : 0,
+          psira_number:               form.psiraNumber || null,
+          security_grade:             form.securityGrade || null,
+          security_area:              form.securityArea || "1_2",
+          shift_type:                 form.shiftType || "day",
+          special_allowance_type:     form.specialAllowanceType || "none",
         }),
       });
       if (live && live.reload) live.reload();
@@ -2919,6 +2960,11 @@ function Payroll({live = {}, user = {}}) {
             medical_aid_employee:       editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
             medical_aid_employer:       editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
             medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
+            psira_number:               editForm.psiraNumber || null,
+            security_grade:             editForm.securityGrade || null,
+            security_area:              editForm.securityArea || "1_2",
+            shift_type:                 editForm.shiftType || "day",
+            special_allowance_type:     editForm.specialAllowanceType || "none",
           }),
         });
         if (live && live.reload) live.reload();
@@ -2989,6 +3035,7 @@ function Payroll({live = {}, user = {}}) {
 
   // EMP201 / IRP5 sub-tab — confidential, behind PIN gate
   if (payrollSection === "emp201") {
+    // ── Monthly EMP201 helpers ─────────────────────────────────────────────
     const loadEmp201 = async () => {
       setEmp201Loading(true);
       try {
@@ -3005,9 +3052,214 @@ function Payroll({live = {}, user = {}}) {
     const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
     const dueDate   = e ? e.due_date : "7 "+new Date(nowD.getFullYear(),nowD.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
     const empList   = e ? e.employees : employees.map(emp=>{const p=calcPayroll(emp.salary||emp.gross_salary, taxYear);return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
+
+    // ── Annual IRP5 / EMP501 helpers ──────────────────────────────────────
+    const loadAnnual = async () => {
+      setAnnualLoading(true);
+      try {
+        const [irp5, e501] = await Promise.all([
+          api(`/payroll/irp5?tax_year=${annualTaxYear}`),
+          api(`/payroll/emp501?tax_year=${annualTaxYear}`),
+        ]);
+        setIrp5Data(irp5);
+        setEmp501Data(e501);
+      } catch(err) { /* silently keep old data */ }
+      setAnnualLoading(false);
+    };
+
+    // Inner view toggle
+    const InnerToggle = () => (
+      <div style={{display:"flex",gap:0,marginBottom:20,background:C.bg,borderRadius:8,border:"1px solid "+C.border,width:"fit-content"}}>
+        {[["monthly","Monthly EMP201"],["annual","Annual IRP5 / EMP501"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setAnnualView(v)}
+            style={{background:annualView===v?C.accent:"transparent",color:annualView===v?"#fff":C.inkMid,border:"none",borderRadius:7,padding:"7px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"all .15s"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+    );
+
+    // ── ANNUAL VIEW ────────────────────────────────────────────────────────
+    if (annualView === "annual") {
+      const irp5 = irp5Data;
+      const e501 = emp501Data;
+      const irp5Emps = irp5 ? irp5.employees : [];
+      return (
+        <div>
+          <SectionTabs/>
+          <InnerToggle/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+            <div>
+              <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Annual Returns — IRP5 &amp; EMP501</h2>
+              <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>
+                Tax Year {annualTaxYear}: {irp5?irp5.period_from:""} – {irp5?irp5.period_to:""}
+              </p>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <select value={annualTaxYear} onChange={ev=>{setAnnualTaxYear(ev.target.value);setIrp5Data(null);setEmp501Data(null);}}
+                style={{padding:"7px 12px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",fontWeight:700}}>
+                {[String(new Date().getFullYear()+2),String(new Date().getFullYear()+1),String(new Date().getFullYear()),String(new Date().getFullYear()-1)].map(y=>(
+                  <option key={y} value={y}>Tax Year {y}</option>
+                ))}
+              </select>
+              <button onClick={loadAnnual} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                {annualLoading?"Loading…":"Load"}
+              </button>
+              {irp5Emps.length>0 && (
+                <ExcelBtn filename={`irp5_${annualTaxYear}.csv`} data={irp5Emps.map(r=>({
+                  Employee:`${r.first_name} ${r.last_name}`, EmpNo:r.employee_number, IDNo:r.id_number, TaxNo:r.tax_number,
+                  Gross:r.gross_remuneration, "3601_Salary":r.code_3601_salary, "3713_MedFringe":r.code_3713_med_fringe,
+                  "3801_Overtime":r.code_3801_overtime, "4001_PAYE":r.code_4001_paye, "4002_UIF_Emp":r.code_4002_uif_employee,
+                  "4005_Pension":r.code_4005_pension, "MedTaxCredit":r.medical_tax_credit, NetPay:r.net_pay_annual,
+                  "4003_UIF_Empr":r.code_4003_uif_employer, "4474_SDL":r.code_4474_sdl, "7002_PensionEmpr":r.code_7002_pension_empr,
+                }))}/>
+              )}
+              {irp5Emps.length>0 && (
+                <button onClick={async()=>{
+                  try {
+                    const token = localStorage.getItem("zuzan_token");
+                    const res = await fetch(`https://zuzan-backend.onrender.com/payroll/easyfile-export?tax_year=${annualTaxYear}&mode=TEST`, {
+                      headers:{Authorization:`Bearer ${token}`}
+                    });
+                    if (!res.ok) { const e=await res.json(); alert("e@syFile export failed: "+(e.detail||res.status)); return; }
+                    const blob = await res.blob();
+                    const url  = URL.createObjectURL(blob);
+                    const a    = document.createElement("a");
+                    a.href = url; a.download = `easyfile_irp5_${annualTaxYear}_TEST.txt`; a.click();
+                    URL.revokeObjectURL(url);
+                  } catch(err) { alert("Download failed. Make sure PAYE Reference is saved in Settings → Company."); }
+                }} style={{background:"#1a7f37",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  ⬇ e@syFile Import (.txt)
+                </button>
+              )}
+              <PrintBtn onClick={()=>{const el=document.getElementById("annual-print");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
+            </div>
+          </div>
+
+          <div id="annual-print">
+            {/* EMP501 Summary */}
+            {e501 && (
+              <div style={{marginBottom:24}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:12}}>EMP501 — Employer Reconciliation Declaration</div>
+                <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+                  <KPI label="Total Employees"    value={e501.total_employees}            color={C.blue}   icon="👥" sub={`${e501.months_submitted} months submitted`}/>
+                  <KPI label="Total Remuneration" value={fmt(e501.total_gross_remuneration)} color={C.ink}    icon="💰" sub="Gross payroll for year"/>
+                  <KPI label="Total PAYE"         value={fmt(e501.total_paye)}            color={C.red}    icon="💼" sub="Income tax withheld"/>
+                  <KPI label="Total UIF"          value={fmt(e501.total_uif)}             color={C.gold}   icon="🛡️" sub="Emp + employer"/>
+                  <KPI label="Total SDL"          value={fmt(e501.total_sdl)}             color={C.blue}   icon="📚" sub="Skills levy"/>
+                  <KPI label="Total Due SARS"     value={fmt(e501.total_due_sars)}        color={C.accent} icon="🏛️" sub="PAYE + UIF + SDL"/>
+                </div>
+                {/* Monthly breakdown */}
+                <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:12,overflow:"hidden",marginBottom:20}}>
+                  <div style={{padding:"12px 18px",borderBottom:"1px solid "+C.border,fontSize:12,fontWeight:700,color:C.ink}}>Monthly EMP201 Reconciliation</div>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                    <thead>
+                      <tr style={{background:C.bg}}>
+                        {["Period","Employees","Gross","PAYE","UIF","SDL","Total SARS"].map(h=>(
+                          <th key={h} style={{padding:"9px 14px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {e501.monthly_breakdown.map((m,i)=>(
+                        <tr key={i} style={{borderBottom:"1px solid "+C.border+"20"}}>
+                          <td style={{padding:"9px 14px",fontWeight:600,color:C.ink}}>{m.period}</td>
+                          <td style={{padding:"9px 14px",color:C.inkMid}}>{m.employee_count}</td>
+                          <td style={{padding:"9px 14px"}}>{fmt(m.gross)}</td>
+                          <td style={{padding:"9px 14px",color:C.red}}>{fmt(m.paye)}</td>
+                          <td style={{padding:"9px 14px",color:C.gold}}>{fmt(m.uif)}</td>
+                          <td style={{padding:"9px 14px",color:C.blue}}>{fmt(m.sdl)}</td>
+                          <td style={{padding:"9px 14px",fontWeight:700}}>{fmt(m.paye+m.uif+m.sdl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
+                        <td colSpan={2} style={{padding:"9px 14px",fontWeight:800,color:C.ink}}>ANNUAL TOTAL</td>
+                        <td style={{padding:"9px 14px",fontWeight:800}}>{fmt(e501.total_gross_remuneration)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.red}}>{fmt(e501.total_paye)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.gold}}>{fmt(e501.total_uif)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.blue}}>{fmt(e501.total_sdl)}</td>
+                        <td style={{padding:"9px 14px",fontWeight:800,color:C.accent}}>{fmt(e501.total_due_sars)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <div style={{background:C.redLt,border:"1px solid "+C.red+"30",borderRadius:10,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:700,color:C.red}}>Submit EMP501 on SARS eFiling</div>
+                    <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>Interim reconciliation: Aug–Sep. Annual reconciliation: May–Jun. Use the figures above to complete your eFiling submission.</div>
+                  </div>
+                  <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling</a>
+                </div>
+              </div>
+            )}
+
+            {/* IRP5 per employee */}
+            <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,overflow:"hidden"}}>
+              <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink}}>IRP5 Employee Tax Certificates — Tax Year {annualTaxYear}</div>
+                <div style={{fontSize:11,color:C.inkMid}}>Give each employee their IRP5 by 31 May. Codes follow SARS IT3(a) format.</div>
+              </div>
+              {irp5Emps.length === 0 ? (
+                <div style={{padding:32,textAlign:"center",color:C.inkMid,fontSize:13}}>
+                  {irp5 ? "No payslips found for this tax year." : "Click Load to generate IRP5 certificates."}
+                </div>
+              ) : (
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                  <thead>
+                    <tr style={{background:C.bg}}>
+                      {["Employee","ID / Tax No","Months","3601 Salary","3713 Med Fringe","3801 OT","4001 PAYE","4002 UIF","4005 Pension","MTC","Net Pay (Annual)","4474 SDL*"].map(h=>(
+                        <th key={h} style={{padding:"9px 12px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:.4,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {irp5Emps.map((emp,i)=>(
+                      <tr key={i} style={{borderBottom:"1px solid "+C.border+"20"}}>
+                        <td style={{padding:"10px 12px",fontWeight:600,color:C.ink,whiteSpace:"nowrap"}}>{emp.first_name} {emp.last_name}</td>
+                        <td style={{padding:"10px 12px",color:C.inkMid,fontSize:10}}>{emp.id_number||"—"} / {emp.tax_number||"—"}</td>
+                        <td style={{padding:"10px 12px",textAlign:"center",color:C.inkMid}}>{emp.periods_count}</td>
+                        <td style={{padding:"10px 12px"}}>{fmt(emp.code_3601_salary)}</td>
+                        <td style={{padding:"10px 12px",color:emp.code_3713_med_fringe>0?C.gold:"inherit"}}>{fmt(emp.code_3713_med_fringe)}</td>
+                        <td style={{padding:"10px 12px",color:emp.code_3801_overtime>0?C.blue:"inherit"}}>{fmt(emp.code_3801_overtime)}</td>
+                        <td style={{padding:"10px 12px",color:C.red,fontWeight:600}}>{fmt(emp.code_4001_paye)}</td>
+                        <td style={{padding:"10px 12px",color:C.gold}}>{fmt(emp.code_4002_uif_employee)}</td>
+                        <td style={{padding:"10px 12px"}}>{fmt(emp.code_4005_pension)}</td>
+                        <td style={{padding:"10px 12px",color:C.green}}>{fmt(emp.medical_tax_credit)}</td>
+                        <td style={{padding:"10px 12px",fontWeight:700,color:C.green}}>{fmt(emp.net_pay_annual)}</td>
+                        <td style={{padding:"10px 12px",color:C.inkMid,fontSize:10}}>{fmt(emp.code_4474_sdl)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
+                      <td colSpan={3} style={{padding:"10px 12px",fontWeight:800,color:C.ink}}>TOTALS</td>
+                      <td style={{padding:"10px 12px",fontWeight:800}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3601_salary||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3713_med_fringe||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.blue}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3801_overtime||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.red}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4001_paye||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4002_uif_employee||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4005_pension||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.green}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.medical_tax_credit||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.green}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.net_pay_annual||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.inkMid}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4474_sdl||0),0))}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+            <p style={{fontSize:10,color:C.inkMid,marginTop:8}}>* SDL (code 4474) is an employer cost — shown for reconciliation, not deducted from employee net pay. MTC = Medical Tax Credit (s6A).</p>
+          </div>
+        </div>
+      );
+    }
+
+    // ── MONTHLY EMP201 VIEW ────────────────────────────────────────────────
     return (
       <div>
         <SectionTabs/>
+        <InnerToggle/>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
           <div>
             <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>EMP201 Monthly Employer Return</h2>
@@ -3038,7 +3290,7 @@ function Payroll({live = {}, user = {}}) {
             <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.red,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap"}}>Open eFiling</a>
           </div>
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,overflow:"hidden"}}>
-            <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,fontSize:13,fontWeight:700,color:C.ink}}>Employee Tax Certificates (IRP5)</div>
+            <div style={{padding:"14px 20px",borderBottom:"1px solid "+C.border,fontSize:13,fontWeight:700,color:C.ink}}>Employee Breakdown</div>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead>
                 <tr style={{background:C.bg,borderBottom:"1px solid "+C.border}}>
@@ -3132,7 +3384,7 @@ function Payroll({live = {}, user = {}}) {
         <div style={{position:"fixed",inset:0,background:"#00000070",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:760,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px #00000030"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — Overtime Entry</h3>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {user?.industry==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
             <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
@@ -3205,7 +3457,10 @@ function Payroll({live = {}, user = {}}) {
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:20}}>
               <thead>
                 <tr style={{background:C.bg}}>
-                  {["Employee","Grade","BCEA Hourly Rate","Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview"].map(h=>(
+                  {[
+                    "Employee","Grade","BCEA Hourly Rate","Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview",
+                    ...(user?.industry==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
+                  ].map(h=>(
                     <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
                   ))}
                 </tr>
@@ -3239,6 +3494,24 @@ function Payroll({live = {}, user = {}}) {
                       <td style={{padding:"10px 12px",fontWeight:700,color:preview.total>0?C.green:C.inkMid}}>
                         {preview.total > 0 ? `+ ${fmt(preview.total)}` : "—"}
                       </td>
+                      {user?.industry==="private_security" && (()=>{
+                        const sec = secData[emp.id] || {nightShifts:0,specialShifts:0};
+                        const setSec = (k,v) => setSecData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
+                        const nightPrev = (+sec.nightShifts||0) * 8.00;
+                        const specPrev  = (+sec.specialShifts||0) * 10.50;
+                        const secTotal  = nightPrev + specPrev + (emp.security_grade ? 32.00 : 0);
+                        return (<>
+                          <td style={{padding:"10px 12px"}}>
+                            <input style={inpStyle} type="number" min="0" step="1" value={sec.nightShifts||""} placeholder="0" onChange={e=>setSec("nightShifts",e.target.value)}/>
+                          </td>
+                          <td style={{padding:"10px 12px"}}>
+                            <input style={inpStyle} type="number" min="0" step="1" value={sec.specialShifts||""} placeholder="0" onChange={e=>setSec("specialShifts",e.target.value)}/>
+                          </td>
+                          <td style={{padding:"10px 12px",fontWeight:700,color:secTotal>0?"#c2410c":C.inkMid}}>
+                            {secTotal > 0 ? `+ ${fmt(secTotal)}` : "—"}
+                          </td>
+                        </>);
+                      })()}
                     </tr>
                   );
                 })}
@@ -3253,7 +3526,11 @@ function Payroll({live = {}, user = {}}) {
                     const ot = otData[emp.id] || {};
                     return { employee_id: emp.id, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
                   }).filter(e => e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
-                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload})});
+                  const secPayload = employees.map(emp => {
+                    const sec = secData[emp.id] || {};
+                    return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0 };
+                  }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0);
+                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload})});
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); }
                 setPayrollRun(true);
@@ -3493,6 +3770,68 @@ function Payroll({live = {}, user = {}}) {
             );
           })()}
 
+          {/* NBCPSS Private Security Section — only shown for private_security industry */}
+          {user?.industry === "private_security" && (()=>{
+            const NBCPSS_MIN = {"1_2":{"A":8184,"B":7607,"C":7003,"D":7003,"E":7003},"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
+            const minWage = NBCPSS_MIN[form.securityArea||"1_2"]?.[form.securityGrade] || 0;
+            const belowMin = form.salary && form.securityGrade && +form.salary < minWage;
+            return (
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#c2410c",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🔒 NBCPSS — Private Security Sector (1 Mar 2026 – 28 Feb 2027)</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:8}}>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>PSIRA Number</label>
+                    <input placeholder="e.g. 1234567890" value={form.psiraNumber} onChange={e=>setForm(v=>({...v,psiraNumber:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Security Grade</label>
+                    <select value={form.securityGrade} onChange={e=>{const g=e.target.value;setForm(v=>({...v,securityGrade:g,pensionEmployeePct:g?"7.5":v.pensionEmployeePct,pensionEmployerPct:g?"7.5":v.pensionEmployerPct}));}} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="">-- Select --</option>
+                      <option value="A">Grade A — Armed/Supervisory</option>
+                      <option value="B">Grade B — Armed Response/Supervisor</option>
+                      <option value="C">Grade C — Armed Guard</option>
+                      <option value="D">Grade D — Unarmed/Access Control</option>
+                      <option value="E">Grade E — Entry Level/Car Guard</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Area</label>
+                    <select value={form.securityArea||"1_2"} onChange={e=>setForm(v=>({...v,securityArea:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="1_2">Area 1 & 2 — Metro / Urban</option>
+                      <option value="3">Area 3 — Rural / All other districts</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Shift Type</label>
+                    <select value={form.shiftType||"day"} onChange={e=>setForm(v=>({...v,shiftType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="day">Day Shift</option>
+                      <option value="night">Night Shift (R8.00/shift allowance)</option>
+                      <option value="rotating">Rotating (Day &amp; Night)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Special Allowance</label>
+                    <select value={form.specialAllowanceType||"none"} onChange={e=>setForm(v=>({...v,specialAllowanceType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="none">None</option>
+                      <option value="armed">Armed Security Officer (R10.50/shift)</option>
+                      <option value="armed_response">Armed Response Officer (R10.50/shift)</option>
+                      <option value="nkp">National Key Point Officer (R10.50/shift)</option>
+                      <option value="control_centre">Control/Comm Centre Operator (R10.50/shift)</option>
+                      <option value="canine">Canine / Dog Handler (R10.50/shift)</option>
+                      <option value="mobile_supervisor">Mobile Supervisor (R10.50/shift)</option>
+                    </select>
+                  </div>
+                </div>
+                {form.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12}}>
+                  {belowMin
+                    ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+form.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {form.securityGrade} in {form.securityArea==="3"?"Area 3 (rural)":"Area 1&2 (urban)"}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
+                    : <span style={{color:"#166534"}}>✓ Salary meets NBCPSS minimum for Grade {form.securityGrade}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Cleaning allowance (R32/mo), BC levy (R9.40/mo) and PSIRA fee (R5.00/mo) will be applied automatically. Provident fund set to 7.5% each.</span>
+                  }
+                </div>}
+              </div>
+            );
+          })()}
+
           {/* Bank Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:20}}>
@@ -3541,7 +3880,16 @@ function Payroll({live = {}, user = {}}) {
               const p = calcPayroll(emp.salary, taxYear);
               return (
                 <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
-                  <td style={{padding:"13px 14px"}}><div style={{fontWeight:600,color:C.ink}}>{emp.name}</div><div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div></td>
+                  <td style={{padding:"13px 14px"}}>
+                    <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
+                    <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
+                    {user?.industry==="private_security" && emp.security_grade && (()=>{
+                      const NBCPSS_MIN={"1_2":{"A":8184,"B":7607,"C":7003,"D":7003,"E":7003},"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
+                      const minW=NBCPSS_MIN[emp.security_area||"1_2"]?.[emp.security_grade]||0;
+                      const below=minW>0&&emp.salary<minW;
+                      return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#166534",fontWeight:600}}>{below?`⚠️ Below NBCPSS min (R${minW.toLocaleString("en-ZA")})`:`🔒 Grade ${emp.security_grade} · R${minW.toLocaleString("en-ZA")} min`}</div>;
+                    })()}
+                  </td>
                   <td style={{padding:"13px 14px"}}>{emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid,fontSize:11}}>—</span>}</td>
                   <td style={{padding:"13px 14px",color:C.inkMid}}>{emp.position}</td>
                   <td style={{padding:"13px 14px"}}><Badge label={emp.dept||"General"} color={C.blue} bg={C.blueLt}/></td>
@@ -3553,7 +3901,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : ""});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"1_2",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                     </div>
                   </td>
@@ -3580,6 +3928,7 @@ function Payroll({live = {}, user = {}}) {
         UIF: 1% employee + 1% employer · Capped at R17,712/month · Overtime excluded from UIF base<br/>
         SDL: 1% of gross payroll · Payable if annual payroll ≥ R500,000<br/>
         <strong style={{color:C.ink}}>BCEA Overtime (s9/s10/s16/s18):</strong> Normal week = 45 hrs · OT max 10 hrs/week · Weekday/Sat OT = 1.5× · Sunday = 2× · Public holiday = 2× · Hourly rate derived from salary ÷ 195 hrs/month
+        {user?.industry==="private_security" && <><br/><strong style={{color:"#c2410c"}}>🔒 NBCPSS (1 Mar 2026 – 28 Feb 2027):</strong> Night shift R8.00/shift · Special allowance R10.50/shift · Cleaning R32.00/month · BC levy R9.40/month (employer) · PSIRA fee R5.00/month (employer) · PSSPF 7.5% each · All allowances are taxable income.</>}
       </div>
 
       {viewPayslip && (
@@ -3761,6 +4110,68 @@ function Payroll({live = {}, user = {}}) {
                       ⚠️ {fmt(p.s11fExcessMonthly)}/month above s11F cap — deducted from after-tax income (contribution is still processed in full, no additional PAYE relief on the excess).
                     </div>
                   )}
+                </div>
+              );
+            })()}
+
+            {/* NBCPSS Private Security Section — edit employee */}
+            {user?.industry === "private_security" && (()=>{
+              const NBCPSS_MIN = {"1_2":{"A":8184,"B":7607,"C":7003,"D":7003,"E":7003},"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
+              const minWage = NBCPSS_MIN[editForm.securityArea||"1_2"]?.[editForm.securityGrade] || 0;
+              const belowMin = editForm.salary && editForm.securityGrade && +editForm.salary < minWage;
+              return (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#c2410c",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🔒 NBCPSS — Private Security Sector (1 Mar 2026 – 28 Feb 2027)</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:8}}>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>PSIRA Number</label>
+                      <input placeholder="e.g. 1234567890" value={editForm.psiraNumber||""} onChange={e=>setEditForm(v=>({...v,psiraNumber:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Security Grade</label>
+                      <select value={editForm.securityGrade||""} onChange={e=>{const g=e.target.value;setEditForm(v=>({...v,securityGrade:g,pensionEmployeePct:g?"7.5":v.pensionEmployeePct,pensionEmployerPct:g?"7.5":v.pensionEmployerPct}));}} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="">-- Select --</option>
+                        <option value="A">Grade A — Armed/Supervisory</option>
+                        <option value="B">Grade B — Armed Response/Supervisor</option>
+                        <option value="C">Grade C — Armed Guard</option>
+                        <option value="D">Grade D — Unarmed/Access Control</option>
+                        <option value="E">Grade E — Entry Level/Car Guard</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Area</label>
+                      <select value={editForm.securityArea||"1_2"} onChange={e=>setEditForm(v=>({...v,securityArea:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="1_2">Area 1 & 2 — Metro / Urban</option>
+                        <option value="3">Area 3 — Rural / All other districts</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Shift Type</label>
+                      <select value={editForm.shiftType||"day"} onChange={e=>setEditForm(v=>({...v,shiftType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="day">Day Shift</option>
+                        <option value="night">Night Shift (R8.00/shift allowance)</option>
+                        <option value="rotating">Rotating (Day &amp; Night)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Special Allowance</label>
+                      <select value={editForm.specialAllowanceType||"none"} onChange={e=>setEditForm(v=>({...v,specialAllowanceType:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="none">None</option>
+                        <option value="armed">Armed Security Officer (R10.50/shift)</option>
+                        <option value="armed_response">Armed Response Officer (R10.50/shift)</option>
+                        <option value="nkp">National Key Point Officer (R10.50/shift)</option>
+                        <option value="control_centre">Control/Comm Centre Operator (R10.50/shift)</option>
+                        <option value="canine">Canine / Dog Handler (R10.50/shift)</option>
+                        <option value="mobile_supervisor">Mobile Supervisor (R10.50/shift)</option>
+                      </select>
+                    </div>
+                  </div>
+                  {editForm.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12,marginBottom:8}}>
+                    {belowMin
+                      ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+editForm.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {editForm.securityGrade} in {editForm.securityArea==="3"?"Area 3 (rural)":"Area 1&2 (urban)"}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
+                      : <span style={{color:"#166534"}}>✓ Salary meets NBCPSS minimum for Grade {editForm.securityGrade}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Cleaning allowance (R32/mo), BC levy (R9.40/mo) and PSIRA fee (R5.00/mo) will be applied automatically. Provident fund set to 7.5% each.</span>
+                    }
+                  </div>}
                 </div>
               );
             })()}
@@ -7268,7 +7679,7 @@ function TeamSettings({user}) {
 }
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
-function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange}) {
+function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange, onNavigate}) {
   const [settingsTab, setSettingsTab] = useState("subscription");
   const [form, setForm] = useState({
     companyName:          user?.companyName          || "",
@@ -7284,9 +7695,18 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     payfastPassphrase:    user?.payfastPassphrase    || "",
     logoUrl:              user?.logoUrl              || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
+    // SARS e@syFile fields
+    payeRef:     "",
+    sdlRef:      "",
+    uifRef:      "",
+    sic7Code:    "",
+    contactName: "",
   });
   const [saved, setSaved] = useState(false);
   const [subInfo, setSubInfo] = useState({status: user?.subscriptionStatus || "trial", trialEnds: user?.trialEnds || null});
+  const [showPayrollForm, setShowPayrollForm] = useState(false);
+  const [payrollEmpCount, setPayrollEmpCount] = useState(5);
+  const [activatingPayroll, setActivatingPayroll] = useState(false);
 
   // Pre-fill Settings form from API on mount so credentials persist across logins
   useEffect(() => {
@@ -7305,6 +7725,11 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         payfastPassphrase:    data.payfast_passphrase   || f.payfastPassphrase,
         logoUrl:              data.logo_url          || f.logoUrl,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
+        payeRef:     data.paye_ref     || f.payeRef,
+        sdlRef:      data.sdl_ref      || f.sdlRef,
+        uifRef:      data.uif_ref      || f.uifRef,
+        sic7Code:    data.sic7_code    || f.sic7Code,
+        contactName: data.contact_name || f.contactName,
       }));
       setSubInfo({status: data.subscription_status, trialEnds: data.trial_ends, plan: data.plan, billingCycle: data.billing_cycle});
     }).catch(() => {});
@@ -7362,6 +7787,11 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         payfast_merchant_id:    form.payfastMerchantId  || null,
         payfast_merchant_key:   form.payfastMerchantKey || null,
         payfast_passphrase:     form.payfastPassphrase  || null,
+        paye_ref:     form.payeRef     || null,
+        sdl_ref:      form.sdlRef      || null,
+        uif_ref:      form.uifRef      || null,
+        sic7_code:    form.sic7Code    || null,
+        contact_name: form.contactName || null,
       })});
     } catch(e) { console.warn("Settings save failed:", e.message); }
     // Update local user context
@@ -7518,7 +7948,33 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
             {user?.payrollEnabled
               ? <span style={{padding:"7px 16px",background:C.green,color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
-              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true})});if(onUserUpdate)onUserUpdate({...user,payrollEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Payroll</button>
+              : showPayrollForm
+                ? <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div>
+                      <div style={{fontSize:11,color:C.inkMid,marginBottom:4}}>Employees</div>
+                      <input type="number" min={1} max={500} value={payrollEmpCount} onChange={e=>setPayrollEmpCount(+e.target.value)} style={{width:70,padding:"8px 10px",border:`1.5px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",textAlign:"center"}}/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,color:C.inkMid,marginBottom:4}}>Cost/mo</div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,payrollEmpCount*34)}</div>
+                    </div>
+                    <button
+                      disabled={activatingPayroll}
+                      onClick={async()=>{
+                        setActivatingPayroll(true);
+                        try{
+                          await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:true,payroll_employees:payrollEmpCount})});
+                          if(onUserUpdate)onUserUpdate({...user,payrollEnabled:true,payrollEmployees:payrollEmpCount});
+                          setShowPayrollForm(false);
+                        }catch(e){alert("Could not activate payroll.");}
+                        setActivatingPayroll(false);
+                      }}
+                      style={{padding:"9px 16px",background:activatingPayroll?C.inkDim:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                      {activatingPayroll?"Activating…":"Confirm"}
+                    </button>
+                    <button onClick={()=>setShowPayrollForm(false)} style={{padding:"9px 12px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+                  </div>
+                : <button onClick={()=>setShowPayrollForm(true)} style={{padding:"9px 20px",background:C.green,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Payroll</button>
             }
           </div>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 20px",border:`1px solid ${user?.afsEnabled?"#7C3AED":C.border}`,borderRadius:12,background:user?.afsEnabled?"#F5F3FF":C.bg}}>
@@ -7530,10 +7986,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}><strong style={{color:C.ink}}>R1,999/year</strong> — IFRS-compliant, ready for your accountant</div>
               </div>
             </div>
-            {user?.afsEnabled
-              ? <span style={{padding:"7px 16px",background:"#7C3AED",color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
-              : <button onClick={async()=>{try{await api("/companies/me",{method:"PUT",body:JSON.stringify({afs_enabled:true})});if(onUserUpdate)onUserUpdate({...user,afsEnabled:true});}catch(e){alert("Could not activate.");}}} style={{padding:"9px 20px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add AFS — R1,999/yr</button>
-            }
+            <button onClick={()=>onNavigate&&onNavigate("fin_statements")} style={{padding:"9px 20px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Open AFS →</button>
           </div>
         </div>
       </div>
@@ -7568,12 +8021,32 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:20}}>Company Details</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
-          {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"Industry",k:"industry"},{l:"VAT Number",k:"vatNumber"},{l:"CIPC Registration Date",k:"cipcRegistrationDate",type:"date",hint:"Used for Annual Return reminders"}].map(f=>(
+          {[{l:"Company Name",k:"companyName"},{l:"Registration Number",k:"regNumber"},{l:"VAT Number",k:"vatNumber"},{l:"CIPC Registration Date",k:"cipcRegistrationDate",type:"date",hint:"Used for Annual Return reminders"}].map(f=>(
             <div key={f.k}>
               <label style={labelStyle}>{f.l}{f.hint&&<span style={{fontWeight:400,textTransform:"none",color:C.inkDim,marginLeft:6}}>{f.hint}</span>}</label>
               <input type={f.type||"text"} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
             </div>
           ))}
+          <div>
+            <label style={labelStyle}>Industry</label>
+            <select value={form.industry||""} onChange={e=>setForm(v=>({...v,industry:e.target.value}))} style={inputStyle}>
+              <option value="">General</option>
+              <option value="private_security">Private Security (NBCPSS)</option>
+              <option value="construction">Construction</option>
+              <option value="retail">Retail</option>
+              <option value="hospitality">Hospitality</option>
+              <option value="transport">Transport &amp; Logistics</option>
+              <option value="healthcare">Healthcare</option>
+              <option value="agriculture">Agriculture</option>
+              <option value="mining">Mining</option>
+              <option value="manufacturing">Manufacturing</option>
+              <option value="financial_services">Financial Services</option>
+              <option value="it_technology">IT &amp; Technology</option>
+              <option value="professional_services">Professional Services</option>
+              <option value="other">Other</option>
+            </select>
+            {form.industry==="private_security" && <div style={{marginTop:6,padding:"8px 12px",background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,fontSize:12,color:"#c2410c"}}>🔒 NBCPSS mode active — payroll enforces National Bargaining Council for the Private Security Sector requirements (minimum wages, allowances, levies). Rates effective 1 March 2026 – 28 February 2027.</div>}
+          </div>
         </div>
 
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Banking Details <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(shown on invoices)</span></div>
@@ -7602,6 +8075,26 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         <div style={{background:C.goldLt,borderRadius:10,padding:"12px 16px",marginBottom:20,fontSize:12,color:C.inkMid}}>
           Get your credentials at <strong>payfast.co.za → Account → Settings → API Credentials</strong>. Each client uses their own PayFast account — Zuzan never touches your funds.
         </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>SARS Returns <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(IRP5 / EMP501 / e@syFile export)</span></div>
+        <div style={{background:C.accentLt,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:12,color:C.inkMid}}>
+          Required to generate e@syFile-compatible IRP5 import files. PAYE Reference is mandatory — SDL and UIF refs only needed if registered. SIC7 code: your industry classification (e.g. <strong>85100</strong> for accounting). Contact name appears on the EMP501.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+          {[
+            {l:"PAYE Reference Number",k:"payeRef",  p:"7000000000",   hint:"10 digits, starts with 7 — mandatory"},
+            {l:"Contact Name (SARS)",   k:"contactName",p:"Jane Smith",hint:"Person responsible for payroll"},
+            {l:"SDL Reference Number",  k:"sdlRef",   p:"L000000000",   hint:"Starts with L — if registered"},
+            {l:"UIF Reference Number",  k:"uifRef",   p:"U000000000",   hint:"Starts with U — if registered"},
+            {l:"SIC7 Industry Code",    k:"sic7Code", p:"85100",        hint:"5-char SARS industry code"},
+          ].map(f=>(
+            <div key={f.k}>
+              <label style={labelStyle}>{f.l} <span style={{fontWeight:400,textTransform:"none",color:C.inkDim}}>{f.hint}</span></label>
+              <input placeholder={f.p} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
+            </div>
+          ))}
+        </div>
+
         <div style={{display:"flex",alignItems:"center",gap:14}}>
           <button onClick={handleSave} style={{padding:"11px 26px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
           {saved && <span style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Saved</span>}
@@ -7985,7 +8478,8 @@ function Registration({onComplete, onLogin}) {
   const [payrollEnabled, setPayroll] = useState(false);
   const [empCount, setEmpCount] = useState(5);
   const [form, setForm] = useState({companyName:"",regNumber:"",industry:"",firstName:"",lastName:"",email:"",phone:"",password:"",confirm:""});
-  const [payment, setPayment] = useState({cardNumber:"",expiry:"",cvv:"",cardName:""});
+  const [mandate, setMandate] = useState({accountHolder:"",bank:"",accountNumber:"",branchCode:"",accountType:"current",collectionDay:"1",signedName:"",mandateAccepted:false});
+  const SA_BANK_BRANCHES = {"FNB":"250655","ABSA":"632005","Standard Bank":"051001","Nedbank":"198765","Capitec":"470010","African Bank":"430000","Investec":"580105","TymeBank":"678910","Discovery Bank":"679000","Bidvest":"462005"};
   const [processing, setProcessing] = useState(false);
   const [complete, setComplete] = useState(false);
   const [tcAccepted, setTcAccepted] = useState(false);
@@ -8037,12 +8531,20 @@ function Registration({onComplete, onLogin}) {
           first_name:      form.firstName.trim(),
           last_name:       form.lastName.trim(),
           email:           form.email.trim(),
-          phone:           form.phone.trim(),
-          password:        form.password.slice(0, 50),
-          plan:            selectedPlan.id,
-          billing_cycle:   billing,
-          payroll_enabled: payrollEnabled,
-          employee_count:  empCount,
+          phone:                   form.phone.trim(),
+          password:                form.password.slice(0, 50),
+          plan:                    selectedPlan.id,
+          billing_cycle:           billing,
+          payroll_enabled:         payrollEnabled,
+          employee_count:          empCount,
+          mandate_account_holder:  mandate.accountHolder || `${form.firstName} ${form.lastName}`.trim(),
+          mandate_bank:            mandate.bank,
+          mandate_account_number:  mandate.accountNumber,
+          mandate_branch_code:     mandate.branchCode,
+          mandate_account_type:    mandate.accountType,
+          mandate_collection_day:  mandate.collectionDay,
+          mandate_signed_name:     mandate.signedName,
+          mandate_signed:          mandate.mandateAccepted,
         }),
       });
       const data = await res.json();
@@ -8208,29 +8710,95 @@ function Registration({onComplete, onLogin}) {
         )}
         {step === 3 && (
           <div style={{maxWidth:560,margin:"0 auto"}}>
-            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:6}}>Payment details</h1>
-            <p style={{color:C.inkMid,fontSize:15,marginBottom:24}}>14-day free trial. No charge until trial ends.</p>
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Order Summary</div>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>{selectedPlan ? selectedPlan.name : ""} Plan ({billing})</span><span style={{fontWeight:600}}>{fmt(planPrice)}/mo</span></div>
-              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R34)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
-              <div style={{borderTop:`1px solid ${C.border}`,marginTop:12,paddingTop:12,display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
+            <h1 style={{fontFamily:"serif",fontSize:34,color:C.ink,marginBottom:6}}>Debit order mandate</h1>
+            <p style={{color:C.inkMid,fontSize:15,marginBottom:24}}>Your subscription will be collected monthly after your 14-day free trial.</p>
+
+            {/* Order summary */}
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:20,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12}}>Order Summary</div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:14}}><span style={{color:C.inkMid}}>{selectedPlan ? selectedPlan.name : ""} Plan ({billing})</span><span style={{fontWeight:600}}>{fmt(planPrice)}/mo</span></div>
+              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R34)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
+              <div style={{borderTop:`1px solid ${C.border}`,marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
             </div>
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
-              <div style={{textAlign:"center",padding:"8px 0 4px"}}>
-                <div style={{fontSize:44,marginBottom:12}}>🎉</div>
-                <div style={{fontSize:20,fontWeight:800,color:C.ink,marginBottom:10}}>No card required</div>
-                <div style={{fontSize:14,color:C.inkMid,marginBottom:20,lineHeight:1.6}}>Start your 14-day free trial — no payment details needed. We'll email you before your trial ends with a link to subscribe.</div>
-                <div style={{display:"flex",flexDirection:"column",gap:8,textAlign:"left"}}>
-                  {["✅ Full access to all features during your trial","✅ No card collected until you choose to subscribe","✅ Cancel anytime — no questions asked","✅ Email reminder 3 days before trial expires"].map(item=>(
-                    <div key={item} style={{fontSize:13,color:C.ink,padding:"10px 14px",background:C.greenLt,borderRadius:8}}>{item}</div>
-                  ))}
+
+            {/* Bank account details */}
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Bank Account Details</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+
+                <div style={{gridColumn:"1/-1"}}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Holder Name</label>
+                  <input value={mandate.accountHolder} onChange={e=>setMandate({...mandate,accountHolder:e.target.value})} placeholder={`${form.firstName} ${form.lastName}`} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+
+                <div style={{gridColumn:"1/-1"}}>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Bank</label>
+                  <select value={mandate.bank} onChange={e=>{const b=e.target.value;setMandate({...mandate,bank:b,branchCode:SA_BANK_BRANCHES[b]||"",});}} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                    <option value="">Select bank…</option>
+                    {Object.keys(SA_BANK_BRANCHES).map(b=><option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Number</label>
+                  <input value={mandate.accountNumber} onChange={e=>setMandate({...mandate,accountNumber:e.target.value})} placeholder="e.g. 62012345678" style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Branch Code</label>
+                  <input value={mandate.branchCode} onChange={e=>setMandate({...mandate,branchCode:e.target.value})} placeholder="Auto-filled" style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:mandate.branchCode?C.ink:C.inkDim,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Account Type</label>
+                  <select value={mandate.accountType} onChange={e=>setMandate({...mandate,accountType:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                    <option value="current">Current / Cheque</option>
+                    <option value="savings">Savings</option>
+                    <option value="transmission">Transmission</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Collection Day</label>
+                  <select value={mandate.collectionDay} onChange={e=>setMandate({...mandate,collectionDay:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                    <option value="1">1st of the month</option>
+                    <option value="15">15th of the month</option>
+                    <option value="25">25th of the month</option>
+                    <option value="last">Last day of the month</option>
+                  </select>
                 </div>
               </div>
             </div>
+
+            {/* Authorisation */}
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:24,marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Authorisation</div>
+              <p style={{fontSize:13,color:C.inkMid,lineHeight:1.7,marginBottom:16}}>
+                I authorise <strong>Solutha (Pty) Ltd (ZuZan)</strong> to debit the above account on the selected day each month for my ZuZan subscription. This authority remains in force until cancelled in writing. I will receive 20 days' notice of any change to the debit amount.
+              </p>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Full Name (e-signature)</label>
+                <input value={mandate.signedName} onChange={e=>setMandate({...mandate,signedName:e.target.value})} placeholder="Type your full name to sign" style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${mandate.signedName?C.accent:C.border}`,borderRadius:10,fontSize:13,fontFamily:"serif",fontStyle:"italic",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+              <label style={{display:"flex",alignItems:"flex-start",gap:12,cursor:"pointer"}}>
+                <input type="checkbox" checked={mandate.mandateAccepted} onChange={e=>setMandate({...mandate,mandateAccepted:e.target.checked})} style={{marginTop:2,width:16,height:16,accentColor:C.accent,flexShrink:0}}/>
+                <span style={{fontSize:12,color:C.inkMid,lineHeight:1.7}}>I confirm that I am authorised to sign this debit order mandate on behalf of <strong>{form.companyName || "my company"}</strong> and that the banking details above are correct. A signed mandate PDF will be emailed to me for my records.</span>
+              </label>
+            </div>
+
             <div style={{display:"flex",gap:12}}>
               <button onClick={() => setStep(2)} style={{flex:1,padding:"13px",border:`1.5px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-              <button onClick={() => setStep(4)} style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Review Order</button>
+              <button
+                onClick={() => {
+                  if (!mandate.bank || !mandate.accountNumber || !mandate.signedName || !mandate.mandateAccepted) {
+                    alert("Please complete all mandate fields and sign to continue.");
+                    return;
+                  }
+                  setStep(4);
+                }}
+                style={{flex:2,padding:"13px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Review &amp; Confirm
+              </button>
             </div>
           </div>
         )}
@@ -8246,6 +8814,7 @@ function Registration({onComplete, onLogin}) {
                 {label:"Payroll",value:payrollEnabled ? `${empCount} employees x R34 = ${fmt(payrollCost)}/mo` : "Not included"},
                 {label:"Trial Period",value:"14 days FREE"},
                 {label:"First Charge",value:`${fmt(totalMonthly)}/month after trial`},
+                {label:"Debit Order",value:mandate.bank ? `${mandate.bank} · ****${mandate.accountNumber.slice(-4)} · ${{"1":"1st","15":"15th","25":"25th","last":"Last day"}[mandate.collectionDay]||mandate.collectionDay} of month` : "Not provided"},
               ].map((r,i) => (
                 <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"11px 0",borderBottom:i<6?`1px solid ${C.border}30`:"none",fontSize:13}}>
                   <span style={{color:C.inkMid}}>{r.label}</span>
@@ -10629,6 +11198,72 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
   );
 }
 
+// ── AFS PAYMENT GATE ─────────────────────────────────────────────────────────
+function AfsPaymentGate() {
+  const now = new Date();
+  // SA financial year ends in February — FY label = the year containing February
+  const fy = now.getMonth() < 2 ? now.getFullYear() : now.getFullYear() + 1;
+  const [status, setStatus] = useState(null); // null=loading, true=paid, false=not paid
+  const [paying, setPaying]  = useState(false);
+  const [error,  setError]   = useState("");
+
+  useEffect(() => {
+    api(`/billing/afs-status?year=${fy}`)
+      .then(d => setStatus(d.paid))
+      .catch(() => setStatus(false));
+  }, [fy]);
+
+  const handleUnlock = async () => {
+    setPaying(true); setError("");
+    try {
+      const res = await api("/billing/afs-initiate", {
+        method: "POST",
+        body: JSON.stringify({financial_year: fy}),
+      });
+      pfSubmit(res.payfast_url, res.payfast_data);
+    } catch(e) {
+      setError(e.message || "Payment failed — please try again.");
+      setPaying(false);
+    }
+  };
+
+  if (status === null) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:300}}>
+      <div style={{color:C.inkMid,fontSize:14}}>Checking AFS status…</div>
+    </div>
+  );
+
+  if (status === true) return <FinancialStatements/>;
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:480,padding:40,textAlign:"center"}}>
+      <div style={{fontSize:56,marginBottom:20}}>📑</div>
+      <h2 style={{fontFamily:"serif",fontSize:28,color:C.ink,margin:"0 0 12px"}}>Annual Financial Statements</h2>
+      <p style={{fontSize:14,color:C.inkMid,maxWidth:460,lineHeight:1.7,margin:"0 0 8px"}}>
+        Generate IFRS-compliant AFS for <strong>FY{fy}</strong> — Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
+      </p>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:"20px 32px",margin:"24px 0",display:"inline-block"}}>
+        <div style={{fontSize:13,color:C.inkMid,marginBottom:4}}>Once-off fee for FY{fy}</div>
+        <div style={{fontSize:36,fontWeight:800,color:C.accent}}>R1,999</div>
+        <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Unlocks AFS for the full {fy} financial year</div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:28,textAlign:"left",maxWidth:360}}>
+        {["✅ Income Statement","✅ Balance Sheet","✅ Cash Flow Statement","✅ Statement of Changes in Equity","✅ IFRS-compliant notes","✅ PDF download ready"].map(f=>(
+          <div key={f} style={{fontSize:13,color:C.ink,padding:"8px 14px",background:C.greenLt,borderRadius:8}}>{f}</div>
+        ))}
+      </div>
+      {error && <div style={{color:C.red,fontSize:13,marginBottom:12}}>{error}</div>}
+      <button
+        onClick={handleUnlock}
+        disabled={paying}
+        style={{background:paying?C.inkDim:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"15px 40px",fontSize:16,fontWeight:700,cursor:paying?"not-allowed":"pointer",fontFamily:"inherit"}}>
+        {paying ? "Redirecting to payment…" : `Unlock AFS for FY${fy} — R1,999`}
+      </button>
+      <p style={{fontSize:11,color:C.inkDim,marginTop:12}}>Secure payment via PayFast · Instant unlock on payment confirmation</p>
+    </div>
+  );
+}
+
 // ── ANNUAL FINANCIAL STATEMENTS ───────────────────────────────────────────────
 function FinancialStatements() {
   const now   = new Date();
@@ -11886,6 +12521,43 @@ function DocumentRepository() {
   );
 }
 
+// ── PLAN FEATURE GATING ───────────────────────────────────────────────────────
+const PLAN_LEVEL = { starter: 1, professional: 2, business: 3 };
+const PLAN_LABEL = { professional: "Professional", business: "Business" };
+const PLAN_PRICE = { professional: "R899/mo", business: "R1 499/mo" };
+
+function getPlanLevel(user) {
+  const id = (user?.plan?.id || "starter").toLowerCase();
+  return PLAN_LEVEL[id] || 1;
+}
+
+function canAccess(user, requiredPlan) {
+  return getPlanLevel(user) >= (PLAN_LEVEL[requiredPlan] || 1);
+}
+
+function UpgradeWall({ requiredPlan, onNavigateSettings }) {
+  const label = PLAN_LABEL[requiredPlan] || "Professional";
+  const price = PLAN_PRICE[requiredPlan] || "R899/mo";
+  return (
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
+      <div style={{fontSize:52,marginBottom:16}}>🔒</div>
+      <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>{label} Plan Feature</h2>
+      <p style={{fontSize:14,color:C.inkMid,maxWidth:400,lineHeight:1.7,margin:"0 0 6px"}}>
+        This feature is available on the <strong style={{color:C.ink}}>{label}</strong> plan and above.
+      </p>
+      <p style={{fontSize:13,color:C.inkMid,maxWidth:400,lineHeight:1.6,margin:"0 0 28px"}}>
+        Upgrade to {label} at <strong style={{color:C.ink}}>{price}</strong> to unlock this feature.
+      </p>
+      <button
+        onClick={onNavigateSettings}
+        style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}
+      >
+        Upgrade in Settings →
+      </button>
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 function ZuZanApp({user, onLogout, onUserUpdate}) {
   const live = useLiveData();
@@ -11924,21 +12596,21 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
       {id:"customers",       label:"Customers",       icon:"👥"},
     ]},
     {id:"procurement", label:"Procurement", icon:"🛒", children:[
-      {id:"purchase_orders", label:"Purchase Orders", icon:"📋"},
+      {id:"purchase_orders", label:"Purchase Orders", icon:"📋", minPlan:"professional"},
       {id:"suppliers",       label:"Suppliers",       icon:"🏭"},
     ]},
     {id:"expenses",   label:"Expenses",    icon:"💳"},
     {id:"payroll",    label:"Payroll",     icon:"👥"},
     {id:"reports",    label:"Reports",     icon:"📊"},
-    {id:"budgeting",  label:"Budgeting",   icon:"🎯"},
-    {id:"debtors",    label:"Debtors",     icon:"📥"},
-    {id:"creditors",  label:"Creditors",   icon:"📤"},
+    {id:"budgeting",  label:"Budgeting",   icon:"🎯", minPlan:"professional"},
+    {id:"debtors",    label:"Debtors",     icon:"📥", minPlan:"professional"},
+    {id:"creditors",  label:"Creditors",   icon:"📤", minPlan:"professional"},
     {id:"coa",        label:"Accounts",    icon:"📒"},
-    {id:"inventory",    label:"Inventory",   icon:"📦"},
-    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭"},
+    {id:"inventory",    label:"Inventory",   icon:"📦", minPlan:"professional"},
+    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭", minPlan:"professional"},
     {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
-    {id:"documents",       label:"Documents",    icon:"📁"},
-    {id:"data_import",     label:"Import Data",  icon:"⬆️"},
+    {id:"documents",       label:"Documents",    icon:"📁", minPlan:"business"},
+    {id:"data_import",     label:"Import Data",  icon:"⬆️", minPlan:"professional"},
     {id:"banking",    label:"Banking",     icon:"🏦", children:[
       {id:"bankimport", label:"Manual Update",   icon:"📄"},
       {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
@@ -11957,6 +12629,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
 
   const navBtn = (t, isChild=false) => {
     const active = tab === t.id;
+    const locked = t.minPlan && !canAccess(user, t.minPlan);
+    const lockLabel = t.minPlan === "business" ? "Biz" : "Pro";
     return (
       <button key={t.id} onClick={()=>setTab(t.id)} style={{
         width:"100%", display:"flex", alignItems:"center", gap:10,
@@ -11966,11 +12640,15 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         fontWeight: active ? 700 : 400,
         marginBottom:2,
         background: active ? C.accentLt : "transparent",
-        color: active ? C.accent : isChild ? C.inkMid : C.inkMid,
+        color: active ? C.accent : locked ? C.inkDim : C.inkMid,
         textAlign:"left",
+        opacity: locked ? 0.75 : 1,
       }}>
         <span style={{fontSize: isChild ? 14 : 17}}>{t.icon}</span>{t.label}
-        {active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>}
+        {locked
+          ? <span style={{marginLeft:"auto",fontSize:9,fontWeight:700,color:"#fff",background:t.minPlan==="business"?"#7C3AED":C.accent,borderRadius:4,padding:"1px 5px",letterSpacing:0.3}}>🔒 {lockLabel}</span>
+          : active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.accent}}/>
+        }
       </button>
     );
   };
@@ -11995,35 +12673,21 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           </button>
         </div>,
     reports:    <Reports    live={live}/>,
-    budgeting:  <Budgeting  live={live}/>,
-    debtors:    <Debtors    live={live}/>,
-    creditors:  <Creditors  live={live}/>,
+    budgeting:  canAccess(user,"professional") ? <Budgeting  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    debtors:    canAccess(user,"professional") ? <Debtors    live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    creditors:  canAccess(user,"professional") ? <Creditors  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     coa:        <ChartOfAccounts/>,
-    inventory:       <Inventory/>,
-    fixed_assets:    <FixedAssets/>,
-    fin_statements:  user?.afsEnabled
-      ? <FinancialStatements/>
-      : <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:400,padding:40,textAlign:"center"}}>
-          <div style={{fontSize:48,marginBottom:16}}>📑</div>
-          <h2 style={{fontFamily:"serif",fontSize:24,color:C.ink,margin:"0 0 10px"}}>Annual Financial Statements</h2>
-          <p style={{fontSize:14,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 6px"}}>
-            Generate IFRS-compliant AFS including Income Statement, Balance Sheet, Cash Flow Statement, and Statement of Changes in Equity — ready for your accountant or auditor.
-          </p>
-          <p style={{fontSize:13,color:C.inkMid,maxWidth:420,lineHeight:1.6,margin:"0 0 28px"}}>
-            <strong style={{color:C.ink}}>R1,999/year</strong> — less than one hour of accountant fees.
-          </p>
-          <button onClick={()=>setTab("settings")} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-            Add Annual AFS in Settings →
-          </button>
-        </div>,
-    documents:       <DocumentRepository/>,
-    data_import:     <DataImport/>,
+    inventory:       canAccess(user,"professional") ? <Inventory/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    fixed_assets:    canAccess(user,"professional") ? <FixedAssets/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    fin_statements:  <AfsPaymentGate/>,
+    documents:       canAccess(user,"business") ? <DocumentRepository/> : <UpgradeWall requiredPlan="business" onNavigateSettings={()=>setTab("settings")}/>,
+    data_import:     canAccess(user,"professional") ? <DataImport/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
-    purchase_orders: <PurchaseOrders/>,
+    purchase_orders: canAccess(user,"professional") ? <PurchaseOrders/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     bankimport:      <BankImport live={live} onNavigate={setTab}/>,
     bankfeeds:       <BankFeeds/>,
-    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange}/>,
+    settings:   <AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={handleTemplateChange} onNavigate={setTab}/>,
   };
 
   return (
@@ -12036,7 +12700,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
         </div>
         <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`}}>
           <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user?.companyName||"Your Company"}</div>
-          <div style={{fontSize:10,color:C.inkDim}}>{user?.plan?.name||"Professional"} Plan</div>
+          <div style={{fontSize:10,color:C.inkDim}}>{(user?.plan?.name||"starter").charAt(0).toUpperCase()+(user?.plan?.name||"starter").slice(1)} Plan</div>
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
         </div>
@@ -12045,6 +12709,8 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
             if (!t.children) return navBtn(t);
             const isOpen = expanded[t.id];
             const childActive = t.children.some(c => c.id === tab);
+            const groupLocked = t.minPlan && !canAccess(user, t.minPlan);
+            const groupLockLabel = t.minPlan === "business" ? "Biz" : "Pro";
             return (
               <div key={t.id}>
                 <button onClick={()=>toggleGroup(t.id)} style={{
@@ -12053,12 +12719,16 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
                   fontFamily:"inherit", fontSize:13, marginBottom:2,
                   fontWeight: childActive ? 700 : 400,
                   background: childActive ? C.accentLt : "transparent",
-                  color: childActive ? C.accent : C.inkMid,
+                  color: childActive ? C.accent : groupLocked ? C.inkDim : C.inkMid,
                   textAlign:"left",
+                  opacity: groupLocked ? 0.75 : 1,
                 }}>
                   <span style={{fontSize:17}}>{t.icon}</span>
                   {t.label}
-                  <span style={{marginLeft:"auto",fontSize:10,opacity:.5}}>{isOpen ? "▾" : "▸"}</span>
+                  {groupLocked
+                    ? <span style={{marginLeft:"auto",fontSize:9,fontWeight:700,color:"#fff",background:t.minPlan==="business"?"#7C3AED":C.accent,borderRadius:4,padding:"1px 5px",letterSpacing:0.3}}>🔒 {groupLockLabel}</span>
+                    : <span style={{marginLeft:"auto",fontSize:10,opacity:.5}}>{isOpen ? "▾" : "▸"}</span>
+                  }
                 </button>
                 {isOpen && t.children.map(c => navBtn(c, true))}
               </div>
@@ -12146,13 +12816,19 @@ export default function App() {
           role:               data.user.role || "owner",
           payrollEnabled: data.company.payroll_enabled || false,
           afsEnabled:     data.company.afs_enabled || false,
+          industry:       data.company.industry || "",
         });
+        Sentry.setUser({ email: data.user.email, username: data.company.name });
         setScreen("app");
       })
       .catch(() => { clearTimeout(timeout); localStorage.removeItem("zuzan_token"); setScreen("login"); });
   }, []);
 
-  const handleLogin = userData => { setUser(userData); setScreen("app"); };
+  const handleLogin = userData => {
+    Sentry.setUser({ email: userData.email, username: userData.companyName });
+    setUser(userData);
+    setScreen("app");
+  };
 
   const handleRegistrationComplete = userData => {
     const savedToken = localStorage.getItem("zuzan_token");
@@ -12167,6 +12843,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    Sentry.setUser(null);
     localStorage.removeItem("zuzan_token");
     setUser(null);
     setScreen("login");
@@ -12210,5 +12887,20 @@ export default function App() {
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
 
-  return <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>;
+  return (
+    <Sentry.ErrorBoundary fallback={
+      <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"sans-serif"}}>
+        <div style={{textAlign:"center",maxWidth:420,padding:40}}>
+          <div style={{fontFamily:"serif",fontSize:36,fontWeight:800,color:C.ink,marginBottom:16}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <h2 style={{color:C.ink,margin:"0 0 12px"}}>Something went wrong</h2>
+          <p style={{color:C.inkMid,lineHeight:1.6,margin:"0 0 24px"}}>An unexpected error occurred. Our team has been notified automatically.</p>
+          <button onClick={()=>window.location.reload()} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Reload ZuZan
+          </button>
+        </div>
+      </div>
+    }>
+      <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>
+    </Sentry.ErrorBoundary>
+  );
 }
