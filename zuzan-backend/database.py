@@ -105,8 +105,8 @@ class Company(Base):
     category_rules=relationship("CategoryRule",back_populates="company")
     documents=relationship("CompanyDocument",back_populates="company")
     stitch_connection=relationship("StitchConnection",foreign_keys="StitchConnection.company_id",uselist=False)
-    stitch_bank_accounts=relationship("StitchBankAccount",foreign_keys="StitchBankAccount.company_id")
-    stitch_transactions=relationship("StitchTransaction",foreign_keys="StitchTransaction.company_id")
+    stitch_bank_accounts=relationship("StitchBankAccount",foreign_keys="StitchBankAccount.company_id",overlaps="company")
+    stitch_transactions=relationship("StitchTransaction",foreign_keys="StitchTransaction.company_id",overlaps="company")
     recurring_invoices=relationship("RecurringInvoice",back_populates="company")
     credit_notes=relationship("CreditNote",back_populates="company")
 
@@ -615,7 +615,7 @@ class StitchBankAccount(Base):
     last_synced         = Column(DateTime, nullable=True)
     is_active           = Column(Boolean, default=True)
     created_at          = Column(DateTime, default=datetime.utcnow)
-    company             = relationship("Company", foreign_keys=[company_id])
+    company             = relationship("Company", foreign_keys=[company_id], overlaps="stitch_bank_accounts")
     transactions        = relationship("StitchTransaction", back_populates="bank_account", cascade="all, delete-orphan")
 
 
@@ -639,7 +639,7 @@ class StitchTransaction(Base):
     matched_at          = Column(DateTime, nullable=True)
     created_at          = Column(DateTime, default=datetime.utcnow)
     bank_account        = relationship("StitchBankAccount", back_populates="transactions")
-    company             = relationship("Company", foreign_keys=[company_id])
+    company             = relationship("Company", foreign_keys=[company_id], overlaps="stitch_transactions")
 
 class SaltEdgeConnection(Base):
     """Salt Edge connection for a company (one per company)."""
