@@ -316,7 +316,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -664,6 +664,28 @@ async def admin_clients(db: Session = Depends(get_db_session), _=Depends(_check_
     except Exception as e:
         logger.error(f"Admin clients error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/api/clients/{company_id}/extend-trial", tags=["Admin"])
+async def admin_extend_trial(company_id: int, request: Request, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    body = await request.json()
+    days = int(body.get("days", 14))
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+    co = db.query(_Company).filter(_Company.id == company_id).first()
+    if not co:
+        raise HTTPException(status_code=404, detail="Company not found")
+    from datetime import datetime, timedelta
+    # Extend from today or from current trial_ends, whichever is later
+    base = max(co.trial_ends or datetime.utcnow(), datetime.utcnow())
+    co.trial_ends = base + timedelta(days=days)
+    # If expired, reactivate to trial
+    from database import SubscriptionStatus
+    if co.subscription_status and co.subscription_status.value == "expired":
+        co.subscription_status = SubscriptionStatus.trial
+    db.commit()
+    logger.info(f"Admin extended trial for company {co.id} ({co.name}) by {days} days → {co.trial_ends}")
+    return {"ok": True, "company": co.name, "trial_ends": co.trial_ends.strftime("%Y-%m-%d")}
 
 
 @app.get("/admin/api/subscriptions", tags=["Admin"])
@@ -1110,13 +1132,33 @@ function renderTable(data) {
       : '<span class="unverified">✗ No</span>'}</td>
     <td><span class="badge ${d.plan}">${d.plan}</span></td>
     <td><span class="badge ${d.status}">${d.status}</span></td>
-    <td>${d.signed_up||'—'}</td><td>${d.trial_ends||'—'}</td>
+    <td>${d.signed_up||'—'}</td>
+    <td>${d.trial_ends||'—'}</td>
     <td style="text-align:center">${d.invoices}</td>
     <td style="text-align:center">${d.expenses}</td>
     <td style="text-align:center">${d.employees}</td>
     <td>R${(d.revenue_collected||0).toLocaleString('en-ZA',{minimumFractionDigits:2})}</td>
     <td style="color:#888">${d.last_activity||'No activity yet'}</td>
+    <td><button onclick="extendTrial(${d.id},'${d.company.replace(/'/g,"\\'")}','${d.trial_ends||''}')" style="background:#1A3A6B;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;white-space:nowrap">+ Extend Trial</button></td>
   </tr>`).join('');
+}
+
+async function extendTrial(companyId, companyName, currentEnds) {
+  const daysStr = prompt(\`Extend trial for \${companyName}\\nCurrent trial ends: \${currentEnds||'unknown'}\\n\\nAdd how many days?\`, '14');
+  if (!daysStr) return;
+  const days = parseInt(daysStr);
+  if (isNaN(days) || days < 1) { alert('Enter a valid number of days.'); return; }
+  try {
+    const res = await fetch(\`/admin/api/clients/\${companyId}/extend-trial\`, {
+      method: 'POST',
+      headers: { 'X-Admin-Secret': secret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed');
+    alert(\`✓ Trial extended!\\n\${data.company} trial now ends \${data.trial_ends}\`);
+    loadClients(); // refresh the table
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 async function loadRevenue() {
