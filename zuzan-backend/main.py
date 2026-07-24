@@ -316,7 +316,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -924,6 +924,7 @@ tr:hover td{background:#fdf9f7}
 <body>
 <div class="topbar">
   <h1>ZuZan</h1><span>Admin Dashboard</span>
+  <button id="logoutBtn" onclick="logout()" style="margin-left:auto;background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);padding:6px 16px;border-radius:6px;font-size:13px;cursor:pointer;display:none">Log Out</button>
 </div>
 
 <div class="login" id="loginBox">
@@ -1077,6 +1078,15 @@ function login() {
   load();
 }
 
+function logout() {
+  secret = '';
+  document.getElementById('main').style.display = 'none';
+  document.getElementById('loginBox').style.display = '';
+  document.getElementById('logoutBtn').style.display = 'none';
+  document.getElementById('secretInput').value = '';
+  document.getElementById('loginErr').textContent = '';
+}
+
 function setError(msg) {
   const loggedIn = document.getElementById('main').style.display === 'block';
   if (loggedIn) {
@@ -1099,6 +1109,7 @@ async function load() {
     const data = await res.json();
     document.getElementById('loginBox').style.display = 'none';
     document.getElementById('main').style.display = 'block';
+    document.getElementById('logoutBtn').style.display = '';
     renderStats(data);
     renderTable(data);
     const now = new Date();
