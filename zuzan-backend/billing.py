@@ -258,13 +258,19 @@ async def initiate_subscription(
         "notify_url":       f"{BACKEND_URL}/billing/payfast-notify",
         "name_first":       current_user.first_name or "User",
         "name_last":        current_user.last_name  or "",
-        "email_address":    current_user.email,
+        # NOTE: email_address intentionally omitted — sending the merchant's own
+        # email causes PayFast to reject with "same account" even as a buyer.
         "m_payment_id":     f"sub-{co.id}-{int(datetime.utcnow().timestamp())}",
         "amount":           f"{amount:.2f}",
         "item_name":        item_desc,
         "item_description": f"Subscription — {co.name}",
-        # Ad-hoc tokenization: PayFast charges first payment + returns a token for future charges
-        "subscription_type": "2",
+        # subscription_type=1: standard PayFast-managed recurring subscription.
+        # type=2 (ad-hoc tokenization) requires separate PayFast account enablement.
+        "subscription_type": "1",
+        "billing_date":      billing_date,
+        "recurring_amount":  f"{amount:.2f}",
+        "frequency":         pf_frequency,
+        "cycles":            "0",   # 0 = indefinite
     }
     pf_data["signature"] = _pf_signature(pf_data, pf_pp)
 
