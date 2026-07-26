@@ -17,8 +17,10 @@ from email_service import (
     send_trial_expired_email,
     send_subscription_active_email,
     send_overdue_invoice_reminder,
+    send_payment_failed_email,
+    send_add_payment_method_email,
 )
-import os, hashlib, logging, io
+import os, hashlib, logging, io, requests as _requests
 from urllib.parse import quote_plus
 
 logger = logging.getLogger("zuzan.billing")
@@ -261,12 +263,8 @@ async def initiate_subscription(
         "amount":           f"{amount:.2f}",
         "item_name":        item_desc,
         "item_description": f"Subscription — {co.name}",
-        # PayFast Subscriptions product
-        "subscription_type": "1",
-        "billing_date":      billing_date,
-        "recurring_amount":  f"{amount:.2f}",
-        "frequency":         pf_frequency,
-        "cycles":            "0",   # 0 = indefinite
+        # Ad-hoc tokenization: PayFast charges first payment + returns a token for future charges
+        "subscription_type": "2",
     }
     pf_data["signature"] = _pf_signature(pf_data, pf_pp)
 
@@ -315,6 +313,15 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
         logger.warning(f"PayFast ITN: company {company_id} not found")
         return {"ok": True}
 
+    # Capture ad-hoc token if present (subscription_type=2)
+    token = data.get("token", "")
+    if token:
+        co.payfast_token = token
+        co.payfast_token_created = datetime.utcnow()
+        # Next billing date = 1 month from today
+        co.next_billing_date = datetime.utcnow() + timedelta(days=30)
+        logger.info(f"PayFast token captured for company {co.id}: {token[:8]}...")
+
     # Activate subscription
     co.subscription_status = SubscriptionStatus.active
     db.commit()
@@ -352,6 +359,107 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
 
     logger.info(f"Subscription activated for company {co.id} ({co.name}), amount R{amount_gross}")
     return {"ok": True}
+
+
+# ── PayFast ad-hoc charge helper ──────────────────────────────────────────────
+PAYFAST_ADHOC_URL = "https://api.payfast.co.za/subscriptions/{token}/adhoc"
+
+def _pf_adhoc_signature(data: dict, passphrase: str = "") -> str:
+    """Build HMAC-MD5 signature for PayFast ad-hoc API calls."""
+    params = {k: v for k, v in sorted(data.items()) if v not in (None, "")}
+    if passphrase:
+        params["passphrase"] = passphrase
+    param_str = "&".join(f"{k}={quote_plus(str(v))}" for k, v in params.items())
+    return hashlib.md5(param_str.encode()).hexdigest()
+
+def adhoc_charge(company: "Company", db: Session) -> dict:
+    """
+    Charge a company's stored PayFast token for their current plan amount.
+    Returns {"ok": True} on success or raises on failure.
+    Locks the account and logs if the charge fails.
+    """
+    from email_service import send_payment_failed_email
+
+    if not company.payfast_token:
+        raise ValueError(f"Company {company.id} has no PayFast token")
+
+    plan  = company.plan.value          if company.plan          else "starter"
+    cycle = company.billing_cycle.value if company.billing_cycle else "monthly"
+    base_amount = PLAN_PRICES.get(plan, PLAN_PRICES["starter"])[cycle]
+
+    payroll_cost = 0
+    if getattr(company, "payroll_enabled", False):
+        emp_count    = getattr(company, "payroll_employees", 0) or 0
+        monthly_cost = max(PAYROLL_MIN_COST, emp_count * PAYROLL_PER_EMP)
+        payroll_cost = monthly_cost if cycle == "monthly" else monthly_cost * 12
+
+    amount = base_amount + payroll_cost
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+
+    pf_id  = (decrypt_field(company.payfast_merchant_id)  if company.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
+    pf_pp  = (decrypt_field(company.payfast_passphrase)   if company.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
+
+    body = {
+        "amount":           str(int(amount * 100)),  # PayFast adhoc expects cents
+        "item_name":        f"ZuZan {plan.title()} Plan ({cycle})",
+        "item_description": f"Monthly subscription — {company.name}",
+    }
+    sig = _pf_adhoc_signature({**body, "merchant-id": pf_id, "timestamp": ts, "version": "v1"}, pf_pp)
+
+    headers = {
+        "merchant-id": pf_id,
+        "version":     "v1",
+        "timestamp":   ts,
+        "signature":   sig,
+    }
+    url = PAYFAST_ADHOC_URL.format(token=company.payfast_token)
+
+    try:
+        resp = _requests.post(url, data=body, headers=headers, timeout=30)
+        result = resp.json() if resp.content else {}
+    except Exception as e:
+        logger.error(f"AdHoc charge network error for company {company.id}: {e}")
+        result = {"code": 0, "data": {"response": str(e)}}
+
+    if resp.status_code == 200 and result.get("code") == 200:
+        # Success — log payment and advance next_billing_date
+        company.next_billing_date = datetime.utcnow() + timedelta(days=30)
+        owner = db.query(User).filter(User.company_id == company.id, User.role == "owner").first()
+        sub_pay = SubscriptionPayment(
+            company_id=company.id,
+            company_name=company.name,
+            owner_email=owner.email if owner else None,
+            plan=plan,
+            billing_cycle=cycle,
+            amount=amount,
+            payfast_payment_id=result.get("data", {}).get("response", ""),
+            status="success",
+            payment_date=datetime.utcnow(),
+            period_start=datetime.utcnow(),
+            period_end=datetime.utcnow() + timedelta(days=31),
+        )
+        db.add(sub_pay)
+        db.commit()
+        logger.info(f"AdHoc charge SUCCESS company {company.id} R{amount:.2f}")
+        return {"ok": True, "amount": amount}
+    else:
+        # Failure — lock account immediately
+        company.subscription_status = SubscriptionStatus.expired
+        db.commit()
+        logger.warning(f"AdHoc charge FAILED company {company.id}: {result}")
+        owner = db.query(User).filter(User.company_id == company.id, User.role == "owner").first()
+        if owner:
+            try:
+                send_payment_failed_email(
+                    first_name=owner.first_name,
+                    email=owner.email,
+                    company_name=company.name,
+                    amount=amount,
+                    subscribe_url=f"{FRONTEND_URL}/settings?tab=subscription",
+                )
+            except Exception as e:
+                logger.warning(f"Payment failed email error: {e}")
+        raise RuntimeError(f"PayFast charge failed: {result}")
 
 
 # ── AFS once-off payment ──────────────────────────────────────────────────────
@@ -642,5 +750,38 @@ def send_overdue_reminders():
             logger.info(f"Overdue reminders: {sent} sent")
     except Exception as e:
         logger.error(f"Overdue reminder job failed: {e}")
+    finally:
+        db.close()
+
+
+# ── Background: monthly auto-charge ──────────────────────────────────────────
+def run_monthly_charges():
+    """
+    Run daily. Charges any active subscribers whose next_billing_date is today or past.
+    On failure: locks account immediately and emails user.
+    """
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        due = db.query(Company).filter(
+            Company.subscription_status == SubscriptionStatus.active,
+            Company.payfast_token != None,
+            Company.next_billing_date <= now,
+        ).all()
+
+        charged = 0
+        failed  = 0
+        for co in due:
+            try:
+                adhoc_charge(co, db)
+                charged += 1
+            except Exception as e:
+                logger.warning(f"Monthly charge failed for company {co.id}: {e}")
+                failed += 1
+
+        if charged or failed:
+            logger.info(f"Monthly charges: {charged} succeeded, {failed} failed")
+    except Exception as e:
+        logger.error(f"Monthly charge job failed: {e}")
     finally:
         db.close()

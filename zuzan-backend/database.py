@@ -63,6 +63,9 @@ class Company(Base):
     payfast_merchant_id=Column(String,nullable=True)   # Per-company PayFast credentials (encrypted)
     payfast_merchant_key=Column(String,nullable=True)
     payfast_passphrase=Column(String,nullable=True)
+    payfast_token=Column(String,nullable=True)          # Ad-hoc tokenization token from PayFast ITN
+    payfast_token_created=Column(DateTime,nullable=True)  # When the token was captured
+    next_billing_date=Column(DateTime,nullable=True)    # Next scheduled charge date
     cipc_registration_date=Column(DateTime,nullable=True)   # Company anniversary for CIPC AR reminder
     # ── SARS e@syFile / IRP5 fields (BRS v25.3.0) ────────────────────────────
     paye_ref=Column(String,nullable=True)             # PAYE Reference Number (10 digits, starts 7)
@@ -1391,6 +1394,9 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN mandate_signed_name VARCHAR",
             "ALTER TABLE companies ADD COLUMN mandate_signed_at TIMESTAMP",
             "ALTER TABLE companies ADD COLUMN mandate_signed BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE companies ADD COLUMN payfast_token VARCHAR",
+            "ALTER TABLE companies ADD COLUMN payfast_token_created TIMESTAMP",
+            "ALTER TABLE companies ADD COLUMN next_billing_date TIMESTAMP",
             # ── AFS once-off payments (2026-07) ───────────────────────────────
             """CREATE TABLE IF NOT EXISTS afs_payments (
                 id SERIAL PRIMARY KEY,

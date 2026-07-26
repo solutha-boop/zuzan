@@ -7888,7 +7888,14 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </button>
           )}
           <button onClick={()=>setShowUpgrade(true)} style={{padding:"10px 22px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
-          <button onClick={()=>setShowBilling(true)} style={{padding:"10px 22px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Manage Billing</button>
+          <button onClick={async()=>{
+            try {
+              const res = await api("/billing/subscribe", {method:"POST"});
+              if (res.payfast_url) pfSubmit(res.payfast_url, res.payfast_data);
+            } catch(e) { alert("Could not open payment page. " + (e.message||"")); }
+          }} style={{padding:"10px 22px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+            {subInfo.status === "active" ? "💳 Update Payment Method" : "💳 Add Payment Method"}
+          </button>
         </div>
 
         {/* Auto-renewal toggle */}

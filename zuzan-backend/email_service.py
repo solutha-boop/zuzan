@@ -830,3 +830,67 @@ def send_mandate_email(
         _wrap(body, email, transactional=True),
         attachments=attachments,
     )
+
+
+# ── Payment failed ─────────────────────────────────────────────────────────────
+def send_payment_failed_email(
+    first_name: str,
+    email: str,
+    company_name: str,
+    amount: float,
+    subscribe_url: str,
+):
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 12px;">Payment failed for {company_name}</h2>
+      <p style="color:#555;line-height:1.7;margin:0 0 24px;">
+        Hi {first_name}, we were unable to collect your subscription payment of
+        <strong>R{amount:,.2f}</strong>. Your account has been paused until payment is updated.
+      </p>
+
+      <div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <p style="color:#991B1B;font-weight:700;margin:0 0 6px;">Action required</p>
+        <p style="color:#7F1D1D;margin:0;font-size:13px;line-height:1.7;">
+          Your data is safely stored. Update your payment method below to restore access immediately.
+        </p>
+      </div>
+
+      {_btn("Update Payment Method", subscribe_url)}
+
+      <p style="color:#555;font-size:13px;text-align:center;margin:16px 0 0;">
+        If you believe this is an error, email <a href="mailto:{SUPPORT_EMAIL}" style="color:#C8401A;">{SUPPORT_EMAIL}</a>.
+      </p>
+    """
+    send_email(
+        email,
+        f"Action required: ZuZan payment failed for {company_name}",
+        _wrap(body, email, transactional=True),
+        from_email=FROM_SUPPORT_EMAIL,
+    )
+
+
+# ── Add payment method reminder ────────────────────────────────────────────────
+def send_add_payment_method_email(
+    first_name: str,
+    email: str,
+    company_name: str,
+    subscribe_url: str,
+):
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 12px;">Your ZuZan trial is ending soon</h2>
+      <p style="color:#555;line-height:1.7;margin:0 0 24px;">
+        Hi {first_name}, your free trial for <strong>{company_name}</strong> is coming to an end.
+        Add a payment method now to keep your access uninterrupted.
+      </p>
+
+      {_btn("Add Payment Method", subscribe_url)}
+
+      <p style="color:#555;font-size:13px;text-align:center;margin:16px 0 0;">
+        Questions? Email <a href="mailto:{SUPPORT_EMAIL}" style="color:#C8401A;">{SUPPORT_EMAIL}</a>.
+      </p>
+    """
+    send_email(
+        email,
+        f"Add your payment method — ZuZan trial ending for {company_name}",
+        _wrap(body, email, transactional=True),
+        from_email=FROM_SUPPORT_EMAIL,
+    )
