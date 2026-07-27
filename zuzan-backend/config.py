@@ -7,8 +7,8 @@ Import from here; never redefine these in individual modules.
 # Single source of truth — referenced by auth.py and payroll.py
 PLAN_PRICES = {
     "starter":      {"monthly": 399,   "annual": 3990},
-    "professional": {"monthly": 899,   "annual": 8990},
-    "business":     {"monthly": 1499,  "annual": 14990},
+    "professional": {"monthly": 699,   "annual": 6990},
+    "business":     {"monthly": 1299,  "annual": 12990},
 }
 
 # Payroll add-on pricing

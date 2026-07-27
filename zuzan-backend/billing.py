@@ -39,8 +39,8 @@ ADMIN_EMAIL          = os.environ.get("ADMIN_EMAIL",  "dev@solutha.co.za")
 
 PLAN_PRICES = {
     "starter":      {"monthly": 399,  "annual": 3990},
-    "professional": {"monthly": 899,  "annual": 8990},
-    "business":     {"monthly": 1499, "annual": 14990},
+    "professional": {"monthly": 699,  "annual": 6990},
+    "business":     {"monthly": 1299, "annual": 12990},
 }
 
 PAYROLL_PER_EMP  = 45   # R45/employee/month (matches companies.py)

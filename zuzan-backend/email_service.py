@@ -34,8 +34,8 @@ PLAN_DETAILS = {
     },
     "professional": {
         "name": "Professional",
-        "price_monthly": 899,
-        "price_annual":  8990,
+        "price_monthly": 699,
+        "price_annual":  6990,
         "features": [
             "5 users",
             "50 invoices/month",
@@ -49,8 +49,8 @@ PLAN_DETAILS = {
     },
     "business": {
         "name": "Business",
-        "price_monthly": 1499,
-        "price_annual":  14990,
+        "price_monthly": 1299,
+        "price_annual":  12990,
         "features": [
             "20 users",
             "Unlimited Invoices",

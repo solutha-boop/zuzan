@@ -123,8 +123,8 @@ function useLiveData() {
 
 const PLANS = [
   { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Payroll add-on (in-app, no 3rd party)","Bank feed (all SA banks)","Double-entry general ledger","Trial balance & journal viewer","Basic reports","Email support"] },
-  { id:"professional", name:"Professional", monthly:899,  annual:8990,  usdMonthly:49, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Balance sheet reconciliation","Purchase orders & inventory","Fixed assets & depreciation","Budgeting","Advanced reports & VAT201","Priority support"] },
-  { id:"business",     name:"Business",     monthly:1499, annual:14990, usdMonthly:82, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Budgeting vs actuals","Cash flow forecast","Department budgets","API access","Dedicated account manager"] },
+  { id:"professional", name:"Professional", monthly:699,  annual:6990,  usdMonthly:39, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Balance sheet reconciliation","Purchase orders & inventory","Fixed assets & depreciation","Budgeting","Advanced reports & VAT201","Priority support"] },
+  { id:"business",     name:"Business",     monthly:1299, annual:12990, usdMonthly:72, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Budgeting vs actuals","Cash flow forecast","Department budgets","API access","Dedicated account manager"] },
 ];
 
 const MOCK_INVOICES = [
@@ -12531,7 +12531,7 @@ function DocumentRepository() {
 // ── PLAN FEATURE GATING ───────────────────────────────────────────────────────
 const PLAN_LEVEL = { starter: 1, professional: 2, business: 3 };
 const PLAN_LABEL = { professional: "Professional", business: "Business" };
-const PLAN_PRICE = { professional: "R899/mo", business: "R1 499/mo" };
+const PLAN_PRICE = { professional: "R699/mo", business: "R1 299/mo" };
 
 function getPlanLevel(user) {
   const id = (user?.plan?.id || "starter").toLowerCase();
