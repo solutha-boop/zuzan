@@ -1,8 +1,3 @@
 [build]
-  base    = "zuzan-app"
-  command = "npm run build"
-  publish = "build"
-
-[build.environment]
-  NODE_VERSION = "18"
-  CI           = "false"
+  command = "mkdir -p _site && cp zuzan-landing.html _site/index.html"
+  publish = "_site"
