@@ -2224,6 +2224,100 @@ async def management_accounts(
 
 
 
+class InsightsRequest(BaseModel):
+    period: str = ""
+    revenue: float = 0
+    total_expenses: float = 0
+    gross_profit: float = 0
+    payroll_cost: float = 0
+    net_profit: float = 0
+    gross_margin_pct: float = 0
+    net_margin_pct: float = 0
+    outstanding: float = 0
+    overdue_count: int = 0
+    employee_count: int = 0
+    expense_breakdown: dict = {}
+    trend: list = []
+
+
+@reports_router.post("/ai-insights")
+async def ai_insights(
+    body: InsightsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Generate AI-powered management insights for Business plan users."""
+    co = db.query(Company).filter(Company.id == current_user.company_id).first()
+    plan = (co.plan.value if co and co.plan else "starter").lower()
+    if plan != "business":
+        raise HTTPException(status_code=403, detail="AI Insights are available on the Business plan only.")
+
+    import os as _os
+    api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="AI service not configured.")
+
+    # Build a compact financial summary for the prompt
+    breakdown_lines = "\n".join(
+        f"  - {cat}: R{amt:,.0f}" for cat, amt in (body.expense_breakdown or {}).items()
+    ) or "  - No expense detail available"
+
+    trend_lines = ""
+    if body.trend:
+        trend_lines = "\n".join(
+            f"  {m['month']}: Rev R{m['revenue']:,.0f} | Exp R{m['expenses']:,.0f} | GP R{m['gross_profit']:,.0f}"
+            for m in body.trend
+        )
+
+    prompt = f"""You are a South African SME financial advisor. Analyse this management pack and provide concise, actionable insights.
+
+PERIOD: {body.period}
+
+KEY FINANCIALS (ZAR, ex-VAT):
+- Revenue: R{body.revenue:,.0f}
+- Total Expenses (ex-payroll): R{body.total_expenses:,.0f}
+- Gross Profit: R{body.gross_profit:,.0f} ({body.gross_margin_pct}% margin)
+- Payroll Cost: R{body.payroll_cost:,.0f}
+- Net Profit: R{body.net_profit:,.0f} ({body.net_margin_pct}% margin)
+- Outstanding Debtors: R{body.outstanding:,.0f} ({body.overdue_count} overdue)
+- Headcount: {body.employee_count} employees
+
+EXPENSE BREAKDOWN:
+{breakdown_lines}
+
+6-MONTH TREND:
+{trend_lines}
+
+Respond with exactly 4–5 short insight bullets. Each bullet must:
+1. State ONE specific observation (with actual numbers where possible)
+2. Explain what it means for the business
+3. Suggest one concrete action
+
+Format each bullet as:
+**[Category]** Observation. Implication. Action.
+
+Categories to use: Revenue, Profitability, Cash Flow, Expenses, Payroll, or Trend.
+Keep each bullet to 2–3 sentences maximum. Be direct and SA-business-relevant."""
+
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # Split into individual bullets
+        bullets = [b.strip() for b in raw.split("\n") if b.strip().startswith("**")]
+        if not bullets:
+            bullets = [b.strip() for b in raw.split("\n\n") if b.strip()]
+        return {"insights": bullets, "period": body.period}
+    except Exception as e:
+        logger.error(f"AI insights error: {e}")
+        raise HTTPException(status_code=500, detail="Could not generate insights. Please try again.")
+
+
 @reports_router.get("/provisional-tax")
 async def provisional_tax(
     current_user: User = Depends(get_current_user),

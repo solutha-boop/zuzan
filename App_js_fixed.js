@@ -4239,8 +4239,8 @@ function ExcelBtn({data,filename}) {
   return <button onClick={download} style={{background:C.greenLt,color:C.green,border:"1px solid "+C.green+"40",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Export Excel</button>;
 }
 
-function Reports({live = {}}) {
-  const [activeTab, setActiveTab] = useState("pl");
+function Reports({live = {}, user = null}) {
+  const [activeTab, setActiveTab] = useState("mgmt");
   const [bsData,  setBsData]  = useState(null);
   const [cfData,  setCfData]  = useState(null);
   // emp201 moved to Payroll component
@@ -4259,6 +4259,9 @@ function Reports({live = {}}) {
   const [loading,  setLoading]  = useState(false);
   const [mgmtDrill, setMgmtDrill] = useState(null); // {type,title,cols,rows,total,color}
   const [mgmtDrillLoading, setMgmtDrillLoading] = useState(false);
+  const [aiInsights,    setAiInsights]    = useState(null);  // [{text}] or null
+  const [aiLoading,     setAiLoading]     = useState(false);
+  const [aiError,       setAiError]       = useState(null);
 
   // ── Date range ──────────────────────────────────────────────────
   const now = new Date();
@@ -4325,14 +4328,13 @@ function Reports({live = {}}) {
   // Reload current tab when date range changes
   useEffect(() => { loadTab(activeTab, true); }, [dateFrom, dateTo]);
   const RTABS = [
+    {id:"mgmt", label:"Management Pack"},
     {id:"pl",   label:"Income Statement"},
     {id:"bs",   label:"Balance Sheet"},
+    {id:"cf",   label:"Cash Flow"},
     {id:"recon",label:"Reconciliation"},
     {id:"tb",   label:"Trial Balance"},
     {id:"jnl",  label:"Journal"},
-    {id:"cf",   label:"Cash Flow"},
-    {id:"mgmt", label:"Management Pack"},
-
     {id:"prov", label:"Provisional Tax"},
     {id:"vat",  label:"VAT201"},
   ];
@@ -4966,6 +4968,82 @@ function Reports({live = {}}) {
             }
           </div>
         </div>
+
+        {/* AI Insights Panel */}
+        {canAccess(user, "business") ? (
+          <div style={{background:C.surface,border:"1px solid "+C.accent+"40",borderRadius:16,padding:20,marginTop:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:aiInsights||aiLoading?16:0}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:C.ink}}>✨ AI Insights</div>
+                {!aiInsights && !aiLoading && <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Analyse your revenue, margins, payroll, and cash flow.</div>}
+              </div>
+              <button
+                onClick={async()=>{
+                  setAiLoading(true); setAiError(null); setAiInsights(null);
+                  try {
+                    const res = await api("/reports/ai-insights",{method:"POST",body:JSON.stringify({
+                      period: m ? m.period : "",
+                      revenue: kpis.revenue,
+                      total_expenses: pl.total_expenses,
+                      gross_profit: pl.gross_profit,
+                      payroll_cost: kpis.payroll_cost,
+                      net_profit: kpis.net_profit,
+                      gross_margin_pct: kpis.gross_margin_pct,
+                      net_margin_pct: kpis.net_margin_pct,
+                      outstanding: kpis.outstanding,
+                      overdue_count: kpis.overdue_count,
+                      employee_count: kpis.employee_count,
+                      expense_breakdown: expBreakdown,
+                      trend
+                    })});
+                    setAiInsights(res);
+                  } catch(e){ setAiError(e.message||"Failed to generate insights"); }
+                  finally { setAiLoading(false); }
+                }}
+                disabled={aiLoading}
+                style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:600,cursor:aiLoading?"wait":"pointer",opacity:aiLoading?0.7:1,whiteSpace:"nowrap",flexShrink:0}}
+              >{aiLoading?"Analysing…":aiInsights?"Regenerate":"Generate Insights"}</button>
+            </div>
+            {aiError && <div style={{fontSize:12,color:C.red,marginTop:8}}>{aiError}</div>}
+            {aiInsights && (
+              <div>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>Period: {aiInsights.period}</div>
+                {(aiInsights.insights||"").split("\n").filter(l=>l.trim()).map((line,i)=>{
+                  const match = line.match(/^\*\*(.+?)\*\*\s*(.*)/);
+                  return (
+                    <div key={i} style={{display:"flex",gap:12,padding:"12px 0",borderBottom:"1px solid "+C.border+"30"}}>
+                      {match ? (
+                        <>
+                          <div style={{minWidth:100,fontSize:11,fontWeight:700,color:C.accent,paddingTop:2,flexShrink:0}}>{match[1]}</div>
+                          <div style={{fontSize:12,color:C.ink,lineHeight:1.65}}>{match[2]}</div>
+                        </>
+                      ) : (
+                        <div style={{fontSize:12,color:C.ink,lineHeight:1.65}}>{line.replace(/\*\*/g,"")}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{background:C.surface,border:"1px dashed "+C.border,borderRadius:16,padding:20,marginTop:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.ink}}>✨ AI Insights</div>
+              <span style={{fontSize:10,background:C.accentLt,color:C.accent,borderRadius:6,padding:"2px 8px",fontWeight:700,letterSpacing:0.3}}>BUSINESS</span>
+            </div>
+            <div style={{fontSize:12,color:C.inkMid,marginBottom:16,lineHeight:1.65}}>AI Insights analyse your revenue, margins, payroll efficiency, and cash flow to surface actionable recommendations.</div>
+            <div style={{background:C.bg,borderRadius:10,padding:16,marginBottom:16,filter:"blur(3px)",pointerEvents:"none",userSelect:"none"}}>
+              {[["Revenue","Strong month with 12% YoY growth. Consider reviewing pricing on core services to improve margin."],["Payroll","Payroll at 38% of revenue — within healthy range for service businesses. Monitor if headcount grows."],["Cash Flow","3 invoices overdue >30 days totalling R24 500. Follow up promptly to protect working capital."],["Expenses","Admin costs rising 8% MoM. Review subscriptions and recurring charges to identify savings."]].map(([cat,text],i)=>(
+                <div key={i} style={{display:"flex",gap:12,padding:"10px 0",borderBottom:"1px solid "+C.border+"30"}}>
+                  <div style={{minWidth:100,fontSize:11,fontWeight:700,color:C.accent,flexShrink:0}}>{cat}</div>
+                  <div style={{fontSize:12,color:C.ink}}>{text}</div>
+                </div>
+              ))}
+            </div>
+            <UpgradeWall requiredPlan="business" onNavigateSettings={undefined}/>
+          </div>
+        )}
       </div>
     );
   };
@@ -11136,7 +11214,7 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
     payroll:    <div style={{padding:"16px 16px 100px"}}><Payroll    live={live} user={user}/></div>,
     quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate} docTemplate={docTemplate}/></div>,
     budgeting:  <div style={{padding:"16px 16px 100px"}}><Budgeting  live={live}/></div>,
-    reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live}/></div>,
+    reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live} user={user}/></div>,
     inventory:       <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
     fixed_assets:    <div style={{padding:"16px 16px 100px"}}><FixedAssets/></div>,
     customers:       <div style={{padding:"16px 16px 100px"}}><Customers/></div>,
@@ -12679,7 +12757,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
             Add Payroll in Settings →
           </button>
         </div>,
-    reports:    <Reports    live={live}/>,
+    reports:    <Reports    live={live} user={user}/>,
     budgeting:  canAccess(user,"professional") ? <Budgeting  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     debtors:    canAccess(user,"professional") ? <Debtors    live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     creditors:  canAccess(user,"professional") ? <Creditors  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
