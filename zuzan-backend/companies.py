@@ -45,6 +45,10 @@ class CompanyUpdate(BaseModel):
     payfast_merchant_id:    Optional[str] = None
     payfast_merchant_key:   Optional[str] = None
     payfast_passphrase:     Optional[str] = None
+    # Plan / billing cycle — user can switch plan at any time; takes effect on
+    # next PayFast subscription charge or immediately for trial users.
+    plan:                   Optional[str] = None
+    billing_cycle:          Optional[str] = None
     # User-initiated subscription transitions only — guarded in update_company.
     # "cancelled" (cancel / auto-renew off) or "active" (undo a cancellation).
     subscription_status:    Optional[str] = None
@@ -100,6 +104,15 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(requi
             setattr(company, field, encrypt_field(value))
         elif field == "cipc_registration_date":
             setattr(company, field, datetime.fromisoformat(value) if value else None)
+        elif field == "plan":
+            valid_plans = {"starter", "professional", "business"}
+            if value not in valid_plans:
+                raise HTTPException(status_code=400, detail=f"Invalid plan '{value}'. Must be one of: {', '.join(sorted(valid_plans))}")
+            company.plan = value
+        elif field == "billing_cycle":
+            if value not in ("monthly", "annual"):
+                raise HTTPException(status_code=400, detail="billing_cycle must be 'monthly' or 'annual'")
+            company.billing_cycle = value
         elif field == "subscription_status":
             # Launch fix 2026-07-14: this field was previously ignored (not in
             # CompanyUpdate), so "Cancel subscription" silently no-oped while the

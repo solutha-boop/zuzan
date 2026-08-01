@@ -19,12 +19,13 @@ git add zuzan-app/src/App.js
 git add zuzan-app/src/App.mobile.js
 git add zuzan-landing.html
 git add audit_reports/
+git add zuzan-backend/companies.py
 git diff --cached --stat
 
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "deploy: %STAMP%" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "fix: plan upgrade for trial users + AI assistant keyword handlers [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main

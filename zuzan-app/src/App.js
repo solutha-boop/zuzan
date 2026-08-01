@@ -7821,10 +7821,18 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   const handleUpgrade = async (planId) => {
     setUpgrading(true); setUpgradeMsg("");
     try {
-      await api("/companies/me", {method:"PUT", body: JSON.stringify({plan: planId})});
-      setUpgradeMsg("✓ Plan updated successfully.");
-      setTimeout(() => { setShowUpgrade(false); setUpgradeMsg(""); }, 1500);
-    } catch(e) { setUpgradeMsg("Failed to update plan. " + (e.message||"")); }
+      // 1. Save the chosen plan and billing cycle to the company record
+      await api("/companies/me", {method:"PUT", body: JSON.stringify({plan: planId, billing_cycle: upgradeBilling})});
+      setUpgradeMsg("Plan selected — redirecting to payment…");
+      // 2. Build the PayFast subscription form for this plan and redirect
+      const res = await api("/billing/subscribe", {method:"POST"});
+      if (res.payfast_url) {
+        pfSubmit(res.payfast_url, res.payfast_data);
+      } else {
+        setUpgradeMsg("✓ Plan updated. Use Subscribe Now to complete payment.");
+        setTimeout(() => { setShowUpgrade(false); setUpgradeMsg(""); }, 2000);
+      }
+    } catch(e) { setUpgradeMsg("Failed: " + (e.message||"Please try again.")); }
     setUpgrading(false);
   };
 
@@ -8270,7 +8278,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
             {PLANS.map(p=>{
               const price = upgradeBilling==="annual" ? Math.round(p.annual/12) : p.monthly;
-              const isCurrent = (user?.plan?.id||"professional")===p.id;
+              const isCurrent = (user?.plan?.id||"starter")===p.id;
               return (
                 <div key={p.id} style={{border:`2px solid ${isCurrent?C.accent:C.border}`,borderRadius:12,padding:16,marginBottom:12,background:isCurrent?C.accentLt:"transparent"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>

@@ -67,8 +67,29 @@ def patch_main():
     print("  [main] written")
 
 
+def patch_companies():
+    path = "zuzan-backend/companies.py"
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    # Ensure plan and billing_cycle fields are in CompanyUpdate (fix 2026-08-01)
+    if "plan:                   Optional[str] = None" not in src:
+        src = src.replace(
+            "    # User-initiated subscription transitions only — guarded in update_company.",
+            "    # Plan / billing cycle — user can switch plan at any time.\n"
+            "    plan:                   Optional[str] = None\n"
+            "    billing_cycle:          Optional[str] = None\n"
+            "    # User-initiated subscription transitions only — guarded in update_company.",
+        )
+        print("  [companies] added plan + billing_cycle to CompanyUpdate")
+    # Always rewrite to refresh mtime
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    print("  [companies] written")
+
+
 if __name__ == "__main__":
     print("=== Applying backend patches ===")
     patch_auth()
     patch_main()
+    patch_companies()
     print("=== Done ===")
