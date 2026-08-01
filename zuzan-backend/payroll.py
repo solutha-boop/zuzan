@@ -2303,7 +2303,7 @@ Keep each bullet to 2–3 sentences maximum. Be direct and SA-business-relevant.
         import anthropic as _anthropic
         client = _anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-haiku-4-5",
+            model="claude-haiku-4-5-20251001",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )

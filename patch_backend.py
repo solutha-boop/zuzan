@@ -67,6 +67,17 @@ def patch_main():
     print("  [main] written")
 
 
+def patch_payroll():
+    path = "zuzan-backend/payroll.py"
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    # Fix model string (2026-08-01)
+    src = src.replace('model="claude-haiku-4-5",', 'model="claude-haiku-4-5-20251001",')
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    print("  [payroll] model string fixed + written")
+
+
 def patch_companies():
     path = "zuzan-backend/companies.py"
     with open(path, "r", encoding="utf-8") as f:
@@ -92,4 +103,5 @@ if __name__ == "__main__":
     patch_auth()
     patch_main()
     patch_companies()
+    patch_payroll()
     print("=== Done ===")

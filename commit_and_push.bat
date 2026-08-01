@@ -20,6 +20,7 @@ git add zuzan-app/src/App.mobile.js
 git add zuzan-landing.html
 git add audit_reports/
 git add zuzan-backend/companies.py
+git add zuzan-backend/payroll.py
 git diff --cached --stat
 
 echo === Committing ===
