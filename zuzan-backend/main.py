@@ -317,7 +317,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -560,6 +560,7 @@ async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__im
 
 
 def _keyword_fallback(msg: str, ctx: str) -> dict:
+    # Invoices
     if ("invoice" in msg and any(x in msg for x in ["create","new","add","make","how","generate"])):
         return {"reply":"To create an invoice: go to Sales → Invoices, click '+ New Invoice', fill in the client name, description and amount. ZuZan automatically calculates 15% VAT and assigns an invoice number. You can then send it directly to the client."}
     if "overdue" in msg and "invoice" in msg:
@@ -568,14 +569,36 @@ def _keyword_fallback(msg: str, ctx: str) -> dict:
         return {"reply":"To mark an invoice as paid: open the invoice, click 'Mark as Paid'. ZuZan records the payment date and updates the invoice status."}
     if "send" in msg and "invoice" in msg:
         return {"reply":"To send an invoice: open the invoice and click 'Send Invoice'. ZuZan emails it to the client's email address."}
+    if "credit note" in msg:
+        return {"reply":"To issue a credit note: go to Sales → Invoices, open the paid invoice, and click 'Credit Note'. ZuZan reverses the journal entries and creates a linked credit note."}
+    # Quotes
     if ("quote" in msg or "estimate" in msg) and any(x in msg for x in ["create","new","add","make","how","find","where"]):
         return {"reply":"To create a quote: go to Sales → Quotes, click '+ New Quote', fill in the client name, description, amount and validity date. Once accepted, click 'Convert to Invoice'."}
     if "convert" in msg and ("quote" in msg or "estimate" in msg):
         return {"reply":"To convert a quote to an invoice: open the quote, click 'Accept', then click 'Convert to Invoice'. ZuZan creates a new invoice with all details pre-filled."}
+    # Expenses
     if "expense" in msg and any(x in msg for x in ["add","create","new","record","how","make"]):
         return {"reply":"To add an expense: go to Expenses, click '+ Add Expense', fill in the vendor, amount, category, and date. You can also scan a receipt using the camera icon."}
+    # Purchase orders
     if "purchase order" in msg or " po " in msg or msg.startswith("po "):
         return {"reply":"To create a PO: go to Procurement → Purchase Orders, click '+ New PO'. You can send it to the supplier by email, receive goods, and mark it as paid when done."}
+    # Employees
+    if "employee" in msg and any(x in msg for x in ["add","create","new","how","register"]):
+        return {"reply":"To add an employee: go to the Payroll tab, click '+ Add Employee'. Fill in their name, ID number, salary, bank details and tax number. ZuZan will include them in the next payroll run automatically."}
+    if "employee" in msg and any(x in msg for x in ["edit","update","change","delete","remove"]):
+        return {"reply":"To edit an employee: go to the Payroll tab, find the employee card and click 'Edit'. Update their details and click Save. To remove an employee, click 'Delete' on their card."}
+    if "employee" in msg:
+        return {"reply":"Employees are managed in the Payroll tab. You can add, edit, or remove employees there. Each employee needs a name, salary, bank account and tax number for payroll to run correctly."}
+    # Payroll
+    if "run payroll" in msg or ("run" in msg and "payroll" in msg):
+        return {"reply":"To run payroll: go to the Payroll tab and click 'Run Payroll'. Enter any overtime hours, then click 'Confirm & Run Payroll'. ZuZan calculates PAYE, UIF and SDL and generates payslips automatically."}
+    if "payslip" in msg:
+        return {"reply":"Payslips are generated automatically when you run payroll. Go to the Payroll tab, find the employee and click 'View Payslip'. You can download or email it directly to the employee."}
+    if "emp201" in msg or "emp 201" in msg:
+        return {"reply":"The EMP201 is generated automatically after each payroll run. Go to Payroll → EMP201 to download it. It is due to SARS by the 7th of each month."}
+    if "leave" in msg:
+        return {"reply":"Leave is managed under Payroll → Leave Management. Employees can submit leave requests, and managers can approve or reject them. Annual leave accrues at 1.25 days per month (15 days/year)."}
+    # Tax
     if "uif" in msg:
         return {"reply":"UIF is 1% employee + 1% employer, capped at R17,712/month gross. Both portions are calculated automatically in ZuZan's Payroll tab."}
     if "paye" in msg:
@@ -584,11 +607,37 @@ def _keyword_fallback(msg: str, ctx: str) -> dict:
         return {"reply":"SDL is 1% of gross payroll, only if annual payroll exceeds R500,000. It is an employer cost calculated automatically in Payroll."}
     if "vat" in msg:
         return {"reply":"South Africa's standard VAT rate is 15%. ZuZan calculates VAT automatically on invoices and expenses. VAT201 reports are in the Reports tab."}
+    if "provisional tax" in msg or "provisional" in msg:
+        return {"reply":"Provisional tax estimates are in Reports → Management Accounts. ZuZan calculates your estimated tax liability based on current-year profit. Pay in August (1st period) and February (2nd period)."}
+    # Reports
+    if "vat201" in msg or "vat 201" in msg:
+        return {"reply":"The VAT201 report is in Reports → VAT201. It summarises output VAT (from invoices) and input VAT (from expenses) for your submission period. ZuZan calculates the amount due or refundable."}
+    if "report" in msg or "balance sheet" in msg or "profit" in msg or "p&l" in msg:
+        return {"reply":"Reports are under the Reports tab. You'll find P&L, Balance Sheet, Trial Balance, VAT201, Reconciliation, and Management Accounts. Filter by date range or financial year."}
     if "payroll" in msg:
-        return {"reply":"Go to the Payroll tab to run monthly payroll. ZuZan calculates PAYE, UIF and SDL automatically and lets you download the EMP201."}
-    if "report" in msg or "balance sheet" in msg or "profit" in msg:
-        return {"reply":"Reports are under the Reports tab. You'll find P&L, Balance Sheet, Trial Balance, VAT201, and Reconciliation. Filter by date range or financial year."}
-    return {"reply":"I'm here to help with ZuZan. You can ask me about invoices, quotes, expenses, purchase orders, payroll, VAT, or any SARS compliance questions."}
+        return {"reply":"Go to the Payroll tab to run monthly payroll. ZuZan calculates PAYE, UIF and SDL automatically and generates payslips and EMP201."}
+    # Other modules
+    if "inventory" in msg or "stock" in msg:
+        return {"reply":"Inventory is under the Inventory tab. Add stock items with cost price and quantity. ZuZan tracks stock levels and posts COGS automatically when you receive purchase orders."}
+    if "budget" in msg:
+        return {"reply":"Budgeting is under the Reports → Budget tab. Set monthly budgets per category and ZuZan shows actuals vs budget variance in real time."}
+    if "fixed asset" in msg or "depreciation" in msg:
+        return {"reply":"Fixed assets are under the Fixed Assets tab. Add an asset with cost, useful life and SARS category. ZuZan calculates depreciation automatically each month and posts the journal entry."}
+    if "bank" in msg and any(x in msg for x in ["feed","import","connect","reconcil","statement"]):
+        return {"reply":"Bank feeds are under the Banking tab. Connect via Stitch or Salt Edge to import transactions automatically, or upload a CSV. ZuZan matches transactions to invoices and expenses for easy reconciliation."}
+    if "reconcil" in msg:
+        return {"reply":"Bank reconciliation is in Reports → Reconciliation. Match your bank transactions to ZuZan records. Any unmatched items are flagged for review."}
+    if "customer" in msg:
+        return {"reply":"Customers are managed under the Customers tab. Add customer details including contact info and payment terms. Customer balances and payment history are shown on each record."}
+    if "supplier" in msg:
+        return {"reply":"Suppliers are managed under the Suppliers tab. Add supplier details and link them to purchase orders and expenses for a full payables picture."}
+    if "document" in msg:
+        return {"reply":"The Document Repository is under the Documents tab. Upload and organise contracts, licences, compliance certificates and other business documents."}
+    if "plan" in msg or "upgrade" in msg or "subscription" in msg:
+        return {"reply":"ZuZan plans start at R399/month (Starter), R699/month (Professional) and R1,299/month (Business). Upgrade in Settings → Subscription. A 14-day free trial is included."}
+    if "setting" in msg or "company" in msg or "profile" in msg:
+        return {"reply":"Company settings are under the Settings tab. Update your company name, VAT number, banking details, logo, and notification preferences there."}
+    return {"reply":"I'm here to help with ZuZan. You can ask me about invoices, quotes, expenses, employees, payroll, VAT, reports, inventory, fixed assets, or SARS compliance. What do you need help with?"}
 
 
 # ── RECEIPT SCAN ──────────────────────────────────────────────────────────────
