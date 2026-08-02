@@ -6765,6 +6765,13 @@ function BankFeeds() {
 
   return (
     <div>
+      <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"12px 16px",marginBottom:20,display:"flex",alignItems:"flex-start",gap:10}}>
+        <span style={{fontSize:16}}>🚧</span>
+        <div style={{fontSize:12,color:"#92400e"}}>
+          <strong>Work in progress.</strong> Automatic bank feeds are coming soon. In the meantime, use the <strong>Bank Import</strong> tab to upload your bank statement and categorise transactions manually.
+        </div>
+      </div>
+
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
         <div>
           <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Live Bank Feeds</div>
