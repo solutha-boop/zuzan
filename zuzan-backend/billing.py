@@ -420,6 +420,8 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     }
     url = PAYFAST_ADHOC_URL.format(token=company.payfast_token)
 
+    resp = None
+    resp = None
     try:
         resp = _requests.post(url, data=body, headers=headers, timeout=30)
         result = resp.json() if resp.content else {}
@@ -427,7 +429,7 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
         logger.error(f"AdHoc charge network error for company {company.id}: {e}")
         result = {"code": 0, "data": {"response": str(e)}}
 
-    if resp.status_code == 200 and result.get("code") == 200:
+    if resp and resp.status_code == 200 and result.get("code") == 200:
         # Success — log payment and advance next_billing_date
         company.next_billing_date = datetime.utcnow() + timedelta(days=30)
         owner = db.query(User).filter(User.company_id == company.id, User.role == "owner").first()
@@ -511,9 +513,9 @@ async def afs_initiate(
     co = db.query(Company).filter(Company.id == current_user.company_id).first()
     m_payment_id = f"afs-{co.id}-{fy}"
 
-    merchant_id  = co.payfast_merchant_id  or PAYFAST_MERCHANT_ID
-    merchant_key = co.payfast_merchant_key or PAYFAST_MERCHANT_KEY
-    passphrase   = co.payfast_passphrase   or PAYFAST_PASSPHRASE
+    merchant_id  = (decrypt_field(co.payfast_merchant_id)  if co.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
+    merchant_key = (decrypt_field(co.payfast_merchant_key) if co.payfast_merchant_key else None) or PAYFAST_MERCHANT_KEY
+    passphrase   = (decrypt_field(co.payfast_passphrase)   if co.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
 
     data = {
         "merchant_id":   merchant_id,

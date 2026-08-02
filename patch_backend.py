@@ -98,10 +98,63 @@ def patch_companies():
     print("  [companies] written")
 
 
+def patch_billing():
+    path = "zuzan-backend/billing.py"
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    # Fix 1: guard resp before status_code check in adhoc_charge (2026-08-02)
+    src = src.replace(
+        "    try:\n        resp = _requests.post(url, data=body, headers=headers, timeout=30)",
+        "    resp = None\n    try:\n        resp = _requests.post(url, data=body, headers=headers, timeout=30)",
+    )
+    src = src.replace(
+        "    if resp.status_code == 200 and result.get(\"code\") == 200:",
+        "    if resp and resp.status_code == 200 and result.get(\"code\") == 200:",
+    )
+    # Fix 2: decrypt PayFast credentials in afs_initiate (2026-08-02)
+    src = src.replace(
+        "    merchant_id  = co.payfast_merchant_id  or PAYFAST_MERCHANT_ID\n"
+        "    merchant_key = co.payfast_merchant_key or PAYFAST_MERCHANT_KEY\n"
+        "    passphrase   = co.payfast_passphrase   or PAYFAST_PASSPHRASE",
+        "    merchant_id  = (decrypt_field(co.payfast_merchant_id)  if co.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID\n"
+        "    merchant_key = (decrypt_field(co.payfast_merchant_key) if co.payfast_merchant_key else None) or PAYFAST_MERCHANT_KEY\n"
+        "    passphrase   = (decrypt_field(co.payfast_passphrase)   if co.payfast_passphrase   else None) or PAYFAST_PASSPHRASE",
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    print("  [billing] adhoc_charge NameError + afs_initiate decrypt fixed + written")
+
+
+def patch_main_billing_loop():
+    path = "zuzan-backend/main.py"
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    # Fix: add run_monthly_charges to the daily maintenance loop (2026-08-02)
+    old = (
+        "                from billing import check_trial_expirations, send_overdue_reminders\n"
+        "                check_trial_expirations()\n"
+        "                send_overdue_reminders()\n"
+    )
+    new = (
+        "                from billing import check_trial_expirations, send_overdue_reminders, run_monthly_charges\n"
+        "                check_trial_expirations()\n"
+        "                send_overdue_reminders()\n"
+        "                run_monthly_charges()\n"
+    )
+    if old in src:
+        src = src.replace(old, new)
+        print("  [main] added run_monthly_charges to daily loop")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    print("  [main] written")
+
+
 if __name__ == "__main__":
     print("=== Applying backend patches ===")
     patch_auth()
     patch_main()
     patch_companies()
     patch_payroll()
+    patch_billing()
+    patch_main_billing_loop()
     print("=== Done ===")
