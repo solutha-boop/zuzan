@@ -2,3 +2,4 @@
   base    = ""
   command = "mkdir -p _site && cp zuzan-landing.html _site/index.html"
   publish = "_site"
+  ignore  = "git diff --quiet HEAD^ HEAD -- zuzan-landing.html"

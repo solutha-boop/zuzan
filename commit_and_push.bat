@@ -23,6 +23,7 @@ git add zuzan-backend/companies.py
 git add zuzan-backend/payroll.py
 git add zuzan-backend/billing.py
 git add zuzan-backend/main.py
+git add netlify.toml
 git diff --cached --stat
 
 echo === Committing ===
