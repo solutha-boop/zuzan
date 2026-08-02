@@ -1631,7 +1631,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div id="invoice-preview-content">
               <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>
-            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={true}/>
+            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={true} hasPayfast={!!user?.payfastMerchantId}/>
           </div>
           {/* Sticky action bar */}
           <div style={{flexShrink:0,background:C.surface,borderTop:`1px solid ${C.border}`,padding:"12px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -1653,7 +1653,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <div id="invoice-preview-content">
             <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>
-            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={false}/>
+            <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={false} hasPayfast={!!user?.payfastMerchantId}/>
             <div style={{display:"flex",gap:8,marginTop:16}}>
               <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={printInvoice} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
@@ -7397,7 +7397,7 @@ function InvoicePortal({token}) {
 }
 
 // ── SEND INVOICE PANEL (inside invoice preview modal) ─────────────────────────
-function SendInvoicePanel({preview, onSent, isMobile}) {
+function SendInvoicePanel({preview, onSent, isMobile, hasPayfast}) {
   const [sending,    setSending]    = useState(false);
   const [portalUrl,  setPortalUrl]  = useState(preview?.portalToken ? `${window.location.origin}/portal/${preview.portalToken}` : null);
   const [copied,     setCopied]     = useState(false);
@@ -7442,6 +7442,11 @@ function SendInvoicePanel({preview, onSent, isMobile}) {
       ) : (
         <div>
           <div style={{fontSize:11,color:C2.inkMid,marginBottom:10}}>Generate a secure payment link and optionally email it to the client.</div>
+          {!hasPayfast && (
+            <div style={{fontSize:11,color:"#c2410c",background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,padding:"8px 10px",marginBottom:10}}>
+              ⚠️ <strong>PayFast not set up</strong> — clients won't be able to pay online. <a href="#settings" style={{color:"#c2410c",fontWeight:700}} onClick={()=>window.dispatchEvent(new CustomEvent("zuzan-nav",{detail:"settings"}))}>Go to Settings →</a>
+            </div>
+          )}
           <button onClick={handleSend} disabled={sending} style={{background:C2.blue,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:sending?"not-allowed":"pointer",fontFamily:"inherit",opacity:sending?0.7:1}}>
             {sending ? "Sending..." : "Send Invoice"}
           </button>
@@ -8153,6 +8158,12 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         </div>
 
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>PayFast Online Payments</div>
+        {!form.payfastMerchantId && (
+          <div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:12,color:"#c2410c",display:"flex",alignItems:"flex-start",gap:10}}>
+            <span style={{fontSize:16}}>⚠️</span>
+            <div><strong>Setup required to receive online payments.</strong> Without your PayFast credentials, clients cannot pay invoices online. <a href="https://www.payfast.co.za/registration" target="_blank" rel="noreferrer" style={{color:"#c2410c",fontWeight:700}}>Create a free PayFast account →</a> then enter your Merchant ID and Key below.</div>
+          </div>
+        )}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:14}}>
           {[{l:"Merchant ID",k:"payfastMerchantId",p:"10000100"},{l:"Merchant Key",k:"payfastMerchantKey",p:"46f0cd694581a"}].map(f=>(
             <div key={f.k}>
