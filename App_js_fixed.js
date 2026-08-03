@@ -1296,7 +1296,7 @@ function RecurringInvoicesTab() {
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({client_name:"",client_email:"",description:"",amount:"",vat_applicable:true,currency:"ZAR",frequency:"monthly",start_date:new Date().toISOString().slice(0,10)});
   const [saving, setSaving] = useState(false);
-  const load = () => api("/recurring-invoices").then(setItems).catch(()=>{});
+  const load = () => { api("/recurring-invoices").then(setItems).catch(()=>{}); };
   useEffect(load, []);
   const FREQ = {weekly:"Weekly",monthly:"Monthly",quarterly:"Quarterly",annually:"Annually"};
   const handleCreate = async () => {
@@ -1408,7 +1408,7 @@ function CreditNotesTab() {
   const [showNew, setShowNew] = useState(false);
   const [form, setForm] = useState({client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:new Date().toISOString().slice(0,10)});
   const [saving, setSaving] = useState(false);
-  const load = () => api("/credit-notes").then(setItems).catch(()=>{});
+  const load = () => { api("/credit-notes").then(setItems).catch(()=>{}); };
   useEffect(load, []);
   const handleCreate = async () => {
     if(!form.client_name||!form.amount){alert("Client name and amount required.");return;}
