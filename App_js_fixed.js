@@ -6470,6 +6470,7 @@ function BankFeedPanel({ bank }) {
   const [matchModal, setMatchModal]= useState(null);
   const [invoices,   setInvoices]  = useState([]);
   const [expenses,   setExpenses]  = useState([]);
+  const [requested,  setRequested] = useState(false);
 
   const BANK_META = {
     absa:         {label:"ABSA",          color:"#CC0000", icon:"🔴"},
@@ -6629,14 +6630,28 @@ function BankFeedPanel({ bank }) {
       {!status?.connected ? (
         <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:12,padding:28,textAlign:"center"}}>
           <div style={{fontSize:28,marginBottom:10}}>{bankIcon}</div>
-          <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>Connect your {bankLabel} account</div>
-          <div style={{fontSize:11,color:C.inkMid,lineHeight:1.7,maxWidth:380,margin:"0 auto 16px"}}>
-            You'll be redirected to <strong>{bankLabel}'s secure login page</strong> to authorise ZuZan.
-            ZuZan never sees your banking password — only read-only transaction data is shared.
-          </div>
-          <button onClick={handleConnect} disabled={connecting} style={{background:bankColor,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:connecting?0.6:1}}>
-            {connecting ? "Redirecting to " + bankLabel + "…" : "🔗 Connect " + bankLabel}
-          </button>
+          {status?.configured ? (<>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>Connect your {bankLabel} account</div>
+            <div style={{fontSize:11,color:C.inkMid,lineHeight:1.7,maxWidth:380,margin:"0 auto 16px"}}>
+              You'll be redirected to <strong>{bankLabel}'s secure login page</strong> to authorise ZuZan.
+              ZuZan never sees your banking password — only read-only transaction data is shared.
+            </div>
+            <button onClick={handleConnect} disabled={connecting} style={{background:bankColor,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:connecting?0.6:1}}>
+              {connecting ? "Redirecting to " + bankLabel + "…" : "🔗 Connect " + bankLabel}
+            </button>
+          </>) : (<>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>{bankLabel} — Coming Soon</div>
+            <div style={{fontSize:11,color:C.inkMid,lineHeight:1.7,maxWidth:380,margin:"0 auto 14px"}}>
+              We're completing our partnership with {bankLabel}. Once live, you'll be able to connect your account and import transactions automatically.
+            </div>
+            {requested ? (
+              <div style={{fontSize:12,color:"#16a34a",fontWeight:600}}>✓ Interest registered — we'll notify you when {bankLabel} goes live.</div>
+            ) : (
+              <button onClick={()=>{ api(`/banking/${bank}/request-interest`,{method:"POST"}).catch(()=>{}); setRequested(true); }} style={{background:"#f8fafc",color:C.ink,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 20px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                🔔 Notify me when {bankLabel} is available
+              </button>
+            )}
+          </>)}
         </div>
       ) : (
         <div>

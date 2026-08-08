@@ -318,7 +318,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -346,7 +346,7 @@ from portal import portal_router
 from stitch import stitch_router
 from saltedge import saltedge_router
 from financial_statements import router as fin_stmts_router
-from bank_direct_feeds import absa_router, nedbank_router, investec_router, standardbank_router
+from bank_direct_feeds import absa_router, nedbank_router, investec_router, standardbank_router, bank_interest_router
 from documents import router as documents_router
 from csv_import import router as csv_import_router
 from category_rules import router as category_rules_router
@@ -381,6 +381,7 @@ app.include_router(absa_router,          prefix="/banking/absa",         tags=["
 app.include_router(nedbank_router,       prefix="/banking/nedbank",      tags=["Bank Feeds"])
 app.include_router(investec_router,      prefix="/banking/investec",     tags=["Bank Feeds"])
 app.include_router(standardbank_router,  prefix="/banking/standardbank", tags=["Bank Feeds"])
+app.include_router(bank_interest_router, prefix="/banking",               tags=["Bank Feeds"])
 app.include_router(fin_stmts_router,     prefix="/financial-statements", tags=["Financial Statements"])
 app.include_router(documents_router,     prefix="/documents",            tags=["Documents"])
 app.include_router(csv_import_router,    prefix="/import",               tags=["CSV Import"])
@@ -909,6 +910,15 @@ async def admin_analytics(db: Session = Depends(get_db_session), _=Depends(_chec
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/admin/api/bank-interest", tags=["Admin"])
+async def admin_bank_interest(db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    """Per-bank interest request counts — use to prioritise bank partnerships."""
+    from database import BankInterestRequest as _BIR
+    from sqlalchemy import func as _func
+    rows = db.query(_BIR.bank, _func.count(_BIR.id).label("count")).group_by(_BIR.bank).all()
+    return {row.bank: row.count for row in rows}
+
+
 @app.get("/admin", response_class=_HTML, tags=["Admin"])
 async def admin_dashboard():
     html = """<!DOCTYPE html>
@@ -991,6 +1001,7 @@ tr:hover td{background:#fdf9f7}
     <button class="tab active" onclick="showTab('clients')">Clients</button>
     <button class="tab" onclick="showTab('revenue')">Subscription Revenue</button>
     <button class="tab" onclick="showTab('analytics')">Site Analytics</button>
+    <button class="tab" onclick="showTab('banks')">Bank Interest</button>
   </div>
 
   <!-- ── CLIENTS TAB ── -->
@@ -1106,6 +1117,18 @@ tr:hover td{background:#fdf9f7}
       </div>
     </div>
   </div><!-- end tab-analytics -->
+
+  <!-- ── BANK INTEREST TAB ── -->
+  <div id="tab-banks" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <h3>🏦 Bank Integration Interest</h3>
+        <button class="refresh" style="margin-left:auto" onclick="loadBankInterest()">↻ Refresh</button>
+      </div>
+      <p style="font-size:12px;color:#888;margin-bottom:16px">Clients who clicked "Notify me when [Bank] is available". Use these counts when approaching bank partnership teams.</p>
+      <div id="bankInterestGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px"></div>
+    </div>
+  </div><!-- end tab-banks -->
 </div><!-- end main -->
 
 <script>
@@ -1119,8 +1142,10 @@ function showTab(tab) {
   document.getElementById('tab-clients').style.display   = tab === 'clients'   ? '' : 'none';
   document.getElementById('tab-revenue').style.display   = tab === 'revenue'   ? '' : 'none';
   document.getElementById('tab-analytics').style.display = tab === 'analytics' ? '' : 'none';
+  document.getElementById('tab-banks').style.display     = tab === 'banks'     ? '' : 'none';
   if (tab === 'revenue')   loadRevenue();
   if (tab === 'analytics') loadAnalytics();
+  if (tab === 'banks')     loadBankInterest();
 }
 
 function login() {
@@ -1330,6 +1355,26 @@ async function loadAnalytics() {
     }).join('') || '<tr><td colspan="5" style="color:#aaa;font-size:12px">No visits recorded yet</td></tr>';
 
   } catch(e) { console.error('loadAnalytics error', e); }
+}
+
+async function loadBankInterest() {
+  try {
+    const d = await api('/admin/api/bank-interest');
+    const BANKS = [
+      {id:'absa',        label:'ABSA',          icon:'🔴'},
+      {id:'nedbank',     label:'Nedbank',        icon:'🟩'},
+      {id:'investec',    label:'Investec',       icon:'⬛'},
+      {id:'standardbank',label:'Standard Bank',  icon:'🔵'},
+      {id:'fnb',         label:'FNB',            icon:'🟢'},
+      {id:'capitec',     label:'Capitec',        icon:'🟦'},
+    ];
+    document.getElementById('bankInterestGrid').innerHTML = BANKS.map(b => `
+      <div class="mrr-card">
+        <div style="font-size:24px;margin-bottom:6px">${b.icon}</div>
+        <div class="val">${d[b.id] || 0}</div>
+        <div class="lbl">${b.label}</div>
+      </div>`).join('');
+  } catch(e) { console.error('loadBankInterest error', e); }
 }
 
 async function submitManual() {

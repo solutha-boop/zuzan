@@ -973,6 +973,16 @@ class SiteVisit(Base):
     user_agent  = Column(String, nullable=True)   # truncated to 300 chars
     ip_hash     = Column(String, nullable=True)   # first 16 chars of SHA-256 hash
 
+class BankInterestRequest(Base):
+    """Records when a client requests integration with a specific bank."""
+    __tablename__ = "bank_interest_requests"
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    bank        = Column(String, nullable=False)   # "absa" | "nedbank" | "investec" | "standardbank" | "fnb" | "capitec"
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    company     = relationship("Company")
+
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).

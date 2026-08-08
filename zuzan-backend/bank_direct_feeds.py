@@ -55,7 +55,7 @@ from database import (
     NedbankConnection, NedbankBankAccount, NedbankTransaction,
     InvestecConnection, InvestecBankAccount, InvestecTransaction,
     StandardBankConnection, StandardBankBankAccount, StandardBankTransaction,
-    Invoice, Expense, InvoiceStatus,
+    Invoice, Expense, InvoiceStatus, BankInterestRequest,
 )
 from auth import get_current_user, require_role
 from crypto import encrypt_field, decrypt_field
@@ -1189,3 +1189,47 @@ def standardbank_disconnect(db: Session = Depends(get_db), current_user=Depends(
     conn = db.query(StandardBankConnection).filter(StandardBankConnection.company_id == current_user.company_id).first()
     if conn: db.delete(conn); db.commit()
     return {"status": "disconnected"}
+
+
+# ── Bank Interest Requests ────────────────────────────────────────────────────
+# Clients click "Request this bank" on unconfigured bank cards.
+# Counts are visible in the admin dashboard to guide partnership prioritisation.
+
+bank_interest_router = APIRouter()
+
+VALID_BANKS = {"absa", "nedbank", "investec", "standardbank", "fnb", "capitec"}
+
+
+@bank_interest_router.post("/{bank}/request-interest")
+def request_bank_interest(
+    bank: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    bank = bank.lower()
+    if bank not in VALID_BANKS:
+        raise HTTPException(400, f"Unknown bank '{bank}'")
+    # Deduplicate — one request per company per bank
+    existing = db.query(BankInterestRequest).filter(
+        BankInterestRequest.company_id == current_user.company_id,
+        BankInterestRequest.bank == bank,
+    ).first()
+    if not existing:
+        db.add(BankInterestRequest(company_id=current_user.company_id, bank=bank))
+        db.commit()
+    return {"status": "recorded", "bank": bank}
+
+
+@bank_interest_router.get("/interest-counts")
+def get_interest_counts(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("owner")),
+):
+    """Admin endpoint — returns interest count per bank."""
+    from sqlalchemy import func
+    rows = (
+        db.query(BankInterestRequest.bank, func.count(BankInterestRequest.id).label("count"))
+        .group_by(BankInterestRequest.bank)
+        .all()
+    )
+    return {row.bank: row.count for row in rows}
