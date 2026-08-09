@@ -8,7 +8,7 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import secrets
 from typing import Optional
-from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus
+from database import get_db, User, Company, Payment, PlanType, BillingCycle, SubscriptionStatus, CompanyMembership
 from email_service import send_verification_email, send_welcome_email, send_password_reset_email, send_admin_signup_notification, send_invite_email, send_mandate_email
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -109,12 +109,34 @@ def get_current_user(
         user_id = payload.get("user_id")
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
+        active_company_id = payload.get("company_id")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found")
+
+    # Accountant Practice / multi-client: the JWT's company_id is the "active"
+    # company for this session, which may differ from the user's home company
+    # (users.company_id) after a /auth/switch-company call. Re-verify
+    # membership on every request (cheap, and protects against stale/edited
+    # tokens) and, if valid, apply the active company + its role to the user
+    # object for the rest of this request only. We immediately expunge the
+    # object from the session so this in-memory swap can never be persisted
+    # to the DB by an unrelated db.commit() elsewhere in the request.
+    if active_company_id and active_company_id != user.company_id:
+        membership = db.query(CompanyMembership).filter(
+            CompanyMembership.user_id == user.id,
+            CompanyMembership.company_id == active_company_id,
+        ).first()
+        if membership:
+            db.expunge(user)
+            user.company_id = active_company_id
+            user.role = membership.role
+        # If no membership is found (e.g. removed access, tampered token),
+        # silently fall back to the user's real home company rather than
+        # erroring the whole request.
     return user
 
 
@@ -164,6 +186,12 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
         email_verify_token=verify_token,
     )
     db.add(user)
+    db.flush()
+
+    # Accountant Practice / multi-client: record the owner's membership so
+    # /auth/my-companies has a proper row from day one (not just the
+    # legacy users.company_id fallback).
+    db.add(CompanyMembership(user_id=user.id, company_id=company.id, role="owner"))
     db.flush()
 
     # Create payment record
@@ -310,6 +338,102 @@ async def get_me(
             "payroll_employees":   company.payroll_employees,
         },
     }
+
+@router.get("/my-companies")
+async def my_companies(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Accountant Practice / multi-client: list every company this user can
+    access, with their role in each. Always includes the user's home
+    company (users.company_id) even if no CompanyMembership row exists yet,
+    so pre-existing single-company users see exactly one entry here and the
+    frontend can skip the Client Picker for them.
+    """
+    # Re-fetch fresh by id (not current_user directly) to get the user's
+    # true home company_id, independent of any active-company override
+    # get_current_user may have applied for this request.
+    home_user = db.query(User).filter(User.id == current_user.id).first()
+
+    memberships = db.query(CompanyMembership).filter(
+        CompanyMembership.user_id == current_user.id
+    ).all()
+    roles_by_company = {m.company_id: m.role for m in memberships}
+    if home_user.company_id not in roles_by_company:
+        roles_by_company[home_user.company_id] = home_user.role
+
+    companies = db.query(Company).filter(Company.id.in_(roles_by_company.keys())).all()
+    return [
+        {
+            "id":                  c.id,
+            "name":                c.name,
+            "logo_url":            c.logo_url,
+            "plan":                str(c.plan.value),
+            "subscription_status": effective_subscription_status(c),
+            "role":                roles_by_company.get(c.id),
+            "is_home":             c.id == home_user.company_id,
+        }
+        for c in companies
+    ]
+
+
+@router.post("/switch-company/{company_id}")
+async def switch_company(
+    company_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Accountant Practice / multi-client: verify the user has access to
+    `company_id` (either their home company or a CompanyMembership row),
+    then issue a fresh JWT with that company_id as the active company.
+    No server-side session state — the switch lives entirely in the token,
+    matching the existing stateless JWT auth flow.
+    """
+    home_user = db.query(User).filter(User.id == current_user.id).first()
+
+    role = None
+    if company_id == home_user.company_id:
+        role = home_user.role
+    else:
+        membership = db.query(CompanyMembership).filter(
+            CompanyMembership.user_id == home_user.id,
+            CompanyMembership.company_id == company_id,
+        ).first()
+        if membership:
+            role = membership.role
+
+    if not role:
+        raise HTTPException(status_code=403, detail="You do not have access to this company.")
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    token = create_token({"user_id": home_user.id, "company_id": company.id})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id":         home_user.id,
+            "first_name": home_user.first_name,
+            "last_name":  home_user.last_name,
+            "email":      home_user.email,
+            "role":       role,
+        },
+        "company": {
+            "id":                  company.id,
+            "name":                company.name,
+            "logo_url":            company.logo_url,
+            "plan":                str(company.plan.value),
+            "subscription_status": effective_subscription_status(company),
+            "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
+            "payroll_enabled":     company.payroll_enabled,
+            "afs_enabled":         company.afs_enabled,
+        },
+    }
+
 
 @router.get("/verify-email/{token}", response_class=HTMLResponse)
 async def verify_email(token: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -622,16 +746,53 @@ async def accept_invite(
     # Check if email already has an account
     existing = db.query(User).filter(User.email == invite.email).first()
     if existing:
-        # If they already belong to this company, just mark the invite used
-        if existing.company_id == invite.company_id:
+        already_member = (
+            existing.company_id == invite.company_id
+            or db.query(CompanyMembership).filter(
+                CompanyMembership.user_id == existing.id,
+                CompanyMembership.company_id == invite.company_id,
+            ).first() is not None
+        )
+        if already_member:
             invite.used_at = now
             db.commit()
-            raise HTTPException(status_code=400, detail="You already have an account in this company.")
-        raise HTTPException(
-            status_code=400,
-            detail="An account with this email already exists. "
-                   "Contact support to move your account to this company."
-        )
+            raise HTTPException(status_code=400, detail="You already have access to this company.")
+
+        # Accountant Practice / multi-client: an existing user accepting an
+        # invite to a *different* company now gets a CompanyMembership row
+        # for it instead of being turned away. Their home company
+        # (users.company_id) is untouched — this just adds another company
+        # they can switch into via /auth/switch-company.
+        db.add(CompanyMembership(user_id=existing.id, company_id=invite.company_id, role=invite.role))
+        invite.used_at = now
+        db.commit()
+
+        company = db.query(Company).filter(Company.id == invite.company_id).first()
+        log_action(db, invite.company_id, existing, "team.invite_accepted",
+                   detail=f"{invite.email} joined as {invite.role} (existing account — added as additional company)")
+
+        token_str = create_token({"user_id": existing.id, "company_id": invite.company_id})
+        return {
+            "access_token": token_str,
+            "token_type": "bearer",
+            "user": {
+                "id":         existing.id,
+                "first_name": existing.first_name,
+                "last_name":  existing.last_name,
+                "email":      existing.email,
+                "role":       invite.role,
+            },
+            "company": {
+                "id":                  company.id,
+                "name":                company.name,
+                "logo_url":            company.logo_url,
+                "plan":                str(company.plan.value),
+                "subscription_status": effective_subscription_status(company),
+                "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
+                "payroll_enabled":     company.payroll_enabled,
+                "afs_enabled":         company.afs_enabled,
+            },
+        }
 
     if len(data.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
@@ -649,6 +810,11 @@ async def accept_invite(
     )
     db.add(user)
     invite.used_at = now
+    db.flush()
+
+    # Accountant Practice / multi-client: record the membership so
+    # /auth/my-companies has a proper row from day one.
+    db.add(CompanyMembership(user_id=user.id, company_id=invite.company_id, role=invite.role))
     db.flush()
 
     company = db.query(Company).filter(Company.id == invite.company_id).first()
@@ -786,3 +952,90 @@ async def get_audit_log(
         }
         for e in entries
     ]
+
+
+# ── Accountant Practice / Multi-Client ────────────────────────────────────────
+
+@router.get("/my-companies")
+async def my_companies(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return all companies this user can access.
+    For single-company users with no membership rows (legacy / pre-feature),
+    falls back to their home company so the login flow is unchanged.
+    """
+    memberships = db.query(CompanyMembership).filter(
+        CompanyMembership.user_id == current_user.id
+    ).all()
+
+    if not memberships:
+        # Legacy user — synthesise a single-entry list from their home company
+        company = db.query(Company).filter(Company.id == current_user.company_id).first()
+        if not company:
+            return []
+        return [{
+            "company_id":   company.id,
+            "company_name": company.name,
+            "role":         current_user.role,
+            "plan":         company.plan.value if company.plan else "starter",
+            "subscription_status": company.subscription_status.value if company.subscription_status else "trial",
+        }]
+
+    result = []
+    for m in memberships:
+        co = db.query(Company).filter(Company.id == m.company_id).first()
+        if co:
+            result.append({
+                "company_id":          co.id,
+                "company_name":        co.name,
+                "role":                m.role,
+                "plan":                co.plan.value if co.plan else "starter",
+                "subscription_status": co.subscription_status.value if co.subscription_status else "trial",
+            })
+    return result
+
+
+@router.post("/switch-company/{company_id}")
+async def switch_company(
+    company_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Issue a new JWT with company_id set to the requested company.
+    Only succeeds if the user has a CompanyMembership (or it's their home company).
+    """
+    # Allow switching to home company always
+    if company_id != current_user.company_id:
+        membership = db.query(CompanyMembership).filter(
+            CompanyMembership.user_id == current_user.id,
+            CompanyMembership.company_id == company_id,
+        ).first()
+        if not membership:
+            raise HTTPException(status_code=403, detail="You don't have access to this company.")
+        role = membership.role
+    else:
+        role = current_user.role
+
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found.")
+
+    new_token = create_token({"user_id": current_user.id, "company_id": company_id})
+    return {
+        "access_token": new_token,
+        "token_type": "bearer",
+        "company": {
+            "id":                  company.id,
+            "name":                company.name,
+            "logo_url":            company.logo_url,
+            "plan":                company.plan.value if company.plan else "starter",
+            "subscription_status": effective_subscription_status(company),
+            "trial_ends":          company.trial_ends.isoformat() if company.trial_ends else None,
+            "payroll_enabled":     company.payroll_enabled,
+            "afs_enabled":         company.afs_enabled,
+        },
+        "role": role,
+    }

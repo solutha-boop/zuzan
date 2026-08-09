@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Enum
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Enum, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -552,6 +552,30 @@ class InviteToken(Base):
     expires_at = Column(DateTime, nullable=False)
     used_at    = Column(DateTime, nullable=True)
     company    = relationship("Company", foreign_keys=[company_id])
+
+class CompanyMembership(Base):
+    """
+    Accountant Practice / multi-client support.
+
+    Links a user to a company they can access, with a role scoped to that
+    specific company. `users.company_id` remains the user's "home" company
+    (used for legacy single-company logic, and as the default landing
+    company on login); CompanyMembership rows are the full list of companies
+    + per-company roles a user can switch into. A user's home company does
+    not require a row here — /auth/my-companies falls back to it when no
+    membership rows exist yet, so pre-existing single-company users are
+    unaffected.
+    """
+    __tablename__ = "company_memberships"
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    role       = Column(String, nullable=False, default="owner")  # owner|admin|accountant|payroll|employee
+    created_at = Column(DateTime, default=datetime.utcnow)
+    user       = relationship("User", foreign_keys=[user_id])
+    company    = relationship("Company", foreign_keys=[company_id])
+    __table_args__ = (UniqueConstraint("user_id", "company_id", name="uq_company_membership_user_company"),)
+
 
 class AuditLog(Base):
     """Immutable record of every mutation in a company."""
@@ -1431,6 +1455,11 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN cleaning_allowance FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN bc_levy_employer FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN psira_levy_employer FLOAT DEFAULT 0",
+            # ── Accountant Practice / multi-client (2026-08) ───────────────────
+            # Belt-and-braces alongside the CompanyMembership model + create_all()
+            # above — safe no-op if the table already exists.
+            "CREATE TABLE IF NOT EXISTS company_memberships (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id), company_id INTEGER REFERENCES companies(id), role VARCHAR NOT NULL DEFAULT 'owner', created_at TIMESTAMP DEFAULT NOW())",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_membership_user_company ON company_memberships (user_id, company_id)",
         ]:
             try:
                 conn.execute(text(sql))

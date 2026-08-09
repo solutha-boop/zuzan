@@ -8377,6 +8377,61 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
 
 
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
+// ── CLIENT PICKER (Accountant Practice / multi-client) ─────────────────────────
+// Shown after login when a user has access to more than one company — lets
+// an accountant/bookkeeper pick which client to work in before landing on
+// the dashboard. Single-company users never see this screen.
+function ClientPicker({companies, onSelect, onLogout}) {
+  const [switching, setSwitching] = useState(null); // id of company being switched into
+
+  const pick = async (id) => {
+    if (switching !== null) return;
+    setSwitching(id);
+    await onSelect(id);
+    setSwitching(null);
+  };
+
+  const roleColor = (role) => {
+    if (role === "owner") return C.accent;
+    if (role === "admin") return C.blue;
+    if (role === "accountant") return C.green;
+    return C.inkMid;
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{width:"100%",maxWidth:640}}>
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{fontFamily:"serif",fontSize:40,fontWeight:800,color:C.ink,marginBottom:8}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 6px"}}>Select a client</h2>
+          <p style={{fontSize:13,color:C.inkMid}}>You have access to {companies.length} companies. Choose one to continue.</p>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(260px, 1fr))",gap:14}}>
+          {companies.map(c => (
+            <button key={c.id} onClick={()=>pick(c.id)} disabled={switching!==null} style={{
+              textAlign:"left", background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16,
+              padding:20, cursor: switching!==null ? "default" : "pointer", fontFamily:"inherit",
+              opacity: switching!==null && switching!==c.id ? 0.5 : 1,
+              transition:"opacity 0.15s",
+            }}>
+              <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:8}}>{c.name}</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{fontSize:10,fontWeight:700,color:"#fff",background:C.inkDim,borderRadius:20,padding:"3px 10px",textTransform:"capitalize"}}>{c.plan||"starter"}</span>
+                {c.role && <span style={{fontSize:10,fontWeight:700,color:roleColor(c.role),background:roleColor(c.role)+"1A",borderRadius:20,padding:"3px 10px",textTransform:"capitalize"}}>{c.role}</span>}
+                {c.is_home && <span style={{fontSize:10,fontWeight:600,color:C.inkDim}}>Home</span>}
+              </div>
+              {switching===c.id && <div style={{fontSize:11,color:C.inkMid,marginTop:10}}>Switching…</div>}
+            </button>
+          ))}
+        </div>
+        <div style={{textAlign:"center",marginTop:28}}>
+          <button onClick={onLogout} style={{fontSize:12,color:C.inkDim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Sign out</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Login({onLogin, onRegister}) {
   const [view,    setView]    = useState("login");   // login | forgot | reset
   const [form,    setForm]    = useState({email:"", password:""});
@@ -12714,6 +12769,22 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
   const [expanded, setExpanded] = useState({sales: false, procurement: false, banking: false});
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
+  // ── Accountant Practice / multi-client: company switcher ──────────────────
+  const [companies, setCompanies] = useState([]);
+  const [showSwitcher, setShowSwitcher] = useState(false);
+  useEffect(() => {
+    api("/auth/my-companies").then(setCompanies).catch(() => {});
+  }, []);
+  const handleSwitchCompany = async (companyId) => {
+    try {
+      const data = await api(`/auth/switch-company/${companyId}`, {method:"POST"});
+      localStorage.setItem("zuzan_token", data.access_token);
+      window.location.reload();
+    } catch (e) {
+      alert(e.message || "Could not switch company.");
+    }
+  };
+
   const TABS = [
     {id:"dashboard",  label:"Dashboard",   icon:"🏠"},
     {id:"sales",      label:"Sales",       icon:"💼", children:[
@@ -12824,11 +12895,28 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
           <div style={{fontSize:10,color:C.inkMid,marginTop:3,letterSpacing:0.5}}>SA BOOKKEEPING PLATFORM</div>
         </div>
-        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:2}}>{user?.companyName||"Your Company"}</div>
+        <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,position:"relative"}}>
+          <div onClick={()=>companies.length>1 && setShowSwitcher(s=>!s)} style={{display:"flex",alignItems:"center",gap:6,cursor:companies.length>1?"pointer":"default",marginBottom:2}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user?.companyName||"Your Company"}</div>
+            {companies.length>1 && <span style={{fontSize:9,color:C.inkDim,flexShrink:0}}>{showSwitcher?"▴":"▾"}</span>}
+          </div>
           <div style={{fontSize:10,color:C.inkDim}}>{(user?.plan?.name||"starter").charAt(0).toUpperCase()+(user?.plan?.name||"starter").slice(1)} Plan</div>
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
+          {showSwitcher && companies.length>1 && (
+            <div style={{position:"absolute",top:"100%",left:12,right:12,marginTop:6,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:50,overflow:"hidden"}}>
+              {companies.map(c => (
+                <button key={c.id} onClick={()=>{setShowSwitcher(false); handleSwitchCompany(c.id);}} style={{
+                  display:"block",width:"100%",textAlign:"left",padding:"10px 14px",border:"none",
+                  borderBottom:`1px solid ${C.border}`,background:c.name===user?.companyName?C.accentLt:"transparent",
+                  cursor:"pointer",fontFamily:"inherit",
+                }}>
+                  <div style={{fontSize:12,fontWeight:600,color:C.ink}}>{c.name}</div>
+                  <div style={{fontSize:10,color:C.inkDim,textTransform:"capitalize"}}>{c.role||"member"}</div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <nav style={{flex:1,padding:"12px 10px",overflowY:"auto"}}>
           {visibleTabs.map(t => {
@@ -12900,6 +12988,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
 export default function App() {
   const [screen, setScreen] = useState("loading");
   const [user,   setUser]   = useState(null);
+  const [companies, setCompanies] = useState([]); // Accountant Practice: multi-client memberships
   // Detect invite token from URL path /accept-invite/<token>
   const _inviteMatch = window.location.pathname.match(/\/accept-invite\/([A-Za-z0-9_-]{20,})/);
   const _inviteToken = _inviteMatch ? _inviteMatch[1] : null;
@@ -12950,10 +13039,54 @@ export default function App() {
       .catch(() => { clearTimeout(timeout); localStorage.removeItem("zuzan_token"); setScreen("login"); });
   }, []);
 
-  const handleLogin = userData => {
+  const handleLogin = async userData => {
     Sentry.setUser({ email: userData.email, username: userData.companyName });
+    // Accountant Practice / multi-client: only show the Client Picker when
+    // there's an actual choice — single-company users (the vast majority)
+    // go straight to the dashboard exactly as before.
+    try {
+      const res = await fetch(`${BASE_URL}/auth/my-companies`, {
+        headers: {"Authorization": "Bearer " + userData.access_token},
+      });
+      if (res.ok) {
+        const list = await res.json();
+        if (Array.isArray(list) && list.length > 1) {
+          setCompanies(list);
+          setUser(userData);
+          setScreen("client-picker");
+          return;
+        }
+      }
+    } catch (e) { /* couldn't check — fall through to normal single-company flow */ }
     setUser(userData);
     setScreen("app");
+  };
+
+  const handleClientPick = async companyId => {
+    try {
+      const res = await fetch(`${BASE_URL}/auth/switch-company/${companyId}`, {
+        method: "POST",
+        headers: {"Authorization": "Bearer " + localStorage.getItem("zuzan_token")},
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not switch company.");
+      localStorage.setItem("zuzan_token", data.access_token);
+      const _rawSub = data.company.subscription_status || "trial";
+      const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
+      const switchedUser = {
+        firstName: data.user.first_name, lastName: data.user.last_name, email: data.user.email,
+        companyName: data.company.name, logoUrl: data.company.logo_url || "",
+        plan: {name: data.company.plan, id: data.company.plan},
+        access_token: data.access_token, trialEnds: data.company.trial_ends,
+        subscriptionStatus: _subStatus, role: data.user.role || "owner",
+        payrollEnabled: data.company.payroll_enabled || false, afsEnabled: data.company.afs_enabled || false,
+      };
+      Sentry.setUser({ email: switchedUser.email, username: switchedUser.companyName });
+      setUser(switchedUser);
+      setScreen("app");
+    } catch (e) {
+      alert(e.message || "Could not switch company.");
+    }
   };
 
   const handleRegistrationComplete = userData => {
@@ -13012,6 +13145,7 @@ export default function App() {
   if (screen === "accept-invite") return <AcceptInvite token={_inviteToken} onLogin={handleLogin} onSignIn={()=>setScreen("login")}/>;
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
+  if (screen === "client-picker") return <ClientPicker companies={companies} onSelect={handleClientPick} onLogout={handleLogout}/>;
 
   return (
     <Sentry.ErrorBoundary fallback={
