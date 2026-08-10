@@ -8429,14 +8429,28 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
 // Shown after login when a user has access to more than one company — lets
 // an accountant/bookkeeper pick which client to work in before landing on
 // the dashboard. Single-company users never see this screen.
-function ClientPicker({companies, onSelect, onLogout}) {
+function ClientPicker({companies, onSelect, onLogout, onNewCompany}) {
   const [switching, setSwitching] = useState(null); // id of company being switched into
+  const [showNew, setShowNew] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newErr, setNewErr] = useState("");
 
   const pick = async (id) => {
     if (switching !== null) return;
     setSwitching(id);
     await onSelect(id);
     setSwitching(null);
+  };
+
+  const handleCreate = async () => {
+    if (!newName.trim()) { setNewErr("Enter a company name."); return; }
+    setCreating(true); setNewErr("");
+    try {
+      await onNewCompany(newName.trim());
+      setShowNew(false); setNewName("");
+    } catch(e) { setNewErr(e.message || "Could not create company."); }
+    setCreating(false);
   };
 
   const roleColor = (role) => {
@@ -8472,7 +8486,26 @@ function ClientPicker({companies, onSelect, onLogout}) {
             </button>
           ))}
         </div>
-        <div style={{textAlign:"center",marginTop:28}}>
+        <div style={{textAlign:"center",marginTop:24,display:"flex",flexDirection:"column",alignItems:"center",gap:12}}>
+          {showNew ? (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,width:"100%",maxWidth:360,textAlign:"left"}}>
+              <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>New Client Company</div>
+              <input autoFocus type="text" placeholder="Company name" value={newName} onChange={e=>setNewName(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&handleCreate()}
+                style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",marginBottom:8,outline:"none"}}/>
+              {newErr && <div style={{fontSize:12,color:C.red,marginBottom:8}}>{newErr}</div>}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={handleCreate} disabled={creating} style={{flex:1,padding:"10px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:creating?0.6:1}}>
+                  {creating?"Creating…":"Create"}
+                </button>
+                <button onClick={()=>{setShowNew(false);setNewName("");setNewErr("");}} style={{padding:"10px 16px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={()=>setShowNew(true)} style={{padding:"11px 24px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              + Add Client
+            </button>
+          )}
           <button onClick={onLogout} style={{fontSize:12,color:C.inkDim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>Sign out</button>
         </div>
       </div>
@@ -12832,6 +12865,13 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
       alert(e.message || "Could not switch company.");
     }
   };
+  const handleNewCompany = async (name) => {
+    const newCo = await api("/companies/create-new", {method:"POST", body:JSON.stringify({name})});
+    // Switch into the new company immediately
+    const data = await api(`/auth/switch-company/${newCo.id}`, {method:"POST"});
+    localStorage.setItem("zuzan_token", data.access_token);
+    window.location.reload();
+  };
 
   const TABS = [
     {id:"dashboard",  label:"Dashboard",   icon:"🏠"},
@@ -12963,6 +13003,10 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
                   <div style={{fontSize:10,color:C.inkDim,textTransform:"capitalize"}}>{c.role||"member"}</div>
                 </button>
               ))}
+              <button onClick={()=>{setShowSwitcher(false); const n=window.prompt("New client company name:"); if(n&&n.trim()) handleNewCompany(n.trim()).catch(e=>alert(e.message||"Could not create."));}} style={{
+                display:"block",width:"100%",textAlign:"left",padding:"10px 14px",border:"none",
+                background:"transparent",cursor:"pointer",fontFamily:"inherit",color:C.accent,fontWeight:700,fontSize:12,
+              }}>+ Add Client</button>
             </div>
           )}
         </div>
@@ -13193,7 +13237,7 @@ export default function App() {
   if (screen === "accept-invite") return <AcceptInvite token={_inviteToken} onLogin={handleLogin} onSignIn={()=>setScreen("login")}/>;
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
-  if (screen === "client-picker") return <ClientPicker companies={companies} onSelect={handleClientPick} onLogout={handleLogout}/>;
+  if (screen === "client-picker") return <ClientPicker companies={companies} onSelect={handleClientPick} onLogout={handleLogout} onNewCompany={handleNewCompany}/>;
 
   return (
     <Sentry.ErrorBoundary fallback={

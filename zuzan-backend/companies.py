@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus
+from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus, CompanyMembership
 from auth import get_current_user, require_role, log_action, User
 from crypto import encrypt_field, decrypt_field
 from passlib.context import CryptContext
@@ -180,6 +180,27 @@ async def payroll_pin_status(current_user: User = Depends(get_current_user), db:
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     return {"pin_set": bool(company.payroll_pin_hash)}
 
+
+class NewCompanyRequest(BaseModel):
+    name: str
+
+@router.post("/create-new")
+async def create_new_company(
+    body: NewCompanyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Company name is required")
+    company = Company(name=name)
+    db.add(company)
+    db.flush()  # get the new ID before committing
+    membership = CompanyMembership(user_id=current_user.id, company_id=company.id, role="owner")
+    db.add(membership)
+    db.commit()
+    db.refresh(company)
+    return {"id": company.id, "name": company.name, "role": "owner", "plan": "starter"}
 
 # Keep router as companies_router
 companies_router = router
