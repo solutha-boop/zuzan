@@ -12976,14 +12976,14 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <div style={{fontSize:10,color:C.inkMid,marginTop:3,letterSpacing:0.5}}>SA BOOKKEEPING PLATFORM</div>
         </div>
         <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,position:"relative"}}>
-          <div onClick={()=>companies.length>1 && setShowSwitcher(s=>!s)} style={{display:"flex",alignItems:"center",gap:6,cursor:companies.length>1?"pointer":"default",marginBottom:2}}>
+          <div onClick={()=>setShowSwitcher(s=>!s)} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",marginBottom:2}}>
             <div style={{fontSize:12,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user?.companyName||"Your Company"}</div>
-            {companies.length>1 && <span style={{fontSize:9,color:C.inkDim,flexShrink:0}}>{showSwitcher?"▴":"▾"}</span>}
+            <span style={{fontSize:9,color:C.inkDim,flexShrink:0}}>{showSwitcher?"▴":"▾"}</span>
           </div>
           <div style={{fontSize:10,color:C.inkDim}}>{(user?.plan?.name||"starter").charAt(0).toUpperCase()+(user?.plan?.name||"starter").slice(1)} Plan</div>
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
-          {showSwitcher && companies.length>1 && (
+          {showSwitcher && (
             <div style={{position:"absolute",top:"100%",left:12,right:12,marginTop:6,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:50,overflow:"hidden"}}>
               {companies.map(c => (
                 <button key={c.id} onClick={()=>{setShowSwitcher(false); handleSwitchCompany(c.id);}} style={{
