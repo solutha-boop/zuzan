@@ -185,6 +185,7 @@ def send_welcome_email(
     billing_cycle: str,
     trial_ends_str: str,
     payroll_enabled: bool = False,
+    user_type: str = "business_owner",
 ):
     info  = PLAN_DETAILS.get(plan, PLAN_DETAILS["starter"])
     price = info.get(f"price_{billing_cycle}", info["price_monthly"])
@@ -287,6 +288,42 @@ def send_welcome_email(
       </div>
     """
 
+    bookkeeper_section = ""
+    if user_type == "bookkeeper":
+        bookkeeper_section = f"""
+      <!-- Bookkeeper / Accountant Practice guide -->
+      <div style="background:#f0f9ff;border-radius:8px;padding:24px;border:1px solid #bae0fd;margin-bottom:24px;">
+        <p style="color:#0369a1;font-weight:bold;font-size:13px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.5px;">
+          📋 &nbsp;Managing Multiple Clients
+        </p>
+        <p style="color:#444;line-height:1.7;margin:0 0 16px;">
+          ZuZan is built for bookkeepers. You can manage all your clients from a single login — each client gets their own separate set of books, and you switch between them in seconds.
+        </p>
+        <div style="background:#fff;border-radius:6px;padding:16px;border:1px solid #bae0fd;margin-bottom:12px;">
+          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 8px;">How to add a client</p>
+          <ol style="margin:0;padding-left:20px;color:#444;line-height:2;">
+            <li>Log in to ZuZan and look at the <strong>sidebar on the left</strong></li>
+            <li>Click your <strong>company name</strong> — a small ▾ arrow appears next to it</li>
+            <li>A dropdown opens — click <strong>+ Add Client</strong> at the bottom</li>
+            <li>Type the client's business name and press <strong>Create</strong></li>
+            <li>ZuZan switches you straight into the new client's workspace</li>
+          </ol>
+        </div>
+        <div style="background:#fff;border-radius:6px;padding:16px;border:1px solid #bae0fd;margin-bottom:12px;">
+          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 8px;">Switching between clients</p>
+          <p style="color:#555;line-height:1.7;margin:0;">
+            Click your company name in the sidebar at any time to see all your clients.
+            Select one to switch — no logging out, no separate passwords.
+            Each client's invoices, expenses, payroll and reports are completely isolated.
+          </p>
+        </div>
+        <p style="color:#0369a1;font-size:13px;margin:0;line-height:1.6;">
+          💡 Your own bookkeeping firm is already set up as your first company.
+          Add each client using the steps above and start working in their books immediately.
+        </p>
+      </div>
+    """
+
     body = f"""
       <h2 style="color:#1a1a1a;margin:0 0 8px;">Welcome to ZuZan, {first_name}!</h2>
       <p style="color:#555;line-height:1.7;margin:0 0 24px;">
@@ -309,6 +346,8 @@ def send_welcome_email(
       </div>
 
       {payroll_section}
+
+      {bookkeeper_section}
 
       <!-- Team access section -->
       <div style="background:#fff;border-radius:8px;padding:24px;border:1px solid #e0d9d0;margin-bottom:24px;">

@@ -8739,7 +8739,7 @@ function Registration({onComplete, onLogin}) {
   const [selectedPlan, setPlan] = useState(null);
   const [payrollEnabled, setPayroll] = useState(false);
   const [empCount, setEmpCount] = useState(5);
-  const [form, setForm] = useState({companyName:"",regNumber:"",industry:"",firstName:"",lastName:"",email:"",phone:"",password:"",confirm:""});
+  const [form, setForm] = useState({companyName:"",regNumber:"",industry:"",firstName:"",lastName:"",email:"",phone:"",password:"",confirm:"",userType:"business_owner"});
   const [mandate, setMandate] = useState({accountHolder:"",bank:"",accountNumber:"",branchCode:"",accountType:"current",collectionDay:"1",signedName:"",mandateAccepted:false});
   const SA_BANK_BRANCHES = {"FNB":"250655","ABSA":"632005","Standard Bank":"051001","Nedbank":"198765","Capitec":"470010","African Bank":"430000","Investec":"580105","TymeBank":"678910","Discovery Bank":"679000","Bidvest":"462005"};
   const [processing, setProcessing] = useState(false);
@@ -8807,6 +8807,7 @@ function Registration({onComplete, onLogin}) {
           mandate_collection_day:  mandate.collectionDay,
           mandate_signed_name:     mandate.signedName,
           mandate_signed:          mandate.mandateAccepted,
+          user_type:               form.userType,
         }),
       });
       const data = await res.json();
@@ -8947,6 +8948,19 @@ function Registration({onComplete, onLogin}) {
             </div>
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
               <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Your Details</div>
+              <div style={{marginBottom:16}}>
+                <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>I am a</label>
+                <div style={{display:"flex",gap:10}}>
+                  {[{v:"business_owner",l:"Business Owner"},{v:"bookkeeper",l:"Bookkeeper / Accountant"}].map(opt => (
+                    <button key={opt.v} type="button" onClick={()=>setForm({...form,userType:opt.v})} style={{
+                      flex:1,padding:"11px 14px",border:`1.5px solid ${form.userType===opt.v?C.accent:C.border}`,
+                      borderRadius:10,background:form.userType===opt.v?C.accentLt:"transparent",
+                      color:form.userType===opt.v?C.accent:C.inkMid,fontSize:13,fontWeight:form.userType===opt.v?700:500,
+                      cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s",
+                    }}>{opt.l}</button>
+                  ))}
+                </div>
+              </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
                 {[{l:"First Name",k:"firstName",p:"John"},{l:"Last Name",k:"lastName",p:"Smith"}].map(f => (
                   <div key={f.k}>

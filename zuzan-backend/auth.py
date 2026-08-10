@@ -68,6 +68,7 @@ class RegisterRequest(BaseModel):
     mandate_collection_day:  Optional[str] = None
     mandate_signed_name:     Optional[str] = None
     mandate_signed:          bool = False
+    user_type:               Optional[str] = "business_owner"  # business_owner | bookkeeper
 
 
 class LoginRequest(BaseModel):
@@ -184,6 +185,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
         role="owner",
         email_verified=False,
         email_verify_token=verify_token,
+        user_type=data.user_type or "business_owner",
     )
     db.add(user)
     db.flush()
@@ -491,6 +493,7 @@ async def verify_email(token: str, background_tasks: BackgroundTasks, db: Sessio
             user.first_name, user.email, company.name,
             str(company.plan.value), str(company.billing_cycle.value), trial_ends_fmt,
             bool(company.payroll_enabled),
+            user.user_type or "business_owner",
         )
 
     html = f"""<html><body style="font-family:Arial;text-align:center;padding:60px;background:#FAF7F2;">

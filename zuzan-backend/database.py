@@ -124,6 +124,7 @@ class User(Base):
     created_at=Column(DateTime,default=datetime.utcnow)
     reset_token=Column(String,nullable=True); reset_token_expires=Column(DateTime,nullable=True)
     email_verified=Column(Boolean,default=False); email_verify_token=Column(String,nullable=True)
+    user_type=Column(String,default="business_owner")  # business_owner | bookkeeper
     company=relationship("Company",back_populates="users")
 
 class Invoice(Base):
@@ -1460,6 +1461,7 @@ def init_db():
             # above — safe no-op if the table already exists.
             "CREATE TABLE IF NOT EXISTS company_memberships (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id), company_id INTEGER REFERENCES companies(id), role VARCHAR NOT NULL DEFAULT 'owner', created_at TIMESTAMP DEFAULT NOW())",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_membership_user_company ON company_memberships (user_id, company_id)",
+            "ALTER TABLE users ADD COLUMN user_type VARCHAR DEFAULT 'business_owner'",
         ]:
             try:
                 conn.execute(text(sql))
