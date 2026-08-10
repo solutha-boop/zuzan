@@ -3357,7 +3357,7 @@ function Payroll({live = {}, user = {}}) {
         </div>
       </div>
       <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R34 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
+        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R18.25 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
         <Badge label="Active" color={C.green} bg={C.greenLt}/>
       </div>
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
@@ -8087,7 +8087,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               <div>
                 <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Payroll</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>PAYE, UIF &amp; SDL calculations · Payslips · EMP201 reports</div>
-                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>From <strong style={{color:C.ink}}>R99/month</strong> + R34 per employee</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>From <strong style={{color:C.ink}}>R65/month</strong> + R18.25 per employee</div>
               </div>
             </div>
             {user?.payrollEnabled
@@ -8822,7 +8822,7 @@ function Registration({onComplete, onLogin}) {
   const [errors, setErrors] = useState({});
 
   const planPrice = selectedPlan ? (billing === "monthly" ? selectedPlan.monthly : Math.round(selectedPlan.annual / 12)) : 0;
-  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 34)) : 0;
+  const payrollCost = payrollEnabled ? Math.max(65, Math.round(empCount * 18.25)) : 0;
   const totalMonthly = planPrice + payrollCost;
 
   const validateStep2 = () => {
@@ -8978,7 +8978,7 @@ function Registration({onComplete, onLogin}) {
                   <span style={{fontSize:32}}>👥</span>
                   <div>
                     <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:4}}>Payroll Module</div>
-                    <div style={{fontSize:13,color:C.inkMid}}>SARS-compliant PAYE, UIF, SDL - EMP201 and IRP5 - <strong style={{color:C.accent}}>R34/employee/month</strong> (min R99/month)</div>
+                    <div style={{fontSize:13,color:C.inkMid}}>SARS-compliant PAYE, UIF, SDL - EMP201 and IRP5 - <strong style={{color:C.accent}}>R18.25/employee/month</strong> (min R65/month)</div>
                   </div>
                 </div>
                 <button onClick={() => setPayroll(!payrollEnabled)} style={{padding:"8px 18px",borderRadius:8,border:`1.5px solid ${payrollEnabled?C.accent:C.border}`,background:payrollEnabled?C.accentLt:"transparent",color:payrollEnabled?C.accent:C.inkMid,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{payrollEnabled?"Added":"Add Payroll"}</button>
@@ -9067,7 +9067,7 @@ function Registration({onComplete, onLogin}) {
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:20,marginBottom:20}}>
               <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12}}>Order Summary</div>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:14}}><span style={{color:C.inkMid}}>{selectedPlan ? selectedPlan.name : ""} Plan ({billing})</span><span style={{fontWeight:600}}>{fmt(planPrice)}/mo</span></div>
-              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R34)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
+              {payrollEnabled && <div style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:14}}><span style={{color:C.inkMid}}>Payroll ({empCount} employees x R18.25)</span><span style={{fontWeight:600}}>{fmt(payrollCost)}/mo</span></div>}
               <div style={{borderTop:`1px solid ${C.border}`,marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800}}><span>Total (after trial)</span><span style={{color:C.accent}}>{fmt(totalMonthly)}/mo</span></div>
             </div>
 
@@ -9161,7 +9161,7 @@ function Registration({onComplete, onLogin}) {
                 {label:"Plan",value:`${selectedPlan ? selectedPlan.name : ""} (${billing})`},
                 {label:"Users",value:`Up to ${selectedPlan ? selectedPlan.users : ""}`},
                 {label:"Invoices",value:selectedPlan ? `${selectedPlan.invoices}${selectedPlan.invoices !== "Unlimited" ? " per month" : ""}` : ""},
-                {label:"Payroll",value:payrollEnabled ? `${empCount} employees x R34 = ${fmt(payrollCost)}/mo` : "Not included"},
+                {label:"Payroll",value:payrollEnabled ? `${empCount} employees x R18.25 = ${fmt(payrollCost)}/mo` : "Not included"},
                 {label:"Trial Period",value:"14 days FREE"},
                 {label:"First Charge",value:`${fmt(totalMonthly)}/month after trial`},
                 {label:"Debit Order",value:mandate.bank ? `${mandate.bank} · ****${mandate.accountNumber.slice(-4)} · ${{"1":"1st","15":"15th","25":"25th","last":"Last day"}[mandate.collectionDay]||mandate.collectionDay} of month` : "Not provided"},

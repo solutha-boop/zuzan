@@ -198,7 +198,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
 
     # Create payment record
     plan_price = PLAN_PRICES.get(data.plan, {}).get(data.billing_cycle, 299)
-    payroll_cost = max(99, data.employee_count * PAYROLL_PER_EMP) if data.payroll_enabled else 0
+    payroll_cost = max(65, data.employee_count * PAYROLL_PER_EMP) if data.payroll_enabled else 0
     payment = Payment(
         company_id=company.id,
         amount=plan_price + payroll_cost,

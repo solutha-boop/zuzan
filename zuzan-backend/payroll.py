@@ -2864,7 +2864,7 @@ async def initiate_payment(
     db: Session = Depends(get_db)
 ):
     plan_price   = PLAN_PRICES.get(data.plan, {}).get(data.billing_cycle, 299)
-    payroll_cost = max(99, data.employee_count * 34.00) if data.payroll_enabled else 0
+    payroll_cost = max(65, data.employee_count * 18.25) if data.payroll_enabled else 0
     total        = round(plan_price + payroll_cost, 2)
 
     payment = Payment(
@@ -2982,7 +2982,7 @@ async def subscription_status(
     plan_str    = str(company.plan).split(".")[-1]
     billing_str = str(company.billing_cycle).split(".")[-1]
     plan_price  = PLAN_PRICES.get(plan_str, {}).get(billing_str, 299)
-    payroll_cost = max(99, company.payroll_employees * 34.00) if company.payroll_enabled else 0
+    payroll_cost = max(65, company.payroll_employees * 18.25) if company.payroll_enabled else 0
 
     return {
         "plan":              company.plan,

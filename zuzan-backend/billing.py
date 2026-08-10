@@ -43,8 +43,8 @@ PLAN_PRICES = {
     "business":     {"monthly": 1299, "annual": 12990},
 }
 
-PAYROLL_PER_EMP  = 45   # R45/employee/month (matches companies.py)
-PAYROLL_MIN_COST = 99   # minimum payroll add-on fee
+PAYROLL_PER_EMP  = 18.25  # R18.25/employee/month (price parity with SimplePay)
+PAYROLL_MIN_COST = 65     # minimum payroll add-on fee
 
 
 def generate_mandate_pdf(company_name: str, mandate: dict) -> bytes:
@@ -432,6 +432,7 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     }
     url = PAYFAST_ADHOC_URL.format(token=company.payfast_token)
 
+    resp = None
     resp = None
     resp = None
     resp = None

@@ -11,6 +11,6 @@ PLAN_PRICES = {
     "business":     {"monthly": 1299,  "annual": 12990},
 }
 
-# Payroll add-on pricing
-PAYROLL_PER_EMP = 34.00   # R per employee per month
-PAYROLL_MIN     = 99.00   # Minimum payroll add-on fee
+# Payroll add-on pricing (price parity with SimplePay)
+PAYROLL_PER_EMP = 18.25   # R per employee per month
+PAYROLL_MIN     = 65.00   # Minimum payroll add-on fee
