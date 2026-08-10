@@ -436,6 +436,7 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     resp = None
     resp = None
     resp = None
+    resp = None
     try:
         resp = _requests.post(url, data=body, headers=headers, timeout=30)
         result = resp.json() if resp.content else {}

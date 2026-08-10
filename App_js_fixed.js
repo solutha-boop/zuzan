@@ -12865,14 +12865,6 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
       alert(e.message || "Could not switch company.");
     }
   };
-  const handleNewCompany = async (name) => {
-    const newCo = await api("/companies/create-new", {method:"POST", body:JSON.stringify({name})});
-    // Switch into the new company immediately
-    const data = await api(`/auth/switch-company/${newCo.id}`, {method:"POST"});
-    localStorage.setItem("zuzan_token", data.access_token);
-    window.location.reload();
-  };
-
   const TABS = [
     {id:"dashboard",  label:"Dashboard",   icon:"🏠"},
     {id:"sales",      label:"Sales",       icon:"💼", children:[
@@ -13003,7 +12995,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
                   <div style={{fontSize:10,color:C.inkDim,textTransform:"capitalize"}}>{c.role||"member"}</div>
                 </button>
               ))}
-              <button onClick={()=>{setShowSwitcher(false); const n=window.prompt("New client company name:"); if(n&&n.trim()) handleNewCompany(n.trim()).catch(e=>alert(e.message||"Could not create."));}} style={{
+              <button onClick={async ()=>{setShowSwitcher(false); const n=window.prompt("New client company name:"); if(!n||!n.trim()) return; try{ const r1=await api("/companies/create-new",{method:"POST",body:JSON.stringify({name:n.trim()})}); const r2=await api(`/auth/switch-company/${r1.id}`,{method:"POST"}); localStorage.setItem("zuzan_token",r2.access_token); window.location.reload(); }catch(e){alert(e.message||"Could not create company.");}}} style={{
                 display:"block",width:"100%",textAlign:"left",padding:"10px 14px",border:"none",
                 background:"transparent",cursor:"pointer",fontFamily:"inherit",color:C.accent,fontWeight:700,fontSize:12,
               }}>+ Add Client</button>
@@ -13179,6 +13171,23 @@ export default function App() {
     } catch (e) {
       alert(e.message || "Could not switch company.");
     }
+  };
+
+  const handleNewCompany = async (name) => {
+    const token = localStorage.getItem("zuzan_token");
+    const res1 = await fetch(`${BASE_URL}/companies/create-new`, {
+      method:"POST", headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"},
+      body: JSON.stringify({name}),
+    });
+    const newCo = await res1.json();
+    if (!res1.ok) throw new Error(newCo.detail || "Could not create company.");
+    const res2 = await fetch(`${BASE_URL}/auth/switch-company/${newCo.id}`, {
+      method:"POST", headers:{"Authorization":"Bearer "+token},
+    });
+    const data = await res2.json();
+    if (!res2.ok) throw new Error(data.detail || "Could not switch company.");
+    localStorage.setItem("zuzan_token", data.access_token);
+    window.location.reload();
   };
 
   const handleRegistrationComplete = userData => {
