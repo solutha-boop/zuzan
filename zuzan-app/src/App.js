@@ -7839,6 +7839,19 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       setSubInfo({status: data.subscription_status, trialEnds: data.trial_ends, plan: data.plan, billingCycle: data.billing_cycle});
     }).catch(() => {});
   }, []);
+  const [profileForm, setProfileForm] = useState({firstName: user?.firstName||user?.first_name||"", lastName: user?.lastName||user?.last_name||""});
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState("");
+  const handleProfileSave = async () => {
+    if(!profileForm.firstName.trim()||!profileForm.lastName.trim()){setProfileMsg("Both fields are required.");return;}
+    setProfileSaving(true); setProfileMsg("");
+    try {
+      const updated = await api("/auth/me",{method:"PATCH",body:JSON.stringify({first_name:profileForm.firstName.trim(),last_name:profileForm.lastName.trim()})});
+      if(onUserUpdate) onUserUpdate({...user, firstName:updated.first_name, lastName:updated.last_name, first_name:updated.first_name, last_name:updated.last_name});
+      setProfileMsg("✓ Name updated");
+    } catch(e){ setProfileMsg("Failed to save. Try again."); }
+    setProfileSaving(false);
+  };
   const [showUpgrade,  setShowUpgrade]  = useState(false);
   const [showBilling,  setShowBilling]  = useState(false);
   const [upgradeBilling, setUpgradeBilling] = useState("monthly");
@@ -7932,6 +7945,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   // ── Settings tab definitions ─────────────────────────────────────────────
   const STABS = [
     {id:"subscription", label:"Subscription", icon:"💳"},
+    {id:"profile",      label:"Profile",      icon:"👤"},
     {id:"company",      label:"Company",      icon:"🏢"},
     {id:"security",     label:"Security",     icon:"🔒"},
     {id:"templates",    label:"Templates",    icon:"🎨"},
@@ -8108,6 +8122,40 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
             <button onClick={()=>onNavigate&&onNavigate("fin_statements")} style={{padding:"9px 20px",background:"#7C3AED",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Open AFS →</button>
           </div>
+        </div>
+      </div>
+      </>}
+
+      {/* ── PROFILE TAB ──────────────────────────────────────────────────────── */}
+      {settingsTab === "profile" && <>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+          <div style={{fontSize:28}}>👤</div>
+          <div>
+            <div style={{fontSize:16,fontWeight:700,color:C.ink}}>Your Profile</div>
+            <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Update the name on your account. Your email address cannot be changed here.</div>
+          </div>
+        </div>
+        <div style={{height:1,background:C.border,margin:"16px 0"}}/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:20,maxWidth:480}}>
+          <div>
+            <label style={labelStyle}>First Name</label>
+            <input type="text" value={profileForm.firstName} onChange={e=>setProfileForm(f=>({...f,firstName:e.target.value}))} style={inputStyle} placeholder="First name"/>
+          </div>
+          <div>
+            <label style={labelStyle}>Last Name</label>
+            <input type="text" value={profileForm.lastName} onChange={e=>setProfileForm(f=>({...f,lastName:e.target.value}))} style={inputStyle} placeholder="Last name"/>
+          </div>
+        </div>
+        <div style={{marginBottom:16,maxWidth:480}}>
+          <label style={labelStyle}>Email</label>
+          <input type="text" value={user?.email||""} readOnly style={{...inputStyle,background:C.bg,color:C.inkMid,cursor:"default"}}/>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:14}}>
+          <button onClick={handleProfileSave} disabled={profileSaving} style={{padding:"11px 26px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:profileSaving?0.6:1}}>
+            {profileSaving ? "Saving…" : "Save Name"}
+          </button>
+          {profileMsg && <span style={{fontSize:13,color:profileMsg.startsWith("✓")?C.green:C.red,fontWeight:600}}>{profileMsg}</span>}
         </div>
       </div>
       </>}

@@ -339,6 +339,36 @@ async def get_me(
         },
     }
 
+class UpdateProfileRequest(BaseModel):
+    first_name: Optional[str] = None
+    last_name:  Optional[str] = None
+
+@router.patch("/me")
+async def update_me(
+    body: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if body.first_name is not None:
+        first_name = body.first_name.strip()
+        if not first_name:
+            raise HTTPException(status_code=400, detail="First name cannot be empty")
+        current_user.first_name = first_name
+    if body.last_name is not None:
+        last_name = body.last_name.strip()
+        if not last_name:
+            raise HTTPException(status_code=400, detail="Last name cannot be empty")
+        current_user.last_name = last_name
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "id":         current_user.id,
+        "first_name": current_user.first_name,
+        "last_name":  current_user.last_name,
+        "email":      current_user.email,
+        "role":       current_user.role,
+    }
+
 @router.get("/my-companies")
 async def my_companies(
     current_user: User = Depends(get_current_user),
