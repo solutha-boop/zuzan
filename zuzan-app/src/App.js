@@ -7812,6 +7812,16 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   const [showPayrollForm, setShowPayrollForm] = useState(false);
   const [payrollEmpCount, setPayrollEmpCount] = useState(5);
   const [activatingPayroll, setActivatingPayroll] = useState(false);
+  const [myClients, setMyClients] = useState([]);
+  const [myClientsLoading, setMyClientsLoading] = useState(false);
+
+  // Fetch client accounts for consolidated billing display
+  useEffect(() => {
+    setMyClientsLoading(true);
+    api("/companies/my-clients").then(data => {
+      setMyClients(Array.isArray(data) ? data : []);
+    }).catch(() => { setMyClients([]); }).finally(() => setMyClientsLoading(false));
+  }, []);
 
   // Pre-fill Settings form from API on mount so credentials persist across logins
   useEffect(() => {
@@ -8124,6 +8134,62 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           </div>
         </div>
       </div>
+
+      {/* ── CLIENT ACCOUNTS (consolidated billing) ───────────────────────────── */}
+      {(myClientsLoading || myClients.length > 0) && (
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Client Accounts</div>
+        {myClientsLoading ? (
+          <div style={{fontSize:13,color:C.inkMid}}>Loading…</div>
+        ) : (() => {
+          const PLAN_PRICES = {starter:{monthly:399,annual:3990},professional:{monthly:699,annual:6990},business:{monthly:1299,annual:11990}};
+          const ownPlan = (subInfo.plan || "starter").toLowerCase();
+          const ownCycle = (subInfo.billingCycle || "monthly").toLowerCase();
+          const ownPrice = PLAN_PRICES[ownPlan]?.[ownCycle] ?? 399;
+          const clientTotal = myClients.reduce((sum, c) => {
+            const p = (c.plan||"starter").toLowerCase();
+            const cyc = (c.billing_cycle||"monthly").toLowerCase();
+            return sum + (PLAN_PRICES[p]?.[cyc] ?? 399);
+          }, 0);
+          const grandTotal = ownPrice + clientTotal;
+          return (
+            <>
+              {/* Own plan row */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:`1px solid ${C.border}`}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:600,color:C.ink}}>Your firm</div>
+                  <div style={{fontSize:12,color:C.inkMid,marginTop:2,textTransform:"capitalize"}}>{ownPlan} Plan · {ownCycle}</div>
+                </div>
+                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>R{ownPrice.toLocaleString("en-ZA")}/mo</div>
+              </div>
+              {/* Client rows */}
+              {myClients.map(c => {
+                const p = (c.plan||"starter").toLowerCase();
+                const cyc = (c.billing_cycle||"monthly").toLowerCase();
+                const price = PLAN_PRICES[p]?.[cyc] ?? 399;
+                return (
+                  <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:`1px solid ${C.border}`}}>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{c.name}</div>
+                      <div style={{fontSize:12,color:C.inkMid,marginTop:2,textTransform:"capitalize"}}>{p} Plan · {cyc}</div>
+                    </div>
+                    <div style={{fontSize:14,fontWeight:700,color:C.ink}}>R{price.toLocaleString("en-ZA")}/mo</div>
+                  </div>
+                );
+              })}
+              {/* Total */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 0 0 0"}}>
+                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Total monthly billing</div>
+                <div style={{fontSize:18,fontWeight:800,color:C.accent}}>R{grandTotal.toLocaleString("en-ZA")}/mo</div>
+              </div>
+              <div style={{fontSize:12,color:C.inkMid,marginTop:6}}>
+                You are billed a single consolidated amount covering your firm and all {myClients.length} client account{myClients.length===1?"":"s"}.
+              </div>
+            </>
+          );
+        })()}
+      </div>
+      )}
       </>}
 
       {/* ── PROFILE TAB ──────────────────────────────────────────────────────── */}
@@ -8433,6 +8499,7 @@ function ClientPicker({companies, onSelect, onLogout, onNewCompany}) {
   const [switching, setSwitching] = useState(null); // id of company being switched into
   const [showNew, setShowNew] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newPlan, setNewPlan] = useState("starter");
   const [creating, setCreating] = useState(false);
   const [newErr, setNewErr] = useState("");
 
@@ -8447,8 +8514,8 @@ function ClientPicker({companies, onSelect, onLogout, onNewCompany}) {
     if (!newName.trim()) { setNewErr("Enter a company name."); return; }
     setCreating(true); setNewErr("");
     try {
-      await onNewCompany(newName.trim());
-      setShowNew(false); setNewName("");
+      await onNewCompany(newName.trim(), newPlan);
+      setShowNew(false); setNewName(""); setNewPlan("starter");
     } catch(e) { setNewErr(e.message || "Could not create company."); }
     setCreating(false);
   };
@@ -8491,8 +8558,15 @@ function ClientPicker({companies, onSelect, onLogout, onNewCompany}) {
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,width:"100%",maxWidth:360,textAlign:"left"}}>
               <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:12}}>New Client Company</div>
               <input autoFocus type="text" placeholder="Company name" value={newName} onChange={e=>setNewName(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&handleCreate()}
                 style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",marginBottom:8,outline:"none"}}/>
+              <label style={{display:"block",fontSize:11,fontWeight:600,color:"#888",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Plan</label>
+              <div style={{display:"flex",gap:6,marginBottom:8}}>
+                {[{v:"starter",l:"Starter",p:"R399"},{v:"professional",l:"Professional",p:"R699"},{v:"business",l:"Business",p:"R1 299"}].map(opt=>(
+                  <button key={opt.v} type="button" onClick={()=>setNewPlan(opt.v)} style={{flex:1,padding:"8px 4px",border:`1.5px solid ${newPlan===opt.v?C.accent:C.border}`,borderRadius:8,background:newPlan===opt.v?C.accentLt:"transparent",color:newPlan===opt.v?C.accent:"#666",fontSize:12,fontWeight:newPlan===opt.v?700:500,cursor:"pointer",fontFamily:"inherit"}}>
+                    <div>{opt.l}</div><div style={{fontSize:10,opacity:0.8}}>{opt.p}/mo</div>
+                  </button>
+                ))}
+              </div>
               {newErr && <div style={{fontSize:12,color:C.red,marginBottom:8}}>{newErr}</div>}
               <div style={{display:"flex",gap:8}}>
                 <button onClick={handleCreate} disabled={creating} style={{flex:1,padding:"10px",background:C.accent,border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:creating?0.6:1}}>
@@ -13187,11 +13261,11 @@ export default function App() {
     }
   };
 
-  const handleNewCompany = async (name) => {
+  const handleNewCompany = async (name, plan="starter") => {
     const token = localStorage.getItem("zuzan_token");
     const res1 = await fetch(`${BASE_URL}/companies/create-new`, {
       method:"POST", headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"},
-      body: JSON.stringify({name}),
+      body: JSON.stringify({name, plan}),
     });
     const newCo = await res1.json();
     if (!res1.ok) throw new Error(newCo.detail || "Could not create company.");

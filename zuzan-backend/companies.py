@@ -183,6 +183,8 @@ async def payroll_pin_status(current_user: User = Depends(get_current_user), db:
 
 class NewCompanyRequest(BaseModel):
     name: str
+    plan: Optional[str] = "starter"
+    billing_cycle: Optional[str] = "monthly"
 
 @router.post("/create-new")
 async def create_new_company(
@@ -190,17 +192,50 @@ async def create_new_company(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from database import PlanType, BillingCycle, SubscriptionStatus
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Company name is required")
-    company = Company(name=name)
+    # Resolve the accountant's home company to use as parent
+    parent_company_id = current_user.company_id
+    try:
+        plan_enum = PlanType(body.plan or "starter")
+    except ValueError:
+        plan_enum = PlanType.starter
+    try:
+        cycle_enum = BillingCycle(body.billing_cycle or "monthly")
+    except ValueError:
+        cycle_enum = BillingCycle.monthly
+    company = Company(
+        name=name,
+        plan=plan_enum,
+        billing_cycle=cycle_enum,
+        subscription_status=SubscriptionStatus.active,  # covered by accountant's billing
+        parent_company_id=parent_company_id,
+    )
     db.add(company)
-    db.flush()  # get the new ID before committing
+    db.flush()
     membership = CompanyMembership(user_id=current_user.id, company_id=company.id, role="owner")
     db.add(membership)
     db.commit()
     db.refresh(company)
-    return {"id": company.id, "name": company.name, "role": "owner", "plan": "starter"}
+    return {"id": company.id, "name": company.name, "role": "owner", "plan": body.plan or "starter"}
+
+@router.get("/my-clients")
+async def my_clients(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return all client companies managed under this accountant's account."""
+    clients = db.query(Company).filter(Company.parent_company_id == current_user.company_id).all()
+    PLAN_PRICES = {"starter":{"monthly":399,"annual":3990},"professional":{"monthly":699,"annual":6990},"business":{"monthly":1299,"annual":12990}}
+    result = []
+    for c in clients:
+        plan = c.plan.value if c.plan else "starter"
+        cycle = c.billing_cycle.value if c.billing_cycle else "monthly"
+        price = PLAN_PRICES.get(plan, PLAN_PRICES["starter"])[cycle]
+        result.append({"id": c.id, "name": c.name, "plan": plan, "billing_cycle": cycle, "monthly_cost": price})
+    return result
 
 # Keep router as companies_router
 companies_router = router

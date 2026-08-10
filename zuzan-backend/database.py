@@ -87,6 +87,7 @@ class Company(Base):
     trial_warning_sent_at=Column(DateTime,nullable=True)    # When 3-day warning email was sent
     trial_expiry_email_sent_at=Column(DateTime,nullable=True) # When "trial ended" email was sent
     overdue_reminders_enabled=Column(Boolean,default=True)  # Whether auto overdue reminders fire
+    parent_company_id=Column(Integer,ForeignKey("companies.id"),nullable=True)  # Set for accountant-managed clients
     created_at=Column(DateTime,default=datetime.utcnow)
     users=relationship("User",back_populates="company")
     invoices=relationship("Invoice",back_populates="company")
@@ -1462,6 +1463,7 @@ def init_db():
             "CREATE TABLE IF NOT EXISTS company_memberships (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id), company_id INTEGER REFERENCES companies(id), role VARCHAR NOT NULL DEFAULT 'owner', created_at TIMESTAMP DEFAULT NOW())",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_membership_user_company ON company_memberships (user_id, company_id)",
             "ALTER TABLE users ADD COLUMN user_type VARCHAR DEFAULT 'business_owner'",
+            "ALTER TABLE companies ADD COLUMN parent_company_id INTEGER REFERENCES companies(id)",
         ]:
             try:
                 conn.execute(text(sql))

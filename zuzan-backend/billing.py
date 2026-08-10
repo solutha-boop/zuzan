@@ -399,7 +399,19 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
         monthly_cost = max(PAYROLL_MIN_COST, emp_count * PAYROLL_PER_EMP)
         payroll_cost = monthly_cost if cycle == "monthly" else monthly_cost * 12
 
-    amount = base_amount + payroll_cost
+    # ── Consolidated billing: add client company costs ─────────────────────────
+    client_cost = 0
+    try:
+        from database import Company as _Company
+        clients = db.query(_Company).filter(_Company.parent_company_id == company.id).all()
+        for client in clients:
+            c_plan  = client.plan.value          if client.plan          else "starter"
+            c_cycle = client.billing_cycle.value if client.billing_cycle else "monthly"
+            client_cost += PLAN_PRICES.get(c_plan, PLAN_PRICES["starter"])[c_cycle]
+    except Exception:
+        pass
+
+    amount = base_amount + payroll_cost + client_cost
     ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
     pf_id  = (decrypt_field(company.payfast_merchant_id)  if company.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
@@ -420,6 +432,7 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     }
     url = PAYFAST_ADHOC_URL.format(token=company.payfast_token)
 
+    resp = None
     resp = None
     resp = None
     resp = None
@@ -793,6 +806,7 @@ def run_monthly_charges():
             Company.subscription_status == SubscriptionStatus.active,
             Company.payfast_token != None,
             Company.next_billing_date <= now,
+            Company.parent_company_id == None,  # skip client companies — charged via parent
         ).all()
 
         charged = 0
