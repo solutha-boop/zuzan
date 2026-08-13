@@ -46,6 +46,27 @@ PLAN_PRICES = {
 PAYROLL_PER_EMP  = 18.25  # R18.25/employee/month (price parity with SimplePay)
 PAYROLL_MIN_COST = 65     # minimum payroll add-on fee
 
+# ── Accountant multi-client fee structure ─────────────────────────────────────
+ACCOUNTANT_PLAN_DISCOUNT_PER_CLIENT = 20   # R20 off own plan per active client
+# Volume discounts on client plan fees, based on total client count
+ACCOUNTANT_CLIENT_DISCOUNTS = [
+    (10, 0.25),  # 10+ clients: 25% off each client's plan
+    (6,  0.15),  # 6–9  clients: 15% off
+    (3,  0.05),  # 3–5  clients: 5% off
+    (0,  0.00),  # 0–2  clients: no discount
+]
+
+def accountant_client_discount(num_clients: int) -> float:
+    """Return the fractional volume discount for a given number of client companies."""
+    for threshold, rate in ACCOUNTANT_CLIENT_DISCOUNTS:
+        if num_clients >= threshold:
+            return rate
+    return 0.0
+
+def accountant_own_plan_cost(base_plan_price: float, num_clients: int) -> float:
+    """Own plan cost after R20/client sliding discount, floor at R0."""
+    return max(0.0, base_plan_price - num_clients * ACCOUNTANT_PLAN_DISCOUNT_PER_CLIENT)
+
 
 def generate_mandate_pdf(company_name: str, mandate: dict) -> bytes:
     """Generate a debit order mandate PDF and return raw bytes."""
@@ -399,15 +420,24 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
         monthly_cost = max(PAYROLL_MIN_COST, emp_count * PAYROLL_PER_EMP)
         payroll_cost = monthly_cost if cycle == "monthly" else monthly_cost * 12
 
-    # ── Consolidated billing: add client company costs ─────────────────────────
+    # ── Consolidated billing: accountant fee structure ────────────────────────
     client_cost = 0
     try:
         from database import Company as _Company
         clients = db.query(_Company).filter(_Company.parent_company_id == company.id).all()
-        for client in clients:
-            c_plan  = client.plan.value          if client.plan          else "starter"
-            c_cycle = client.billing_cycle.value if client.billing_cycle else "monthly"
-            client_cost += PLAN_PRICES.get(c_plan, PLAN_PRICES["starter"])[c_cycle]
+        num_clients = len(clients)
+
+        if num_clients > 0:
+            # 1. Accountant's own plan: -R20 per client, floor at R0
+            base_amount = accountant_own_plan_cost(base_amount, num_clients)
+
+            # 2. Each client billed at their plan rate with volume discount
+            discount = accountant_client_discount(num_clients)
+            for client in clients:
+                c_plan  = client.plan.value          if client.plan          else "starter"
+                c_cycle = client.billing_cycle.value if client.billing_cycle else "monthly"
+                c_base  = PLAN_PRICES.get(c_plan, PLAN_PRICES["starter"])[c_cycle]
+                client_cost += round(c_base * (1 - discount), 2)
     except Exception:
         pass
 
@@ -432,6 +462,7 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     }
     url = PAYFAST_ADHOC_URL.format(token=company.payfast_token)
 
+    resp = None
     resp = None
     resp = None
     resp = None

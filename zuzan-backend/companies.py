@@ -226,16 +226,47 @@ async def my_clients(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return all client companies managed under this accountant's account."""
+    """Return all client companies with pricing, volume discount, and own-plan discount info."""
+    from billing import (
+        PLAN_PRICES, accountant_client_discount, accountant_own_plan_cost,
+        ACCOUNTANT_PLAN_DISCOUNT_PER_CLIENT,
+    )
+
     clients = db.query(Company).filter(Company.parent_company_id == current_user.company_id).all()
-    PLAN_PRICES = {"starter":{"monthly":399,"annual":3990},"professional":{"monthly":699,"annual":6990},"business":{"monthly":1299,"annual":12990}}
+    num_clients = len(clients)
+    discount_rate = accountant_client_discount(num_clients)
+
+    # Own company plan
+    own_company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    own_plan  = own_company.plan.value          if own_company and own_company.plan          else "starter"
+    own_cycle = own_company.billing_cycle.value if own_company and own_company.billing_cycle else "monthly"
+    own_base  = PLAN_PRICES.get(own_plan, PLAN_PRICES["starter"])[own_cycle]
+    own_discounted = accountant_own_plan_cost(own_base, num_clients)
+
     result = []
     for c in clients:
-        plan = c.plan.value if c.plan else "starter"
+        plan  = c.plan.value          if c.plan          else "starter"
         cycle = c.billing_cycle.value if c.billing_cycle else "monthly"
-        price = PLAN_PRICES.get(plan, PLAN_PRICES["starter"])[cycle]
-        result.append({"id": c.id, "name": c.name, "plan": plan, "billing_cycle": cycle, "monthly_cost": price})
-    return result
+        base  = PLAN_PRICES.get(plan, PLAN_PRICES["starter"])[cycle]
+        discounted = round(base * (1 - discount_rate), 2)
+        result.append({
+            "id": c.id, "name": c.name, "plan": plan, "billing_cycle": cycle,
+            "monthly_cost": base,
+            "discounted_cost": discounted,
+            "discount_pct": int(discount_rate * 100),
+        })
+
+    return {
+        "clients": result,
+        "num_clients": num_clients,
+        "discount_pct": int(discount_rate * 100),
+        "own_plan": own_plan,
+        "own_cycle": own_cycle,
+        "own_base_cost": own_base,
+        "own_discounted_cost": own_discounted,
+        "own_plan_saving": own_base - own_discounted,
+        "discount_per_client": ACCOUNTANT_PLAN_DISCOUNT_PER_CLIENT,
+    }
 
 # Keep router as companies_router
 companies_router = router

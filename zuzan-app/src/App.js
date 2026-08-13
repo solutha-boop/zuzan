@@ -7812,15 +7812,16 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   const [showPayrollForm, setShowPayrollForm] = useState(false);
   const [payrollEmpCount, setPayrollEmpCount] = useState(5);
   const [activatingPayroll, setActivatingPayroll] = useState(false);
-  const [myClients, setMyClients] = useState([]);
+  const [myClientsData, setMyClientsData] = useState(null);  // full accountant fee response
   const [myClientsLoading, setMyClientsLoading] = useState(false);
 
   // Fetch client accounts for consolidated billing display
   useEffect(() => {
     setMyClientsLoading(true);
     api("/companies/my-clients").then(data => {
-      setMyClients(Array.isArray(data) ? data : []);
-    }).catch(() => { setMyClients([]); }).finally(() => setMyClientsLoading(false));
+      // API returns either the new object shape {clients,discount_pct,...} or legacy array
+      setMyClientsData(Array.isArray(data) ? {clients: data, num_clients: data.length, discount_pct: 0} : data);
+    }).catch(() => { setMyClientsData(null); }).finally(() => setMyClientsLoading(false));
   }, []);
 
   // Pre-fill Settings form from API on mount so credentials persist across logins
@@ -8135,55 +8136,82 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         </div>
       </div>
 
-      {/* ── CLIENT ACCOUNTS (consolidated billing) ───────────────────────────── */}
-      {(myClientsLoading || myClients.length > 0) && (
+      {/* ── CLIENT ACCOUNTS (consolidated billing + accountant fee structure) ─── */}
+      {(myClientsLoading || (myClientsData && myClientsData.num_clients > 0)) && (
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
-        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Client Accounts</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase"}}>Client Accounts</div>
+          {myClientsData?.discount_pct > 0 && (
+            <span style={{fontSize:12,fontWeight:700,color:C.green,background:C.greenLt,borderRadius:20,padding:"4px 12px"}}>
+              {myClientsData.discount_pct}% volume discount active
+            </span>
+          )}
+        </div>
+
         {myClientsLoading ? (
           <div style={{fontSize:13,color:C.inkMid}}>Loading…</div>
-        ) : (() => {
-          const PLAN_PRICES = {starter:{monthly:399,annual:3990},professional:{monthly:699,annual:6990},business:{monthly:1299,annual:11990}};
-          const ownPlan = (subInfo.plan || "starter").toLowerCase();
-          const ownCycle = (subInfo.billingCycle || "monthly").toLowerCase();
-          const ownPrice = PLAN_PRICES[ownPlan]?.[ownCycle] ?? 399;
-          const clientTotal = myClients.reduce((sum, c) => {
-            const p = (c.plan||"starter").toLowerCase();
-            const cyc = (c.billing_cycle||"monthly").toLowerCase();
-            return sum + (PLAN_PRICES[p]?.[cyc] ?? 399);
-          }, 0);
-          const grandTotal = ownPrice + clientTotal;
+        ) : myClientsData && (() => {
+          const d = myClientsData;
+          const clientTotal = (d.clients||[]).reduce((s,c) => s + (c.discounted_cost ?? c.monthly_cost ?? 0), 0);
+          const grandTotal  = (d.own_discounted_cost ?? d.own_base_cost ?? 0) + clientTotal;
+          const totalSaving = (d.own_plan_saving ?? 0) + (d.clients||[]).reduce((s,c) => s + ((c.monthly_cost||0) - (c.discounted_cost||c.monthly_cost||0)), 0);
+
           return (
             <>
               {/* Own plan row */}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:`1px solid ${C.border}`}}>
                 <div>
                   <div style={{fontSize:14,fontWeight:600,color:C.ink}}>Your firm</div>
-                  <div style={{fontSize:12,color:C.inkMid,marginTop:2,textTransform:"capitalize"}}>{ownPlan} Plan · {ownCycle}</div>
+                  <div style={{fontSize:12,color:C.inkMid,marginTop:2,textTransform:"capitalize"}}>
+                    {d.own_plan||"starter"} Plan · {d.own_cycle||"monthly"}
+                    {d.own_plan_saving > 0 && <span style={{color:C.green,marginLeft:8}}>−R{d.own_plan_saving.toLocaleString("en-ZA")} ({d.num_clients} clients × R20)</span>}
+                  </div>
                 </div>
-                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>R{ownPrice.toLocaleString("en-ZA")}/mo</div>
+                <div style={{textAlign:"right"}}>
+                  {d.own_plan_saving > 0 && <div style={{fontSize:11,color:C.inkMid,textDecoration:"line-through"}}>R{(d.own_base_cost||0).toLocaleString("en-ZA")}</div>}
+                  <div style={{fontSize:14,fontWeight:700,color:d.own_discounted_cost===0?C.green:C.ink}}>
+                    {d.own_discounted_cost===0?"FREE":`R${(d.own_discounted_cost||0).toLocaleString("en-ZA")}/mo`}
+                  </div>
+                </div>
               </div>
+
               {/* Client rows */}
-              {myClients.map(c => {
-                const p = (c.plan||"starter").toLowerCase();
-                const cyc = (c.billing_cycle||"monthly").toLowerCase();
-                const price = PLAN_PRICES[p]?.[cyc] ?? 399;
+              {(d.clients||[]).map(c => {
+                const hasDis = c.discount_pct > 0;
                 return (
                   <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:`1px solid ${C.border}`}}>
                     <div>
                       <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{c.name}</div>
-                      <div style={{fontSize:12,color:C.inkMid,marginTop:2,textTransform:"capitalize"}}>{p} Plan · {cyc}</div>
+                      <div style={{fontSize:12,color:C.inkMid,marginTop:2,textTransform:"capitalize"}}>
+                        {c.plan} Plan · {c.billing_cycle}
+                        {hasDis && <span style={{color:C.green,marginLeft:6}}>{c.discount_pct}% off</span>}
+                      </div>
                     </div>
-                    <div style={{fontSize:14,fontWeight:700,color:C.ink}}>R{price.toLocaleString("en-ZA")}/mo</div>
+                    <div style={{textAlign:"right"}}>
+                      {hasDis && <div style={{fontSize:11,color:C.inkMid,textDecoration:"line-through"}}>R{(c.monthly_cost||0).toLocaleString("en-ZA")}</div>}
+                      <div style={{fontSize:14,fontWeight:700,color:C.ink}}>R{(c.discounted_cost||c.monthly_cost||0).toLocaleString("en-ZA")}/mo</div>
+                    </div>
                   </div>
                 );
               })}
-              {/* Total */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 0 0 0"}}>
-                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Total monthly billing</div>
-                <div style={{fontSize:18,fontWeight:800,color:C.accent}}>R{grandTotal.toLocaleString("en-ZA")}/mo</div>
-              </div>
-              <div style={{fontSize:12,color:C.inkMid,marginTop:6}}>
-                You are billed a single consolidated amount covering your firm and all {myClients.length} client account{myClients.length===1?"":"s"}.
+
+              {/* Total + saving */}
+              <div style={{paddingTop:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Total monthly billing</div>
+                  <div style={{fontSize:18,fontWeight:800,color:C.accent}}>R{grandTotal.toLocaleString("en-ZA")}/mo</div>
+                </div>
+                {totalSaving > 0 && (
+                  <div style={{display:"flex",justifyContent:"flex-end",marginTop:4}}>
+                    <span style={{fontSize:12,color:C.green,fontWeight:600}}>You save R{totalSaving.toLocaleString("en-ZA")}/mo with the accountant pricing model</span>
+                  </div>
+                )}
+                <div style={{fontSize:12,color:C.inkMid,marginTop:8}}>
+                  One consolidated invoice covers your firm and all {d.num_clients} client account{d.num_clients===1?"":"s"}.
+                  {d.num_clients < 3 && <span> Add {3-d.num_clients} more client{3-d.num_clients===1?"":"s"} to unlock a 5% volume discount on client fees.</span>}
+                  {d.num_clients >= 3 && d.num_clients < 6 && <span> Add {6-d.num_clients} more client{6-d.num_clients===1?"":"s"} to upgrade to 15% off.</span>}
+                  {d.num_clients >= 6 && d.num_clients < 10 && <span> Add {10-d.num_clients} more client{10-d.num_clients===1?"":"s"} to unlock 25% off.</span>}
+                </div>
               </div>
             </>
           );
