@@ -5399,6 +5399,23 @@ function Budgeting({live = {}}) {
   const [csvError,   setCsvError]   = useState(null);
   const csvInputRef = useRef(null);
 
+  // ── 13-WEEK FORECAST STATE ──────────────────────────────────────────────────
+  const [forecastData,    setForecastData]    = useState(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [openingBalance,  setOpeningBalance]  = useState(0);
+  const [fcOverrides,     setFcOverrides]     = useState({});   // {`${wk}-${field}`: number}
+
+  const loadForecast = async (ob) => {
+    setForecastLoading(true);
+    try {
+      const bal = ob !== undefined ? ob : openingBalance;
+      const data = await api(`/reports/cash-flow-13week?opening_balance=${bal}`);
+      setForecastData(data);
+      setFcOverrides({}); // reset manual overrides on refresh
+    } catch(e) { console.warn("Forecast load error", e); }
+    finally { setForecastLoading(false); }
+  };
+
   const load = async () => {
     setLoading(true);
     try {
@@ -5914,6 +5931,7 @@ function Budgeting({live = {}}) {
           {id:"annual",      label:"Annual Plan"},
           {id:"cashflow",    label:"Cash Flow"},
           {id:"departments", label:"Departments"},
+          {id:"forecast",    label:"13-Week Forecast"},
         ].map(v=>(
           <button key={v.id} onClick={()=>setView(v.id)} style={{
             padding:"7px 14px",borderRadius:8,border:`1px solid ${view===v.id?C.accent:C.border}`,
@@ -5994,8 +6012,272 @@ function Budgeting({live = {}}) {
       {view==="annual"      && <AnnualView/>}
       {view==="cashflow"    && <CashFlowView/>}
       {view==="departments" && <DepartmentsView/>}
+      {view==="forecast"    && <ForecastView/>}
     </div>
   );
+
+  // ── 13-WEEK FORECAST VIEW ─────────────────────────────────────────────────
+  function ForecastView() {
+    // Trigger initial load when tab is first opened
+    useEffect(() => {
+      if (!forecastData && !forecastLoading) loadForecast(openingBalance);
+    }, []); // eslint-disable-line
+
+    const fcGet = (i, field) => {
+      const key = `${i}-${field}`;
+      return fcOverrides[key] !== undefined ? fcOverrides[key] : (forecastData?.weeks?.[i]?.[field] ?? 0);
+    };
+    const fcSet = (i, field, val) => {
+      setFcOverrides(p => ({...p, [`${i}-${field}`]: parseFloat(val) || 0}));
+    };
+
+    // Calculate running balances across all 13 weeks
+    let running = parseFloat(openingBalance) || 0;
+    const calc = (forecastData?.weeks || []).map((_, i) => {
+      const opening   = running;
+      const receipts  = fcGet(i,"invoice_receipts") + fcGet(i,"recurring_income");
+      const payments  = fcGet(i,"payroll") + fcGet(i,"operating_expenses") + fcGet(i,"other_payments") + fcGet(i,"vat_payment");
+      const net       = receipts - payments;
+      const closing   = opening + net;
+      running = closing;
+      return { opening, receipts, payments, net, closing };
+    });
+
+    const exportCsv = () => {
+      const rows = [
+        ["Week","Period","Opening Balance","Invoice Receipts","Recurring Income","Total Receipts","Payroll","Operating Expenses","Other Payments","VAT/Tax","Total Payments","Net Cash Flow","Closing Balance"],
+        ...(forecastData?.weeks || []).map((w,i) => {
+          const c = calc[i];
+          return [w.week, w.label, c.opening.toFixed(2), fcGet(i,"invoice_receipts").toFixed(2), fcGet(i,"recurring_income").toFixed(2), c.receipts.toFixed(2), fcGet(i,"payroll").toFixed(2), fcGet(i,"operating_expenses").toFixed(2), fcGet(i,"other_payments").toFixed(2), fcGet(i,"vat_payment").toFixed(2), c.payments.toFixed(2), c.net.toFixed(2), c.closing.toFixed(2)];
+        }),
+      ];
+      const csv = rows.map(r=>r.join(",")).join("\n");
+      const blob = new Blob([csv],{type:"text/csv"});
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a"); a.href=url; a.download="cash-flow-forecast-13week.csv"; a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const EDIT_ROWS = [
+      {field:"invoice_receipts",   label:"Invoice Receipts",    color:C.green,  dir:"in"},
+      {field:"recurring_income",   label:"Recurring Income",    color:C.green,  dir:"in"},
+      {field:"payroll",            label:"Payroll",             color:C.red,    dir:"out"},
+      {field:"operating_expenses", label:"Operating Expenses",  color:C.red,    dir:"out"},
+      {field:"other_payments",     label:"Other Payments",      color:C.red,    dir:"out"},
+      {field:"vat_payment",        label:"VAT / Tax",           color:C.accent, dir:"out"},
+    ];
+
+    const cellStyle = (color, editable=false) => ({
+      padding:"6px 8px", border:`1px solid ${C.border}`, textAlign:"right",
+      fontSize:11, color, cursor:editable?"text":"default",
+      background:editable?"transparent":"#fafafa",
+      minWidth:90,
+    });
+
+    const balColor = (v) => v > 0 ? C.green : v < 0 ? C.red : C.inkMid;
+    const warningBg = (v) => {
+      if (v > 0) return "#f0fff4";
+      if (v < 0) return "#fff0f0";
+      return "#fafafa";
+    };
+
+    if (forecastLoading) return (
+      <div style={{textAlign:"center",padding:60,color:C.inkMid}}>
+        <div style={{fontSize:24,marginBottom:12}}>📊</div>
+        <div style={{fontSize:14,fontWeight:600}}>Building your 13-week forecast…</div>
+        <div style={{fontSize:12,marginTop:6}}>Pulling outstanding invoices, expenses and payroll data</div>
+      </div>
+    );
+
+    if (!forecastData) return (
+      <div style={{textAlign:"center",padding:60,color:C.inkMid}}>
+        <button onClick={()=>loadForecast(openingBalance)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 28px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+          Generate 13-Week Forecast
+        </button>
+      </div>
+    );
+
+    return (
+      <div>
+        {/* Top controls */}
+        <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:20,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,background:C.surface,padding:"8px 14px",borderRadius:10,border:`1px solid ${C.border}`}}>
+            <span style={{fontSize:12,color:C.inkMid,fontWeight:600}}>Opening Balance (R)</span>
+            <input type="number" value={openingBalance}
+              onChange={e=>setOpeningBalance(parseFloat(e.target.value)||0)}
+              style={{width:120,padding:"4px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:13,fontFamily:"inherit",textAlign:"right"}}/>
+          </div>
+          <button onClick={()=>loadForecast(openingBalance)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"9px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            ↻ Refresh
+          </button>
+          <button onClick={exportCsv} style={{background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+            ⬇ Export CSV
+          </button>
+          <div style={{marginLeft:"auto",display:"flex",gap:16,fontSize:11,color:C.inkMid}}>
+            <span>📋 Expenses: avg <strong style={{color:C.ink}}>R {Number(forecastData.avg_weekly_expenses).toLocaleString("en-ZA",{maximumFractionDigits:0})}/wk</strong></span>
+            <span>👥 Payroll: avg <strong style={{color:C.ink}}>R {Number(forecastData.avg_monthly_payroll).toLocaleString("en-ZA",{maximumFractionDigits:0})}/mo</strong></span>
+          </div>
+        </div>
+
+        {/* Summary KPI strip */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:20}}>
+          {[
+            {label:"Total Receipts (13 wks)", value: calc.reduce((s,c)=>s+c.receipts,0), color:C.green},
+            {label:"Total Payments (13 wks)", value: calc.reduce((s,c)=>s+c.payments,0), color:C.red},
+            {label:"Net Cash Flow (13 wks)",  value: calc.reduce((s,c)=>s+c.net,0),      color:calc.reduce((s,c)=>s+c.net,0)>=0?C.green:C.red},
+            {label:"Closing Balance (Wk 13)", value: calc[12]?.closing ?? 0,             color:balColor(calc[12]?.closing ?? 0)},
+          ].map(k=>(
+            <div key={k.label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px"}}>
+              <div style={{fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>{k.label}</div>
+              <div style={{fontSize:17,fontWeight:700,color:k.color}}>R {Number(k.value).toLocaleString("en-ZA",{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Instruction note */}
+        <div style={{fontSize:11,color:C.inkMid,marginBottom:12,padding:"8px 12px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+          💡 Click any green or red cell to override the projected value. Totals and closing balances update automatically.
+        </div>
+
+        {/* Main table */}
+        <div style={{overflowX:"auto"}}>
+          <table style={{borderCollapse:"collapse",fontSize:11,minWidth:forecastData.weeks.length*95+160}}>
+            <thead>
+              <tr style={{background:C.surface}}>
+                <th style={{padding:"8px 14px",textAlign:"left",fontWeight:600,color:C.inkMid,border:`1px solid ${C.border}`,minWidth:160,position:"sticky",left:0,background:C.surface,zIndex:2}}>
+                  Category
+                </th>
+                {forecastData.weeks.map(w=>(
+                  <th key={w.week} style={{padding:"6px 8px",textAlign:"center",fontWeight:700,color:C.ink,border:`1px solid ${C.border}`,minWidth:90,fontSize:10}}>
+                    <div>Wk {w.week}</div>
+                    <div style={{fontWeight:400,color:C.inkMid,fontSize:9}}>{w.label}</div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {/* Opening Balance */}
+              <tr style={{background:"#f8f8f8"}}>
+                <td style={{padding:"7px 14px",border:`1px solid ${C.border}`,fontWeight:700,color:C.ink,position:"sticky",left:0,background:"#f8f8f8",zIndex:1,fontSize:12}}>
+                  Opening Balance
+                </td>
+                {calc.map((c,i)=>(
+                  <td key={i} style={{...cellStyle(balColor(c.opening)),fontWeight:700}}>
+                    {fmtR(c.opening)}
+                  </td>
+                ))}
+              </tr>
+
+              {/* Separator: Receipts */}
+              <tr>
+                <td colSpan={forecastData.weeks.length+1} style={{padding:"4px 14px",background:C.green+"18",border:`1px solid ${C.border}`,fontSize:10,fontWeight:700,color:C.green,textTransform:"uppercase",letterSpacing:0.5}}>
+                  💰 Cash Receipts
+                </td>
+              </tr>
+
+              {/* Editable receipt rows */}
+              {EDIT_ROWS.filter(r=>r.dir==="in").map(row=>(
+                <EditableRow key={row.field} row={row} calc={calc} fcGet={fcGet} fcSet={fcSet} weeks={forecastData.weeks}/>
+              ))}
+
+              {/* Total Receipts */}
+              <tr style={{background:C.green+"12"}}>
+                <td style={{padding:"7px 14px",border:`1px solid ${C.border}`,fontWeight:700,color:C.green,position:"sticky",left:0,background:C.green+"12",zIndex:1}}>
+                  Total Receipts
+                </td>
+                {calc.map((c,i)=>(
+                  <td key={i} style={{...cellStyle(C.green),fontWeight:700}}>
+                    {fmtR(c.receipts)}
+                  </td>
+                ))}
+              </tr>
+
+              {/* Separator: Payments */}
+              <tr>
+                <td colSpan={forecastData.weeks.length+1} style={{padding:"4px 14px",background:C.red+"18",border:`1px solid ${C.border}`,fontSize:10,fontWeight:700,color:C.red,textTransform:"uppercase",letterSpacing:0.5}}>
+                  💸 Cash Payments
+                </td>
+              </tr>
+
+              {/* Editable payment rows */}
+              {EDIT_ROWS.filter(r=>r.dir==="out").map(row=>(
+                <EditableRow key={row.field} row={row} calc={calc} fcGet={fcGet} fcSet={fcSet} weeks={forecastData.weeks}/>
+              ))}
+
+              {/* Total Payments */}
+              <tr style={{background:C.red+"12"}}>
+                <td style={{padding:"7px 14px",border:`1px solid ${C.border}`,fontWeight:700,color:C.red,position:"sticky",left:0,background:C.red+"12",zIndex:1}}>
+                  Total Payments
+                </td>
+                {calc.map((c,i)=>(
+                  <td key={i} style={{...cellStyle(C.red),fontWeight:700}}>
+                    {fmtR(c.payments)}
+                  </td>
+                ))}
+              </tr>
+
+              {/* Net Cash Flow */}
+              <tr style={{background:C.surface}}>
+                <td style={{padding:"8px 14px",border:`1px solid ${C.border}`,fontWeight:700,color:C.ink,position:"sticky",left:0,background:C.surface,zIndex:1,fontSize:12}}>
+                  Net Cash Flow
+                </td>
+                {calc.map((c,i)=>(
+                  <td key={i} style={{...cellStyle(c.net>=0?C.green:C.red),fontWeight:700,background:c.net>=0?"#f0fff4":"#fff0f0"}}>
+                    {c.net>=0?"+":""}{fmtR(c.net)}
+                  </td>
+                ))}
+              </tr>
+
+              {/* Closing Balance */}
+              <tr>
+                <td style={{padding:"8px 14px",border:`1px solid ${C.border}`,fontWeight:800,color:C.ink,position:"sticky",left:0,background:C.surface,zIndex:1,fontSize:12}}>
+                  Closing Balance
+                </td>
+                {calc.map((c,i)=>(
+                  <td key={i} style={{padding:"6px 8px",border:`1px solid ${C.border}`,textAlign:"right",fontSize:12,fontWeight:800,color:balColor(c.closing),background:warningBg(c.closing)}}>
+                    {fmtR(c.closing)}
+                    {c.closing < 0 && <div style={{fontSize:9,color:C.red}}>⚠ Deficit</div>}
+                    {c.closing >= 0 && c.closing < 5000 && <div style={{fontSize:9,color:C.gold}}>⚡ Low</div>}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+
+    function EditableRow({row, calc, fcGet, fcSet, weeks}) {
+      const [editing, setEditing] = useState(null); // week index being edited
+      const [editVal, setEditVal] = useState("");
+      return (
+        <tr>
+          <td style={{padding:"6px 14px",border:`1px solid ${C.border}`,color:row.color,fontWeight:600,position:"sticky",left:0,background:"#fff",zIndex:1,fontSize:12}}>
+            {row.dir==="in" ? "↑ " : "↓ "}{row.label}
+          </td>
+          {weeks.map((_,i)=>{
+            const val = fcGet(i, row.field);
+            const isEditing = editing===i;
+            return (
+              <td key={i} style={{padding:"2px 4px",border:`1px solid ${C.border}`,textAlign:"right"}}>
+                {isEditing
+                  ? <input autoFocus type="number" value={editVal}
+                      onChange={e=>setEditVal(e.target.value)}
+                      onBlur={()=>{fcSet(i,row.field,editVal);setEditing(null);}}
+                      onKeyDown={e=>{if(e.key==="Enter"){fcSet(i,row.field,editVal);setEditing(null);}if(e.key==="Escape")setEditing(null);}}
+                      style={{width:80,padding:"2px 4px",border:`1px solid ${C.accent}`,borderRadius:4,fontSize:11,textAlign:"right",fontFamily:"inherit"}}/>
+                  : <span onClick={()=>{setEditing(i);setEditVal(val.toString());}}
+                      style={{cursor:"text",fontSize:11,color:val?row.color:C.inkDim,display:"block",textAlign:"right",padding:"4px 6px",borderRadius:4,border:`1px dashed ${C.border}`}}>
+                      {val ? fmtR(val) : "—"}
+                    </span>
+                }
+              </td>
+            );
+          })}
+        </tr>
+      );
+    }
+  }
 }
 
 // ── DEBTORS ───────────────────────────────────────────────────────────────────

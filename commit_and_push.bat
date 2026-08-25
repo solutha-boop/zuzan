@@ -32,7 +32,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: accountant fee structure — R20/client discount on own plan, 5/15/25%% volume discount on client fees; SimplePay payroll parity; bookkeeper onboarding; profile edit [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: 13-week rolling cash flow forecast in Budgeting/Planning — backend /reports/cash-flow-13week endpoint + frontend ForecastView with editable overrides, running balances, color-coded deficit warnings, CSV export [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main

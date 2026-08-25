@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as _date
+import calendar as _calendar
 from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine
 from auth import get_current_user, User
 import hashlib
@@ -1984,6 +1985,116 @@ async def cash_flow(
             "net_cash_from_financing": 0,
         },
         "net_increase_in_cash": net_operating,
+    }
+
+
+@reports_router.get("/cash-flow-13week")
+async def cash_flow_13week(
+    opening_balance: float = 0.0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Forward-looking 13-week rolling cash flow forecast.
+
+    Pulls outstanding invoices (by due date), recurring invoice schedule,
+    trailing 8-week expense average, and average monthly payroll to project
+    each weekly period.  The frontend lets users override any cell.
+    """
+    from database import RecurringInvoice
+
+    cid   = current_user.company_id
+    today = _date.today()
+
+    # Monday of the current week
+    week_start = today - timedelta(days=today.weekday())
+
+    # ── Trailing expense average (last 8 weeks) ────────────────────────────
+    hist_start = datetime.combine(week_start - timedelta(weeks=8), datetime.min.time())
+    hist_end   = datetime.combine(week_start, datetime.min.time())
+
+    past_expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.expense_date >= hist_start,
+        Expense.expense_date <  hist_end,
+    ).all()
+    total_hist_exp   = sum((e.amount or 0) for e in past_expenses)
+    avg_weekly_exp   = round(total_hist_exp / 8, 2) if past_expenses else 0.0
+
+    # ── Average monthly payroll (last 13 weeks of payslips) ───────────────
+    pay_hist_start = datetime.combine(week_start - timedelta(weeks=13), datetime.min.time())
+    recent_payslips = db.query(Payslip).join(Employee).filter(
+        Employee.company_id == cid,
+        Payslip.generated_at >= pay_hist_start,
+    ).all()
+    avg_monthly_payroll = 0.0
+    if recent_payslips:
+        total_net   = sum(p.net_pay for p in recent_payslips)
+        months_seen = {(p.generated_at.year, p.generated_at.month) for p in recent_payslips}
+        avg_monthly_payroll = round(total_net / (len(months_seen) or 1), 2)
+
+    # ── Active recurring invoices ──────────────────────────────────────────
+    active_recurring = db.query(RecurringInvoice).filter(
+        RecurringInvoice.company_id == cid,
+        RecurringInvoice.is_active  == True,  # noqa: E712
+    ).all()
+
+    # ── Build 13 weekly periods ────────────────────────────────────────────
+    weeks = []
+    for i in range(13):
+        w_start    = week_start + timedelta(weeks=i)
+        w_end      = w_start + timedelta(days=6)
+        w_start_dt = datetime.combine(w_start, datetime.min.time())
+        w_end_dt   = datetime.combine(w_end,   datetime.max.time())
+
+        # Outstanding invoices with due_date in this week
+        invoices_due = db.query(Invoice).filter(
+            Invoice.company_id == cid,
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+            Invoice.due_date >= w_start_dt,
+            Invoice.due_date <= w_end_dt,
+        ).all()
+        invoice_receipts = round(sum(_to_zar(inv) for inv in invoices_due), 2)
+
+        # Recurring income: next_run_date falls in this week
+        recurring_income = 0.0
+        for ri in active_recurring:
+            if ri.next_run_date and w_start_dt <= ri.next_run_date <= w_end_dt:
+                amt = ri.amount or 0
+                if ri.vat_applicable:
+                    amt = round(amt * 1.15, 2)
+                recurring_income += amt
+        recurring_income = round(recurring_income, 2)
+
+        # Payroll: attribute monthly payroll to the last week of each month
+        payroll_this_week = 0.0
+        for d in range(7):
+            day      = w_start + timedelta(days=d)
+            last_day = _calendar.monthrange(day.year, day.month)[1]
+            if day.day == last_day:
+                payroll_this_week = avg_monthly_payroll
+                break
+
+        # Week label — "25 Aug – 31 Aug"
+        label = f"{w_start.strftime('%d %b')}–{w_end.strftime('%d %b')}"
+
+        weeks.append({
+            "week":               i + 1,
+            "week_start":         w_start.isoformat(),
+            "week_end":           w_end.isoformat(),
+            "label":              label,
+            "invoice_receipts":   invoice_receipts,
+            "recurring_income":   recurring_income,
+            "payroll":            round(payroll_this_week, 2),
+            "operating_expenses": avg_weekly_exp,
+            "other_payments":     0.0,
+            "vat_payment":        0.0,
+        })
+
+    return {
+        "opening_balance":     opening_balance,
+        "avg_weekly_expenses": avg_weekly_exp,
+        "avg_monthly_payroll": avg_monthly_payroll,
+        "weeks":               weeks,
     }
 
 
