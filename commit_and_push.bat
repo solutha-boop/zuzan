@@ -32,7 +32,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: persist Chart of Accounts — CompanyAccount model + /coa CRUD API + frontend wired to load/save/delete; bank feeds: add FNB, African Bank, Discovery Bank [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: settings — downgrade/upgrade plan selector with smart labels; cancel payroll add-on; COA persistence; bank feeds FNB/African/Discovery [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main

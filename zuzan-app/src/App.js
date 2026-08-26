@@ -8360,7 +8360,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               {subInfo.status === "trial" ? "🔑 Subscribe Now" : "🔑 Reactivate Subscription"}
             </button>
           )}
-          <button onClick={()=>setShowUpgrade(true)} style={{padding:"10px 22px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Upgrade Plan</button>
+          <button onClick={()=>setShowUpgrade(true)} style={{padding:"10px 22px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Change Plan</button>
           <button onClick={async()=>{
             try {
               const res = await api("/billing/subscribe", {method:"POST"});
@@ -8427,7 +8427,18 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               </div>
             </div>
             {user?.payrollEnabled
-              ? <span style={{padding:"7px 16px",background:C.green,color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
+              ? <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+                  <span style={{padding:"7px 16px",background:C.green,color:"#fff",borderRadius:8,fontSize:13,fontWeight:700}}>✓ Active</span>
+                  <button onClick={async()=>{
+                    if(!window.confirm("Cancel the Payroll add-on? Payroll data will be retained but payroll features will be disabled immediately.")) return;
+                    try{
+                      await api("/companies/me",{method:"PUT",body:JSON.stringify({payroll_enabled:false})});
+                      if(onUserUpdate) onUserUpdate({...user,payrollEnabled:false});
+                    }catch(e){ alert("Could not cancel payroll. Please email support@solutha.co.za."); }
+                  }} style={{fontSize:11,color:C.red,background:"none",border:"none",cursor:"pointer",textDecoration:"underline",fontFamily:"inherit",padding:0}}>
+                    Cancel Payroll
+                  </button>
+                </div>
               : showPayrollForm
                 ? <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <div>
@@ -8776,7 +8787,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:520,boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
-              <div style={{fontSize:18,fontWeight:800,color:C.ink}}>Choose a Plan</div>
+              <div style={{fontSize:18,fontWeight:800,color:C.ink}}>Change Plan</div>
               <button onClick={()=>{setShowUpgrade(false);setUpgradeMsg("");}} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:C.inkMid}}>✕</button>
             </div>
             <div style={{display:"flex",gap:8,marginBottom:24}}>
@@ -8786,11 +8797,17 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                 </button>
               ))}
             </div>
-            {PLANS.map(p=>{
+            {PLANS.map((p, pIdx)=>{
               const price = upgradeBilling==="annual" ? Math.round(p.annual/12) : p.monthly;
-              const isCurrent = (user?.plan?.id||"starter")===p.id;
+              const currentPlanId = user?.plan?.id||"starter";
+              const isCurrent = currentPlanId === p.id;
+              const currentIdx = PLANS.findIndex(x => x.id === currentPlanId);
+              const isDowngrade = pIdx < currentIdx;
+              const btnBg    = isCurrent ? C.border : isDowngrade ? C.red    : C.green;
+              const btnColor = isCurrent ? C.inkMid : "#fff";
+              const btnLabel = isCurrent ? "Current Plan" : upgrading ? "Updating…" : isDowngrade ? "Downgrade" : "Upgrade";
               return (
-                <div key={p.id} style={{border:`2px solid ${isCurrent?C.accent:C.border}`,borderRadius:12,padding:16,marginBottom:12,background:isCurrent?C.accentLt:"transparent"}}>
+                <div key={p.id} style={{border:`2px solid ${isCurrent?C.accent:isDowngrade?C.red+"40":C.border}`,borderRadius:12,padding:16,marginBottom:12,background:isCurrent?C.accentLt:"transparent"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                     <div>
                       <div style={{fontSize:14,fontWeight:800,color:C.ink}}>{p.icon} {p.name}</div>
@@ -8802,10 +8819,13 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                     </div>
                   </div>
                   <button
-                    onClick={()=>handleUpgrade(p.id)}
+                    onClick={async()=>{
+                      if(isDowngrade && !window.confirm(`Downgrade to ${p.name}? Some features may become unavailable immediately.`)) return;
+                      handleUpgrade(p.id);
+                    }}
                     disabled={upgrading||isCurrent}
-                    style={{marginTop:12,width:"100%",padding:"9px 0",borderRadius:8,border:"none",background:isCurrent?C.border:C.accent,color:isCurrent?C.inkMid:"#fff",fontWeight:700,fontSize:12,cursor:isCurrent?"default":"pointer",fontFamily:"inherit",opacity:upgrading?0.6:1}}
-                  >{isCurrent?"Current Plan":upgrading?"Updating…":"Select Plan"}</button>
+                    style={{marginTop:12,width:"100%",padding:"9px 0",borderRadius:8,border:"none",background:btnBg,color:btnColor,fontWeight:700,fontSize:12,cursor:isCurrent?"default":"pointer",fontFamily:"inherit",opacity:upgrading?0.6:1}}
+                  >{btnLabel}</button>
                 </div>
               );
             })}
