@@ -6736,6 +6736,7 @@ const SA_BANKS = [
   {id:"capitec",      name:"Capitec",       logo:"🟦",color:"#1E4A8C"},
   {id:"discovery",    name:"Discovery Bank",logo:"🟣",color:"#6B2A8B"},
   {id:"tymebank",     name:"TymeBank",      logo:"🩵",color:"#00B4D8"},
+  {id:"africanbank",  name:"African Bank",  logo:"🟠",color:"#E85C0D"},
 ];
 
 // ── Shared sub-component: BankFeedPanel ──────────────────────────────────────
@@ -6759,6 +6760,9 @@ function BankFeedPanel({ bank }) {
     nedbank:      {label:"Nedbank",        color:"#009A44", icon:"🟩"},
     investec:     {label:"Investec",       color:"#1A1A1A", icon:"⬛"},
     standardbank: {label:"Standard Bank",  color:"#0033A0", icon:"🔵"},
+    fnb:          {label:"FNB",            color:"#007A39", icon:"🟢"},
+    africanbank:  {label:"African Bank",   color:"#E85C0D", icon:"🟠"},
+    discovery:    {label:"Discovery Bank", color:"#6B2A8B", icon:"🟣"},
   };
   const bankLabel = BANK_META[bank]?.label || bank;
   const bankColor = BANK_META[bank]?.color || C.accent;
@@ -7049,13 +7053,16 @@ function BankFeedPanel({ bank }) {
 }
 
 function BankFeeds() {
-  const [bankTab, setBankTab] = useState("absa");
+  const [bankTab, setBankTab] = useState("fnb");
 
   const BANKS = [
-    {id:"absa",         label:"🔴 ABSA",          color:"#CC0000"},
-    {id:"nedbank",      label:"🟩 Nedbank",        color:"#009A44"},
-    {id:"investec",     label:"⬛ Investec",        color:"#1A1A1A"},
-    {id:"standardbank", label:"🔵 Standard Bank",  color:"#0033A0"},
+    {id:"fnb",          label:"🟢 FNB",            color:"#007A39"},
+    {id:"absa",         label:"🔴 ABSA",           color:"#CC0000"},
+    {id:"nedbank",      label:"🟩 Nedbank",         color:"#009A44"},
+    {id:"investec",     label:"⬛ Investec",         color:"#1A1A1A"},
+    {id:"standardbank", label:"🔵 Standard Bank",   color:"#0033A0"},
+    {id:"africanbank",  label:"🟠 African Bank",    color:"#E85C0D"},
+    {id:"discovery",    label:"🟣 Discovery Bank",  color:"#6B2A8B"},
   ];
 
   const active = BANKS.find(b=>b.id===bankTab);
