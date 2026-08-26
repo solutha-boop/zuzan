@@ -1,5 +1,5 @@
 // ZuZan App v2.1 — PO module: retry, draft, pay
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import * as Sentry from "@sentry/react";
 import * as XLSX from "xlsx";
 import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from "recharts";
@@ -6577,7 +6577,7 @@ function ChartOfAccounts() {
   const [form, setForm] = useState({code:"",name:"",type:"Detail",group:"Expenses",normal:"Debit",description:""});
 
   // Build merged account list: DEFAULT_COA + custom additions, minus soft-deleted codes
-  const accounts = React.useMemo(() => {
+  const accounts = useMemo(() => {
     const deletedCodes = new Set(customRows.filter(r => r.is_deleted).map(r => r.code));
     // Default accounts not hidden
     const defaults = DEFAULT_COA.filter(a => !deletedCodes.has(a.code));
@@ -6596,7 +6596,7 @@ function ChartOfAccounts() {
     } catch(e) { console.warn("COA load error", e); }
     finally { setLoading(false); }
   };
-  React.useEffect(() => { loadCoa(); }, []);
+  useEffect(() => { loadCoa(); }, []);
 
   const filtered = accounts.filter(a => {
     const ms = a.name.toLowerCase().includes(search.toLowerCase()) || a.code.includes(search) || (a.description||"").toLowerCase().includes(search.toLowerCase());
