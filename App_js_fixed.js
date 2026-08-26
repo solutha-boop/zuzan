@@ -1806,6 +1806,20 @@ function Expenses({live = {}}) {
   const [viewExp,  setViewExp]  = useState(null);
   const [editExp,  setEditExp]  = useState(null);
 
+  // Merged COA: DEFAULT_COA + any custom accounts added via Chart of Accounts
+  const [coaAccounts, setCoaAccounts] = useState(DEFAULT_COA);
+  useEffect(() => {
+    api("/coa/").then(rows => {
+      if (!rows || !rows.length) return;
+      const deletedCodes = new Set(rows.filter(r => r.is_deleted).map(r => r.code));
+      const defaultCodes = new Set(DEFAULT_COA.map(a => a.code));
+      const additions = rows.filter(r => !r.is_deleted && !defaultCodes.has(r.code));
+      const merged = [...DEFAULT_COA.filter(a => !deletedCodes.has(a.code)), ...additions]
+        .sort((a, b) => a.code.localeCompare(b.code));
+      setCoaAccounts(merged);
+    }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const expRows = liveExpenses && liveExpenses.length > 0
       ? liveExpenses.map(e => ({...e, date: e.expense_date || e.date, desc: e.description, vendor: e.vendor, amount: e.amount, vat_amount: e.vat_amount||0, category: e.category || "", id: `EXP-${String(e.id).padStart(3,"0")}`}))
@@ -2000,7 +2014,7 @@ function Expenses({live = {}}) {
                 <option value="">-- Categorise later --</option>
                 {EXPENSE_COA_GROUPS.map(group => (
                   <optgroup key={group} label={group}>
-                    {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
+                    {coaAccounts.filter(a => a.group === group && a.type === "Detail").map(a => (
                       <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
                     ))}
                   </optgroup>
@@ -2075,7 +2089,7 @@ function Expenses({live = {}}) {
                 <option value="">-- Uncategorised --</option>
                 {EXPENSE_COA_GROUPS.map(group=>(
                   <optgroup key={group} label={group}>
-                    {DEFAULT_COA.filter(a=>a.group===group&&a.type==="Detail").map(a=>(
+                    {coaAccounts.filter(a=>a.group===group&&a.type==="Detail").map(a=>(
                       <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
                     ))}
                   </optgroup>
@@ -2132,7 +2146,7 @@ function Expenses({live = {}}) {
                         <option value="">-- Select Account --</option>
                         {EXPENSE_COA_GROUPS.map(group => (
                           <optgroup key={group} label={group}>
-                            {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
+                            {coaAccounts.filter(a => a.group === group && a.type === "Detail").map(a => (
                               <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
                             ))}
                           </optgroup>
