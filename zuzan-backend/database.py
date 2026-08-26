@@ -999,6 +999,23 @@ class SiteVisit(Base):
     user_agent  = Column(String, nullable=True)   # truncated to 300 chars
     ip_hash     = Column(String, nullable=True)   # first 16 chars of SHA-256 hash
 
+class CompanyAccount(Base):
+    """Chart of Accounts — custom accounts added by a company (overlaid on DEFAULT_COA in the frontend)."""
+    __tablename__ = "company_accounts"
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    code        = Column(String, nullable=False)
+    name        = Column(String, nullable=False)
+    type        = Column(String, nullable=False, default="Detail")   # Header | Detail
+    group       = Column(String, nullable=False)                     # Assets | Liabilities | Equity | Income | Cost of Sales | Expenses
+    normal      = Column(String, nullable=False, default="Debit")   # Debit | Credit
+    description = Column(String, default="")
+    is_deleted  = Column(Boolean, default=False)                     # soft-delete for default account overrides
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    company     = relationship("Company")
+
+
 class BankInterestRequest(Base):
     """Records when a client requests integration with a specific bank."""
     __tablename__ = "bank_interest_requests"
@@ -1464,6 +1481,21 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_membership_user_company ON company_memberships (user_id, company_id)",
             "ALTER TABLE users ADD COLUMN user_type VARCHAR DEFAULT 'business_owner'",
             "ALTER TABLE companies ADD COLUMN parent_company_id INTEGER REFERENCES companies(id)",
+            # ── Persistent Chart of Accounts (2026-08) ───────────────────────────
+            """CREATE TABLE IF NOT EXISTS company_accounts (
+                id          SERIAL PRIMARY KEY,
+                company_id  INTEGER NOT NULL REFERENCES companies(id),
+                code        VARCHAR NOT NULL,
+                name        VARCHAR NOT NULL,
+                type        VARCHAR NOT NULL DEFAULT 'Detail',
+                "group"     VARCHAR NOT NULL,
+                normal      VARCHAR NOT NULL DEFAULT 'Debit',
+                description VARCHAR DEFAULT '',
+                is_deleted  BOOLEAN DEFAULT FALSE,
+                created_at  TIMESTAMP DEFAULT NOW(),
+                updated_at  TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_accounts_company_code ON company_accounts (company_id, code)",
         ]:
             try:
                 conn.execute(text(sql))

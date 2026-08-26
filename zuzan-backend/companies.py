@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus, CompanyMembership
+from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus, CompanyMembership, CompanyAccount
 from auth import get_current_user, require_role, log_action, User
 from crypto import encrypt_field, decrypt_field
 from passlib.context import CryptContext
@@ -883,6 +883,154 @@ async def delete_expense(expense_id: int, current_user: User = Depends(require_r
     db.delete(expense)
     db.commit()
     return {"status": "deleted"}
+
+
+# ── CHART OF ACCOUNTS ─────────────────────────────────────────────────────────
+coa_router = APIRouter()
+
+class AccountIn(BaseModel):
+    code:        str
+    name:        str
+    type:        str = "Detail"
+    group:       str = "Expenses"
+    normal:      str = "Debit"
+    description: str = ""
+
+@coa_router.get("/")
+async def list_coa(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return all custom COA rows for this company (the frontend merges with DEFAULT_COA)."""
+    rows = (
+        db.query(CompanyAccount)
+        .filter(CompanyAccount.company_id == current_user.company_id)
+        .all()
+    )
+    return [
+        {
+            "id":          r.id,
+            "code":        r.code,
+            "name":        r.name,
+            "type":        r.type,
+            "group":       r.group,
+            "normal":      r.normal,
+            "description": r.description or "",
+            "is_deleted":  r.is_deleted,
+            "custom":      True,
+        }
+        for r in rows
+    ]
+
+@coa_router.post("/")
+async def create_account(
+    payload: AccountIn,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Add a new custom account (or un-delete a soft-deleted one with the same code)."""
+    existing = (
+        db.query(CompanyAccount)
+        .filter(
+            CompanyAccount.company_id == current_user.company_id,
+            CompanyAccount.code == payload.code.strip(),
+        )
+        .first()
+    )
+    if existing:
+        if existing.is_deleted:
+            # Resurrect it with new values
+            existing.name        = payload.name.strip()
+            existing.type        = payload.type
+            existing.group       = payload.group
+            existing.normal      = payload.normal
+            existing.description = payload.description
+            existing.is_deleted  = False
+            db.commit()
+            db.refresh(existing)
+            return {"id": existing.id, "code": existing.code, "name": existing.name,
+                    "type": existing.type, "group": existing.group, "normal": existing.normal,
+                    "description": existing.description, "is_deleted": False, "custom": True}
+        raise HTTPException(status_code=400, detail="Account code already exists.")
+    acct = CompanyAccount(
+        company_id  = current_user.company_id,
+        code        = payload.code.strip(),
+        name        = payload.name.strip(),
+        type        = payload.type,
+        group       = payload.group,
+        normal      = payload.normal,
+        description = payload.description,
+    )
+    db.add(acct)
+    db.commit()
+    db.refresh(acct)
+    return {"id": acct.id, "code": acct.code, "name": acct.name,
+            "type": acct.type, "group": acct.group, "normal": acct.normal,
+            "description": acct.description, "is_deleted": False, "custom": True}
+
+@coa_router.put("/{code}")
+async def update_account(
+    code: str,
+    payload: AccountIn,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Update an existing custom account."""
+    acct = (
+        db.query(CompanyAccount)
+        .filter(
+            CompanyAccount.company_id == current_user.company_id,
+            CompanyAccount.code == code,
+            CompanyAccount.is_deleted == False,
+        )
+        .first()
+    )
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    acct.name        = payload.name.strip()
+    acct.type        = payload.type
+    acct.group       = payload.group
+    acct.normal      = payload.normal
+    acct.description = payload.description
+    db.commit()
+    db.refresh(acct)
+    return {"id": acct.id, "code": acct.code, "name": acct.name,
+            "type": acct.type, "group": acct.group, "normal": acct.normal,
+            "description": acct.description, "is_deleted": False, "custom": True}
+
+@coa_router.delete("/{code}")
+async def delete_account(
+    code: str,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Soft-delete a custom account (or mark a default account as hidden for this company)."""
+    acct = (
+        db.query(CompanyAccount)
+        .filter(
+            CompanyAccount.company_id == current_user.company_id,
+            CompanyAccount.code == code,
+        )
+        .first()
+    )
+    if acct:
+        acct.is_deleted = True
+        db.commit()
+    else:
+        # First time hiding a default account — create a tombstone row
+        tombstone = CompanyAccount(
+            company_id  = current_user.company_id,
+            code        = code,
+            name        = "__deleted__",
+            type        = "Detail",
+            group       = "Expenses",
+            normal      = "Debit",
+            description = "",
+            is_deleted  = True,
+        )
+        db.add(tombstone)
+        db.commit()
+    return {"status": "deleted", "code": code}
 
 
 # ── EMPLOYEES ─────────────────────────────────────────────────────────────────

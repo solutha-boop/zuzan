@@ -6565,7 +6565,10 @@ function Creditors({live = {}}) {
 
 // ── CHART OF ACCOUNTS ─────────────────────────────────────────────────────────
 function ChartOfAccounts() {
-  const [accounts, setAccounts] = useState(DEFAULT_COA);
+  // Merge DEFAULT_COA with server-persisted custom accounts on every load
+  const [customRows, setCustomRows] = useState([]);   // [{code, name, type, group, normal, description, is_deleted, custom:true}]
+  const [loading,    setLoading]    = useState(true);
+  const [saving,     setSaving]     = useState(false);
   const [search, setSearch] = useState("");
   const [groupFilter, setGF] = useState("All");
   const [showNew, setShowNew] = useState(false);
@@ -6573,23 +6576,66 @@ function ChartOfAccounts() {
   const [expanded, setExpanded] = useState(new Set(COA_GROUPS));
   const [form, setForm] = useState({code:"",name:"",type:"Detail",group:"Expenses",normal:"Debit",description:""});
 
+  // Build merged account list: DEFAULT_COA + custom additions, minus soft-deleted codes
+  const accounts = React.useMemo(() => {
+    const deletedCodes = new Set(customRows.filter(r => r.is_deleted).map(r => r.code));
+    // Default accounts not hidden
+    const defaults = DEFAULT_COA.filter(a => !deletedCodes.has(a.code));
+    // Custom additions (not deleted, not already a default code)
+    const defaultCodes = new Set(DEFAULT_COA.map(a => a.code));
+    const additions = customRows.filter(r => !r.is_deleted && !defaultCodes.has(r.code));
+    return [...defaults, ...additions].sort((a,b) => a.code.localeCompare(b.code));
+  }, [customRows]);
+
+  // Load custom rows from server
+  const loadCoa = async () => {
+    setLoading(true);
+    try {
+      const rows = await api("/coa/");
+      setCustomRows(rows || []);
+    } catch(e) { console.warn("COA load error", e); }
+    finally { setLoading(false); }
+  };
+  React.useEffect(() => { loadCoa(); }, []);
+
   const filtered = accounts.filter(a => {
-    const ms = a.name.toLowerCase().includes(search.toLowerCase()) || a.code.includes(search) || a.description.toLowerCase().includes(search.toLowerCase());
+    const ms = a.name.toLowerCase().includes(search.toLowerCase()) || a.code.includes(search) || (a.description||"").toLowerCase().includes(search.toLowerCase());
     const mg = groupFilter === "All" || a.group === groupFilter;
     return ms && mg;
   });
 
   const toggleGroup = g => setExpanded(prev => { const n = new Set(prev); n.has(g) ? n.delete(g) : n.add(g); return n; });
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!form.code || !form.name) return;
-    if (accounts.find(a => a.code === form.code)) { alert("Account code already exists."); return; }
-    setAccounts([...accounts,{...form,custom:true}].sort((a,b) => a.code.localeCompare(b.code)));
-    setShowNew(false);
-    setForm({code:"",name:"",type:"Detail",group:"Expenses",normal:"Debit",description:""});
+    if (accounts.find(a => a.code === form.code.trim())) { alert("Account code already exists."); return; }
+    setSaving(true);
+    try {
+      await api("/coa/", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(form) });
+      await loadCoa();
+      setShowNew(false);
+      setForm({code:"",name:"",type:"Detail",group:"Expenses",normal:"Debit",description:""});
+    } catch(e) { alert("Failed to save account: " + (e.message||e)); }
+    finally { setSaving(false); }
   };
 
-  const handleEdit = () => { setAccounts(accounts.map(a => a.code === showEdit.code ? {...showEdit} : a)); setShowEdit(null); };
+  const handleEdit = async () => {
+    setSaving(true);
+    try {
+      await api(`/coa/${encodeURIComponent(showEdit.code)}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(showEdit) });
+      await loadCoa();
+      setShowEdit(null);
+    } catch(e) { alert("Failed to update account: " + (e.message||e)); }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async (code) => {
+    if (!window.confirm(`Remove account ${code} from the chart of accounts?`)) return;
+    try {
+      await api(`/coa/${encodeURIComponent(code)}`, { method:"DELETE" });
+      await loadCoa();
+    } catch(e) { alert("Failed to delete account: " + (e.message||e)); }
+  };
 
   const grouped = COA_GROUPS.reduce((acc,g) => { acc[g] = filtered.filter(a => a.group === g); return acc; }, {});
 
@@ -6598,9 +6644,9 @@ function ChartOfAccounts() {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:24}}>
         <div>
           <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Chart of Accounts</h2>
-          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>IFRS for SMEs - SA-compliant - {accounts.filter(a => !a.inactive).length} active accounts</p>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>IFRS for SMEs · SA-compliant · {loading ? "Loading…" : `${accounts.length} accounts`}</p>
         </div>
-        <button onClick={() => setShowNew(true)} style={{padding:"9px 18px",border:"none",borderRadius:8,background:C.accent,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add Account</button>
+        <button onClick={() => setShowNew(true)} disabled={loading} style={{padding:"9px 18px",border:"none",borderRadius:8,background:C.accent,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:loading?0.6:1}}>+ Add Account</button>
       </div>
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
         <input type="text" placeholder="Search by code, name or description..." value={search} onChange={e => setSearch(e.target.value)} style={{flex:1,minWidth:200,padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
@@ -6647,7 +6693,7 @@ function ChartOfAccounts() {
             <input placeholder="Brief description" value={form.description} onChange={e => setForm({...form,description:e.target.value})} style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={handleAdd} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add Account</button>
+            <button onClick={handleAdd} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving ? "Saving…" : "Add Account"}</button>
             <button onClick={() => setShowNew(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
           </div>
         </div>
@@ -6673,7 +6719,7 @@ function ChartOfAccounts() {
               <input value={showEdit.description} onChange={e => setShowEdit({...showEdit,description:e.target.value})} style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
             </div>
             <div style={{display:"flex",gap:8}}>
-              <button onClick={handleEdit} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
+              <button onClick={handleEdit} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving ? "Saving…" : "Save Changes"}</button>
               <button onClick={() => setShowEdit(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
             </div>
           </div>
@@ -6714,7 +6760,7 @@ function ChartOfAccounts() {
                       <td style={{padding:"10px 16px",color:C.inkMid,fontSize:11,maxWidth:280}}><div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{acc.description}</div></td>
                       <td style={{padding:"10px 16px",whiteSpace:"nowrap"}}>
                         <button onClick={() => setShowEdit({...acc})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600,marginRight:4}}>Edit</button>
-                        <button onClick={() => setAccounts(accounts.map(a => a.code === acc.code ? {...a,inactive:!a.inactive} : a))} style={{background:acc.inactive ? C.greenLt : C.redLt,color:acc.inactive ? C.green : C.red,border:"none",borderRadius:6,padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{acc.inactive ? "Activate" : "Deactivate"}</button>
+                        {acc.custom && <button onClick={() => handleDelete(acc.code)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>}
                       </td>
                     </tr>
                   ))}
