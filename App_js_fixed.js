@@ -895,6 +895,31 @@ function InvFormFields({data, onChange, customers=[]}) {
     api("/service-items/").then(items => { if (Array.isArray(items)) setCatalogItems(items.filter(i => i.is_active)); }).catch(() => {});
   }, []);
 
+  // Multi-line items state
+  const EMPTY_LINE = {code:"", description:"", quantity:1, unit_price:0, vat_applicable:true};
+  const [useLineItems, setUseLineItems] = useState(() => !!(data.items_json && data.items_json.length > 2));
+  const [lineItems, setLineItems] = useState(() => {
+    if (data.items_json) { try { return JSON.parse(data.items_json); } catch(_) {} }
+    return [{ ...EMPTY_LINE }];
+  });
+
+  // Sync line items → parent data.items_json + auto-compute amount
+  const syncLines = (lines) => {
+    const enriched = lines.map(l => {
+      const qty = +l.quantity || 0;
+      const up  = +l.unit_price || 0;
+      const vat = l.vat_applicable ? Math.round(qty * up * 0.15 * 100) / 100 : 0;
+      return { ...l, quantity: qty, unit_price: up, vat_amount: vat, total: Math.round((qty*up + vat)*100)/100 };
+    });
+    const subtotal = enriched.reduce((s,l) => s + (l.unit_price * l.quantity), 0);
+    setLineItems(enriched);
+    onChange(d => ({
+      ...d,
+      items_json: JSON.stringify(enriched),
+      amount: Math.round(subtotal * 100) / 100,
+    }));
+  };
+
   const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
   const lb = (txt) => <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{txt}</label>;
   return (
@@ -975,9 +1000,231 @@ function InvFormFields({data, onChange, customers=[]}) {
           {data.currency&&data.currency!=="ZAR" && <span style={{color:C.blue}}>≈ {fmt(((+data.amount||0)+(+data.vatAmount||0))*(+data.exchangeRate||18.5))} ZAR</span>}
         </div>
       )}
+
+      {/* ── REFERENCE FIELDS ──────────────────────────────────────────── */}
+      <div style={{marginTop:8,padding:"12px 14px",background:C.bg,borderRadius:8,border:`1px solid ${C.border}`,marginBottom:12}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Travel / Reference Details</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:8}}>
+          <div><label style={{fontSize:11,color:C.inkMid,display:"block",marginBottom:4}}>Passenger Name</label>
+            <input value={data.passenger_name||""} onChange={e=>onChange(d=>({...d,passenger_name:e.target.value}))} placeholder="e.g. J. Smith" style={is}/></div>
+          <div><label style={{fontSize:11,color:C.inkMid,display:"block",marginBottom:4}}>Tour Ref</label>
+            <input value={data.tour_ref||""} onChange={e=>onChange(d=>({...d,tour_ref:e.target.value}))} placeholder="e.g. T-2024-001" style={is}/></div>
+          <div><label style={{fontSize:11,color:C.inkMid,display:"block",marginBottom:4}}>Quote Ref</label>
+            <input value={data.quote_ref||""} onChange={e=>onChange(d=>({...d,quote_ref:e.target.value}))} placeholder="e.g. Q-2024-001" style={is}/></div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          <div><label style={{fontSize:11,color:C.inkMid,display:"block",marginBottom:4}}>Tax Ref</label>
+            <input value={data.tax_ref||""} onChange={e=>onChange(d=>({...d,tax_ref:e.target.value}))} placeholder="SARS tax ref" style={is}/></div>
+          <div><label style={{fontSize:11,color:C.inkMid,display:"block",marginBottom:4}}>Travel Date</label>
+            <input type="date" value={data.travel_date||""} onChange={e=>onChange(d=>({...d,travel_date:e.target.value}))} style={is}/></div>
+          <div><label style={{fontSize:11,color:C.inkMid,display:"block",marginBottom:4}}>Pax Count</label>
+            <input type="number" min="1" value={data.pax_count||""} onChange={e=>onChange(d=>({...d,pax_count:e.target.value}))} placeholder="1" style={is}/></div>
+        </div>
+      </div>
+
+      {/* ── LINE ITEMS ────────────────────────────────────────────────── */}
+      <div style={{marginBottom:12}}>
+        <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink,marginBottom:8}}>
+          <input type="checkbox" checked={useLineItems} onChange={e=>{
+            setUseLineItems(e.target.checked);
+            if (!e.target.checked) onChange(d=>({...d, items_json:null}));
+            else syncLines(lineItems);
+          }} style={{width:16,height:16,cursor:"pointer"}}/>
+          Use line-item breakdown (code / description / qty / unit price)
+        </label>
+        {useLineItems && (
+          <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{background:C.bg}}>
+                  {["Code","Description","Qty","Unit Price","VAT?","Total",""].map(h=>(
+                    <th key={h} style={{padding:"7px 8px",fontWeight:600,color:C.inkMid,textAlign:h==="Total"||h==="Qty"||h==="Unit Price"?"right":"left",borderBottom:`1px solid ${C.border}`,fontSize:11}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lineItems.map((row, idx) => (
+                  <tr key={idx} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"4px 6px",width:80}}>
+                      <input value={row.code||""} onChange={e=>{const r=[...lineItems];r[idx]={...r[idx],code:e.target.value};syncLines(r);}} placeholder="SVC01" style={{...is,padding:"5px 7px",fontSize:12}}/>
+                    </td>
+                    <td style={{padding:"4px 6px"}}>
+                      <input value={row.description||""} onChange={e=>{const r=[...lineItems];r[idx]={...r[idx],description:e.target.value};syncLines(r);}} placeholder="Description" style={{...is,padding:"5px 7px",fontSize:12}}/>
+                    </td>
+                    <td style={{padding:"4px 6px",width:60}}>
+                      <input type="number" min="0" step="0.01" value={row.quantity||1} onChange={e=>{const r=[...lineItems];r[idx]={...r[idx],quantity:e.target.value};syncLines(r);}} style={{...is,padding:"5px 7px",fontSize:12,textAlign:"right"}}/>
+                    </td>
+                    <td style={{padding:"4px 6px",width:100}}>
+                      <input type="number" min="0" step="0.01" value={row.unit_price||0} onChange={e=>{const r=[...lineItems];r[idx]={...r[idx],unit_price:e.target.value};syncLines(r);}} style={{...is,padding:"5px 7px",fontSize:12,textAlign:"right"}}/>
+                    </td>
+                    <td style={{padding:"4px 8px",textAlign:"center",width:40}}>
+                      <input type="checkbox" checked={row.vat_applicable!==false} onChange={e=>{const r=[...lineItems];r[idx]={...r[idx],vat_applicable:e.target.checked};syncLines(r);}} style={{cursor:"pointer"}}/>
+                    </td>
+                    <td style={{padding:"4px 8px",textAlign:"right",width:80,fontWeight:600,color:C.ink}}>
+                      {(((+row.quantity||0)*(+row.unit_price||0))*(row.vat_applicable!==false?1.15:1)).toFixed(2)}
+                    </td>
+                    <td style={{padding:"4px 6px",width:30,textAlign:"center"}}>
+                      {lineItems.length > 1 && <button onClick={()=>{const r=lineItems.filter((_,i)=>i!==idx);syncLines(r);}} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16,lineHeight:1,padding:2}}>×</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{padding:"8px 10px",background:C.bg,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <button onClick={()=>{const r=[...lineItems,{...EMPTY_LINE}];syncLines(r);}} style={{padding:"6px 14px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:6,color:C.accent,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add Line</button>
+              <div style={{fontSize:12,color:C.inkMid}}>
+                Subtotal: <strong>{lineItems.reduce((s,l)=>(s+(+l.quantity||0)*(+l.unit_price||0)),0).toFixed(2)}</strong>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </>
   );
 }
+
+// ── CUSTOM HTML TEMPLATE RENDERER ────────────────────────────────────────────
+// Replaces {{variable}} placeholders with live invoice data.
+function renderTemplate(html, doc, user) {
+  const fmt = v => v !== undefined && v !== null ? String(v) : "";
+  const fmtAmt = v => isNaN(Number(v)) ? "0.00" : Number(v).toFixed(2);
+  const fmtDate = v => v ? (v.includes("T") ? v.substring(0,10) : v) : "";
+
+  // Build items table HTML if doc has items_json
+  let itemsTableHtml = "";
+  try {
+    const items = doc.items_json ? JSON.parse(doc.items_json) : null;
+    if (items && items.length) {
+      const rows = items.map(it => `
+        <tr>
+          <td>${fmt(it.code)}</td>
+          <td>${fmt(it.description)}</td>
+          <td style="text-align:right">${fmt(it.quantity)}</td>
+          <td style="text-align:right">${fmtAmt(it.unit_price)}</td>
+          <td style="text-align:right">${fmtAmt(it.vat_amount)}</td>
+          <td style="text-align:right">${fmtAmt(it.total)}</td>
+        </tr>`).join("");
+      itemsTableHtml = `<table border="1" cellpadding="5" cellspacing="0" style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th>Code</th><th>Description</th><th>Qty</th><th>Unit Price</th><th>VAT</th><th>Total</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+  } catch(_) {}
+
+  const vars = {
+    company_name:        fmt(user.companyName),
+    company_address:     fmt(user.address || user.companyAddress),
+    company_vat:         fmt(user.vatNumber || user.vat_number),
+    company_reg:         fmt(user.regNumber || user.reg_number),
+    company_phone:       fmt(user.phone || user.companyPhone),
+    company_email:       fmt(user.email || user.companyEmail),
+    company_bank_name:   fmt(user.bankName),
+    company_bank_account:fmt(user.bankAccount),
+    company_bank_branch: fmt(user.branchCode),
+    invoice_number:      fmt(doc.invoice_number),
+    issue_date:          fmtDate(doc.issue_date || doc.created_at),
+    due_date:            fmtDate(doc.due_date),
+    client_name:         fmt(doc.client_name),
+    client_email:        fmt(doc.client_email),
+    tour_ref:            fmt(doc.tour_ref),
+    quote_ref:           fmt(doc.quote_ref),
+    tax_ref:             fmt(doc.tax_ref),
+    travel_date:         fmt(doc.travel_date),
+    pax_count:           fmt(doc.pax_count),
+    passenger_name:      fmt(doc.passenger_name),
+    subtotal:            fmtAmt(doc.amount),
+    vat_amount:          fmtAmt(doc.vat_amount),
+    total:               fmtAmt(doc.total_amount),
+    notes:               fmt(doc.notes),
+    items_table:         itemsTableHtml,
+  };
+  let out = html;
+  Object.entries(vars).forEach(([k,v]) => {
+    out = out.split(`{{${k}}}`).join(v);
+  });
+  return out;
+}
+
+// Starter template for the "Download" link in Settings → Templates
+const SOLID_MATTER_HTML_TEMPLATE = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Invoice {{invoice_number}}</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #222; }
+  .header { background: #1a3a5c; color: #fff; padding: 24px 32px; display: flex; justify-content: space-between; align-items: center; }
+  .header-left h1 { margin: 0; font-size: 22px; }
+  .header-right { text-align: right; font-size: 13px; }
+  .ref-bar { background: #f0f4f8; padding: 10px 32px; display: grid; grid-template-columns: repeat(6,1fr); gap: 8px; font-size: 12px; }
+  .ref-bar div span { display: block; font-weight: 700; color: #1a3a5c; }
+  .section { padding: 20px 32px; }
+  h2 { font-size: 14px; color: #1a3a5c; border-bottom: 2px solid #1a3a5c; padding-bottom: 4px; margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #1a3a5c; color: #fff; padding: 8px; text-align: left; }
+  td { padding: 7px 8px; border-bottom: 1px solid #e8ecf0; }
+  .totals { text-align: right; padding: 8px 32px; }
+  .totals table { width: 260px; margin-left: auto; }
+  .totals td { padding: 4px 8px; }
+  .totals .grand { font-weight: 800; font-size: 15px; color: #1a3a5c; }
+  .footer { background: #1a3a5c; color: #fff; padding: 16px 32px; font-size: 12px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-left">
+    <h1>{{company_name}}</h1>
+    <div style="font-size:12px;margin-top:4px">{{company_address}}</div>
+    <div style="font-size:12px">VAT: {{company_vat}} | Reg: {{company_reg}}</div>
+    <div style="font-size:12px">{{company_phone}} | {{company_email}}</div>
+  </div>
+  <div class="header-right">
+    <div style="font-size:20px;font-weight:800">TAX INVOICE</div>
+    <div style="margin-top:6px"><strong>{{invoice_number}}</strong></div>
+    <div>Date: {{issue_date}}</div>
+    <div>Due: {{due_date}}</div>
+  </div>
+</div>
+<div class="ref-bar">
+  <div>Passenger<span>{{passenger_name}}</span></div>
+  <div>Tour Ref<span>{{tour_ref}}</span></div>
+  <div>Quote Ref<span>{{quote_ref}}</span></div>
+  <div>Tax Ref<span>{{tax_ref}}</span></div>
+  <div>Travel Date<span>{{travel_date}}</span></div>
+  <div>Pax<span>{{pax_count}}</span></div>
+</div>
+<div class="section">
+  <h2>Bill To</h2>
+  <div><strong>{{client_name}}</strong></div>
+  <div>{{client_email}}</div>
+</div>
+<div class="section">
+  <h2>Services / Items</h2>
+  {{items_table}}
+</div>
+<div class="totals">
+  <table>
+    <tr><td>Subtotal</td><td>{{subtotal}}</td></tr>
+    <tr><td>VAT (15%)</td><td>{{vat_amount}}</td></tr>
+    <tr class="grand"><td><strong>TOTAL</strong></td><td><strong>{{total}}</strong></td></tr>
+  </table>
+</div>
+<div class="section">
+  <h2>Banking Details</h2>
+  <table style="width:auto">
+    <tr><td><strong>Bank:</strong></td><td>{{company_bank_name}}</td></tr>
+    <tr><td><strong>Account:</strong></td><td>{{company_bank_account}}</td></tr>
+    <tr><td><strong>Branch:</strong></td><td>{{company_bank_branch}}</td></tr>
+  </table>
+</div>
+<div class="footer">
+  <div>{{notes}}</div>
+  <div style="margin-top:8px">Thank you for your business.</div>
+</div>
+</body>
+</html>`;
 
 // ── DOCUMENT RENDERER ────────────────────────────────────────────────────────
 // Renders invoice or quote in the chosen template layout.
@@ -986,6 +1233,11 @@ function InvFormFields({data, onChange, customers=[]}) {
 // user: company info
 // tmpl: document template config
 function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
+  // If company has a custom HTML template, use it instead of built-in layouts
+  if (user.invoiceTemplateHtml && type === "invoice") {
+    const rendered = renderTemplate(user.invoiceTemplateHtml, doc, user);
+    return <div dangerouslySetInnerHTML={{__html: rendered}} style={{fontFamily:"Arial,sans-serif"}}/>;
+  }
   const t = {...DEFAULT_DOC_TEMPLATE, ...tmpl};
   const pc = t.primaryColor;
   const ff = t.fontFamily;
@@ -1584,6 +1836,13 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
     try {
       const invBody = { client_name:form.client, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, due_date:form.due||null, currency:form.currency||"ZAR", exchange_rate:+form.exchangeRate||1.0 };
       if (form.currency && form.currency !== "ZAR") invBody.vat_amount_override = +form.vatAmount||0;
+      if (form.items_json) invBody.items_json = form.items_json;
+      if (form.passenger_name) invBody.passenger_name = form.passenger_name;
+      if (form.tour_ref) invBody.tour_ref = form.tour_ref;
+      if (form.quote_ref) invBody.quote_ref = form.quote_ref;
+      if (form.tax_ref) invBody.tax_ref = form.tax_ref;
+      if (form.travel_date) invBody.travel_date = form.travel_date;
+      if (form.pax_count) invBody.pax_count = +form.pax_count;
       await api("/invoices/", { method:"POST", body: JSON.stringify(invBody) });
       if (live && live.reload) live.reload();
       setShowNew(false);
@@ -7891,7 +8150,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
         onLogin({
           firstName: data.user.first_name, lastName: data.user.last_name,
           email: data.user.email, companyName: data.company.name,
-          logoUrl: data.company.logo_url||"", headerImageUrl: data.company.invoice_header_url||"", plan:{name:data.company.plan,id:data.company.plan},
+          logoUrl: data.company.logo_url||"", headerImageUrl: data.company.invoice_header_url||"", invoiceTemplateHtml: data.company.invoice_template_html||"", plan:{name:data.company.plan,id:data.company.plan},
           access_token: data.access_token, trialEnds: data.company.trial_ends, subscriptionStatus: data.company.subscription_status||"trial",
           role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
         });
@@ -8299,6 +8558,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     payfastPassphrase:    user?.payfastPassphrase    || "",
     logoUrl:              user?.logoUrl              || "",
     invoiceHeaderUrl:     user?.headerImageUrl       || "",
+    invoiceTemplateHtml:  user?.invoiceTemplateHtml  || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
     // SARS e@syFile fields
     payeRef:     "",
@@ -8341,6 +8601,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         payfastPassphrase:    data.payfast_passphrase   || f.payfastPassphrase,
         logoUrl:              data.logo_url          || f.logoUrl,
         invoiceHeaderUrl:     data.invoice_header_url || f.invoiceHeaderUrl,
+        invoiceTemplateHtml:  data.invoice_template_html || f.invoiceTemplateHtml,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
         payeRef:     data.paye_ref     || f.payeRef,
         sdlRef:      data.sdl_ref      || f.sdlRef,
@@ -8422,6 +8683,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         branch_code:            form.branchCode,
         logo_url:               form.logoUrl || null,
         invoice_header_url:     form.invoiceHeaderUrl || null,
+        invoice_template_html:  form.invoiceTemplateHtml || null,
         cipc_registration_date: form.cipcRegistrationDate || null,
         payfast_merchant_id:    form.payfastMerchantId  || null,
         payfast_merchant_key:   form.payfastMerchantKey || null,
@@ -8446,8 +8708,9 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       bankingDetails:    `${form.bankName} - Acc: ${form.bankAccount} - Branch: ${form.branchCode}`,
       payfastMerchantId: form.payfastMerchantId,
       payfastMerchantKey:form.payfastMerchantKey,
-      logoUrl:           form.logoUrl,
-      headerImageUrl:    form.invoiceHeaderUrl,
+      logoUrl:              form.logoUrl,
+      headerImageUrl:       form.invoiceHeaderUrl,
+      invoiceTemplateHtml:  form.invoiceTemplateHtml,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -8957,15 +9220,63 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
 
       {/* ── TEMPLATES TAB ────────────────────────────────────────────────────── */}
       {settingsTab === "templates" && (
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-            <div>
-              <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Document Templates</div>
-              <div style={{fontSize:13,color:C.inkMid}}>Customise how your invoices and quotes look when printed or shared.</div>
+        <div>
+          {/* Built-in layout picker */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Document Templates</div>
+                <div style={{fontSize:13,color:C.inkMid}}>Customise how your invoices and quotes look when printed or shared.</div>
+              </div>
+              <button onClick={()=>{if(onTemplateChange)onTemplateChange(DEFAULT_DOC_TEMPLATE);}} style={{padding:"9px 18px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Reset to Default</button>
             </div>
-            <button onClick={()=>{if(onTemplateChange)onTemplateChange(DEFAULT_DOC_TEMPLATE);}} style={{padding:"9px 18px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Reset to Default</button>
+            <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
           </div>
-          <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
+          {/* Custom HTML template upload */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
+            <div style={{fontSize:16,fontWeight:700,color:C.ink,marginBottom:4}}>Custom HTML Invoice Template</div>
+            <div style={{fontSize:13,color:C.inkMid,marginBottom:16}}>
+              Upload your own HTML invoice layout. Use <code style={{background:C.bg,padding:"1px 5px",borderRadius:4,fontSize:12}}>{"{{variable}}"}</code> placeholders — Zuzan will fill them in automatically.
+              {" "}<a href="#" onClick={e=>{e.preventDefault(); const tpl=document.createElement("a");tpl.href="data:text/html;charset=utf-8,"+encodeURIComponent(SOLID_MATTER_HTML_TEMPLATE);tpl.download="InvoiceTemplate.html";tpl.click();}} style={{color:C.accent,textDecoration:"none",fontWeight:600}}>Download starter template ↓</a>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{display:"flex",gap:10,marginBottom:10}}>
+                <label style={{display:"inline-flex",alignItems:"center",gap:6,padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                  📂 Upload HTML File
+                  <input type="file" accept=".html,text/html" style={{display:"none"}} onChange={e=>{
+                    const file=e.target.files&&e.target.files[0];
+                    if(!file)return;
+                    const reader=new FileReader();
+                    reader.onload=ev=>setForm(v=>({...v,invoiceTemplateHtml:ev.target.result}));
+                    reader.readAsText(file);
+                    e.target.value="";
+                  }}/>
+                </label>
+                {form.invoiceTemplateHtml && <button onClick={()=>setForm(v=>({...v,invoiceTemplateHtml:""}))} style={{padding:"9px 16px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✕ Remove</button>}
+              </div>
+              <div style={{fontSize:12,color:C.inkMid,marginBottom:6}}>Or paste HTML directly:</div>
+              <textarea
+                value={form.invoiceTemplateHtml}
+                onChange={e=>setForm(v=>({...v,invoiceTemplateHtml:e.target.value}))}
+                placeholder={"<!DOCTYPE html>\n<html>...</html>"}
+                style={{width:"100%",height:160,padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,fontFamily:"monospace",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box",resize:"vertical"}}
+              />
+            </div>
+            {form.invoiceTemplateHtml && (
+              <div style={{padding:"10px 14px",background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:8,fontSize:13,color:C.accent,marginBottom:4}}>
+                ✓ Custom template loaded ({Math.round(form.invoiceTemplateHtml.length/1024)} KB). Click <strong>Save Changes</strong> in Company Settings to activate.
+              </div>
+            )}
+            <div style={{marginTop:12,fontSize:12,color:C.inkMid,lineHeight:1.6}}>
+              <strong>Available placeholders:</strong>{" "}
+              {["{{company_name}}","{{company_address}}","{{company_vat}}","{{company_reg}}","{{company_phone}}","{{company_email}}","{{company_bank_name}}","{{company_bank_account}}","{{company_bank_branch}}",
+                "{{invoice_number}}","{{issue_date}}","{{due_date}}","{{client_name}}","{{client_email}}",
+                "{{tour_ref}}","{{quote_ref}}","{{tax_ref}}","{{travel_date}}","{{pax_count}}","{{passenger_name}}",
+                "{{subtotal}}","{{vat_amount}}","{{total}}","{{notes}}","{{items_table}}"].map(p=>(
+                <code key={p} style={{background:C.bg,padding:"1px 4px",borderRadius:3,fontSize:11,marginRight:4,display:"inline-block",marginBottom:2}}>{p}</code>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -9224,7 +9535,7 @@ function Login({onLogin, onRegister}) {
       const _rawSub = data.company.subscription_status || "trial";
       const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", headerImageUrl:data.company.invoice_header_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", headerImageUrl:data.company.invoice_header_url||"", invoiceTemplateHtml:data.company.invoice_template_html||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -13775,6 +14086,7 @@ export default function App() {
           companyName:  data.company.name,
           logoUrl:      data.company.logo_url || "",
           headerImageUrl: data.company.invoice_header_url || "",
+          invoiceTemplateHtml: data.company.invoice_template_html || "",
           plan:           {name: data.company.plan, id: data.company.plan},
           access_token:   token,
           trialEnds:          data.company.trial_ends,
@@ -13826,7 +14138,7 @@ export default function App() {
       const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
       const switchedUser = {
         firstName: data.user.first_name, lastName: data.user.last_name, email: data.user.email,
-        companyName: data.company.name, logoUrl: data.company.logo_url || "", headerImageUrl: data.company.invoice_header_url || "",
+        companyName: data.company.name, logoUrl: data.company.logo_url || "", headerImageUrl: data.company.invoice_header_url || "", invoiceTemplateHtml: data.company.invoice_template_html || "",
         plan: {name: data.company.plan, id: data.company.plan},
         access_token: data.access_token, trialEnds: data.company.trial_ends,
         subscriptionStatus: _subStatus, role: data.user.role || "owner",

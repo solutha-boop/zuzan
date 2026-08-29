@@ -41,6 +41,7 @@ class CompanyUpdate(BaseModel):
     bank_branch:            Optional[str] = None
     logo_url:               Optional[str] = None
     invoice_header_url:     Optional[str] = None
+    invoice_template_html:  Optional[str] = None
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
     afs_enabled:            Optional[bool] = None
     payfast_merchant_id:    Optional[str] = None
@@ -70,7 +71,9 @@ def _company_dict(c: Company) -> dict:
         "bank_name":    decrypt_field(c.bank_name),
         "bank_account": decrypt_field(c.bank_account),
         "bank_branch":  decrypt_field(c.bank_branch),
-        "logo_url": c.logo_url, "invoice_header_url": c.invoice_header_url, "plan": c.plan, "billing_cycle": c.billing_cycle,
+        "logo_url": c.logo_url, "invoice_header_url": c.invoice_header_url,
+        "invoice_template_html": c.invoice_template_html or "",
+        "plan": c.plan, "billing_cycle": c.billing_cycle,
         "subscription_status": c.subscription_status,
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
         "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
@@ -290,6 +293,15 @@ class InvoiceCreate(BaseModel):
     exchange_rate:       Optional[float] = 1.0
     vat_amount_override: Optional[float] = None  # Manual VAT for non-ZAR invoices
     cogs_amount:         Optional[float] = None  # If set, post DR Cost of Sales / CR Inventory for this amount
+    # Multi-line items (JSON string: [{code,description,quantity,unit_price,vat_amount,total}])
+    items_json:      Optional[str] = None
+    # Travel / reference fields
+    tour_ref:        Optional[str] = None
+    quote_ref:       Optional[str] = None
+    tax_ref:         Optional[str] = None
+    travel_date:     Optional[str] = None
+    pax_count:       Optional[int] = None
+    passenger_name:  Optional[str] = None
 
 class InvoiceUpdate(BaseModel):
     client_name:     Optional[str]   = None
@@ -300,6 +312,14 @@ class InvoiceUpdate(BaseModel):
     paid_date:       Optional[str]   = None
     notes:           Optional[str]   = None
     paid_amount_zar: Optional[float] = None  # ZAR actually received on payment
+    # Multi-line items + reference fields
+    items_json:      Optional[str] = None
+    tour_ref:        Optional[str] = None
+    quote_ref:       Optional[str] = None
+    tax_ref:         Optional[str] = None
+    travel_date:     Optional[str] = None
+    pax_count:       Optional[int] = None
+    passenger_name:  Optional[str] = None
 
 
 def next_invoice_number(company_id: int, db: Session) -> str:
@@ -345,7 +365,8 @@ async def list_invoices(
         rows = db.execute(_text(
             "SELECT id, company_id, invoice_number, client_name, client_email, "
             "description, amount, vat_amount, total_amount, currency, exchange_rate, "
-            "paid_amount_zar, due_date, notes, status, issue_date, paid_date, created_at "
+            "paid_amount_zar, due_date, notes, status, issue_date, paid_date, created_at, "
+            "items_json, tour_ref, quote_ref, tax_ref, travel_date, pax_count, passenger_name "
             "FROM invoices WHERE company_id = :cid ORDER BY created_at DESC" + page_sql
         ), {"cid": current_user.company_id})
         cols = list(rows.keys())
@@ -389,6 +410,13 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         status=InvoiceStatus.sent,
         currency=data.currency or "ZAR",
         exchange_rate=data.exchange_rate or 1.0,
+        items_json=data.items_json,
+        tour_ref=clean(data.tour_ref, 200) if data.tour_ref else None,
+        quote_ref=clean(data.quote_ref, 200) if data.quote_ref else None,
+        tax_ref=clean(data.tax_ref, 200) if data.tax_ref else None,
+        travel_date=clean(data.travel_date, 50) if data.travel_date else None,
+        pax_count=data.pax_count,
+        passenger_name=clean(data.passenger_name, 200) if data.passenger_name else None,
     )
     db.add(invoice)
     db.commit()
@@ -476,6 +504,21 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         invoice.notes = data.notes
     if data.paid_amount_zar is not None:
         invoice.paid_amount_zar = data.paid_amount_zar
+    # Multi-line items + reference fields
+    if data.items_json is not None:
+        invoice.items_json = data.items_json
+    if data.tour_ref is not None:
+        invoice.tour_ref = clean(data.tour_ref, 200) if data.tour_ref else None
+    if data.quote_ref is not None:
+        invoice.quote_ref = clean(data.quote_ref, 200) if data.quote_ref else None
+    if data.tax_ref is not None:
+        invoice.tax_ref = clean(data.tax_ref, 200) if data.tax_ref else None
+    if data.travel_date is not None:
+        invoice.travel_date = clean(data.travel_date, 50) if data.travel_date else None
+    if data.pax_count is not None:
+        invoice.pax_count = data.pax_count
+    if data.passenger_name is not None:
+        invoice.passenger_name = clean(data.passenger_name, 200) if data.passenger_name else None
 
     reverted_to_unpaid = was_paid and invoice.status != InvoiceStatus.paid
     newly_paid         = not was_paid and invoice.status == InvoiceStatus.paid

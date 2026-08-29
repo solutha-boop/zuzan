@@ -32,7 +32,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: invoice header image upload + service item catalogue + pick-from-catalog on invoice form [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: custom HTML invoice template + line items + reference fields (tour/pax/travel) [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main

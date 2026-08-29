@@ -54,6 +54,7 @@ class Company(Base):
     bank_name=Column(String); bank_account=Column(String); bank_branch=Column(String)
     logo_url=Column(Text,nullable=True)
     invoice_header_url=Column(Text,nullable=True)
+    invoice_template_html=Column(Text,nullable=True)   # custom HTML template with {{placeholders}}
     payroll_pin_hash=Column(String,nullable=True)
     plan=Column(Enum(PlanType),default=PlanType.starter)
     billing_cycle=Column(Enum(BillingCycle),default=BillingCycle.monthly)
@@ -144,6 +145,15 @@ class Invoice(Base):
     paid_date=Column(DateTime,nullable=True); paid_amount_zar=Column(Float,nullable=True); notes=Column(Text)
     portal_token=Column(String,nullable=True,unique=True,index=True)   # UUID for public payment portal
     portal_token_created_at=Column(DateTime,nullable=True)
+    # Multi-line items (JSON array: [{code,description,quantity,unit_price,vat_amount,total}])
+    items_json=Column(Text,nullable=True)
+    # Travel / reference fields
+    tour_ref=Column(String,nullable=True)
+    quote_ref=Column(String,nullable=True)
+    tax_ref=Column(String,nullable=True)
+    travel_date=Column(String,nullable=True)
+    pax_count=Column(Integer,nullable=True)
+    passenger_name=Column(String,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="invoices")
 
@@ -1516,6 +1526,15 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_accounts_company_code ON company_accounts (company_id, code)",
             # ── Invoice header image + Service catalogue (2026-08) ───────────────
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_header_url TEXT",
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_template_html TEXT",
+            # ── Multi-line items + travel reference fields on invoices (2026-08) ─
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS items_json TEXT",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tour_ref VARCHAR",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS quote_ref VARCHAR",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tax_ref VARCHAR",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS travel_date VARCHAR",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS pax_count INTEGER",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS passenger_name VARCHAR",
             """CREATE TABLE IF NOT EXISTS service_items (
                 id             SERIAL PRIMARY KEY,
                 company_id     INTEGER NOT NULL REFERENCES companies(id),
