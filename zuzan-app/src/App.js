@@ -949,7 +949,15 @@ function InvFormFields({data, onChange, customers=[]}) {
           <input placeholder="Or type client name" value={data.client||""} onChange={e=>onChange(d=>({...d,client:e.target.value}))} style={is}/>
         </div>
         <div>{lb("Amount (excl. VAT)")}<input type="number" placeholder="50000" value={data.amount||""} onChange={e=>onChange(d=>({...d,amount:e.target.value}))} style={is}/></div>
-        <div>{lb("Description")}<input placeholder="Services rendered" value={data.desc||""} onChange={e=>onChange(d=>({...d,desc:e.target.value}))} style={is}/></div>
+        <div style={{gridColumn:"1 / -1"}}>
+          {lb("Description / Invoice Body")}
+          <textarea
+            placeholder={"Type anything — services rendered, itemised list, free text...\n\nExample:\nCar Hire Extras — 16–19 Aug\nAirport transfers x2\nTravel insurance"}
+            value={data.desc||""}
+            onChange={e=>onChange(d=>({...d,desc:e.target.value}))}
+            style={{...is, minHeight:90, resize:"vertical", lineHeight:1.5}}
+          />
+        </div>
         <div>{lb("Due Date")}<input type="date" value={data.due||""} onChange={e=>onChange(d=>({...d,due:e.target.value}))} style={is}/></div>
         <div>
           {lb("Currency")}
@@ -1137,7 +1145,8 @@ function renderTemplate(html, doc, user) {
     subtotal:            fmtAmt(doc.amount),
     vat_amount:          fmtAmt(doc.vat_amount),
     total:               fmtAmt(doc.total_amount),
-    notes:               fmt(doc.notes),
+    description:         fmt(doc.description).replace(/\n/g, "<br>"),
+    notes:               fmt(doc.notes).replace(/\n/g, "<br>"),
     items_table:         itemsTableHtml,
   };
   let out = html;
@@ -1203,6 +1212,7 @@ const SOLID_MATTER_HTML_TEMPLATE = `<!DOCTYPE html>
 <div class="section">
   <h2>Services / Items</h2>
   {{items_table}}
+  <div style="font-size:13px;line-height:1.7;white-space:pre-wrap;margin-top:6px">{{description}}</div>
 </div>
 <div class="totals">
   <table>
@@ -9272,7 +9282,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               {["{{company_name}}","{{company_address}}","{{company_vat}}","{{company_reg}}","{{company_phone}}","{{company_email}}","{{company_bank_name}}","{{company_bank_account}}","{{company_bank_branch}}",
                 "{{invoice_number}}","{{issue_date}}","{{due_date}}","{{client_name}}","{{client_email}}",
                 "{{tour_ref}}","{{quote_ref}}","{{tax_ref}}","{{travel_date}}","{{pax_count}}","{{passenger_name}}",
-                "{{subtotal}}","{{vat_amount}}","{{total}}","{{notes}}","{{items_table}}"].map(p=>(
+                "{{subtotal}}","{{vat_amount}}","{{total}}","{{description}}","{{notes}}","{{items_table}}"].map(p=>(
                 <code key={p} style={{background:C.bg,padding:"1px 4px",borderRadius:3,fontSize:11,marginRight:4,display:"inline-block",marginBottom:2}}>{p}</code>
               ))}
             </div>
@@ -14188,10 +14198,10 @@ export default function App() {
     setScreen("login");
   };
 
-  // ── Auto-logout after 5 minutes of inactivity ──
+  // ── Auto-logout after 10 minutes of inactivity ──
   useEffect(() => {
     if (screen !== "app") return;
-    const TIMEOUT_MS = 5 * 60 * 1000;
+    const TIMEOUT_MS = 10 * 60 * 1000;
     let timer;
     const reset = () => {
       clearTimeout(timer);
@@ -14200,7 +14210,7 @@ export default function App() {
         setUser(null);
         setScreen("login");
         // Brief delay so React can unmount cleanly before the alert
-        setTimeout(() => alert("You were signed out due to 5 minutes of inactivity."), 50);
+        setTimeout(() => alert("You were signed out due to 10 minutes of inactivity."), 50);
       }, TIMEOUT_MS);
     };
     const events = ["mousemove","mousedown","keydown","touchstart","scroll","click"];
