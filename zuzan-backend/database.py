@@ -53,6 +53,7 @@ class Company(Base):
     address=Column(Text); phone=Column(String); email=Column(String)
     bank_name=Column(String); bank_account=Column(String); bank_branch=Column(String)
     logo_url=Column(Text,nullable=True)
+    invoice_header_url=Column(Text,nullable=True)
     payroll_pin_hash=Column(String,nullable=True)
     plan=Column(Enum(PlanType),default=PlanType.starter)
     billing_cycle=Column(Enum(BillingCycle),default=BillingCycle.monthly)
@@ -1016,6 +1017,23 @@ class CompanyAccount(Base):
     company     = relationship("Company")
 
 
+class ServiceItem(Base):
+    """Service/product catalogue — pre-defined items that auto-fill invoice lines."""
+    __tablename__ = "service_items"
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    code        = Column(String, nullable=False)   # e.g. CONS-001
+    name        = Column(String, nullable=False)   # short display name
+    description = Column(String, default="")       # longer description used on invoice
+    unit_price  = Column(Float, nullable=False, default=0.0)
+    vat_applicable = Column(Boolean, default=True)
+    unit        = Column(String, default="each")   # each | hour | day | month | km
+    is_active   = Column(Boolean, default=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    company     = relationship("Company")
+
+
 class BankInterestRequest(Base):
     """Records when a client requests integration with a specific bank."""
     __tablename__ = "bank_interest_requests"
@@ -1496,6 +1514,22 @@ def init_db():
                 updated_at  TIMESTAMP DEFAULT NOW()
             )""",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_company_accounts_company_code ON company_accounts (company_id, code)",
+            # ── Invoice header image + Service catalogue (2026-08) ───────────────
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_header_url TEXT",
+            """CREATE TABLE IF NOT EXISTS service_items (
+                id             SERIAL PRIMARY KEY,
+                company_id     INTEGER NOT NULL REFERENCES companies(id),
+                code           VARCHAR NOT NULL,
+                name           VARCHAR NOT NULL,
+                description    VARCHAR DEFAULT '',
+                unit_price     FLOAT   NOT NULL DEFAULT 0,
+                vat_applicable BOOLEAN DEFAULT TRUE,
+                unit           VARCHAR DEFAULT 'each',
+                is_active      BOOLEAN DEFAULT TRUE,
+                created_at     TIMESTAMP DEFAULT NOW(),
+                updated_at     TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_service_items_company_code ON service_items (company_id, code)",
         ]:
             try:
                 conn.execute(text(sql))

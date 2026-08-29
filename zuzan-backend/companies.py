@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus, CompanyMembership, CompanyAccount
+from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus, CompanyMembership, CompanyAccount, ServiceItem
 from auth import get_current_user, require_role, log_action, User
 from crypto import encrypt_field, decrypt_field
 from passlib.context import CryptContext
@@ -40,6 +40,7 @@ class CompanyUpdate(BaseModel):
     bank_account:           Optional[str] = None
     bank_branch:            Optional[str] = None
     logo_url:               Optional[str] = None
+    invoice_header_url:     Optional[str] = None
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
     afs_enabled:            Optional[bool] = None
     payfast_merchant_id:    Optional[str] = None
@@ -69,7 +70,7 @@ def _company_dict(c: Company) -> dict:
         "bank_name":    decrypt_field(c.bank_name),
         "bank_account": decrypt_field(c.bank_account),
         "bank_branch":  decrypt_field(c.bank_branch),
-        "logo_url": c.logo_url, "plan": c.plan, "billing_cycle": c.billing_cycle,
+        "logo_url": c.logo_url, "invoice_header_url": c.invoice_header_url, "plan": c.plan, "billing_cycle": c.billing_cycle,
         "subscription_status": c.subscription_status,
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
         "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
@@ -1031,6 +1032,104 @@ async def delete_account(
         db.add(tombstone)
         db.commit()
     return {"status": "deleted", "code": code}
+
+
+# ── SERVICE ITEM CATALOGUE ────────────────────────────────────────────────────
+service_router = APIRouter()
+
+class ServiceItemIn(BaseModel):
+    code:           str
+    name:           str
+    description:    str = ""
+    unit_price:     float = 0.0
+    vat_applicable: bool = True
+    unit:           str = "each"
+    is_active:      bool = True
+
+def _service_dict(s: ServiceItem) -> dict:
+    return {
+        "id": s.id, "code": s.code, "name": s.name,
+        "description": s.description, "unit_price": s.unit_price,
+        "vat_applicable": s.vat_applicable, "unit": s.unit, "is_active": s.is_active,
+    }
+
+@service_router.get("/")
+async def list_service_items(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    items = (
+        db.query(ServiceItem)
+        .filter(ServiceItem.company_id == current_user.company_id)
+        .order_by(ServiceItem.code)
+        .all()
+    )
+    return [_service_dict(s) for s in items]
+
+@service_router.post("/")
+async def create_service_item(
+    payload: ServiceItemIn,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    existing = (
+        db.query(ServiceItem)
+        .filter(ServiceItem.company_id == current_user.company_id, ServiceItem.code == payload.code)
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Service code '{payload.code}' already exists.")
+    item = ServiceItem(company_id=current_user.company_id, **payload.dict())
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return _service_dict(item)
+
+@service_router.put("/{item_id}")
+async def update_service_item(
+    item_id: int,
+    payload: ServiceItemIn,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    item = (
+        db.query(ServiceItem)
+        .filter(ServiceItem.id == item_id, ServiceItem.company_id == current_user.company_id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Service item not found.")
+    # Check code uniqueness if code changed
+    if payload.code != item.code:
+        clash = db.query(ServiceItem).filter(
+            ServiceItem.company_id == current_user.company_id,
+            ServiceItem.code == payload.code,
+            ServiceItem.id != item_id,
+        ).first()
+        if clash:
+            raise HTTPException(status_code=400, detail=f"Service code '{payload.code}' already exists.")
+    for field, value in payload.dict().items():
+        setattr(item, field, value)
+    item.updated_at = datetime.utcnow()
+    db.commit()
+    return _service_dict(item)
+
+@service_router.delete("/{item_id}")
+async def delete_service_item(
+    item_id: int,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    item = (
+        db.query(ServiceItem)
+        .filter(ServiceItem.id == item_id, ServiceItem.company_id == current_user.company_id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Service item not found.")
+    db.delete(item)
+    db.commit()
+    return {"status": "deleted", "id": item_id}
 
 
 # ── EMPLOYEES ─────────────────────────────────────────────────────────────────

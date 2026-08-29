@@ -890,10 +890,28 @@ function Dashboard({live = {}}) {
 
 // Defined outside Invoicing so it never remounts on parent re-render (fixes cursor-jump bug)
 function InvFormFields({data, onChange, customers=[]}) {
+  const [catalogItems, setCatalogItems] = useState([]);
+  useEffect(() => {
+    api("/service-items/").then(items => { if (Array.isArray(items)) setCatalogItems(items.filter(i => i.is_active)); }).catch(() => {});
+  }, []);
+
   const is = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
   const lb = (txt) => <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{txt}</label>;
   return (
     <>
+      {catalogItems.length > 0 && (
+        <div style={{marginBottom:12}}>
+          <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Pick from Catalog</label>
+          <select value="" onChange={e => {
+            const item = catalogItems.find(i => String(i.id) === e.target.value);
+            if (!item) return;
+            onChange(d => ({...d, desc: item.description || item.name, amount: item.unit_price, vatApplicable: item.vat_applicable}));
+          }} style={{...is, background: C.goldLt, color: C.gold, fontWeight: 600}}>
+            <option value="">— Select a service to auto-fill —</option>
+            {catalogItems.map(i => <option key={i.id} value={i.id}>[{i.code}] {i.name} — R{Number(i.unit_price).toFixed(2)} / {i.unit}</option>)}
+          </select>
+        </div>
+      )}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
         <div>
           {lb("Client")}
@@ -981,6 +999,12 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
     ? <img src={user.logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:2}}/>
     : <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:pc}}>{user.companyName||"Your Company"}</div>;
 
+  const headerImageBlock = user.headerImageUrl
+    ? <div style={{width:"100%",marginBottom:0,lineHeight:0}}>
+        <img src={user.headerImageUrl} alt="header" style={{width:"100%",maxHeight:140,objectFit:"cover",display:"block",borderRadius:"8px 8px 0 0"}}/>
+      </div>
+    : null;
+
   const tableHeader = (
     <thead>
       <tr style={{
@@ -1019,7 +1043,8 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
   // ── CLASSIC ──
   if (t.layout === "classic") return (
     <div style={{fontFamily:ff,color:"#1A1209"}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${pc}`}}>
+      {headerImageBlock}
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${pc}`,marginTop:headerImageBlock?16:0}}>
         <div>{logoBlock}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,marginTop:2}}>{user.companyName||""}</div>}</div>
         <div style={{textAlign:"right"}}>
           <div style={{fontSize:20,fontWeight:800,color:"#1A1209"}}>{title}</div>
@@ -1052,7 +1077,8 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
   // ── MODERN ──
   if (t.layout === "modern") return (
     <div style={{fontFamily:ff,color:"#1A1209"}}>
-      <div style={{background:pc,borderRadius:"8px 8px 0 0",padding:"24px 28px",marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      {headerImageBlock}
+      <div style={{background:pc,borderRadius:headerImageBlock?"0":"8px 8px 0 0",padding:"24px 28px",marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
           {user.logoUrl
             ? <div style={{background:"#fff",borderRadius:8,padding:"6px 10px",display:"inline-block"}}>
@@ -1096,7 +1122,8 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
   // ── MINIMAL ──
   if (t.layout === "minimal") return (
     <div style={{fontFamily:ff,color:"#1A1209"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:32}}>
+      {headerImageBlock}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:32,marginTop:headerImageBlock?16:0}}>
         <div>
           {user.logoUrl
             ? <img src={user.logoUrl} alt="logo" style={{height:40,maxWidth:140,objectFit:"contain",display:"block",marginBottom:4}}/>
@@ -1141,6 +1168,7 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
   // ── BOLD ──
   return (
     <div style={{fontFamily:ff,color:"#1A1209"}}>
+      {headerImageBlock}
       <div style={{background:"#1A1209",padding:"28px 32px",marginBottom:0,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
         <div>
           {user.logoUrl
@@ -7863,7 +7891,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
         onLogin({
           firstName: data.user.first_name, lastName: data.user.last_name,
           email: data.user.email, companyName: data.company.name,
-          logoUrl: data.company.logo_url||"", plan:{name:data.company.plan,id:data.company.plan},
+          logoUrl: data.company.logo_url||"", headerImageUrl: data.company.invoice_header_url||"", plan:{name:data.company.plan,id:data.company.plan},
           access_token: data.access_token, trialEnds: data.company.trial_ends, subscriptionStatus: data.company.subscription_status||"trial",
           role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
         });
@@ -8132,6 +8160,128 @@ function TeamSettings({user}) {
   );
 }
 
+// ── SERVICE CATALOG (Settings tab) ────────────────────────────────────────────
+function ServiceCatalog() {
+  const EMPTY = {code:"", name:"", description:"", unit_price:"", vat_applicable:true, unit:"each", is_active:true};
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(EMPTY);
+  const [editId, setEditId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const is = {width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const lb = t => <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:0.5}}>{t}</label>;
+
+  const load = () => { setLoading(true); api("/service-items/").then(d => { setItems(Array.isArray(d)?d:[]); }).catch(()=>{}).finally(()=>setLoading(false)); };
+  useEffect(load, []);
+
+  const handleSave = async () => {
+    if (!form.code || !form.name) { alert("Code and name are required."); return; }
+    setSaving(true);
+    try {
+      const body = {...form, unit_price: parseFloat(form.unit_price)||0};
+      if (editId) { await api(`/service-items/${editId}`, {method:"PUT", body:JSON.stringify(body)}); }
+      else { await api("/service-items/", {method:"POST", body:JSON.stringify(body)}); }
+      setShowForm(false); setForm(EMPTY); setEditId(null); load();
+    } catch(e) { alert(e.message || "Save failed."); }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm("Delete this service item?")) return;
+    try { await api(`/service-items/${id}`, {method:"DELETE"}); load(); }
+    catch(e) { alert("Delete failed."); }
+  };
+
+  const startEdit = (item) => {
+    setForm({...item, unit_price: String(item.unit_price)});
+    setEditId(item.id);
+    setShowForm(true);
+  };
+
+  const UNITS = ["each","hour","day","month","km","kg","litre","project"];
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontSize:16,fontWeight:700,color:C.ink}}>Service Catalogue</div>
+          <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Pre-defined services with codes and prices — pick from these when creating invoices.</div>
+        </div>
+        <button onClick={()=>{setForm(EMPTY);setEditId(null);setShowForm(true);}} style={{padding:"10px 20px",background:C.accent,color:"#fff",border:"none",borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add Service</button>
+      </div>
+
+      {/* Add/Edit Form */}
+      {showForm && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:20}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>{editId ? "Edit Service" : "New Service"}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:14}}>
+            <div>{lb("Code")}<input value={form.code} onChange={e=>setForm(f=>({...f,code:e.target.value.toUpperCase()}))} placeholder="e.g. CONS-001" style={is}/></div>
+            <div>{lb("Name")}<input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Consulting Fee" style={is}/></div>
+            <div>{lb("Unit Price (excl. VAT)")}<input type="number" min="0" step="0.01" value={form.unit_price} onChange={e=>setForm(f=>({...f,unit_price:e.target.value}))} placeholder="1500.00" style={is}/></div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:14,marginBottom:14}}>
+            <div>{lb("Description (used on invoice)")}<input value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))} placeholder="Professional consulting services" style={is}/></div>
+            <div>{lb("Unit")}<select value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} style={is}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select></div>
+            <div style={{display:"flex",flexDirection:"column",gap:10,paddingTop:20}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+                <input type="checkbox" checked={form.vat_applicable} onChange={e=>setForm(f=>({...f,vat_applicable:e.target.checked}))} style={{width:16,height:16}}/>
+                VAT @ 15%
+              </label>
+              <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
+                <input type="checkbox" checked={form.is_active} onChange={e=>setForm(f=>({...f,is_active:e.target.checked}))} style={{width:16,height:16}}/>
+                Active
+              </label>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={handleSave} disabled={saving} style={{padding:"10px 22px",background:C.accent,color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving…":(editId?"Update":"Create")}</button>
+            <button onClick={()=>{setShowForm(false);setForm(EMPTY);setEditId(null);}} style={{padding:"10px 18px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Items table */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+        {loading ? <div style={{padding:32,textAlign:"center",color:C.inkMid}}>Loading…</div> : items.length === 0 ? (
+          <div style={{padding:48,textAlign:"center",color:C.inkMid}}>
+            <div style={{fontSize:32,marginBottom:10}}>📋</div>
+            <div style={{fontWeight:600,marginBottom:6}}>No services yet</div>
+            <div style={{fontSize:13}}>Add your first service to speed up invoice creation.</div>
+          </div>
+        ) : (
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                {["Code","Name","Description","Unit Price","Unit","VAT","Active",""].map(h=><th key={h} style={{textAlign:"left",padding:"10px 16px",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item,i) => (
+                <tr key={item.id} style={{borderBottom:`1px solid ${C.border}30`,background:i%2===0?C.surface:C.bg}}>
+                  <td style={{padding:"11px 16px",fontWeight:700,color:C.accent,fontFamily:"monospace"}}>{item.code}</td>
+                  <td style={{padding:"11px 16px",fontWeight:600}}>{item.name}</td>
+                  <td style={{padding:"11px 16px",color:C.inkMid,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.description||"—"}</td>
+                  <td style={{padding:"11px 16px",fontWeight:600}}>R{Number(item.unit_price).toFixed(2)}</td>
+                  <td style={{padding:"11px 16px",color:C.inkMid}}>{item.unit}</td>
+                  <td style={{padding:"11px 16px"}}>{item.vat_applicable ? <span style={{color:C.green,fontWeight:600}}>Yes</span> : <span style={{color:C.inkMid}}>No</span>}</td>
+                  <td style={{padding:"11px 16px"}}>{item.is_active ? <span style={{color:C.green,fontWeight:600}}>✓</span> : <span style={{color:C.inkMid}}>—</span>}</td>
+                  <td style={{padding:"11px 16px"}}>
+                    <div style={{display:"flex",gap:6}}>
+                      <button onClick={()=>startEdit(item)} style={{padding:"5px 12px",background:C.goldLt,border:`1px solid ${C.gold}30`,borderRadius:6,color:C.gold,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
+                      <button onClick={()=>handleDelete(item.id)} style={{padding:"5px 12px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:6,color:C.red,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
 function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange, onNavigate}) {
   const [settingsTab, setSettingsTab] = useState("subscription");
@@ -8148,6 +8298,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     payfastMerchantKey:   user?.payfastMerchantKey   || "",
     payfastPassphrase:    user?.payfastPassphrase    || "",
     logoUrl:              user?.logoUrl              || "",
+    invoiceHeaderUrl:     user?.headerImageUrl       || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
     // SARS e@syFile fields
     payeRef:     "",
@@ -8189,6 +8340,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         payfastMerchantKey:   data.payfast_merchant_key || f.payfastMerchantKey,
         payfastPassphrase:    data.payfast_passphrase   || f.payfastPassphrase,
         logoUrl:              data.logo_url          || f.logoUrl,
+        invoiceHeaderUrl:     data.invoice_header_url || f.invoiceHeaderUrl,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
         payeRef:     data.paye_ref     || f.payeRef,
         sdlRef:      data.sdl_ref      || f.sdlRef,
@@ -8269,6 +8421,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         bank_account:           form.bankAccount,
         branch_code:            form.branchCode,
         logo_url:               form.logoUrl || null,
+        invoice_header_url:     form.invoiceHeaderUrl || null,
         cipc_registration_date: form.cipcRegistrationDate || null,
         payfast_merchant_id:    form.payfastMerchantId  || null,
         payfast_merchant_key:   form.payfastMerchantKey || null,
@@ -8294,6 +8447,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       payfastMerchantId: form.payfastMerchantId,
       payfastMerchantKey:form.payfastMerchantKey,
       logoUrl:           form.logoUrl,
+      headerImageUrl:    form.invoiceHeaderUrl,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -8309,6 +8463,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     {id:"company",      label:"Company",      icon:"🏢"},
     {id:"security",     label:"Security",     icon:"🔒"},
     {id:"templates",    label:"Templates",    icon:"🎨"},
+    {id:"catalog",      label:"Services",     icon:"📋"},
     {id:"developer",    label:"Developer",    icon:"🔑"},
     ...(["owner","admin"].includes(user?.role) ? [{id:"team", label:"Team", icon:"👥"}] : []),
   ];
@@ -8639,6 +8794,29 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         </div>
       </div>
 
+      {/* Invoice Header Image */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Invoice Header Image</div>
+        <div style={{fontSize:12,color:C.inkMid,marginBottom:14}}>A wide banner/letterhead image that appears at the top of every invoice and quote. Ideal size: 1200×200 px. JPG or PNG, max 1 MB.</div>
+        <div style={{display:"flex",alignItems:"flex-start",gap:20,marginBottom:4}}>
+          {form.invoiceHeaderUrl
+            ? <img src={form.invoiceHeaderUrl} alt="Invoice header" style={{maxWidth:320,maxHeight:90,objectFit:"cover",borderRadius:8,border:`1px solid ${C.border}`,background:"#fff"}}/>
+            : <div style={{width:260,height:70,borderRadius:8,border:`2px dashed ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:C.inkMid}}>No header image</div>
+          }
+          <div>
+            <input type="file" accept="image/*" id="header-upload" style={{display:"none"}} onChange={e=>{
+              const file=e.target.files[0]; if(!file)return;
+              if(file.size>1100000){alert("Header image must be under 1 MB.");return;}
+              const reader=new FileReader();
+              reader.onload=ev=>setForm(v=>({...v,invoiceHeaderUrl:ev.target.result}));
+              reader.readAsDataURL(file);
+            }}/>
+            <label htmlFor="header-upload" style={{display:"inline-block",padding:"9px 18px",background:C.accentLt,border:`1px solid ${C.accent}40`,borderRadius:8,color:C.accent,fontSize:13,fontWeight:700,cursor:"pointer"}}>Upload Header</label>
+            {form.invoiceHeaderUrl && <button onClick={()=>setForm(v=>({...v,invoiceHeaderUrl:""}))} style={{marginLeft:10,padding:"9px 16px",background:C.redLt,border:`1px solid ${C.red}30`,borderRadius:8,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Remove</button>}
+          </div>
+        </div>
+      </div>
+
       {/* Company Details */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:20}}>Company Details</div>
@@ -8790,6 +8968,9 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           <DocumentTemplateSettings template={docTemplate} onChange={tmpl=>{if(onTemplateChange)onTemplateChange(tmpl);}}/>
         </div>
       )}
+
+      {/* ── SERVICE CATALOG TAB ──────────────────────────────────────────────── */}
+      {settingsTab === "catalog" && <ServiceCatalog/>}
 
       {/* ── DEVELOPER TAB ────────────────────────────────────────────────────── */}
       {settingsTab === "developer" && <Developer/>}
@@ -9043,7 +9224,7 @@ function Login({onLogin, onRegister}) {
       const _rawSub = data.company.subscription_status || "trial";
       const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", headerImageUrl:data.company.invoice_header_url||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -13593,6 +13774,7 @@ export default function App() {
           email:        data.user.email,
           companyName:  data.company.name,
           logoUrl:      data.company.logo_url || "",
+          headerImageUrl: data.company.invoice_header_url || "",
           plan:           {name: data.company.plan, id: data.company.plan},
           access_token:   token,
           trialEnds:          data.company.trial_ends,
@@ -13644,7 +13826,7 @@ export default function App() {
       const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
       const switchedUser = {
         firstName: data.user.first_name, lastName: data.user.last_name, email: data.user.email,
-        companyName: data.company.name, logoUrl: data.company.logo_url || "",
+        companyName: data.company.name, logoUrl: data.company.logo_url || "", headerImageUrl: data.company.invoice_header_url || "",
         plan: {name: data.company.plan, id: data.company.plan},
         access_token: data.access_token, trialEnds: data.company.trial_ends,
         subscriptionStatus: _subStatus, role: data.user.role || "owner",
