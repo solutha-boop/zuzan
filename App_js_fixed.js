@@ -8163,6 +8163,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
           logoUrl: data.company.logo_url||"", headerImageUrl: data.company.invoice_header_url||"", invoiceTemplateHtml: data.company.invoice_template_html||"", plan:{name:data.company.plan,id:data.company.plan},
           access_token: data.access_token, trialEnds: data.company.trial_ends, subscriptionStatus: data.company.subscription_status||"trial",
           role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
+          billingExempt: data.company.billing_exempt||false,
         });
       }, 1200);
     } catch(e) { setError(e.message); }
@@ -8767,6 +8768,16 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
 
       {/* ── SUBSCRIPTION TAB ─────────────────────────────────────────────────── */}
       {settingsTab === "subscription" && <>
+      {user?.billingExempt && (
+        <div style={{background:"#e8f5e9",border:"1px solid #a5d6a7",borderRadius:16,padding:24,marginBottom:16,display:"flex",alignItems:"center",gap:16}}>
+          <div style={{fontSize:32}}>🤝</div>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:"#1b5e20",marginBottom:4}}>Partner Account</div>
+            <div style={{fontSize:13,color:"#2e7d32"}}>This is a Zuzan partner account. Billing and subscription limits do not apply.</div>
+          </div>
+        </div>
+      )}
+      {!user?.billingExempt && <>
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Your Plan</div>
 
@@ -9226,6 +9237,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           <button onClick={handleCancelSub} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
         </div>
       </div>
+      </>}{/* end !billingExempt */}
       </>}
 
       {/* ── TEMPLATES TAB ────────────────────────────────────────────────────── */}
@@ -9389,6 +9401,202 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
 }
 
 
+// ── ACCOUNTANT DASHBOARD ──────────────────────────────────────────────────────
+// Full-screen client portfolio view for accountants/bookkeepers.
+// Shows all companies the user has access to with invoice stats, overdue alerts,
+// quick "Open" switch button, and an "Add Client" onboarding modal.
+function AccountantDashboard({user, onSelectCompany, onLogout}) {
+  const [clients,    setClients]    = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [err,        setErr]        = useState("");
+  const [showModal,  setShowModal]  = useState(false);
+  const [switching,  setSwitching]  = useState(null);
+  // Onboarding modal fields
+  const [oName,    setOName]    = useState("");
+  const [oContact, setOContact] = useState("");
+  const [oEmail,   setOEmail]   = useState("");
+  const [oPhone,   setOPhone]   = useState("");
+  const [oIndustry,setOIndustry]= useState("");
+  const [oErr,     setOErr]     = useState("");
+  const [oLoading, setOLoading] = useState(false);
+  const [oSuccess, setOSuccess] = useState("");
+
+  const load = async () => {
+    setLoading(true); setErr("");
+    try {
+      const data = await api("/accountant/clients");
+      setClients(data);
+    } catch(e) { setErr(e.message || "Could not load clients."); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handleOpen = async (id) => {
+    if (switching !== null) return;
+    setSwitching(id);
+    await onSelectCompany(id);
+    setSwitching(null);
+  };
+
+  const handleOnboard = async () => {
+    if (!oName.trim()) { setOErr("Company name is required."); return; }
+    if (!oEmail.trim()) { setOErr("Contact email is required."); return; }
+    setOLoading(true); setOErr("");
+    try {
+      const res = await api("/accountant/onboard-client", {
+        method: "POST",
+        body: JSON.stringify({ company_name: oName.trim(), contact_name: oContact.trim(), contact_email: oEmail.trim(), contact_phone: oPhone.trim(), industry: oIndustry.trim() }),
+      });
+      setOSuccess(`${res.name || oName} created! Invite${res.email_sent?" sent to "+oEmail+".":": invite link generated."}`);
+      setOName(""); setOContact(""); setOEmail(""); setOPhone(""); setOIndustry("");
+      await load();
+    } catch(e) { setOErr(e.message || "Could not onboard client."); }
+    setOLoading(false);
+  };
+
+  const subColor  = (s) => s === "active" ? C.green : s === "trial" ? C.gold : C.red;
+  const subBg     = (s) => s === "active" ? C.greenLt : s === "trial" ? C.goldLt : C.redLt;
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"sans-serif"}}>
+      {/* Header */}
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"18px 32px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
+          <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>Accountant Practice Dashboard</div>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <button onClick={()=>{setShowModal(true);setOSuccess("");setOErr("");}} style={{padding:"10px 20px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add Client</button>
+          <button onClick={load} style={{padding:"10px 16px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>↻ Refresh</button>
+          <button onClick={onLogout} style={{padding:"10px 16px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
+        </div>
+      </div>
+
+      <div style={{padding:"28px 32px"}}>
+        {/* Summary stat bar */}
+        {clients.length > 0 && (
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,marginBottom:28}}>
+            {[
+              {label:"Total Clients",   val: clients.length},
+              {label:"Unpaid Invoices", val: clients.reduce((s,c)=>s+(c.unpaid_count||0),0)},
+              {label:"Overdue",         val: clients.reduce((s,c)=>s+(c.overdue_count||0),0), alert:true},
+              {label:"Outstanding",     val: `R${clients.reduce((s,c)=>s+(c.unpaid_total||0),0).toLocaleString("en-ZA",{minimumFractionDigits:2})}`},
+            ].map(st=>(
+              <div key={st.label} style={{background:C.surface,border:`1px solid ${st.alert&&clients.reduce((s,c)=>s+(c.overdue_count||0),0)>0?C.red+"40":C.border}`,borderRadius:12,padding:18,textAlign:"center"}}>
+                <div style={{fontSize:22,fontWeight:800,color:st.alert&&clients.reduce((s,c)=>s+(c.overdue_count||0),0)>0?C.red:C.ink}}>{st.val}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>{st.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Error / loading */}
+        {loading && <div style={{textAlign:"center",padding:60,color:C.inkMid}}>Loading clients…</div>}
+        {err && <div style={{color:C.red,padding:20,textAlign:"center"}}>{err}</div>}
+
+        {/* Client cards grid */}
+        {!loading && !err && (
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:16}}>
+            {clients.length === 0 && (
+              <div style={{gridColumn:"1/-1",textAlign:"center",padding:60,color:C.inkMid}}>
+                <div style={{fontSize:40,marginBottom:12}}>🏢</div>
+                <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>No clients yet</div>
+                <div style={{fontSize:13}}>Click "+ Add Client" to onboard your first client.</div>
+              </div>
+            )}
+            {clients.map(c => (
+              <div key={c.id} style={{background:C.surface,border:`1.5px solid ${c.overdue_count>0?C.red+"40":C.border}`,borderRadius:16,padding:22,display:"flex",flexDirection:"column",gap:0}}>
+                {/* Company name + plan badge */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:800,color:C.ink}}>{c.name||"Unnamed"}</div>
+                    <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{c.email||""}</div>
+                  </div>
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                    {c.billing_exempt && <span style={{fontSize:10,fontWeight:700,background:"#e8f5e9",color:"#1b5e20",borderRadius:20,padding:"2px 8px"}}>Partner</span>}
+                    <span style={{fontSize:10,fontWeight:700,background:subBg(c.subscription_status),color:subColor(c.subscription_status),borderRadius:20,padding:"2px 8px",textTransform:"capitalize"}}>{c.subscription_status||"trial"}</span>
+                    <span style={{fontSize:10,fontWeight:600,color:C.inkMid,background:C.bg,borderRadius:20,padding:"2px 8px",textTransform:"capitalize"}}>{c.role}</span>
+                  </div>
+                </div>
+
+                {/* Invoice stats */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:14}}>
+                  {[
+                    {label:"Unpaid",  val:c.unpaid_count,  color:c.unpaid_count>0?C.gold:C.inkDim},
+                    {label:"Overdue", val:c.overdue_count, color:c.overdue_count>0?C.red:C.inkDim},
+                    {label:"Drafts",  val:c.draft_count,   color:C.inkDim},
+                  ].map(st=>(
+                    <div key={st.label} style={{textAlign:"center",background:C.bg,borderRadius:8,padding:"8px 4px"}}>
+                      <div style={{fontSize:16,fontWeight:800,color:st.color}}>{st.val}</div>
+                      <div style={{fontSize:9,color:C.inkDim,marginTop:2}}>{st.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:11,color:C.inkMid,marginBottom:14}}>
+                  Outstanding: <strong style={{color:C.ink}}>R{(c.unpaid_total||0).toLocaleString("en-ZA",{minimumFractionDigits:2})}</strong>
+                </div>
+
+                {/* Open button */}
+                <button onClick={()=>handleOpen(c.id)} disabled={switching!==null} style={{
+                  marginTop:"auto",padding:"10px",background:C.accent,border:"none",borderRadius:10,
+                  color:"#fff",fontSize:13,fontWeight:700,cursor:switching!==null?"default":"pointer",
+                  fontFamily:"inherit",opacity:switching!==null&&switching!==c.id?0.5:1,
+                }}>
+                  {switching===c.id ? "Opening…" : "Open →"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Onboarding Modal ── */}
+      {showModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:24}} onClick={e=>{if(e.target===e.currentTarget){setShowModal(false);setOSuccess("");}}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:480,boxShadow:"0 8px 40px rgba(0,0,0,0.18)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <div style={{fontSize:18,fontWeight:800,color:C.ink}}>Add New Client</div>
+              <button onClick={()=>{setShowModal(false);setOSuccess("");}} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:C.inkMid}}>✕</button>
+            </div>
+            {oSuccess ? (
+              <div style={{textAlign:"center",padding:"20px 0"}}>
+                <div style={{fontSize:40,marginBottom:12}}>✅</div>
+                <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:8}}>{oSuccess}</div>
+                <button onClick={()=>setOSuccess("")} style={{padding:"10px 24px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Add Another</button>
+              </div>
+            ) : (
+              <>
+                {[
+                  {label:"Company Name *",     val:oName,     set:setOName,     ph:"e.g. ABC Trading (Pty) Ltd"},
+                  {label:"Contact Name",        val:oContact,  set:setOContact,  ph:"e.g. Jane Smith"},
+                  {label:"Contact Email *",     val:oEmail,    set:setOEmail,    ph:"jane@abctrading.co.za", type:"email"},
+                  {label:"Phone",               val:oPhone,    set:setOPhone,    ph:"+27 82 000 0000"},
+                  {label:"Industry",            val:oIndustry, set:setOIndustry, ph:"e.g. Retail, Construction…"},
+                ].map(f=>(
+                  <div key={f.label} style={{marginBottom:12}}>
+                    <label style={{display:"block",fontSize:11,fontWeight:700,color:C.inkMid,marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>{f.label}</label>
+                    <input type={f.type||"text"} value={f.val} onChange={e=>f.set(e.target.value)} placeholder={f.ph}
+                      style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",outline:"none"}}/>
+                  </div>
+                ))}
+                {oErr && <div style={{fontSize:12,color:C.red,marginBottom:12}}>{oErr}</div>}
+                <div style={{marginTop:4,fontSize:11,color:C.inkMid,marginBottom:16}}>The client will receive an invite email to set up their account. You'll be added as their accountant automatically.</div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={handleOnboard} disabled={oLoading} style={{flex:1,padding:"12px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:oLoading?0.6:1}}>
+                    {oLoading?"Creating…":"Create & Invite"}
+                  </button>
+                  <button onClick={()=>{setShowModal(false);setOErr("");}} style={{padding:"12px 18px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── LOGIN ─────────────────────────────────────────────────────────────────────
 // ── CLIENT PICKER (Accountant Practice / multi-client) ─────────────────────────
 // Shown after login when a user has access to more than one company — lets
@@ -9545,7 +9753,7 @@ function Login({onLogin, onRegister}) {
       const _rawSub = data.company.subscription_status || "trial";
       const _subStatus = (_rawSub === "expired" && data.company.trial_ends && new Date(data.company.trial_ends) > new Date()) ? "trial" : _rawSub;
       onLogin({firstName:data.user.first_name, lastName:data.user.last_name, email:data.user.email,
-        companyName:data.company.name, logoUrl:data.company.logo_url||"", headerImageUrl:data.company.invoice_header_url||"", invoiceTemplateHtml:data.company.invoice_template_html||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false});
+        companyName:data.company.name, logoUrl:data.company.logo_url||"", headerImageUrl:data.company.invoice_header_url||"", invoiceTemplateHtml:data.company.invoice_template_html||"", plan:{name:data.company.plan, id:data.company.plan}, access_token:data.access_token, trialEnds:data.company.trial_ends, subscriptionStatus:_subStatus, role:data.user.role||"owner", payrollEnabled:data.company.payroll_enabled||false, afsEnabled:data.company.afs_enabled||false, billingExempt:data.company.billing_exempt||false});
     } catch(e) { setError(e.message.includes("fetch") || e.message.includes("network") ? "Could not connect to server. Please try again." : e.message); }
     finally { setLoading(false); }
   };
@@ -13969,7 +14177,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           </div>
           <div style={{fontSize:10,color:C.inkDim}}>{(user?.plan?.name||"starter").charAt(0).toUpperCase()+(user?.plan?.name||"starter").slice(1)} Plan</div>
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
-          <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
+          <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.billingExempt ? <span style={{color:"#2e7d32",fontWeight:700}}>🤝 Partner Account</span> : user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
           {showSwitcher && (
             <div style={{position:"absolute",top:"100%",left:12,right:12,marginTop:6,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:50,overflow:"hidden"}}>
               {companies.map(c => (
@@ -14105,6 +14313,7 @@ export default function App() {
           payrollEnabled: data.company.payroll_enabled || false,
           afsEnabled:     data.company.afs_enabled || false,
           industry:       data.company.industry || "",
+          billingExempt:  data.company.billing_exempt || false,
         });
         Sentry.setUser({ email: data.user.email, username: data.company.name });
         setScreen("app");
@@ -14126,7 +14335,10 @@ export default function App() {
         if (Array.isArray(list) && list.length > 1) {
           setCompanies(list);
           setUser(userData);
-          setScreen("client-picker");
+          // If the user is a bookkeeper/accountant (billing-exempt or accountant role),
+          // go to the full Accountant Dashboard. Otherwise, use the simple Client Picker.
+          const isAccountantPractice = userData.billingExempt || userData.role === "accountant";
+          setScreen(isAccountantPractice ? "accountant-dashboard" : "client-picker");
           return;
         }
       }
@@ -14153,6 +14365,7 @@ export default function App() {
         access_token: data.access_token, trialEnds: data.company.trial_ends,
         subscriptionStatus: _subStatus, role: data.user.role || "owner",
         payrollEnabled: data.company.payroll_enabled || false, afsEnabled: data.company.afs_enabled || false,
+        billingExempt: data.company.billing_exempt || false,
       };
       Sentry.setUser({ email: switchedUser.email, username: switchedUser.companyName });
       setUser(switchedUser);
@@ -14236,6 +14449,7 @@ export default function App() {
   if (screen === "login")        return <Login        onLogin={handleLogin} onRegister={()=>setScreen("registration")}/>;
   if (screen === "registration") return <Registration onComplete={handleRegistrationComplete} onLogin={()=>setScreen("login")}/>;
   if (screen === "client-picker") return <ClientPicker companies={companies} onSelect={handleClientPick} onLogout={handleLogout} onNewCompany={handleNewCompany}/>;
+  if (screen === "accountant-dashboard") return <AccountantDashboard user={user} onSelectCompany={handleClientPick} onLogout={handleLogout}/>;
 
   return (
     <Sentry.ErrorBoundary fallback={

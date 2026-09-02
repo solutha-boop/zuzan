@@ -55,6 +55,7 @@ class Company(Base):
     logo_url=Column(Text,nullable=True)
     invoice_header_url=Column(Text,nullable=True)
     invoice_template_html=Column(Text,nullable=True)   # custom HTML template with {{placeholders}}
+    billing_exempt=Column(Boolean,default=False,nullable=False)  # Partner/internal accounts — skip all billing
     payroll_pin_hash=Column(String,nullable=True)
     plan=Column(Enum(PlanType),default=PlanType.starter)
     billing_cycle=Column(Enum(BillingCycle),default=BillingCycle.monthly)
@@ -1527,6 +1528,7 @@ def init_db():
             # ── Invoice header image + Service catalogue (2026-08) ───────────────
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_header_url TEXT",
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_template_html TEXT",
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS billing_exempt BOOLEAN NOT NULL DEFAULT FALSE",
             # ── Multi-line items + travel reference fields on invoices (2026-08) ─
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS items_json TEXT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tour_ref VARCHAR",

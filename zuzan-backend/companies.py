@@ -42,6 +42,7 @@ class CompanyUpdate(BaseModel):
     logo_url:               Optional[str] = None
     invoice_header_url:     Optional[str] = None
     invoice_template_html:  Optional[str] = None
+    billing_exempt:         Optional[bool] = None
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
     afs_enabled:            Optional[bool] = None
     payfast_merchant_id:    Optional[str] = None
@@ -73,6 +74,7 @@ def _company_dict(c: Company) -> dict:
         "bank_branch":  decrypt_field(c.bank_branch),
         "logo_url": c.logo_url, "invoice_header_url": c.invoice_header_url,
         "invoice_template_html": c.invoice_template_html or "",
+        "billing_exempt": bool(c.billing_exempt),
         "plan": c.plan, "billing_cycle": c.billing_cycle,
         "subscription_status": c.subscription_status,
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
@@ -380,15 +382,15 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     limits = {"starter": 20, "professional": 50, "business": 999999}
     limit = limits.get(company.plan, 20)
 
-    # Count this month's invoices
-    now = datetime.utcnow()
-    monthly_count = db.query(Invoice).filter(
-        Invoice.company_id == current_user.company_id,
-        Invoice.created_at >= datetime(now.year, now.month, 1)
-    ).count()
-
-    if monthly_count >= limit:
-        raise HTTPException(status_code=403, detail=f"Monthly invoice limit ({limit}) reached. Upgrade your plan.")
+    if not company.billing_exempt:
+        # Count this month's invoices
+        now = datetime.utcnow()
+        monthly_count = db.query(Invoice).filter(
+            Invoice.company_id == current_user.company_id,
+            Invoice.created_at >= datetime(now.year, now.month, 1)
+        ).count()
+        if monthly_count >= limit:
+            raise HTTPException(status_code=403, detail=f"Monthly invoice limit ({limit}) reached. Upgrade your plan.")
 
     if data.currency and data.currency != "ZAR" and data.vat_amount_override is not None:
         vat_amount = round(data.vat_amount_override, 2)   # User-specified VAT for foreign currency

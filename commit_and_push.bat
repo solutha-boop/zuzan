@@ -26,13 +26,14 @@ git add zuzan-backend/main.py
 git add zuzan-backend/database.py
 git add zuzan-backend/auth.py
 git add zuzan-backend/email_service.py
+git add zuzan-backend/accountant.py
 git add netlify.toml
 git diff --cached --stat
 
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: custom HTML invoice template + line items + reference fields (tour/pax/travel) [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: accountant practice dashboard — billing_exempt partner tier, AccountantDashboard component, client onboarding modal, admin toggle [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main
