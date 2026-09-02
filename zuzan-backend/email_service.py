@@ -294,33 +294,49 @@ def send_welcome_email(
       <!-- Bookkeeper / Accountant Practice guide -->
       <div style="background:#f0f9ff;border-radius:8px;padding:24px;border:1px solid #bae0fd;margin-bottom:24px;">
         <p style="color:#0369a1;font-weight:bold;font-size:13px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.5px;">
-          📋 &nbsp;Managing Multiple Clients
+          🤝 &nbsp;Your Accountant Practice Dashboard
         </p>
         <p style="color:#444;line-height:1.7;margin:0 0 16px;">
-          ZuZan is built for bookkeepers. You can manage all your clients from a single login — each client gets their own separate set of books, and you switch between them in seconds.
+          ZuZan is built for bookkeeping and accounting practices. When you log in you'll land on your
+          <strong>Practice Dashboard</strong> — a single view of every client you manage, with live invoice
+          stats, overdue alerts, and outstanding balances at a glance.
         </p>
+
+        <!-- What you see -->
         <div style="background:#fff;border-radius:6px;padding:16px;border:1px solid #bae0fd;margin-bottom:12px;">
-          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 8px;">How to add a client</p>
-          <ol style="margin:0;padding-left:20px;color:#444;line-height:2;">
-            <li>Log in to ZuZan and look at the <strong>sidebar on the left</strong></li>
-            <li>Click your <strong>company name</strong> — a small ▾ arrow appears next to it</li>
-            <li>A dropdown opens — click <strong>+ Add Client</strong> at the bottom</li>
-            <li>Type the client's business name and press <strong>Create</strong></li>
-            <li>ZuZan switches you straight into the new client's workspace</li>
-          </ol>
+          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 8px;">What the Practice Dashboard shows you</p>
+          <ul style="margin:0;padding-left:0;list-style:none;color:#444;line-height:1.8;">
+            <li style="padding:4px 0;border-bottom:1px solid #e8f4fd;">📊 &nbsp;<strong>Portfolio overview</strong> — total clients, unpaid invoices, overdue count, and total outstanding across all clients</li>
+            <li style="padding:4px 0;border-bottom:1px solid #e8f4fd;">🏢 &nbsp;<strong>Client cards</strong> — each client shows their plan, subscription status, unpaid/overdue/draft invoice counts, and outstanding rand value</li>
+            <li style="padding:4px 0;border-bottom:1px solid #e8f4fd;">🔴 &nbsp;<strong>Overdue alerts</strong> — client cards with overdue invoices are highlighted in red so you never miss a follow-up</li>
+            <li style="padding:4px 0;">🔀 &nbsp;<strong>Quick switch</strong> — click <strong>Open →</strong> on any client card to switch into their books instantly. No re-logging in, no shared passwords.</li>
+          </ul>
         </div>
+
+        <!-- How to add a client -->
         <div style="background:#fff;border-radius:6px;padding:16px;border:1px solid #bae0fd;margin-bottom:12px;">
-          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 8px;">Switching between clients</p>
-          <p style="color:#555;line-height:1.7;margin:0;">
-            Click your company name in the sidebar at any time to see all your clients.
-            Select one to switch — no logging out, no separate passwords.
-            Each client's invoices, expenses, payroll and reports are completely isolated.
+          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 8px;">How to onboard a new client</p>
+          <ol style="margin:0;padding-left:20px;color:#444;line-height:2.1;">
+            <li>From your Practice Dashboard, click <strong>+ Add Client</strong> in the top right</li>
+            <li>Enter the client's <strong>company name</strong>, contact person, and email address</li>
+            <li>Click <strong>Create &amp; Invite</strong> — ZuZan creates their company and sends them an invite email</li>
+            <li>The client clicks the invite link and sets up their own login credentials</li>
+            <li>Their company appears on your dashboard immediately — open it and start working</li>
+          </ol>
+          <p style="color:#0369a1;font-size:13px;margin:12px 0 0;line-height:1.6;">
+            💡 The invite link is valid for <strong>14 days</strong>. You can always onboard more clients later — there's no limit.
           </p>
         </div>
-        <p style="color:#0369a1;font-size:13px;margin:0;line-height:1.6;">
-          💡 Your own bookkeeping firm is already set up as your first company.
-          Add each client using the steps above and start working in their books immediately.
-        </p>
+
+        <!-- Client isolation -->
+        <div style="background:#fff;border-radius:6px;padding:16px;border:1px solid #bae0fd;">
+          <p style="color:#1a1a1a;font-weight:bold;margin:0 0 8px;">How client data is kept separate</p>
+          <p style="color:#555;line-height:1.7;margin:0;">
+            Every client has their own completely isolated set of books — invoices, expenses, employees, payroll,
+            bank feeds, and reports are never mixed between clients. When a client logs in with their own
+            credentials they only ever see their own data. You see all of them from your Practice Dashboard.
+          </p>
+        </div>
       </div>
     """
 
