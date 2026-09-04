@@ -9018,6 +9018,15 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       </div>
       )}
       </>}
+      {/* Account actions */}
+      <div style={{background:C.surface,border:`1px solid ${C.red}30`,borderRadius:16,padding:28}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Account</div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <button onClick={onLogout} style={{padding:"11px 22px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
+          {!user?.billingExempt && <button onClick={handleCancelSub} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>}
+        </div>
+      </div>
+      </>}
 
       {/* ── PROFILE TAB ──────────────────────────────────────────────────────── */}
       {settingsTab === "profile" && <>
@@ -9229,15 +9238,6 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         </div>
       </div>
 
-      {/* Account actions */}
-      <div style={{background:C.surface,border:`1px solid ${C.red}30`,borderRadius:16,padding:28}}>
-        <div style={{fontSize:11,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Account</div>
-        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          <button onClick={onLogout} style={{padding:"11px 22px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
-          <button onClick={handleCancelSub} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>
-        </div>
-      </div>
-      </>}{/* end !billingExempt */}
       </>}
 
       {/* ── TEMPLATES TAB ────────────────────────────────────────────────────── */}
