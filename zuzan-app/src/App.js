@@ -14316,16 +14316,26 @@ export default function App() {
           billingExempt:  data.company.billing_exempt || false,
         });
         Sentry.setUser({ email: data.user.email, username: data.company.name });
-        setScreen("app");
+        if (data.company.billing_exempt || data.user.role === "accountant") {
+          setScreen("accountant-dashboard");
+        } else {
+          setScreen("app");
+        }
       })
       .catch(() => { clearTimeout(timeout); localStorage.removeItem("zuzan_token"); setScreen("login"); });
   }, []);
 
   const handleLogin = async userData => {
     Sentry.setUser({ email: userData.email, username: userData.companyName });
-    // Accountant Practice / multi-client: only show the Client Picker when
-    // there's an actual choice — single-company users (the vast majority)
-    // go straight to the dashboard exactly as before.
+    // Accountant/partner accounts always go to the Practice Dashboard —
+    // they need it even before they've added any clients.
+    // Other users get the Client Picker only if they belong to >1 company.
+    const isAccountantPractice = userData.billingExempt || userData.role === "accountant";
+    if (isAccountantPractice) {
+      setUser(userData);
+      setScreen("accountant-dashboard");
+      return;
+    }
     try {
       const res = await fetch(`${BASE_URL}/auth/my-companies`, {
         headers: {"Authorization": "Bearer " + userData.access_token},
@@ -14335,10 +14345,7 @@ export default function App() {
         if (Array.isArray(list) && list.length > 1) {
           setCompanies(list);
           setUser(userData);
-          // If the user is a bookkeeper/accountant (billing-exempt or accountant role),
-          // go to the full Accountant Dashboard. Otherwise, use the simple Client Picker.
-          const isAccountantPractice = userData.billingExempt || userData.role === "accountant";
-          setScreen(isAccountantPractice ? "accountant-dashboard" : "client-picker");
+          setScreen("client-picker");
           return;
         }
       }
