@@ -47,6 +47,8 @@ class CompanyUpdate(BaseModel):
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
     financial_year_end:     Optional[str] = None  # "MM-DD" e.g. "02-28"
     afs_enabled:            Optional[bool] = None
+    payroll_enabled:        Optional[bool] = None
+    payroll_employees:      Optional[int]  = None
     payfast_merchant_id:    Optional[str] = None
     payfast_merchant_key:   Optional[str] = None
     payfast_passphrase:     Optional[str] = None
