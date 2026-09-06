@@ -8571,6 +8571,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     invoiceHeaderUrl:     user?.headerImageUrl       || "",
     invoiceTemplateHtml:  user?.invoiceTemplateHtml  || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
+    financialYearEnd:     user?.financialYearEnd     || "02-28",
     // SARS e@syFile fields
     payeRef:     "",
     sdlRef:      "",
@@ -8614,6 +8615,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         invoiceHeaderUrl:     data.invoice_header_url || f.invoiceHeaderUrl,
         invoiceTemplateHtml:  data.invoice_template_html || f.invoiceTemplateHtml,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
+        financialYearEnd:     data.financial_year_end    || f.financialYearEnd,
         payeRef:     data.paye_ref     || f.payeRef,
         sdlRef:      data.sdl_ref      || f.sdlRef,
         uifRef:      data.uif_ref      || f.uifRef,
@@ -8696,6 +8698,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         invoice_header_url:     form.invoiceHeaderUrl || null,
         invoice_template_html:  form.invoiceTemplateHtml || null,
         cipc_registration_date: form.cipcRegistrationDate || null,
+        financial_year_end:     form.financialYearEnd    || null,
         payfast_merchant_id:    form.payfastMerchantId  || null,
         payfast_merchant_key:   form.payfastMerchantKey || null,
         payfast_passphrase:     form.payfastPassphrase  || null,
@@ -9121,6 +9124,14 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             </div>
           ))}
           <div>
+            <label style={labelStyle}>Financial Year End</label>
+            <select value={form.financialYearEnd||"02-28"} onChange={e=>setForm(v=>({...v,financialYearEnd:e.target.value}))} style={inputStyle}>
+              {[["01-31","31 January"],["02-28","28 February"],["03-31","31 March"],["04-30","30 April"],["05-31","31 May"],["06-30","30 June"],["07-31","31 July"],["08-31","31 August"],["09-30","30 September"],["10-31","31 October"],["11-30","30 November"],["12-31","31 December"]].map(([v,l])=>(
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label style={labelStyle}>Industry</label>
             <select value={form.industry||""} onChange={e=>setForm(v=>({...v,industry:e.target.value}))} style={inputStyle}>
               <option value="">General</option>
@@ -9142,6 +9153,25 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           </div>
         </div>
 
+        {(()=>{
+          if(!form.cipcRegistrationDate) return null;
+          const reg=new Date(form.cipcRegistrationDate);
+          const now=new Date();
+          const anniv=new Date(now.getFullYear(),reg.getMonth(),reg.getDate());
+          if(anniv<now) anniv.setFullYear(anniv.getFullYear()+1);
+          // add 30 business days
+          let bd=0,dl=new Date(anniv);
+          while(bd<30){dl.setDate(dl.getDate()+1);if(dl.getDay()!==0&&dl.getDay()!==6)bd++;}
+          const daysLeft=Math.round((dl-now)/(1000*60*60*24));
+          const dlStr=dl.toLocaleDateString("en-ZA",{day:"numeric",month:"long",year:"numeric"});
+          const urgent=daysLeft<=30;
+          return(
+            <div style={{background:urgent?"#fff7ed":C.accentLt,border:`1px solid ${urgent?"#fed7aa":C.accent+"40"}`,borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:12,color:urgent?"#c2410c":C.inkMid,display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:16}}>{urgent?"⚠️":"📅"}</span>
+              <span><strong>CIPC Annual Return deadline:</strong> {dlStr} ({daysLeft} days away) — due within 30 business days of your incorporation anniversary ({reg.toLocaleDateString("en-ZA",{day:"numeric",month:"long"})})</span>
+            </div>
+          );
+        })()}
         <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:14}}>Banking Details <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(shown on invoices)</span></div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16,marginBottom:20}}>
           {[{l:"Bank Name",k:"bankName"},{l:"Account Number",k:"bankAccount"},{l:"Branch Code",k:"branchCode"}].map(f=>(
@@ -9920,7 +9950,7 @@ function Registration({onComplete, onLogin}) {
   const [selectedPlan, setPlan] = useState(null);
   const [payrollEnabled, setPayroll] = useState(false);
   const [empCount, setEmpCount] = useState(5);
-  const [form, setForm] = useState({companyName:"",regNumber:"",industry:"",firstName:"",lastName:"",email:"",phone:"",password:"",confirm:"",userType:"business_owner"});
+  const [form, setForm] = useState({companyName:"",regNumber:"",industry:"",financialYearEnd:"02-28",cipcRegistrationDate:"",firstName:"",lastName:"",email:"",phone:"",password:"",confirm:"",userType:"business_owner"});
   const [mandate, setMandate] = useState({accountHolder:"",bank:"",accountNumber:"",branchCode:"",accountType:"current",collectionDay:"1",signedName:"",mandateAccepted:false});
   const SA_BANK_BRANCHES = {"FNB":"250655","ABSA":"632005","Standard Bank":"051001","Nedbank":"198765","Capitec":"470010","African Bank":"430000","Investec":"580105","TymeBank":"678910","Discovery Bank":"679000","Bidvest":"462005"};
   const [processing, setProcessing] = useState(false);
@@ -9969,8 +9999,10 @@ function Registration({onComplete, onLogin}) {
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
           company_name:    form.companyName.trim(),
-          reg_number:      form.regNumber.trim(),
-          industry:        form.industry.trim(),
+          reg_number:              form.regNumber.trim(),
+          industry:                form.industry.trim(),
+          financial_year_end:      form.financialYearEnd || null,
+          cipc_registration_date:  form.cipcRegistrationDate || null,
           first_name:      form.firstName.trim(),
           last_name:       form.lastName.trim(),
           email:           form.email.trim(),
@@ -10126,6 +10158,22 @@ function Registration({onComplete, onLogin}) {
                   {errors[f.k] && <div style={{color:"#EF4444",fontSize:11,marginTop:4}}>{errors[f.k]}</div>}
                 </div>
               ))}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+                <div>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Financial Year End</label>
+                  <select value={form.financialYearEnd} onChange={e=>setForm({...form,financialYearEnd:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}>
+                    {[["01-31","31 January"],["02-28","28 February"],["03-31","31 March"],["04-30","30 April"],["05-31","31 May"],["06-30","30 June"],["07-31","31 July"],["08-31","31 August"],["09-30","30 September"],["10-31","31 October"],["11-30","30 November"],["12-31","31 December"]].map(([v,l])=>(
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </select>
+                  <div style={{fontSize:10,color:C.inkMid,marginTop:3}}>The last day of your financial year</div>
+                </div>
+                <div>
+                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>CIPC Registration Date</label>
+                  <input type="date" value={form.cipcRegistrationDate} onChange={e=>setForm({...form,cipcRegistrationDate:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  <div style={{fontSize:10,color:C.inkMid,marginTop:3}}>Used to calculate your CIPC AR deadline</div>
+                </div>
+              </div>
             </div>
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:18,padding:28,marginBottom:20}}>
               <div style={{fontSize:12,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Your Details</div>

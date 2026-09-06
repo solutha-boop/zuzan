@@ -69,6 +69,8 @@ class RegisterRequest(BaseModel):
     mandate_signed_name:     Optional[str] = None
     mandate_signed:          bool = False
     user_type:               Optional[str] = "business_owner"  # business_owner | bookkeeper
+    financial_year_end:      Optional[str] = None   # "MM-DD" e.g. "02-28" for 28 Feb
+    cipc_registration_date:  Optional[str] = None   # ISO date string e.g. "2020-03-15"
 
 
 class LoginRequest(BaseModel):
@@ -169,6 +171,8 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
         mandate_signed_name=data.mandate_signed_name,
         mandate_signed=data.mandate_signed,
         mandate_signed_at=datetime.utcnow() if data.mandate_signed else None,
+        financial_year_end=data.financial_year_end or None,
+        cipc_registration_date=datetime.strptime(data.cipc_registration_date, "%Y-%m-%d") if data.cipc_registration_date else None,
     )
     db.add(company)
     db.flush()

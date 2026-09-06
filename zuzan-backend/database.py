@@ -70,6 +70,7 @@ class Company(Base):
     payfast_token_created=Column(DateTime,nullable=True)  # When the token was captured
     next_billing_date=Column(DateTime,nullable=True)    # Next scheduled charge date
     cipc_registration_date=Column(DateTime,nullable=True)   # Company anniversary for CIPC AR reminder
+    financial_year_end=Column(String,nullable=True)          # e.g. "02-28" = 28 Feb; used for FY reporting
     # ── SARS e@syFile / IRP5 fields (BRS v25.3.0) ────────────────────────────
     paye_ref=Column(String,nullable=True)             # PAYE Reference Number (10 digits, starts 7)
     sdl_ref=Column(String,nullable=True)              # SDL Reference Number (starts L)
@@ -1529,6 +1530,7 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_header_url TEXT",
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_template_html TEXT",
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS billing_exempt BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS financial_year_end VARCHAR",
             # ── Multi-line items + travel reference fields on invoices (2026-08) ─
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS items_json TEXT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tour_ref VARCHAR",

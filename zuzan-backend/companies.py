@@ -45,6 +45,7 @@ class CompanyUpdate(BaseModel):
     invoice_template_html:  Optional[str] = None
     billing_exempt:         Optional[bool] = None
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
+    financial_year_end:     Optional[str] = None  # "MM-DD" e.g. "02-28"
     afs_enabled:            Optional[bool] = None
     payfast_merchant_id:    Optional[str] = None
     payfast_merchant_key:   Optional[str] = None
@@ -85,6 +86,7 @@ def _company_dict(c: Company) -> dict:
         "payfast_merchant_key": decrypt_field(c.payfast_merchant_key) if c.payfast_merchant_key else "",
         "payfast_passphrase":   decrypt_field(c.payfast_passphrase)   if c.payfast_passphrase   else "",
         "cipc_registration_date": c.cipc_registration_date.isoformat() if c.cipc_registration_date else None,
+        "financial_year_end":     c.financial_year_end or None,
         "paye_ref": c.paye_ref or "",
         "sdl_ref":  c.sdl_ref  or "",
         "uif_ref":  c.uif_ref  or "",
