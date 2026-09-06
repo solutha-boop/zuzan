@@ -14016,7 +14016,7 @@ function UpgradeWall({ requiredPlan, onNavigateSettings }) {
 }
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
-function ZuZanApp({user, onLogout, onUserUpdate}) {
+function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
   const live = useLiveData();
   const [tab, setTab] = useState("dashboard");
 
@@ -14179,7 +14179,7 @@ function ZuZanApp({user, onLogout, onUserUpdate}) {
           <div style={{marginTop:8,height:3,background:C.border,borderRadius:2}}><div style={{height:"100%",width:"65%",background:C.accent,borderRadius:2}}/></div>
           <div style={{fontSize:9,color:C.inkDim,marginTop:4}}>{user?.billingExempt ? <span style={{color:"#2e7d32",fontWeight:700}}>🤝 Partner Account</span> : user?.trialEnds ? (()=>{const d=Math.max(0,Math.ceil((new Date(user.trialEnds)-new Date())/86400000));return d>0?`Trial: ${d} day${d===1?"":"s"} remaining`:"Trial expired";})() : "Trial: 14 days remaining"}</div>
           {user?.billingExempt && (
-            <button onClick={()=>setScreen("accountant-dashboard")} style={{marginTop:8,width:"100%",padding:"6px 0",background:"#e8f5e9",border:"1px solid #a5d6a7",borderRadius:8,color:"#1b5e20",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>← Practice Dashboard</button>
+            <button onClick={onBackToPractice} style={{marginTop:8,width:"100%",padding:"6px 0",background:"#e8f5e9",border:"1px solid #a5d6a7",borderRadius:8,color:"#1b5e20",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>← Practice Dashboard</button>
           )}
           {showSwitcher && (
             <div style={{position:"absolute",top:"100%",left:12,right:12,marginTop:6,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:50,overflow:"hidden"}}>
@@ -14474,7 +14474,7 @@ export default function App() {
         </div>
       </div>
     }>
-      <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser}/>
+      <ZuZanApp user={user} onLogout={handleLogout} onUserUpdate={setUser} onBackToPractice={()=>setScreen("accountant-dashboard")}/>
     </Sentry.ErrorBoundary>
   );
 }
