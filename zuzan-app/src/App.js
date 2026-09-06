@@ -8876,7 +8876,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               <div>
                 <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Payroll</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>PAYE, UIF &amp; SDL calculations · Payslips · EMP201 reports</div>
-                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>From <strong style={{color:C.ink}}>R65/month</strong> + R18.25 per employee</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>R18.25 per employee · min <strong style={{color:C.ink}}>R99/month</strong></div>
               </div>
             </div>
             {user?.payrollEnabled
@@ -8900,7 +8900,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                     </div>
                     <div>
                       <div style={{fontSize:11,color:C.inkMid,marginBottom:4}}>Cost/mo</div>
-                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,payrollEmpCount*34)}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,Math.round(payrollEmpCount*18.25))}/mo</div>
                     </div>
                     <button
                       disabled={activatingPayroll}
@@ -9929,7 +9929,7 @@ function Registration({onComplete, onLogin}) {
   const [errors, setErrors] = useState({});
 
   const planPrice = selectedPlan ? (billing === "monthly" ? selectedPlan.monthly : Math.round(selectedPlan.annual / 12)) : 0;
-  const payrollCost = payrollEnabled ? Math.max(65, Math.round(empCount * 18.25)) : 0;
+  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 18.25)) : 0;
   const totalMonthly = planPrice + payrollCost;
 
   const validateStep2 = () => {
@@ -10085,7 +10085,7 @@ function Registration({onComplete, onLogin}) {
                   <span style={{fontSize:32}}>👥</span>
                   <div>
                     <div style={{fontSize:15,fontWeight:700,color:C.ink,marginBottom:4}}>Payroll Module</div>
-                    <div style={{fontSize:13,color:C.inkMid}}>SARS-compliant PAYE, UIF, SDL - EMP201 and IRP5 - <strong style={{color:C.accent}}>R18.25/employee/month</strong> (min R65/month)</div>
+                    <div style={{fontSize:13,color:C.inkMid}}>SARS-compliant PAYE, UIF, SDL - EMP201 and IRP5 - <strong style={{color:C.accent}}>R18.25/employee/month</strong> (min R99/month)</div>
                   </div>
                 </div>
                 <button onClick={() => setPayroll(!payrollEnabled)} style={{padding:"8px 18px",borderRadius:8,border:`1.5px solid ${payrollEnabled?C.accent:C.border}`,background:payrollEnabled?C.accentLt:"transparent",color:payrollEnabled?C.accent:C.inkMid,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{payrollEnabled?"Added":"Add Payroll"}</button>
