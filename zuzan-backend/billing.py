@@ -44,7 +44,7 @@ PLAN_PRICES = {
 }
 
 PAYROLL_PER_EMP  = 18.25  # R18.25/employee/month (price parity with SimplePay)
-PAYROLL_MIN_COST = 65     # minimum payroll add-on fee
+PAYROLL_MIN_COST = 99     # minimum payroll add-on fee (covers up to 5 employees)
 
 # ── Accountant multi-client fee structure ─────────────────────────────────────
 ACCOUNTANT_PLAN_DISCOUNT_PER_CLIENT = 20   # R20 off own plan per active client
@@ -462,6 +462,7 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     }
     url = PAYFAST_ADHOC_URL.format(token=company.payfast_token)
 
+    resp = None
     resp = None
     resp = None
     resp = None
