@@ -13,6 +13,7 @@ from crypto import encrypt_field, decrypt_field
 from passlib.context import CryptContext
 import logging
 import os
+import json
 import journal as journal_engine
 
 _pin_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -324,6 +325,51 @@ class InvoiceUpdate(BaseModel):
     passenger_name:  Optional[str] = None
 
 
+def _vat_from_line_items(items_json: Optional[str]) -> Optional[dict]:
+    """Sum per-line VAT/totals from a multi-line-item invoice instead of applying
+    a single flat VAT flag to the whole subtotal (audit fix 2026-09-06 — High:
+    invoices with mixed VAT-exempt/standard-rated lines previously had their
+    backend-recorded vat_amount/total_amount computed off `amount * VAT_RATE`
+    for the *entire* subtotal, ignoring each line's own `vat_applicable` flag).
+
+    Each line is expected to look like {code, description, quantity, unit_price,
+    vat_applicable, vat_amount, total} (the shape the frontend's line-item editor
+    sends). A line's own `vat_amount` is trusted if present (it already reflects
+    that line's `vat_applicable` checkbox); otherwise it's derived from
+    quantity * unit_price * VAT_RATE when `vat_applicable` isn't explicitly False.
+
+    Returns None (caller should fall back to the flat calculation) if items_json
+    is missing, not valid JSON, or not a non-empty list of line objects — so a
+    malformed payload can never silently zero out an invoice's amount.
+    """
+    if not items_json:
+        return None
+    try:
+        items = json.loads(items_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(items, list) or not items:
+        return None
+    subtotal = 0.0
+    vat_total = 0.0
+    for line in items:
+        if not isinstance(line, dict):
+            return None
+        qty = float(line.get("quantity") or 0)
+        unit_price = float(line.get("unit_price") or 0)
+        line_subtotal = qty * unit_price
+        subtotal += line_subtotal
+        if line.get("vat_amount") is not None:
+            vat_total += float(line.get("vat_amount") or 0)
+        elif line.get("vat_applicable", True):
+            vat_total += round(line_subtotal * VAT_RATE, 2)
+    return {
+        "amount": round(subtotal, 2),
+        "vat_amount": round(vat_total, 2),
+        "total_amount": round(subtotal + vat_total, 2),
+    }
+
+
 def next_invoice_number(company_id: int, db: Session) -> str:
     from sqlalchemy import func as _func
     last = db.query(_func.max(Invoice.id)).filter(Invoice.company_id == company_id).scalar() or 0
@@ -392,11 +438,18 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         if monthly_count >= limit:
             raise HTTPException(status_code=403, detail=f"Monthly invoice limit ({limit}) reached. Upgrade your plan.")
 
-    if data.currency and data.currency != "ZAR" and data.vat_amount_override is not None:
+    # Multi-line invoices: sum each line's own VAT instead of applying one flat
+    # vat_applicable flag to the whole subtotal (audit fix 2026-09-06 — High).
+    line_totals = _vat_from_line_items(data.items_json)
+    if line_totals is not None:
+        vat_amount = line_totals["vat_amount"]
+        total_amount = line_totals["total_amount"]
+    elif data.currency and data.currency != "ZAR" and data.vat_amount_override is not None:
         vat_amount = round(data.vat_amount_override, 2)   # User-specified VAT for foreign currency
+        total_amount = round(data.amount + vat_amount, 2)
     else:
         vat_amount = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
-    total_amount = round(data.amount + vat_amount, 2)
+        total_amount = round(data.amount + vat_amount, 2)
 
     invoice = Invoice(
         company_id=current_user.company_id,
@@ -404,7 +457,7 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         client_name=clean(data.client_name, 200),
         client_email=clean(data.client_email, 200),
         description=clean(data.description, 1000),
-        amount=data.amount,
+        amount=line_totals["amount"] if line_totals is not None else data.amount,
         vat_amount=vat_amount,
         total_amount=total_amount,
         due_date=datetime.fromisoformat(data.due_date) if data.due_date else None,
@@ -471,6 +524,17 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         data.amount is not None
         and round(data.amount, 2) != round(invoice.amount or 0, 2)
     )
+    # Multi-line invoices: recompute from each line's own VAT instead of scaling
+    # a single flat rate across the whole subtotal (audit fix 2026-09-06 — High).
+    # This also catches an edit that only toggles a line's vat_applicable flag
+    # without changing the subtotal, which data.amount alone wouldn't detect.
+    line_totals = _vat_from_line_items(data.items_json) if data.items_json is not None else None
+    if line_totals is not None:
+        items_changed = (
+            round(line_totals["amount"], 2) != round(invoice.amount or 0, 2)
+            or round(line_totals["vat_amount"], 2) != round(invoice.vat_amount or 0, 2)
+        )
+        amount_changed = amount_changed or items_changed
     # Block amount edits on invoices that remain paid: the payment journal entry
     # carries the old amount and cannot be silently re-stated. Revert the invoice
     # to unpaid first (which reverses the payment entry), then edit the amount.
@@ -484,15 +548,24 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     if data.description:
         invoice.description = data.description
     if amount_changed:
-        # Preserve the invoice's original VAT treatment (audit fix 2026-07-07):
-        # zero-rated invoices keep 0 VAT, standard invoices keep their effective
-        # rate, and foreign-currency VAT overrides scale proportionally — instead
-        # of forcing 15% on every edit.
-        old_amount = invoice.amount or 0
-        vat_rate = (invoice.vat_amount / old_amount) if (old_amount and invoice.vat_amount) else 0.0
-        invoice.amount       = data.amount
-        invoice.vat_amount   = round(data.amount * vat_rate, 2)
-        invoice.total_amount = round(data.amount + invoice.vat_amount, 2)
+        if line_totals is not None:
+            # Line items are present and authoritative — trust their per-line
+            # VAT sum over both the flat-rate fallback below and data.amount
+            # (which for a line-item invoice is just the frontend-computed
+            # subtotal and carries no VAT-exemption information of its own).
+            invoice.amount       = line_totals["amount"]
+            invoice.vat_amount   = line_totals["vat_amount"]
+            invoice.total_amount = line_totals["total_amount"]
+        else:
+            # Preserve the invoice's original VAT treatment (audit fix 2026-07-07):
+            # zero-rated invoices keep 0 VAT, standard invoices keep their effective
+            # rate, and foreign-currency VAT overrides scale proportionally — instead
+            # of forcing 15% on every edit.
+            old_amount = invoice.amount or 0
+            vat_rate = (invoice.vat_amount / old_amount) if (old_amount and invoice.vat_amount) else 0.0
+            invoice.amount       = data.amount
+            invoice.vat_amount   = round(data.amount * vat_rate, 2)
+            invoice.total_amount = round(data.amount + invoice.vat_amount, 2)
     if data.due_date is not None:
         invoice.due_date = datetime.fromisoformat(data.due_date) if data.due_date else None
     if data.status:

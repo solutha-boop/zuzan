@@ -141,8 +141,28 @@ def get_account(company_id: int, code: str, db: Session) -> Account:
 
 
 def expense_account(company_id: int, category: str, db: Session) -> Account:
-    """Resolve expense category → account, falling back to General Expenses."""
-    code = CATEGORY_TO_CODE.get(category or "", "5900")
+    """Resolve expense category → account, falling back to General Expenses.
+
+    Accepts either a bare category name (legacy/imported data, e.g. "Utilities")
+    or the frontend's "{code} - {name}" Account-dropdown value (e.g.
+    "5200 - Utilities"). Audit fix 2026-09-06 — High: the expense Account
+    dropdowns (App_js_fixed.js — new-expense form, amend-expense modal, and the
+    bank-import category selects) have submitted the "{code} - {name}" format
+    since the Chart-of-Accounts feature shipped, but this function previously
+    only matched CATEGORY_TO_CODE's bare-name keys, so that format never hit —
+    every expense silently posted to 5900 General Expenses regardless of the
+    account actually selected. Matching the leading code directly also makes
+    custom accounts added via /coa (which have no CATEGORY_TO_CODE entry at
+    all) resolve correctly instead of falling back to 5900.
+    """
+    cat = (category or "").strip()
+    code = None
+    if " - " in cat:
+        prefix = cat.split(" - ", 1)[0].strip()
+        if prefix.isdigit():
+            code = prefix
+    if code is None:
+        code = CATEGORY_TO_CODE.get(cat, "5900")
     acct = db.query(Account).filter(Account.company_id==company_id, Account.code==code).first()
     if not acct:
         acct = get_account(company_id, "5900", db)
