@@ -14082,7 +14082,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
     {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭", minPlan:"professional"},
     {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
     {id:"documents",       label:"Documents",    icon:"📁", minPlan:"business"},
-    {id:"data_import",     label:"Import Data",  icon:"⬆️", minPlan:"professional"},
+    {id:"data_import",     label:"Import Data",  icon:"⬆️", minPlan:"starter"},
     {id:"banking",    label:"Banking",     icon:"🏦", children:[
       {id:"bankimport", label:"Manual Update",   icon:"📄"},
       {id:"bankfeeds",  label:"Connect to Bank", icon:"🔗"},
@@ -14153,7 +14153,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
     fixed_assets:    canAccess(user,"professional") ? <FixedAssets/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     fin_statements:  <AfsPaymentGate/>,
     documents:       canAccess(user,"business") ? <DocumentRepository/> : <UpgradeWall requiredPlan="business" onNavigateSettings={()=>setTab("settings")}/>,
-    data_import:     canAccess(user,"professional") ? <DataImport/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    data_import:     <DataImport/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
     purchase_orders: canAccess(user,"professional") ? <PurchaseOrders/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
