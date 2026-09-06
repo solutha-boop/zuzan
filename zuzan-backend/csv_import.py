@@ -26,7 +26,7 @@ from datetime import datetime
 
 from database import (
     get_db, Customer, Supplier, Invoice, Expense, InvoiceStatus,
-    Account, AccountType, JournalEntry, JournalLine,
+    Account, AccountType, JournalEntry, JournalLine, Employee,
 )
 from auth import require_role
 
@@ -1149,3 +1149,269 @@ async def import_journals(
         )
 
     return _import_journal_rows(db, cid, rows, m, entity="journals")
+
+
+# ── EMPLOYEES ─────────────────────────────────────────────────────────────────
+
+EMPLOYEE_ALIASES: dict[str, list[str]] = {
+    "first_name":                ["first_name", "firstname", "name", "first"],
+    "last_name":                 ["last_name", "lastname", "surname", "family_name"],
+    "id_number":                 ["id_number", "id_no", "id", "sa_id", "rsa_id", "identity_number"],
+    "tax_number":                ["tax_number", "tax_no", "tax_ref", "income_tax_number", "irp5_number"],
+    "date_of_birth":             ["date_of_birth", "dob", "birth_date", "birthdate"],
+    "position":                  ["position", "job_title", "title", "role", "designation"],
+    "department":                ["department", "dept", "division", "cost_centre"],
+    "grade":                     ["grade", "pay_grade", "job_grade", "level"],
+    "employment_type":           ["employment_type", "emp_type", "type", "contract_type"],
+    "gross_salary":              ["gross_salary", "salary", "gross", "ctc", "basic_salary",
+                                  "monthly_salary", "gross_pay", "remuneration"],
+    "hourly_rate":               ["hourly_rate", "rate", "hourly", "hour_rate"],
+    "employee_number":           ["employee_number", "emp_no", "emp_number", "staff_number",
+                                  "payroll_number", "clock_number"],
+    "bank_name":                 ["bank_name", "bank", "financial_institution"],
+    "account_number":            ["account_number", "bank_account", "acc_number", "account_no"],
+    "branch_code":               ["branch_code", "branch", "sort_code"],
+    "account_type":              ["account_type", "acc_type"],
+    "pension_fund_employee_pct": ["pension_employee_pct", "pension_employee_%", "pension_ee_pct",
+                                  "pension_ee_%", "pension_%", "provident_ee_pct"],
+    "pension_fund_employer_pct": ["pension_employer_pct", "pension_employer_%", "pension_er_pct",
+                                  "pension_er_%", "provident_er_pct"],
+    "pension_employee_fixed":    ["pension_employee_fixed", "pension_ee_fixed", "pension_fixed"],
+    "pension_employer_fixed":    ["pension_employer_fixed", "pension_er_fixed"],
+    "medical_aid_employee":      ["medical_aid_employee", "medical_aid_ee", "medical_employee",
+                                  "medical_ee", "medical_aid_member", "medical_contribution_employee"],
+    "medical_aid_employer":      ["medical_aid_employer", "medical_aid_er", "medical_employer",
+                                  "medical_er", "medical_contribution_employer"],
+    "medical_aid_dependants":    ["medical_aid_dependants", "dependants", "medical_dependants",
+                                  "number_of_dependants"],
+    "start_date":                ["start_date", "commencement_date", "hire_date", "joined"],
+    "appointment_date":          ["appointment_date", "appointment"],
+    "address":                   ["address", "residential_address", "home_address"],
+    "psira_number":              ["psira_number", "psira_no", "psira"],
+    "security_grade":            ["security_grade", "psira_grade"],
+    "security_area":             ["security_area", "area"],
+    "shift_type":                ["shift_type", "shift"],
+}
+
+PAYROLL_ADJ_ALIASES: dict[str, list[str]] = {
+    "id_number":                 ["id_number", "id_no", "id", "sa_id"],
+    "employee_number":           ["employee_number", "emp_no", "staff_number", "payroll_number"],
+    "first_name":                ["first_name", "firstname", "name"],
+    "last_name":                 ["last_name", "lastname", "surname"],
+    "gross_salary":              ["gross_salary", "new_salary", "salary", "gross", "ctc",
+                                  "basic_salary", "new_gross"],
+    "hourly_rate":               ["hourly_rate", "new_rate", "rate"],
+    "pension_fund_employee_pct": ["pension_employee_pct", "pension_ee_pct", "pension_%"],
+    "pension_fund_employer_pct": ["pension_employer_pct", "pension_er_pct"],
+    "pension_employee_fixed":    ["pension_employee_fixed", "pension_ee_fixed"],
+    "pension_employer_fixed":    ["pension_employer_fixed", "pension_er_fixed"],
+    "medical_aid_employee":      ["medical_aid_employee", "medical_aid_ee", "medical_ee"],
+    "medical_aid_employer":      ["medical_aid_employer", "medical_aid_er", "medical_er"],
+    "medical_aid_dependants":    ["medical_aid_dependants", "dependants"],
+    "position":                  ["position", "job_title", "title", "role"],
+    "department":                ["department", "dept"],
+    "grade":                     ["grade", "pay_grade"],
+}
+
+
+def _parse_float_field(val: str) -> float:
+    if not val:
+        return 0.0
+    cleaned = val.strip().replace("R", "").replace(",", "").replace(" ", "")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
+def _parse_int_field(val: str) -> int:
+    try:
+        return int(_parse_float_field(val))
+    except (ValueError, TypeError):
+        return 0
+
+
+@router.post("/employees")
+async def import_employees(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Bulk-create employees from a CSV.  Rows with a matching id_number or
+    employee_number are skipped (use /import/payroll-adjustments to update).
+    Required columns: first_name (or name), last_name (or surname), gross_salary.
+    All other columns are optional.
+    """
+    cid = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m = _map_headers(headers, EMPLOYEE_ALIASES)
+
+    if "first_name" not in m or "last_name" not in m:
+        raise HTTPException(400, f"CSV must have first_name/last_name columns. Detected: {headers}")
+    if "gross_salary" not in m:
+        raise HTTPException(400, f"CSV must have gross_salary column. Detected: {headers}")
+
+    created = skipped = errors = 0
+    error_rows: list[dict] = []
+
+    for i, row in enumerate(rows, start=2):
+        first = row.get(m.get("first_name", ""), "").strip()
+        last  = row.get(m.get("last_name",  ""), "").strip()
+        if not first or not last:
+            continue
+
+        id_no    = row.get(m.get("id_number",       ""), "").strip() or None
+        emp_no   = row.get(m.get("employee_number", ""), "").strip() or None
+        gross    = _parse_float_field(row.get(m.get("gross_salary", ""), ""))
+
+        if gross <= 0:
+            error_rows.append({"row": i, "name": f"{first} {last}", "reason": "gross_salary missing or zero"})
+            errors += 1
+            continue
+
+        # Skip if employee already exists (match by id_number or employee_number)
+        existing = None
+        if id_no:
+            existing = db.query(Employee).filter_by(company_id=cid, id_number=id_no).first()
+        if not existing and emp_no:
+            existing = db.query(Employee).filter_by(company_id=cid, employee_number=emp_no).first()
+        if existing:
+            skipped += 1
+            continue
+
+        emp = Employee(
+            company_id                = cid,
+            first_name                = first,
+            last_name                 = last,
+            id_number                 = id_no,
+            tax_number                = row.get(m.get("tax_number",       ""), "").strip() or None,
+            position                  = row.get(m.get("position",         ""), "").strip() or None,
+            department                = row.get(m.get("department",       ""), "").strip() or None,
+            grade                     = row.get(m.get("grade",            ""), "").strip() or None,
+            employment_type           = row.get(m.get("employment_type",  ""), "").strip() or "salaried",
+            gross_salary              = gross,
+            hourly_rate               = _parse_float_field(row.get(m.get("hourly_rate", ""), "")) or None,
+            employee_number           = emp_no,
+            bank_name                 = row.get(m.get("bank_name",        ""), "").strip() or None,
+            bank_account              = row.get(m.get("account_number",   ""), "").strip() or None,
+            account_number            = row.get(m.get("account_number",   ""), "").strip() or None,
+            branch_code               = row.get(m.get("branch_code",      ""), "").strip() or None,
+            account_type              = row.get(m.get("account_type",     ""), "").strip() or None,
+            pension_fund_employee_pct = _parse_float_field(row.get(m.get("pension_fund_employee_pct", ""), "")),
+            pension_fund_employer_pct = _parse_float_field(row.get(m.get("pension_fund_employer_pct", ""), "")),
+            pension_employee_fixed    = _parse_float_field(row.get(m.get("pension_employee_fixed",    ""), "")),
+            pension_employer_fixed    = _parse_float_field(row.get(m.get("pension_employer_fixed",    ""), "")),
+            medical_aid_employee      = _parse_float_field(row.get(m.get("medical_aid_employee",      ""), "")),
+            medical_aid_employer      = _parse_float_field(row.get(m.get("medical_aid_employer",      ""), "")),
+            medical_aid_dependants    = _parse_int_field  (row.get(m.get("medical_aid_dependants",    ""), "")),
+            psira_number              = row.get(m.get("psira_number",    ""), "").strip() or None,
+            security_grade            = row.get(m.get("security_grade",  ""), "").strip() or None,
+            security_area             = row.get(m.get("security_area",   ""), "").strip() or "1_2",
+            shift_type                = row.get(m.get("shift_type",      ""), "").strip() or "day",
+        )
+
+        # Parse optional date fields
+        for field, key in [("date_of_birth", "date_of_birth"), ("start_date", "start_date"),
+                           ("appointment_date", "appointment_date")]:
+            raw = row.get(m.get(key, ""), "").strip()
+            if raw:
+                parsed = _parse_date(raw)
+                if parsed:
+                    setattr(emp, field, parsed)
+
+        db.add(emp)
+        created += 1
+
+    db.commit()
+    return {
+        "total_rows": created + skipped + errors,
+        "imported":   created,
+        "skipped":    skipped,
+        "errors":     [{"row": e["row"], "message": f"{e['name']}: {e['reason']}"} for e in error_rows],
+    }
+
+
+@router.post("/payroll_adjustments")
+async def import_payroll_adjustments(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Bulk-update payroll fields for existing employees.
+    Employees are matched by id_number, employee_number, or first+last name.
+    Only columns present in the CSV are updated (partial updates).
+    """
+    cid = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m = _map_headers(headers, PAYROLL_ADJ_ALIASES)
+
+    updated = not_found = errors = 0
+    error_rows: list[dict] = []
+
+    for i, row in enumerate(rows, start=2):
+        id_no  = row.get(m.get("id_number",       ""), "").strip() or None
+        emp_no = row.get(m.get("employee_number", ""), "").strip() or None
+        first  = row.get(m.get("first_name",      ""), "").strip() or None
+        last   = row.get(m.get("last_name",       ""), "").strip() or None
+
+        emp = None
+        if id_no:
+            emp = db.query(Employee).filter_by(company_id=cid, id_number=id_no).first()
+        if not emp and emp_no:
+            emp = db.query(Employee).filter_by(company_id=cid, employee_number=emp_no).first()
+        if not emp and first and last:
+            emp = db.query(Employee).filter_by(company_id=cid, first_name=first, last_name=last).first()
+
+        if not emp:
+            label = id_no or emp_no or f"{first} {last}" or f"row {i}"
+            error_rows.append({"row": i, "identifier": label, "reason": "Employee not found"})
+            not_found += 1
+            continue
+
+        # Apply only the fields present in this CSV
+        numeric_fields = {
+            "gross_salary":              "gross_salary",
+            "hourly_rate":               "hourly_rate",
+            "pension_fund_employee_pct": "pension_fund_employee_pct",
+            "pension_fund_employer_pct": "pension_fund_employer_pct",
+            "pension_employee_fixed":    "pension_employee_fixed",
+            "pension_employer_fixed":    "pension_employer_fixed",
+            "medical_aid_employee":      "medical_aid_employee",
+            "medical_aid_employer":      "medical_aid_employer",
+        }
+        text_fields = {
+            "position":   "position",
+            "department": "department",
+            "grade":      "grade",
+        }
+        changed = False
+        for csv_key, model_attr in numeric_fields.items():
+            if csv_key in m:
+                val = _parse_float_field(row.get(m[csv_key], ""))
+                if val or csv_key == "gross_salary":
+                    setattr(emp, model_attr, val)
+                    changed = True
+        if "medical_aid_dependants" in m:
+            val = _parse_int_field(row.get(m["medical_aid_dependants"], ""))
+            emp.medical_aid_dependants = val
+            changed = True
+        for csv_key, model_attr in text_fields.items():
+            if csv_key in m:
+                val = row.get(m[csv_key], "").strip()
+                if val:
+                    setattr(emp, model_attr, val)
+                    changed = True
+
+        if changed:
+            updated += 1
+
+    db.commit()
+    total = updated + not_found
+    return {
+        "total_rows": total,
+        "imported":   updated,
+        "skipped":    not_found,
+        "errors":     [{"row": e["row"], "message": f"{e['identifier']}: {e['reason']}"} for e in error_rows],
+    }
