@@ -282,6 +282,7 @@ class Customer(Base):
     id=Column(Integer,primary_key=True,index=True)
     company_id=Column(Integer,ForeignKey("companies.id"))
     name=Column(String,nullable=False)
+    external_code=Column(String,nullable=True,index=True)  # e.g. SMT accountNo "MOT001"
     contact_person=Column(String); email=Column(String); phone=Column(String)
     address=Column(Text); vat_number=Column(String)
     payment_terms=Column(Integer,default=30)  # days
@@ -1539,6 +1540,7 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS travel_date VARCHAR",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS pax_count INTEGER",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS passenger_name VARCHAR",
+            "ALTER TABLE customers ADD COLUMN IF NOT EXISTS external_code VARCHAR",
             """CREATE TABLE IF NOT EXISTS service_items (
                 id             SERIAL PRIMARY KEY,
                 company_id     INTEGER NOT NULL REFERENCES companies(id),
