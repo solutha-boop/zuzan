@@ -1256,14 +1256,14 @@ async def import_employees(
     error_rows: list[dict] = []
 
     for i, row in enumerate(rows, start=2):
-        first = row.get(m.get("first_name", ""), "").strip()
-        last  = row.get(m.get("last_name",  ""), "").strip()
+        first = _get(row, m, "first_name")
+        last  = _get(row, m, "last_name")
         if not first or not last:
             continue
 
-        id_no    = row.get(m.get("id_number",       ""), "").strip() or None
-        emp_no   = row.get(m.get("employee_number", ""), "").strip() or None
-        gross    = _parse_float_field(row.get(m.get("gross_salary", ""), ""))
+        id_no  = _get(row, m, "id_number")       or None
+        emp_no = _get(row, m, "employee_number")  or None
+        gross  = _parse_float_field(_get(row, m, "gross_salary"))
 
         if gross <= 0:
             error_rows.append({"row": i, "name": f"{first} {last}", "reason": "gross_salary missing or zero"})
@@ -1285,36 +1285,36 @@ async def import_employees(
             first_name                = first,
             last_name                 = last,
             id_number                 = id_no,
-            tax_number                = row.get(m.get("tax_number",       ""), "").strip() or None,
-            position                  = row.get(m.get("position",         ""), "").strip() or None,
-            department                = row.get(m.get("department",       ""), "").strip() or None,
-            grade                     = row.get(m.get("grade",            ""), "").strip() or None,
-            employment_type           = row.get(m.get("employment_type",  ""), "").strip() or "salaried",
+            tax_number                = _get(row, m, "tax_number")       or None,
+            position                  = _get(row, m, "position")         or None,
+            department                = _get(row, m, "department")       or None,
+            grade                     = _get(row, m, "grade")            or None,
+            employment_type           = _get(row, m, "employment_type")  or "salaried",
             gross_salary              = gross,
-            hourly_rate               = _parse_float_field(row.get(m.get("hourly_rate", ""), "")) or None,
+            hourly_rate               = _parse_float_field(_get(row, m, "hourly_rate")) or None,
             employee_number           = emp_no,
-            bank_name                 = row.get(m.get("bank_name",        ""), "").strip() or None,
-            bank_account              = row.get(m.get("account_number",   ""), "").strip() or None,
-            account_number            = row.get(m.get("account_number",   ""), "").strip() or None,
-            branch_code               = row.get(m.get("branch_code",      ""), "").strip() or None,
-            account_type              = row.get(m.get("account_type",     ""), "").strip() or None,
-            pension_fund_employee_pct = _parse_float_field(row.get(m.get("pension_fund_employee_pct", ""), "")),
-            pension_fund_employer_pct = _parse_float_field(row.get(m.get("pension_fund_employer_pct", ""), "")),
-            pension_employee_fixed    = _parse_float_field(row.get(m.get("pension_employee_fixed",    ""), "")),
-            pension_employer_fixed    = _parse_float_field(row.get(m.get("pension_employer_fixed",    ""), "")),
-            medical_aid_employee      = _parse_float_field(row.get(m.get("medical_aid_employee",      ""), "")),
-            medical_aid_employer      = _parse_float_field(row.get(m.get("medical_aid_employer",      ""), "")),
-            medical_aid_dependants    = _parse_int_field  (row.get(m.get("medical_aid_dependants",    ""), "")),
-            psira_number              = row.get(m.get("psira_number",    ""), "").strip() or None,
-            security_grade            = row.get(m.get("security_grade",  ""), "").strip() or None,
-            security_area             = row.get(m.get("security_area",   ""), "").strip() or "1_2",
-            shift_type                = row.get(m.get("shift_type",      ""), "").strip() or "day",
+            bank_name                 = _get(row, m, "bank_name")        or None,
+            bank_account              = _get(row, m, "account_number")   or None,
+            account_number            = _get(row, m, "account_number")   or None,
+            branch_code               = _get(row, m, "branch_code")      or None,
+            account_type              = _get(row, m, "account_type")     or None,
+            pension_fund_employee_pct = _parse_float_field(_get(row, m, "pension_fund_employee_pct")),
+            pension_fund_employer_pct = _parse_float_field(_get(row, m, "pension_fund_employer_pct")),
+            pension_employee_fixed    = _parse_float_field(_get(row, m, "pension_employee_fixed")),
+            pension_employer_fixed    = _parse_float_field(_get(row, m, "pension_employer_fixed")),
+            medical_aid_employee      = _parse_float_field(_get(row, m, "medical_aid_employee")),
+            medical_aid_employer      = _parse_float_field(_get(row, m, "medical_aid_employer")),
+            medical_aid_dependants    = _parse_int_field  (_get(row, m, "medical_aid_dependants")),
+            psira_number              = _get(row, m, "psira_number")     or None,
+            security_grade            = _get(row, m, "security_grade")   or None,
+            security_area             = _get(row, m, "security_area")    or "1_2",
+            shift_type                = _get(row, m, "shift_type")       or "day",
         )
 
         # Parse optional date fields
         for field, key in [("date_of_birth", "date_of_birth"), ("start_date", "start_date"),
                            ("appointment_date", "appointment_date")]:
-            raw = row.get(m.get(key, ""), "").strip()
+            raw = _get(row, m, key)
             if raw:
                 parsed = _parse_date(raw)
                 if parsed:
@@ -1351,10 +1351,10 @@ async def import_payroll_adjustments(
     error_rows: list[dict] = []
 
     for i, row in enumerate(rows, start=2):
-        id_no  = row.get(m.get("id_number",       ""), "").strip() or None
-        emp_no = row.get(m.get("employee_number", ""), "").strip() or None
-        first  = row.get(m.get("first_name",      ""), "").strip() or None
-        last   = row.get(m.get("last_name",       ""), "").strip() or None
+        id_no  = _get(row, m, "id_number")       or None
+        emp_no = _get(row, m, "employee_number")  or None
+        first  = _get(row, m, "first_name")       or None
+        last   = _get(row, m, "last_name")        or None
 
         emp = None
         if id_no:
@@ -1389,17 +1389,17 @@ async def import_payroll_adjustments(
         changed = False
         for csv_key, model_attr in numeric_fields.items():
             if csv_key in m:
-                val = _parse_float_field(row.get(m[csv_key], ""))
+                val = _parse_float_field(_get(row, m, csv_key))
                 if val or csv_key == "gross_salary":
                     setattr(emp, model_attr, val)
                     changed = True
         if "medical_aid_dependants" in m:
-            val = _parse_int_field(row.get(m["medical_aid_dependants"], ""))
+            val = _parse_int_field(_get(row, m, "medical_aid_dependants"))
             emp.medical_aid_dependants = val
             changed = True
         for csv_key, model_attr in text_fields.items():
             if csv_key in m:
-                val = row.get(m[csv_key], "").strip()
+                val = _get(row, m, csv_key)
                 if val:
                     setattr(emp, model_attr, val)
                     changed = True
