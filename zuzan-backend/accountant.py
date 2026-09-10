@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import secrets
 import logging
 
-from database import get_db, Company, User, CompanyMembership, Invoice, InvoiceStatus, InviteToken
+from database import get_db, Company, User, CompanyMembership, Invoice, InvoiceStatus, InviteToken, Customer
 from auth import get_current_user, log_action
 from email_service import send_email
 
@@ -151,6 +151,9 @@ async def onboard_client(
         expires_at=datetime.utcnow() + timedelta(days=14),
     )
     db.add(invite)
+    # Auto-add the new client as a Customer in the accountant's practice
+    _upsert_client_as_customer(current_user.company_id, new_company, db)
+
     db.commit()
     db.refresh(new_company)
 
@@ -190,6 +193,84 @@ async def onboard_client(
         "invite_token": token,
         "invite_url":   invite_url,
         "email_sent":   email_sent,
+    }
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _upsert_client_as_customer(practice_company_id: int, client_company: Company, db: Session) -> Customer:
+    """
+    Ensure `client_company` exists as a Customer record in the accountant's
+    practice company. Matches by name (case-insensitive) so we don't create
+    duplicates if the accountant already added the client manually.
+    Returns the existing or newly-created Customer.
+    """
+    existing = db.query(Customer).filter(
+        Customer.company_id == practice_company_id,
+        Customer.name.ilike(client_company.name.strip()),
+    ).first()
+    if existing:
+        # Keep contact details current
+        if client_company.email and not existing.email:
+            existing.email = client_company.email
+        if client_company.phone and not existing.phone:
+            existing.phone = client_company.phone
+        return existing
+    cust = Customer(
+        company_id=practice_company_id,
+        name=client_company.name.strip(),
+        email=client_company.email or "",
+        phone=client_company.phone or "",
+        notes="Auto-created from linked client company",
+    )
+    db.add(cust)
+    db.flush()
+    return cust
+
+
+# ── POST /accountant/sync-customers ──────────────────────────────────────────
+
+@router.post("/sync-customers")
+async def sync_customers(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Create a Customer record in the accountant's practice for every linked
+    client company that isn't already in the customer list.
+    Safe to call multiple times — existing customers are matched by name and
+    updated, never duplicated.
+    """
+    practice = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not practice:
+        raise HTTPException(status_code=404, detail="Practice company not found.")
+
+    memberships = db.query(CompanyMembership).filter(
+        CompanyMembership.user_id == current_user.id,
+    ).all()
+
+    created, updated = [], []
+    for m in memberships:
+        if m.company_id == current_user.company_id:
+            continue  # skip self
+        client_company = db.query(Company).filter(Company.id == m.company_id).first()
+        if not client_company:
+            continue
+        before_id = db.query(Customer).filter(
+            Customer.company_id == current_user.company_id,
+            Customer.name.ilike(client_company.name.strip()),
+        ).first()
+        cust = _upsert_client_as_customer(current_user.company_id, client_company, db)
+        if before_id:
+            updated.append(cust.name)
+        else:
+            created.append(cust.name)
+
+    db.commit()
+    return {
+        "created": created,
+        "updated": updated,
+        "message": f"{len(created)} customer(s) created, {len(updated)} updated.",
     }
 
 
