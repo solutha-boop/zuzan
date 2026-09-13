@@ -6347,7 +6347,7 @@ function Budgeting({live = {}}) {
     const calc = (forecastData?.weeks || []).map((_, i) => {
       const opening   = running;
       const receipts  = fcGet(i,"invoice_receipts") + fcGet(i,"recurring_income");
-      const payments  = fcGet(i,"payroll") + fcGet(i,"operating_expenses") + fcGet(i,"other_payments") + fcGet(i,"vat_payment");
+      const payments  = fcGet(i,"payroll") + fcGet(i,"operating_expenses") + fcGet(i,"creditor_payments") + fcGet(i,"other_payments") + fcGet(i,"vat_payment");
       const net       = receipts - payments;
       const closing   = opening + net;
       running = closing;
@@ -6356,10 +6356,10 @@ function Budgeting({live = {}}) {
 
     const exportCsv = () => {
       const rows = [
-        ["Week","Period","Opening Balance","Invoice Receipts","Recurring Income","Total Receipts","Payroll","Operating Expenses","Other Payments","VAT/Tax","Total Payments","Net Cash Flow","Closing Balance"],
+        ["Week","Period","Opening Balance","Invoice Receipts","Recurring Income","Total Receipts","Payroll","Operating Expenses","Creditor/PO Payments","Other Payments","VAT/Tax","Total Payments","Net Cash Flow","Closing Balance"],
         ...(forecastData?.weeks || []).map((w,i) => {
           const c = calc[i];
-          return [w.week, w.label, c.opening.toFixed(2), fcGet(i,"invoice_receipts").toFixed(2), fcGet(i,"recurring_income").toFixed(2), c.receipts.toFixed(2), fcGet(i,"payroll").toFixed(2), fcGet(i,"operating_expenses").toFixed(2), fcGet(i,"other_payments").toFixed(2), fcGet(i,"vat_payment").toFixed(2), c.payments.toFixed(2), c.net.toFixed(2), c.closing.toFixed(2)];
+          return [w.week, w.label, c.opening.toFixed(2), fcGet(i,"invoice_receipts").toFixed(2), fcGet(i,"recurring_income").toFixed(2), c.receipts.toFixed(2), fcGet(i,"payroll").toFixed(2), fcGet(i,"operating_expenses").toFixed(2), fcGet(i,"creditor_payments").toFixed(2), fcGet(i,"other_payments").toFixed(2), fcGet(i,"vat_payment").toFixed(2), c.payments.toFixed(2), c.net.toFixed(2), c.closing.toFixed(2)];
         }),
       ];
       const csv = rows.map(r=>r.join(",")).join("\n");
@@ -6374,6 +6374,7 @@ function Budgeting({live = {}}) {
       {field:"recurring_income",   label:"Recurring Income",    color:C.green,  dir:"in"},
       {field:"payroll",            label:"Payroll",             color:C.red,    dir:"out"},
       {field:"operating_expenses", label:"Operating Expenses",  color:C.red,    dir:"out"},
+      {field:"creditor_payments",  label:"Creditor / PO Payments", color:C.red, dir:"out"},
       {field:"other_payments",     label:"Other Payments",      color:C.red,    dir:"out"},
       {field:"vat_payment",        label:"VAT / Tax",           color:C.accent, dir:"out"},
     ];
@@ -10806,7 +10807,12 @@ function Customers() {
           {filtered.map(c=>(
             <div key={c.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:18}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                <div style={{fontWeight:700,fontSize:15,color:C.ink}}>{c.name}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <div style={{fontWeight:700,fontSize:15,color:C.ink}}>{c.name}</div>
+                  {c.notes === "Auto-created from linked client company" && (
+                    <span title="Auto-created when this practice linked to the client company via Accountant sync — not added manually" style={{fontSize:10,fontWeight:600,color:C.accent,background:C.accent+"15",border:`1px solid ${C.accent}30`,borderRadius:6,padding:"2px 6px"}}>🔗 Linked client</span>
+                  )}
+                </div>
                 <div style={{display:"flex",gap:6}}>
                   <button onClick={()=>edit(c)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:C.inkMid}}>Edit</button>
                   <button onClick={()=>del(c.id)} style={{background:"none",border:`1px solid ${C.red}20`,borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",color:C.red}}>Delete</button>

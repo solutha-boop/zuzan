@@ -1988,6 +1988,61 @@ async def cash_flow(
     }
 
 
+def _vat_net_for_month(db: Session, cid: int, year: int, month: int) -> float:
+    """Net VAT payable (output − input) for a single calendar month.
+
+    Mirrors /reports/vat201's own output-tax (invoice issue_date) and
+    input-tax (expenses + delivered PO VAT) methodology, but is kept as an
+    independent helper — used only by /reports/cash-flow-13week to project
+    VAT201 payment outflows — so this forecast's due-date logic (25th of the
+    month following period-end, per SARS) is not coupled to, or affected by,
+    the vat201 endpoint's own due_date string formatting.
+    (audit fix 2026-09-12, action item 3: 13-week forecast previously showed
+    vat_payment hard-coded to 0.0.)
+    """
+    VAT_RATE = 0.15
+    start = datetime(year, month, 1)
+    end_month = month + 1 if month < 12 else 1
+    end_year  = year if month < 12 else year + 1
+    end = datetime(end_year, end_month, 1)
+
+    invoices = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+        Invoice.issue_date >= start,
+        Invoice.issue_date < end,
+    ).all()
+    output_vat = 0.0
+    for i in invoices:
+        r = float(i.exchange_rate or 1.0) if (i.currency and i.currency != "ZAR") else 1.0
+        total_zar = round((i.total_amount or 0) * r, 2)
+        if i.vat_amount is None:
+            output_vat += round(total_zar * VAT_RATE / (1 + VAT_RATE), 2)
+        elif (i.vat_amount or 0) == 0:
+            pass  # zero-rated
+        else:
+            output_vat += round(i.vat_amount * r, 2)
+
+    expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.expense_date >= start,
+        Expense.expense_date < end,
+    ).all()
+    total_expenses_incl = sum((e.amount or 0) for e in expenses)
+    stored_input_vat = sum(getattr(e, "vat_amount", 0) or 0 for e in expenses)
+    input_vat = stored_input_vat if stored_input_vat > 0 else round(total_expenses_incl * VAT_RATE / (1 + VAT_RATE), 2)
+
+    period_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+        PurchaseOrder.received_date >= start,
+        PurchaseOrder.received_date < end,
+    ).all()
+    po_input_vat = sum(_po_delivered_total(po) - _po_delivered_net(po) for po in period_pos)
+
+    return round(output_vat - (input_vat + po_input_vat), 2)
+
+
 @reports_router.get("/cash-flow-13week")
 async def cash_flow_13week(
     opening_balance: float = 0.0,
@@ -1997,16 +2052,23 @@ async def cash_flow_13week(
     """Forward-looking 13-week rolling cash flow forecast.
 
     Pulls outstanding invoices (by due date), recurring invoice schedule,
-    trailing 8-week expense average, and average monthly payroll to project
-    each weekly period.  The frontend lets users override any cell.
+    trailing 8-week expense average, average monthly payroll, outstanding
+    creditor (PO + on-credit expense) payments due, and projected VAT201
+    liabilities to project each weekly period.  The frontend lets users
+    override any cell.
+
+    (audit fix 2026-09-12, action item 3: creditor_payments and vat_payment
+    were previously hard-coded to 0.0 — this endpoint now sources both from
+    the same data the Creditors/VAT201 reports use.)
     """
-    from database import RecurringInvoice
+    from database import RecurringInvoice, Supplier as _Supplier
 
     cid   = current_user.company_id
     today = _date.today()
 
     # Monday of the current week
     week_start = today - timedelta(days=today.weekday())
+    window_end = week_start + timedelta(weeks=13) - timedelta(days=1)
 
     # ── Trailing expense average (last 8 weeks) ────────────────────────────
     hist_start = datetime.combine(week_start - timedelta(weeks=8), datetime.min.time())
@@ -2037,6 +2099,84 @@ async def cash_flow_13week(
         RecurringInvoice.company_id == cid,
         RecurringInvoice.is_active  == True,  # noqa: E712
     ).all()
+
+    # ── Outstanding creditors (POs + on-credit expenses) due in the window ─
+    # Mirrors /reports/creditors-aging: reversal-aware AP balance per PO
+    # (audit fix 2026-07-13: nets credit − debit and includes the
+    # "purchase_order_reversal" source) and supplier payment_terms-based due
+    # dates. Fully paid POs are excluded by the status filter.
+    open_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial"]),
+    ).all()
+
+    ap_acct = db.query(Account).filter(Account.company_id == cid, Account.code == "2000").first()
+    po_ap_amounts: dict = {}
+    if ap_acct and open_pos:
+        po_ids = [po.id for po in open_pos]
+        rows = (
+            db.query(JournalEntry.source_id, func.sum(JournalLine.credit - JournalLine.debit))
+            .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+            .filter(
+                JournalEntry.company_id == cid,
+                JournalEntry.source.in_(["purchase_order", "purchase_order_reversal"]),
+                JournalEntry.source_id.in_(po_ids),
+                JournalLine.account_id == ap_acct.id,
+            )
+            .group_by(JournalEntry.source_id)
+            .all()
+        )
+        for po_id, total_credit in rows:
+            po_ap_amounts[po_id] = round(total_credit or 0, 2)
+
+    supplier_cache: dict = {}
+    def _get_supplier(supplier_id):
+        if supplier_id is None:
+            return None
+        if supplier_id not in supplier_cache:
+            supplier_cache[supplier_id] = db.query(_Supplier).filter(_Supplier.id == supplier_id).first()
+        return supplier_cache[supplier_id]
+
+    creditor_due = []  # [(due_date: date, amount: float), ...]
+    for po in open_pos:
+        sup = _get_supplier(po.supplier_id)
+        payment_terms = (sup.payment_terms if sup else 30) or 30
+        base_date = po.received_date or po.order_date or po.created_at
+        if not base_date:
+            continue
+        due_date = (base_date + timedelta(days=payment_terms)).date()
+        amount = po_ap_amounts.get(po.id, round(po.total_amount or 0, 2))
+        if amount:
+            creditor_due.append((due_date, amount))
+
+    credit_expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.is_on_credit == True,  # noqa: E712
+        Expense.paid_at == None,  # noqa: E711
+    ).all()
+    for exp in credit_expenses:
+        base_date = exp.expense_date or exp.created_at
+        if not base_date:
+            continue
+        due_date = (base_date + timedelta(days=30)).date()  # expenses have no per-supplier payment_terms
+        if exp.amount:
+            creditor_due.append((due_date, exp.amount))
+
+    # ── Projected VAT201 payments due in the window ────────────────────────
+    # SARS due date: 25th of the month following the end of each VAT period.
+    vat_due = []  # [(due_date: date, amount: float), ...]
+    seen_periods = set()
+    probe = week_start.replace(day=1)
+    for _ in range(6):  # scan enough months to cover every 25th in a 13-week window
+        period_year, period_month = probe.year, probe.month
+        due_month = period_month + 1 if period_month < 12 else 1
+        due_year  = period_year if period_month < 12 else period_year + 1
+        candidate_due = _date(due_year, due_month, 25)
+        if week_start <= candidate_due <= window_end and (period_year, period_month) not in seen_periods:
+            seen_periods.add((period_year, period_month))
+            vat_net = _vat_net_for_month(db, cid, period_year, period_month)
+            vat_due.append((candidate_due, max(0.0, vat_net)))
+        probe = (probe.replace(day=28) + timedelta(days=4)).replace(day=1)
 
     # ── Build 13 weekly periods ────────────────────────────────────────────
     weeks = []
@@ -2077,6 +2217,13 @@ async def cash_flow_13week(
         # Week label — "25 Aug – 31 Aug"
         label = f"{w_start.strftime('%d %b')}–{w_end.strftime('%d %b')}"
 
+        # Creditor (PO + on-credit expense) payments due this week
+        creditor_payments = round(sum(a for d, a in creditor_due if w_start <= d <= w_end), 2)
+
+        # Projected VAT201 payment due this week (0.0 if no 25th falls in it,
+        # or if the projected period is a net refund rather than a liability)
+        vat_payment = round(sum(a for d, a in vat_due if w_start <= d <= w_end), 2)
+
         weeks.append({
             "week":               i + 1,
             "week_start":         w_start.isoformat(),
@@ -2086,8 +2233,9 @@ async def cash_flow_13week(
             "recurring_income":   recurring_income,
             "payroll":            round(payroll_this_week, 2),
             "operating_expenses": avg_weekly_exp,
+            "creditor_payments":  creditor_payments,
             "other_payments":     0.0,
-            "vat_payment":        0.0,
+            "vat_payment":        vat_payment,
         })
 
     return {
