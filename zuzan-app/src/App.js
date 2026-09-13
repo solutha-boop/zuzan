@@ -13414,7 +13414,7 @@ function DataImport() {
     suppliers:          ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
     invoices:           ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
     expenses:           ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
-    employees:          ["First Name","Last Name","ID Number","Tax Number","Date of Birth","Position","Department","Grade","Employment Type","Gross Salary","Employee Number","Bank Name","Account Number","Branch Code","Account Type","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Start Date"],
+    employees:          ["First Name","Last Name","ID Number","Tax Number","Date of Birth","Job Title","Department","Grade","Employment Type","Gross Salary","Employee Number","Bank Name","Account Number","Branch Code","Account Type","Start Date","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants"],
     payroll_adjustments:["ID Number","Employee Number","First Name","Last Name","Gross Salary","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Position","Department","Grade"],
     trial_balance:      ["Code","Account Name","Type","Debit","Credit"],
     balance_sheet:      ["Classification","Code","Account Name","Balance"],
@@ -13443,7 +13443,7 @@ function DataImport() {
     suppliers:          "Xero: Contact Name · QBO: Vendor",
     invoices:           "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
     expenses:           "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
-    employees:          "Columns: First Name, Last Name, ID Number, Gross Salary (required). All others optional. Existing employees (matched by ID or Emp No) are skipped.",
+    employees:          "Required: First Name, Last Name, Gross Salary. Optional: ID Number, Tax Number, Date of Birth (YYYY-MM-DD), Job Title, Department, Grade, Employment Type (salaried/hourly), Employee Number, Bank Name, Account Number, Branch Code, Account Type (Cheque/Savings/Transmission), Start Date (YYYY-MM-DD), Pension %, Medical Aid. Existing employees (matched by ID or Emp No) are skipped.",
     payroll_adjustments:"Match employees by ID Number, Employee Number, or First+Last Name. Only columns present in the CSV are updated — partial CSVs are fine.",
     trial_balance:      "Xero: Account Code, Account, Debit, Credit · QBO: Account, Type, Debit Balance, Credit Balance",
     balance_sheet:      "Use Classification column (Asset/Liability/Equity) + Account Name + Balance. Xero/QBO balance sheet exports work directly.",
@@ -13457,9 +13457,21 @@ function DataImport() {
     if (fileRef.current) fileRef.current.value = "";
   }
 
+  const SAMPLE_ROWS = {
+    employees: ["Jane","Smith","8001015009087","9012345678","1980-01-01","Bookkeeper","Finance","B1","salaried","25000","EMP001","FNB","62012345678","250655","Cheque","2023-03-01","0.05","0.05","1500","1500","2"],
+    customers: ["ABC Trading (Pty) Ltd","accounts@abc.co.za","011 000 0000","123 Main St, JHB","4670123456","30","VIP client"],
+    suppliers: ["Office World","ap@officeworld.co.za","010 000 0001","45 Park Rd, CPT","4670098765","ABSA","4098765432","632005","Cheque","30","Stationery supplier"],
+    invoices:  ["INV-001","Motswedi Motors","accounts@motswedi.co.za","Consulting services","8695.65","1304.35","10000","ZAR","2026-09-01","2026-09-30","sent"],
+    expenses:  ["Checkers","Office groceries","230","0","General Expenses","2026-09-05"],
+    payroll_adjustments: ["8001015009087","EMP001","Jane","Smith","27000","0.05","0.05","1600","1600","2","Senior Bookkeeper","Finance","B2"],
+  };
+
   function downloadTemplate() {
     const cols    = TEMPLATES[tab];
-    const content = cols.join(",") + "\n";
+    const sample  = SAMPLE_ROWS[tab];
+    const rows    = [cols.join(",")];
+    if (sample) rows.push(sample.map(v => v.includes(",") ? `"${v}"` : v).join(","));
+    const content = rows.join("\n") + "\n";
     const blob    = new Blob([content], {type:"text/csv"});
     const url     = URL.createObjectURL(blob);
     const a       = document.createElement("a");
