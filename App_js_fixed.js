@@ -13479,6 +13479,24 @@ function DataImport() {
     URL.revokeObjectURL(url);
   }
 
+  // Auto-detect the correct import tab from CSV column headers
+  function detectTab(headers) {
+    const norm = headers.map(h => h.trim().toLowerCase().replace(/[\s_-]+/g, ""));
+    const has  = (...keys) => keys.some(k => norm.includes(k));
+    if (has("firstname","first_name","firstname"))            return "employees";
+    if (has("invoicenumber","invoiceno","inv_no"))            return "invoices";
+    if (has("expensedate","expense_date"))                    return "expenses";
+    if (has("idnumber","id_number","employeenumber","emp_no"))return "payroll_adjustments";
+    if (has("code","accountname","account_name","debit","credit") &&
+        has("accountname","account_name"))                    return "trial_balance";
+    if (has("classification"))                                return "balance_sheet";
+    if (has("journalno","journalnum"))                        return "journals";
+    // suppliers have bank columns; customers don't
+    if (has("bankname","bank_name","accountnumber","account_number")) return "suppliers";
+    if (has("name","contactname","customer","company"))       return "customers";
+    return null; // no confident match — leave tab as-is
+  }
+
   // Client-side parse for preview only
   function handleFileChange(e) {
     const f = e.target.files[0];
@@ -13509,6 +13527,11 @@ function DataImport() {
       const parseLine = l => l.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
       const headers   = parseLine(lines[0]);
       const rows      = lines.slice(1, 6).map(parseLine);
+
+      // Auto-switch tab if we can confidently identify the data type
+      const detected = detectTab(headers);
+      if (detected && detected !== tab) setTab(detected);
+
       setPreview({headers, rows, total: lines.length - 1, xlsx: false});
     };
     reader.readAsText(f);
