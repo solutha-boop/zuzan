@@ -3695,7 +3695,7 @@ function Payroll({live = {}, user = {}}) {
         <div style={{position:"fixed",inset:0,background:"#00000070",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:760,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px #00000030"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {user?.industry==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
             <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
@@ -3706,15 +3706,17 @@ function Payroll({live = {}, user = {}}) {
                 <span style={{fontSize:12,fontWeight:700,color:C.ink}}>📂 Upload overtime from file</span>
                 <button onClick={() => {
                   // Generate and download a template CSV/XLSX with employee list pre-filled
+                  const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
                   const rows = employees.map(e => ({
-                    "Employee Number": e.employee_number || e.id,
-                    "Employee Name":   e.name,
+                    "Employee Number":      e.employee_number || e.id,
+                    "Employee Name":        e.name,
                     "Weekday_Sat_OT_Hours": 0,
-                    "Sunday_Hours":          0,
-                    "Public_Holiday_Hours":  0,
+                    "Sunday_Hours":         0,
+                    "Public_Holiday_Hours": 0,
+                    ...(isSec ? {"Night_Shift_Shifts": 0, "Special_Allow_Shifts": 0} : {}),
                   }));
                   const ws = XLSX.utils.json_to_sheet(rows);
-                  ws["!cols"] = [{wch:18},{wch:28},{wch:22},{wch:16},{wch:22}];
+                  ws["!cols"] = [{wch:18},{wch:28},{wch:22},{wch:16},{wch:22},{wch:20},{wch:22}];
                   const wb = XLSX.utils.book_new();
                   XLSX.utils.book_append_sheet(wb, ws, "Overtime");
                   XLSX.writeFile(wb, `overtime_${new Date().toISOString().slice(0,7)}.xlsx`);
@@ -3734,6 +3736,7 @@ function Payroll({live = {}, user = {}}) {
                         const rows = XLSX.utils.sheet_to_json(ws, {defval:0});
                         let matched = 0, unmatched = [];
                         const newOt = {...otData};
+                        const newSec = {};
                         rows.forEach(row => {
                           // Accept employee_number, employee name, or id as lookup key
                           const empNum = String(row["Employee Number"] || row["employee_number"] || row["EmpNo"] || "").trim();
@@ -3749,8 +3752,13 @@ function Payroll({live = {}, user = {}}) {
                             sunHours: +(row["Sunday_Hours"]           || row["sunday_hours"]    || row["Sunday OT Hours"] || 0),
                             phHours:  +(row["Public_Holiday_Hours"]   || row["ph_hours"]        || row["PH Hours"]        || 0),
                           };
+                          // NBCPSS security columns
+                          const ns = +(row["Night_Shift_Shifts"] || row["Night Shift Shifts"] || row["night_shifts"] || 0);
+                          const ss = +(row["Special_Allow_Shifts"] || row["Special Allow Shifts"] || row["special_shifts"] || 0);
+                          if (ns || ss) newSec[emp.id] = {nightShifts: ns, specialShifts: ss};
                         });
                         setOtData(newOt);
+                        if (Object.keys(newSec).length) setSecData(prev => ({...prev, ...newSec}));
                         if (unmatched.length) alert(`Imported ${matched} employees.\n\nCould not match ${unmatched.length} row(s):\n${unmatched.join(", ")}\n\nCheck that Employee Number in your file matches the payroll list.`);
                         else alert(`✅ Imported ${matched} employee${matched!==1?"s":""} from file.`);
                       } catch(err) {
@@ -3770,7 +3778,7 @@ function Payroll({live = {}, user = {}}) {
                 <tr style={{background:C.bg}}>
                   {[
                     "Employee","Grade","BCEA Hourly Rate","Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview",
-                    ...(user?.industry==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
+                    ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
                   ].map(h=>(
                     <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
                   ))}
@@ -3805,7 +3813,7 @@ function Payroll({live = {}, user = {}}) {
                       <td style={{padding:"10px 12px",fontWeight:700,color:preview.total>0?C.green:C.inkMid}}>
                         {preview.total > 0 ? `+ ${fmt(preview.total)}` : "—"}
                       </td>
-                      {user?.industry==="private_security" && (()=>{
+                      {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (()=>{
                         const sec = secData[emp.id] || {nightShifts:0,specialShifts:0};
                         const setSec = (k,v) => setSecData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
                         const nightPrev = (+sec.nightShifts||0) * 8.00;
@@ -13552,7 +13560,13 @@ function DataImport() {
         const body = await r.json().catch(() => ({}));
         throw new Error(body.detail || "Import failed");
       }
-      setResult(await r.json());
+      const data = await r.json();
+      setResult(data);
+      // Employees and payroll adjustments feed the Payroll tab which uses live data
+      // loaded at startup — reload so the updated employee list is picked up immediately.
+      if ((tab === "employees" || tab === "payroll_adjustments") && (data.imported || 0) > 0) {
+        setTimeout(() => window.location.reload(), 2500);
+      }
     } catch(e) { setErr(e.message); }
     finally   { setImporting(false); }
   }

@@ -34,7 +34,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "fix: DataImport auto-detects correct tab from CSV headers — prevents customer/employee tab mismatch [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "fix: NBCPSS payroll modal — case-insensitive industry check, add Night Shift + Special Allow cols to OT template and upload parser [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main
