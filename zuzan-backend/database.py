@@ -258,8 +258,10 @@ class Payslip(Base):
     special_allowance_shifts=Column(Float,default=0.0)   # shifts qualifying for special allowance
     special_allowance_amount=Column(Float,default=0.0)   # R10.50/shift (taxable income)
     cleaning_allowance=Column(Float,default=0.0)         # R32.00/month (taxable income)
-    bc_levy_employer=Column(Float,default=0.0)           # BC levy R9.40/month (employer cost)
-    psira_levy_employer=Column(Float,default=0.0)        # PSIRA fee R5.00/month (employer cost)
+    bc_levy_employer=Column(Float,default=0.0)           # BC levy R7.00/month (employer cost)
+    psira_levy_employer=Column(Float,default=0.0)        # PSIRA fee R4.00/month (employer cost)
+    normal_hours=Column(Float,default=0.0)               # actual hours worked this period (hourly employees)
+    annual_bonus=Column(Float,default=0.0)               # NBCPSS annual bonus paid this period (taxable)
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -1505,6 +1507,9 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN cleaning_allowance FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN bc_levy_employer FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN psira_levy_employer FLOAT DEFAULT 0",
+            # ── NBCPSS normal hours + annual bonus (2026-09) ──────────────────────
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS normal_hours FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS annual_bonus FLOAT DEFAULT 0",
             # ── Accountant Practice / multi-client (2026-08) ───────────────────
             # Belt-and-braces alongside the CompanyMembership model + create_all()
             # above — safe no-op if the table already exists.

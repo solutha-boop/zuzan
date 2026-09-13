@@ -3137,6 +3137,7 @@ function Payroll({live = {}, user = {}}) {
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
   const [secArea, setSecArea] = useState("1_2"); // NBCPSS rate area: "1_2" = Urban, "3" = Rural
+  const [includeBonus, setIncludeBonus] = useState(false); // NBCPSS annual bonus (December)
   const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"1_2",shiftType:"day",specialAllowanceType:"none"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
@@ -3729,6 +3730,7 @@ function Payroll({live = {}, user = {}}) {
                   const rows = employees.map(e => ({
                     "Employee Number":      e.employee_number || e.id,
                     "Employee Name":        e.name,
+                    ...(isSec ? {"Normal_Hours": 208} : {}),
                     "Weekday_Sat_OT_Hours": 0,
                     "Sunday_Hours":         0,
                     "Public_Holiday_Hours": 0,
@@ -3767,6 +3769,7 @@ function Payroll({live = {}, user = {}}) {
                           if (!emp) { unmatched.push(empNum || empName || "(unknown)"); return; }
                           matched++;
                           newOt[emp.id] = {
+                            normalHours: +(row["Normal_Hours"] || row["normal_hours"] || row["Hours Worked"] || row["Ordinary Hours"] || 0),
                             otHours:  +(row["Weekday_Sat_OT_Hours"]  || row["overtime_hours"]  || row["OT Hours"]        || 0),
                             sunHours: +(row["Sunday_Hours"]           || row["sunday_hours"]    || row["Sunday OT Hours"] || 0),
                             phHours:  +(row["Public_Holiday_Hours"]   || row["ph_hours"]        || row["PH Hours"]        || 0),
@@ -3788,15 +3791,40 @@ function Payroll({live = {}, user = {}}) {
                     e.target.value = "";   // allow re-upload of same file
                   }}/>
                 </label>
-                <span style={{fontSize:11,color:C.inkMid}}>Columns: Employee Number · Employee Name · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours</span>
+                <span style={{fontSize:11,color:C.inkMid}}>{(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? "Columns: Employee Number · Employee Name · Normal_Hours · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours · Night_Shift_Shifts · Special_Allow_Shifts" : "Columns: Employee Number · Employee Name · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours"}</span>
               </div>
             </div>
+
+            {/* ── NBCPSS Annual Bonus banner (November / December only) ── */}
+            {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (()=>{
+              const mo = new Date().getMonth(); // 0-based: 10=Nov, 11=Dec
+              if (mo < 10) return null;
+              const isDec = mo === 11;
+              const bonusTotal = employees.reduce((s,e)=>s+Math.round(e.salary*12/52*100)/100,0);
+              return (
+                <div style={{background:isDec?"#fefce8":"#f0fdf4",border:`1px solid ${isDec?"#fbbf24":"#86efac"}`,borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                  <span style={{fontSize:20}}>{isDec?"🎁":"📅"}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{isDec?"NBCPSS Annual Bonus — Due before 15 December":"NBCPSS Annual Bonus — Payable next month (December)"}</div>
+                    <div style={{fontSize:11,color:C.inkMid}}>1 week's pay per employee (gross × 12/52). Total this run: <strong>{fmt(bonusTotal)}</strong></div>
+                  </div>
+                  {isDec && (
+                    <button onClick={()=>setIncludeBonus(b=>!b)}
+                      style={{padding:"8px 16px",fontSize:12,fontWeight:700,borderRadius:8,border:`2px solid ${includeBonus?"#16a34a":"#d1d5db"}`,background:includeBonus?"#dcfce7":C.surface,color:includeBonus?"#15803d":C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                      {includeBonus?"✓ Bonus included":"Include bonus"}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
 
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:20}}>
               <thead>
                 <tr style={{background:C.bg}}>
                   {[
-                    "Employee","Grade","BCEA Hourly Rate","Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview",
+                    "Employee","Grade","BCEA Hourly Rate",
+                    ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Normal Hrs"] : []),
+                    "Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview",
                     ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
                   ].map(h=>(
                     <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
@@ -3805,7 +3833,8 @@ function Payroll({live = {}, user = {}}) {
               </thead>
               <tbody>
                 {employees.map(emp => {
-                  const ot = otData[emp.id] || {otHours:0,sunHours:0,phHours:0};
+                  const ot = otData[emp.id] || {normalHours:0,otHours:0,sunHours:0,phHours:0};
+                  const isSecurity = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
                   const hr = bceaHourlyRate(emp.salary, emp.hourly_rate||null);
                   const preview = calcOvertime(emp.salary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null);
                   const inpStyle = {width:"60px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
@@ -3820,6 +3849,13 @@ function Payroll({live = {}, user = {}}) {
                         {emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid}}>—</span>}
                       </td>
                       <td style={{padding:"10px 12px",color:C.inkMid}}>{fmt(hr)}/hr</td>
+                      {isSecurity && (
+                        <td style={{padding:"10px 12px"}}>
+                          <input style={{...inpStyle,width:"68px",borderColor:(+ot.normalHours||208)<208?"#f59e0b":C.border}} type="number" min="0" max="250" step="1"
+                            value={ot.normalHours!=null&&ot.normalHours!==""?ot.normalHours:208} placeholder="208"
+                            onChange={e=>setOt("normalHours",e.target.value)}/>
+                        </td>
+                      )}
                       <td style={{padding:"10px 12px"}}>
                         <input style={inpStyle} type="number" min="0" max="10" step="0.5" value={ot.otHours||""} placeholder="0" onChange={e=>setOt("otHours",e.target.value)}/>
                       </td>
@@ -3862,14 +3898,14 @@ function Payroll({live = {}, user = {}}) {
                 try {
                   const otPayload = employees.map(emp => {
                     const ot = otData[emp.id] || {};
-                    return { employee_id: emp.id, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
-                  }).filter(e => e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
+                    return { employee_id: emp.id, normal_hours: +ot.normalHours||0, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
+                  }).filter(e => e.normal_hours > 0 || e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
                   const secPayload = employees.map(emp => {
                     const sec = secData[emp.id] || {};
                     return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0 };
                   }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0);
                   const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
-                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload, ...(isSec ? {area_override: secArea} : {})})});
+                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload, ...(isSec ? {area_override: secArea, include_annual_bonus: includeBonus} : {})})});
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); }
                 setPayrollRun(true);

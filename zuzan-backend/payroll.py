@@ -228,6 +228,7 @@ NBCPSS_NIGHT_SHIFT_PER_SHIFT    = 8.00    # R/shift (effective 1 March 2026)
 NBCPSS_SPECIAL_ALLOW_PER_SHIFT  = 10.50   # R/shift — Armed SO, Armed Response, NKP,
                                            #           Control Centre, Canine, Mobile Supervisor
 NBCPSS_CLEANING_ALLOWANCE       = 32.00   # R/month (all employees)
+NBCPSS_PRESCRIBED_HOURS         = 208.0   # ordinary hours per month (48 h/week × 52/12) per NBCPSS Main Agreement
 NBCPSS_BC_LEVY                  = 7.00    # R/employee/month — employer pays to NBCPSS
 NBCPSS_PSIRA_FEE                = 4.00    # R/SO/month — employer PSIRA registration fee
 NBCPSS_PROVIDENT_RATE           = 0.075   # 7.5% each (employer + employee) — PSSPF
@@ -370,6 +371,8 @@ def calc_payroll(
     is_security: bool = False,             # True → add cleaning allowance + BC levy + PSIRA fee
     security_grade: str = None,            # A–E (used for minimum wage warning only)
     security_area: str = None,             # "1_2" or "3"
+    normal_hours: float = None,            # actual ordinary hours worked; if set and hourly, overrides gross_monthly
+    annual_bonus: float = 0.0,             # NBCPSS annual bonus (gross×12/52) — taxable, added this period
     # Age-based rebates + s11F carry-forward (audit fixes 2026-07-19)
     age: int = None,                       # age at tax-year end → secondary/tertiary rebates
     s11f_carry_forward_annual: float = 0.0,  # unclaimed prior-year s11F excess (rand)
@@ -400,8 +403,15 @@ def calc_payroll(
     """
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
 
+    # ── Effective gross for hourly employees who worked fewer than prescribed hours ──
+    # If normal_hours is provided and employee has an explicit hourly rate,
+    # actual pay = hours_worked × hourly_rate (may be less than contracted gross_monthly).
+    effective_gross = gross_monthly
+    if normal_hours and normal_hours > 0 and explicit_hourly_rate and explicit_hourly_rate > 0:
+        effective_gross = round(normal_hours * explicit_hourly_rate, 2)
+
     # ── Overtime ──────────────────────────────────────────────────────────────
-    ot = calc_overtime(gross_monthly, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate)
+    ot = calc_overtime(effective_gross, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate)
     total_overtime = ot["total_overtime"]
 
     # ── NBCPSS security allowances (taxable income added to gross) ───────────
@@ -415,11 +425,11 @@ def calc_payroll(
     below_min    = is_security and nbcpss_min > 0 and gross_monthly < nbcpss_min
 
     # ── Cash remuneration (for net pay & SDL) ─────────────────────────────────
-    taxable_gross = gross_monthly + total_overtime + night_allow + special_allow + cleaning_allow
+    taxable_gross = effective_gross + total_overtime + night_allow + special_allow + cleaning_allow + annual_bonus
 
     # ── Pension / Provident fund: % + optional fixed ZAR top-up ──────────────
-    pension_employee_monthly = round(gross_monthly * pension_employee_pct + pension_employee_fixed, 2)
-    pension_employer_monthly = round(gross_monthly * pension_employer_pct + pension_employer_fixed, 2)
+    pension_employee_monthly = round(effective_gross * pension_employee_pct + pension_employee_fixed, 2)
+    pension_employer_monthly = round(effective_gross * pension_employer_pct + pension_employer_fixed, 2)
 
     # ── PAYE base includes employer fringe benefits ───────────────────────────
     # Employer medical aid: taxable fringe benefit (7th Schedule s2(i)).
@@ -519,6 +529,8 @@ def calc_payroll(
         "psira_levy_employer":    round(psira_levy, 2),
         "nbcpss_minimum":         nbcpss_min,
         "below_nbcpss_minimum":   below_min,
+        "normal_hours":           normal_hours or 0.0,
+        "annual_bonus":           round(annual_bonus, 2),
     }
 
 
@@ -548,6 +560,7 @@ class OvertimeEntry(BaseModel):
     employee_id:    int
     overtime_hours: float = 0   # weekday/Saturday OT (BCEA s10 — 1.5x)
     sunday_hours:   float = 0   # Sunday hours         (BCEA s16 — 2.0x)
+    normal_hours:   float = 0   # actual ordinary hours worked this period (0 = full month)
     ph_hours:       float = 0   # public holiday hours (BCEA s18 — 2.0x)
 
 
@@ -560,7 +573,8 @@ class SecurityAllowanceEntry(BaseModel):
 class RunPayrollRequest(BaseModel):
     overtime: list[OvertimeEntry] = []
     security: list[SecurityAllowanceEntry] = []
-    area_override: str | None = None  # "1_2" (Urban) or "3" (Rural) — overrides per-employee security_area for this run
+    area_override: str | None = None         # "1_2" (Urban) or "3" (Rural) — overrides per-employee security_area for this run
+    include_annual_bonus: bool = False        # True → add NBCPSS annual bonus (gross × 12/52) for all security employees
 
 
 @payroll_router.get("/calculate")
@@ -691,6 +705,8 @@ async def run_payroll(
         sec_grade = getattr(emp, "security_grade", None)
         sec_area  = data.area_override or getattr(emp, "security_area", None) or "1_2"
         is_sec    = is_security_co and bool(sec_grade)
+        # Annual bonus: gross × 12 / 52 (1 week's pay) per NBCPSS Main Agreement, due in December
+        emp_bonus = round(emp.gross_salary * 12 / 52, 2) if (data.include_annual_bonus and is_sec) else 0.0
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
@@ -710,6 +726,8 @@ async def run_payroll(
             is_security=is_sec,
             security_grade=sec_grade,
             security_area=sec_area,
+            normal_hours=ot_entry.normal_hours or None,
+            annual_bonus=emp_bonus,
             age=age_at_tax_year_end(getattr(emp, "date_of_birth", None)),
             s11f_carry_forward_annual=s11f_carry_forward_balance(db, emp.id),
         )
@@ -745,6 +763,8 @@ async def run_payroll(
             cleaning_allowance=c["cleaning_allowance"],
             bc_levy_employer=c["bc_levy_employer"],
             psira_levy_employer=c["psira_levy_employer"],
+            normal_hours=c["normal_hours"],
+            annual_bonus=c["annual_bonus"],
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post
