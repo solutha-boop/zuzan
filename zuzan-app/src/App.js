@@ -3136,6 +3136,7 @@ function Payroll({live = {}, user = {}}) {
   const [showOtModal, setShowOtModal] = useState(false);
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
+  const [secArea, setSecArea] = useState("1_2"); // NBCPSS rate area: "1_2" = Urban, "3" = Rural
   const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"1_2",shiftType:"day",specialAllowanceType:"none"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
@@ -3700,6 +3701,24 @@ function Payroll({live = {}, user = {}}) {
             </div>
             <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
 
+            {/* ── NBCPSS area selector (security companies only) ── */}
+            {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (
+              <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,fontWeight:700,color:C.ink}}>🏙 NBCPSS Rate Area</span>
+                <div style={{display:"flex",gap:8}}>
+                  {[["1_2","Area 1 & 2 — Urban (JHB, CPT, DBN, PE, Pretoria…)"],["3","Area 3 — Rural (all other districts)"]].map(([val,label])=>(
+                    <button key={val} onClick={()=>setSecArea(val)}
+                      style={{padding:"7px 14px",fontSize:12,fontWeight:secArea===val?700:400,borderRadius:8,border:`2px solid ${secArea===val?C.accent:C.border}`,background:secArea===val?C.accentLt||"#ede9fe":C.surface,color:secArea===val?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <span style={{fontSize:11,color:C.inkMid}}>
+                  {secArea==="1_2" ? "Min wage: Grade A R8,184 · B R7,607 · C/D/E R7,003" : "Min wage: Grade A R7,142 · B/C/D/E R6,726"}
+                </span>
+              </div>
+            )}
+
             {/* ── CSV / Excel upload strip ── */}
             <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:20}}>
               <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
@@ -3849,7 +3868,8 @@ function Payroll({live = {}, user = {}}) {
                     const sec = secData[emp.id] || {};
                     return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0 };
                   }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0);
-                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload})});
+                  const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
+                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload, ...(isSec ? {area_override: secArea} : {})})});
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); }
                 setPayrollRun(true);

@@ -228,8 +228,8 @@ NBCPSS_NIGHT_SHIFT_PER_SHIFT    = 8.00    # R/shift (effective 1 March 2026)
 NBCPSS_SPECIAL_ALLOW_PER_SHIFT  = 10.50   # R/shift — Armed SO, Armed Response, NKP,
                                            #           Control Centre, Canine, Mobile Supervisor
 NBCPSS_CLEANING_ALLOWANCE       = 32.00   # R/month (all employees)
-NBCPSS_BC_LEVY                  = 9.40    # R/employee/month — employer pays to NBCPSS
-NBCPSS_PSIRA_FEE                = 5.00    # R/SO/month — employer PSIRA registration fee
+NBCPSS_BC_LEVY                  = 7.00    # R/employee/month — employer pays to NBCPSS
+NBCPSS_PSIRA_FEE                = 4.00    # R/SO/month — employer PSIRA registration fee
 NBCPSS_PROVIDENT_RATE           = 0.075   # 7.5% each (employer + employee) — PSSPF
 NBCPSS_VALID_UNTIL              = "28 February 2027"
 
@@ -560,6 +560,7 @@ class SecurityAllowanceEntry(BaseModel):
 class RunPayrollRequest(BaseModel):
     overtime: list[OvertimeEntry] = []
     security: list[SecurityAllowanceEntry] = []
+    area_override: str | None = None  # "1_2" (Urban) or "3" (Rural) — overrides per-employee security_area for this run
 
 
 @payroll_router.get("/calculate")
@@ -688,7 +689,7 @@ async def run_payroll(
         ot_entry  = ot_map.get(emp.id, OvertimeEntry(employee_id=emp.id))
         sec_entry = sec_map.get(emp.id, SecurityAllowanceEntry(employee_id=emp.id))
         sec_grade = getattr(emp, "security_grade", None)
-        sec_area  = getattr(emp, "security_area", None) or "1_2"
+        sec_area  = data.area_override or getattr(emp, "security_area", None) or "1_2"
         is_sec    = is_security_co and bool(sec_grade)
         c = calc_payroll(
             emp.gross_salary,
