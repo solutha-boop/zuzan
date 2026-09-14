@@ -3874,7 +3874,7 @@ function Payroll({live = {}, user = {}}) {
                   const isFuelStation = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station";
                   // For security employees, effective monthly = max(contracted salary, NBCPSS area+grade minimum)
                   const _NBCPSS = {"1_2":{A:8184,B:7607,C:7003,D:7003,E:7003},"3":{A:7142,B:6726,C:6726,D:6726,E:6726}};
-                  const _gradeKey = ((emp.grade||"C").toUpperCase().match(/[A-E]/)||["C"])[0];
+                  const _gradeKey = ((emp.security_grade||"C").toUpperCase().match(/[A-E]/)||["C"])[0];
                   const _areaRates = _NBCPSS[secArea] || _NBCPSS["1_2"];
                   const _areaMin = _areaRates[_gradeKey] || _areaRates["C"];
                   // For fuel station employees, effective monthly = max(contracted salary, MIBCO role minimum)
