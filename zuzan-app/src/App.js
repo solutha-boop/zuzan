@@ -3700,7 +3700,7 @@ function Payroll({live = {}, user = {}}) {
               <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
-            <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter hours per employee for this pay period. <strong>Weekday/Sat OT</strong> = extra hours above normal shift (×1.5). <strong>Sunday Hrs Worked</strong> = total hours worked on Sunday (×2, all hours). <strong>Public Holiday</strong> = hours worked on a PH (×2).</p>
+            <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter hours per employee for this pay period. <strong>Weekday/Sat OT</strong> = extra hours above normal shift (×1.5). <strong>Sunday Hrs Worked</strong> = total hours worked on Sunday (×2, all hours). Default shift = 12 h; enter 12 per Sunday, 24 for two Sundays, etc. <strong>Public Holiday</strong> = hours worked on a PH (×2).</p>
 
             {/* ── NBCPSS area selector (security companies only) ── */}
             {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (
@@ -3864,7 +3864,7 @@ function Payroll({live = {}, user = {}}) {
                         <input style={inpStyle} type="number" min="0" max="10" step="0.5" value={ot.otHours||""} placeholder="0" onChange={e=>setOt("otHours",e.target.value)}/>
                       </td>
                       <td style={{padding:"10px 12px"}}>
-                        <input style={inpStyle} type="number" min="0" max="24" step="1" value={ot.sunHours||""} placeholder="0" onChange={e=>setOt("sunHours",e.target.value)}/>
+                        <input style={inpStyle} type="number" min="0" max="96" step="1" value={ot.sunHours||""} placeholder="12" onChange={e=>setOt("sunHours",e.target.value)}/>
                       </td>
                       <td style={{padding:"10px 12px"}}>
                         <input style={inpStyle} type="number" min="0" step="0.5" value={ot.phHours||""} placeholder="0" onChange={e=>setOt("phHours",e.target.value)}/>
