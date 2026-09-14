@@ -3700,7 +3700,7 @@ function Payroll({live = {}, user = {}}) {
               <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
-            <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter BCEA overtime hours per employee for this pay period. Leave at 0 if none worked. Weekday/Sat OT = 1.5× · Sunday = 2× · Public Holiday = 2×</p>
+            <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter hours per employee for this pay period. <strong>Weekday/Sat OT</strong> = extra hours above normal shift (×1.5). <strong>Sunday Hrs Worked</strong> = total hours worked on Sunday (×2, all hours). <strong>Public Holiday</strong> = hours worked on a PH (×2).</p>
 
             {/* ── NBCPSS area selector (security companies only) ── */}
             {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (
@@ -3715,7 +3715,9 @@ function Payroll({live = {}, user = {}}) {
                   ))}
                 </div>
                 <span style={{fontSize:11,color:C.inkMid}}>
-                  {secArea==="1_2" ? "Min wage: Grade A R8,184 · B R7,607 · C/D/E R7,003" : "Min wage: Grade A R7,142 · B/C/D/E R6,726"}
+                  {secArea==="1_2"
+                    ? "Area 1&2 rates — Grade A: R8,184 · Grade B: R7,607 · Grade C/D/E: R7,003"
+                    : "Area 3 rates — Grade A: R7,142 · Grade B/C/D/E: R6,726"}
                 </span>
               </div>
             )}
@@ -3823,8 +3825,8 @@ function Payroll({live = {}, user = {}}) {
                 <tr style={{background:C.bg}}>
                   {[
                     "Employee","Grade","BCEA Hourly Rate",
-                    ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Normal Hrs"] : []),
-                    "Weekday/Sat OT hrs","Sunday hrs","PH hrs","OT Pay Preview",
+                    ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Normal Hrs (hourly)"] : []),
+                    "Weekday/Sat OT hrs","Sunday Hrs Worked","PH hrs","OT Pay Preview",
                     ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
                   ].map(h=>(
                     <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
@@ -3851,16 +3853,18 @@ function Payroll({live = {}, user = {}}) {
                       <td style={{padding:"10px 12px",color:C.inkMid}}>{fmt(hr)}/hr</td>
                       {isSecurity && (
                         <td style={{padding:"10px 12px"}}>
-                          <input style={{...inpStyle,width:"68px",borderColor:(+ot.normalHours||208)<208?"#f59e0b":C.border}} type="number" min="0" max="250" step="1"
-                            value={ot.normalHours!=null&&ot.normalHours!==""?ot.normalHours:208} placeholder="208"
-                            onChange={e=>setOt("normalHours",e.target.value)}/>
+                          {(emp.employment_type||"").toLowerCase().replace(/[\s_]/g,"") === "hourlypaid" || (emp.employment_type||"").toLowerCase() === "hourly"
+                            ? <input style={{...inpStyle,width:"68px",borderColor:(+ot.normalHours||208)<208?"#f59e0b":C.border}} type="number" min="0" max="250" step="1"
+                                value={ot.normalHours!=null&&ot.normalHours!==""?ot.normalHours:208} placeholder="208"
+                                onChange={e=>setOt("normalHours",e.target.value)}/>
+                            : <span style={{color:C.inkMid,fontSize:11}}>{fmt(emp.salary)}</span>}
                         </td>
                       )}
                       <td style={{padding:"10px 12px"}}>
                         <input style={inpStyle} type="number" min="0" max="10" step="0.5" value={ot.otHours||""} placeholder="0" onChange={e=>setOt("otHours",e.target.value)}/>
                       </td>
                       <td style={{padding:"10px 12px"}}>
-                        <input style={inpStyle} type="number" min="0" step="0.5" value={ot.sunHours||""} placeholder="0" onChange={e=>setOt("sunHours",e.target.value)}/>
+                        <input style={inpStyle} type="number" min="0" max="24" step="1" value={ot.sunHours||""} placeholder="0" onChange={e=>setOt("sunHours",e.target.value)}/>
                       </td>
                       <td style={{padding:"10px 12px"}}>
                         <input style={inpStyle} type="number" min="0" step="0.5" value={ot.phHours||""} placeholder="0" onChange={e=>setOt("phHours",e.target.value)}/>
