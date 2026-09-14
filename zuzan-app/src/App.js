@@ -3837,8 +3837,14 @@ function Payroll({live = {}, user = {}}) {
                 {employees.map(emp => {
                   const ot = otData[emp.id] || {normalHours:0,otHours:0,sunHours:0,phHours:0};
                   const isSecurity = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
-                  const hr = bceaHourlyRate(emp.salary, emp.hourly_rate||null);
-                  const preview = calcOvertime(emp.salary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null);
+                  // For security employees, effective monthly = max(contracted salary, NBCPSS area+grade minimum)
+                  const _NBCPSS = {"1_2":{A:8184,B:7607,C:7003,D:7003,E:7003},"3":{A:7142,B:6726,C:6726,D:6726,E:6726}};
+                  const _gradeKey = ((emp.grade||"C").toUpperCase().match(/[A-E]/)||["C"])[0];
+                  const _areaRates = _NBCPSS[secArea] || _NBCPSS["1_2"];
+                  const _areaMin = _areaRates[_gradeKey] || _areaRates["C"];
+                  const effectiveSalary = isSecurity ? Math.max(emp.salary||0, _areaMin) : (emp.salary||0);
+                  const hr = bceaHourlyRate(effectiveSalary, emp.hourly_rate||null);
+                  const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null);
                   const inpStyle = {width:"60px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
                   const setOt = (k,v) => setOtData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
                   return (
