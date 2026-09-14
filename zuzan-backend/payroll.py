@@ -688,6 +688,18 @@ async def run_payroll(
     sec_map = {entry.employee_id: entry for entry in (data.security or [])}
 
     period = datetime.utcnow().strftime("%Y-%m")
+    # Helper: pay date depends on employment type
+    # salaried → last calendar day of the period month
+    # hourly / fixed pay → 15th of the period month
+    def _pay_date(emp_type: str) -> date:
+        import calendar as _cal
+        from datetime import date as _date
+        yr, mo = int(period[:4]), int(period[5:7])
+        if (emp_type or "").lower().replace(" ", "_") in ("salaried", "fixed_pay", "fixed pay"):
+            last_day = _cal.monthrange(yr, mo)[1]
+            return _date(yr, mo, last_day)
+        else:                                  # hourly paid, hourly
+            return _date(yr, mo, 15)
     created = []
     annual_payroll_total = sum(e.gross_salary for e in employees) * 12
     company = db.query(__import__("database").Company).filter_by(id=current_user.company_id).first()
@@ -765,6 +777,7 @@ async def run_payroll(
             psira_levy_employer=c["psira_levy_employer"],
             normal_hours=c["normal_hours"],
             annual_bonus=c["annual_bonus"],
+            payment_date=_pay_date(getattr(emp, "employment_type", "salaried")),
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post

@@ -2482,6 +2482,14 @@ function Expenses({live = {}}) {
 function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
   const p = payroll;
   const today = new Date().toLocaleDateString("en-ZA", {day:"2-digit", month:"long", year:"numeric"});
+  // Payment date: salaried → last day of current month; hourly / fixed pay → 15th
+  const _empType = (employee.employment_type||"").toLowerCase().replace(/[\s_]/g,"");
+  const _isHourly = _empType === "hourlypaid" || _empType === "hourly";
+  const _now = new Date();
+  const _payD = _isHourly
+    ? new Date(_now.getFullYear(), _now.getMonth(), 15)
+    : new Date(_now.getFullYear(), _now.getMonth() + 1, 0); // last day
+  const paymentDate = _payD.toLocaleDateString("en-ZA", {day:"2-digit", month:"long", year:"numeric"});
 
   const handlePrint = () => {
     const printContent = document.getElementById("payslip-content").innerHTML;
@@ -2544,6 +2552,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               <div style={{fontSize:18,fontWeight:800,color:C.ink}}>PAYSLIP</div>
               <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>Period: {period || "Current Month"}</div>
               <div style={{fontSize:12,color:C.inkMid}}>Date: {today}</div>
+              <div style={{fontSize:12,color:C.green,fontWeight:700}}>Payment Date: {paymentDate}</div>
             </div>
           </div>
 

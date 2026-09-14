@@ -262,6 +262,7 @@ class Payslip(Base):
     psira_levy_employer=Column(Float,default=0.0)        # PSIRA fee R4.00/month (employer cost)
     normal_hours=Column(Float,default=0.0)               # actual hours worked this period (hourly employees)
     annual_bonus=Column(Float,default=0.0)               # NBCPSS annual bonus paid this period (taxable)
+    payment_date=Column(Date,nullable=True)              # salaried=last day of month; hourly=15th of month
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -1510,6 +1511,7 @@ def init_db():
             # ── NBCPSS normal hours + annual bonus (2026-09) ──────────────────────
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS normal_hours FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS annual_bonus FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS payment_date DATE",
             # ── Accountant Practice / multi-client (2026-08) ───────────────────
             # Belt-and-braces alongside the CompanyMembership model + create_all()
             # above — safe no-op if the table already exists.
