@@ -1291,6 +1291,9 @@ class EmployeeCreate(BaseModel):
     security_area:             Optional[str]   = "1_2" # "1_2" = metro/urban, "3" = rural
     shift_type:                Optional[str]   = "day" # "day", "night", "rotating"
     special_allowance_type:    Optional[str]   = "none"
+    # MIBCO Sector 5 fuel station fields
+    mibco_role:                Optional[str]   = None  # "forecourt_attendant" | "cashier" | "char"
+    mibco_scheme_enrolled:     Optional[bool]  = True  # False = opted out of health scheme
 
 class EmployeeUpdate(BaseModel):
     position:                  Optional[str] = None
@@ -1323,6 +1326,9 @@ class EmployeeUpdate(BaseModel):
     security_area:             Optional[str]   = None
     shift_type:                Optional[str]   = None
     special_allowance_type:    Optional[str]   = None
+    # MIBCO Sector 5 fuel station fields
+    mibco_role:                Optional[str]   = None
+    mibco_scheme_enrolled:     Optional[bool]  = None
 
 
 def _employee_dict(e: Employee) -> dict:
@@ -1361,6 +1367,9 @@ def _employee_dict(e: Employee) -> dict:
         "security_area":          getattr(e, "security_area", None) or "1_2",
         "shift_type":             getattr(e, "shift_type", None) or "day",
         "special_allowance_type": getattr(e, "special_allowance_type", None) or "none",
+        # MIBCO Sector 5 fuel station
+        "mibco_role":             getattr(e, "mibco_role", None),
+        "mibco_scheme_enrolled":  bool(getattr(e, "mibco_scheme_enrolled", True)),
     }
 
 
@@ -1427,6 +1436,8 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         security_area=data.security_area or "1_2",
         shift_type=data.shift_type or "day",
         special_allowance_type=data.special_allowance_type or "none",
+        mibco_role=data.mibco_role or None,
+        mibco_scheme_enrolled=data.mibco_scheme_enrolled if data.mibco_scheme_enrolled is not None else True,
     )
     db.add(emp)
     db.commit()

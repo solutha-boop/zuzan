@@ -243,6 +243,55 @@ NBCPSS_SPECIAL_CATEGORIES = {
     "mobile_supervisor":"Mobile Supervisor",
 }
 
+# ── MIBCO Sector 5 — Fuel Retailers Minimum Wages (22 Dec 2025 – 31 Aug 2028) ──
+# Source: MIBCO Main Agreement 2025–2028 / Gov Gazette No. 53822 (12 Dec 2025)
+# Binding for ALL Sector 5 employers from 22 December 2025 under LRA s32(2).
+# Standard work week: 45 hours (also BCEA normal weekly maximum per s9).
+MIBCO_SECTOR5_HOURLY = {
+    "forecourt_attendant": 45.79,   # Forecourt / Petrol Attendant
+    "cashier":             45.30,   # Cashier
+    "char":                34.64,   # Char / Cleaner
+}
+MIBCO_SECTOR5_WEEKLY_HOURS      = 45       # 45 h/week = BCEA s9 normal maximum
+# Medical Insurance Allowance: R19.62/week paid directly to employee (separate payslip line).
+# Taxable remuneration. Applies even on leave / reduced hours — it is a fixed weekly entitlement.
+MIBCO_SECTOR5_MED_ALLOW_WEEKLY  = 19.62
+# Compulsory Medical Health Insurance Scheme (Affinity Health via MIBCO, from 1 Feb 2026).
+# Split-contribution: employer + employee portions remitted to MIBCO by the 10th of each month.
+# Not payable for weeks where employee works < 23 hours.
+# Year boundaries: Year 1 = Feb 2026–Aug 2026; Year 2 = Sep 2026–Aug 2027; Year 3 = Sep 2027–Aug 2028.
+MIBCO_SECTOR5_SCHEME_EMPLOYER = {
+    1: 85.00,   # Feb 2026 – Aug 2026
+    2: 90.00,   # Sep 2026 – Aug 2027 (current as of Sep 2026)
+    3: 95.00,   # Sep 2027 – Aug 2028
+}
+MIBCO_SECTOR5_SCHEME_EMPLOYEE    = 174.00  # employee deduction R/month (Year 1 confirmed; Year 2 TBC → using Year 1)
+MIBCO_SECTOR5_VALID_UNTIL        = "31 August 2028"
+
+MIBCO_SECTOR5_ROLES = {
+    "forecourt_attendant": "Forecourt Attendant",
+    "cashier":             "Cashier",
+    "char":                "Char / Cleaner",
+}
+
+
+def _mibco_scheme_year() -> int:
+    """MIBCO Sector 5 health scheme year (1/2/3) based on today's date."""
+    now = datetime.utcnow()
+    yr, mo = now.year, now.month
+    if yr < 2026 or (yr == 2026 and mo < 2):
+        return 1   # pre-scheme (treat as year 1 for future-proofing)
+    if yr == 2026 and mo < 9:
+        return 1   # Feb–Aug 2026
+    if (yr == 2026 and mo >= 9) or (yr == 2027 and mo < 9):
+        return 2   # Sep 2026–Aug 2027
+    return 3       # Sep 2027–Aug 2028
+
+
+def mibco_minimum_hourly(role: str) -> float:
+    """Return MIBCO Sector 5 minimum hourly rate for a given role key, or 0 if unknown."""
+    return MIBCO_SECTOR5_HOURLY.get((role or "").lower(), 0.0)
+
 
 def nbcpss_minimum(grade: str, area: str) -> float:
     """Return the NBCPSS minimum monthly salary for a given grade and area.
@@ -376,6 +425,10 @@ def calc_payroll(
     # Age-based rebates + s11F carry-forward (audit fixes 2026-07-19)
     age: int = None,                       # age at tax-year end → secondary/tertiary rebates
     s11f_carry_forward_annual: float = 0.0,  # unclaimed prior-year s11F excess (rand)
+    # MIBCO Sector 5 fuel station fields (only used when company.industry == 'fuel_station')
+    mibco_role: str = None,              # "forecourt_attendant" | "cashier" | "char"
+    is_fuel_station: bool = False,       # True → apply MIBCO med allow + scheme
+    mibco_scheme_enrolled: bool = False, # True → deduct employee scheme + add employer cost
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -424,8 +477,21 @@ def calc_payroll(
     nbcpss_min   = nbcpss_minimum(security_grade, security_area) if is_security else 0.0
     below_min    = is_security and nbcpss_min > 0 and gross_monthly < nbcpss_min
 
+    # ── MIBCO Sector 5 fuel station allowances ────────────────────────────────
+    # Medical Insurance Allowance: fixed R19.62/week, paid to employee, taxable (separate payslip line).
+    # = R19.62 × (52/12) ≈ R84.98/month
+    mibco_med_allow = round(MIBCO_SECTOR5_MED_ALLOW_WEEKLY * BCEA_WEEKS_PER_MONTH, 2) if is_fuel_station else 0.0
+    # Compulsory scheme: employer cost + employee deduction
+    _scheme_yr = _mibco_scheme_year()
+    mibco_scheme_empr = MIBCO_SECTOR5_SCHEME_EMPLOYER.get(_scheme_yr, 90.0) if (is_fuel_station and mibco_scheme_enrolled) else 0.0
+    mibco_scheme_empe = MIBCO_SECTOR5_SCHEME_EMPLOYEE if (is_fuel_station and mibco_scheme_enrolled) else 0.0
+    # Below-minimum warning
+    mibco_hourly_min  = mibco_minimum_hourly(mibco_role) if is_fuel_station else 0.0
+    mibco_monthly_min = round(mibco_hourly_min * MIBCO_SECTOR5_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH, 2)
+    below_mibco_min   = is_fuel_station and mibco_hourly_min > 0 and effective_gross < mibco_monthly_min
+
     # ── Cash remuneration (for net pay & SDL) ─────────────────────────────────
-    taxable_gross = effective_gross + total_overtime + night_allow + special_allow + cleaning_allow + annual_bonus
+    taxable_gross = effective_gross + total_overtime + night_allow + special_allow + cleaning_allow + annual_bonus + mibco_med_allow
 
     # ── Pension / Provident fund: % + optional fixed ZAR top-up ──────────────
     pension_employee_monthly = round(effective_gross * pension_employee_pct + pension_employee_fixed, 2)
@@ -493,10 +559,11 @@ def calc_payroll(
     sdl = taxable_gross * SDL_RATE if sdl_applicable else 0
 
     # ── Net pay: cash the employee receives ───────────────────────────────────
-    net_pay = taxable_gross - paye_after_mtc - uif_employee - pension_employee_monthly - medical_aid_employee
+    # MIBCO scheme employee deduction treated as a compulsory after-tax deduction (like medical aid)
+    net_pay = taxable_gross - paye_after_mtc - uif_employee - pension_employee_monthly - medical_aid_employee - mibco_scheme_empe
 
     # ── Total cost to employer ────────────────────────────────────────────────
-    total_cost = taxable_gross + uif_employer + sdl + pension_employer_monthly + medical_aid_employer + bc_levy_emp + psira_levy
+    total_cost = taxable_gross + uif_employer + sdl + pension_employer_monthly + medical_aid_employer + bc_levy_emp + psira_levy + mibco_scheme_empr
 
     return {
         "gross":                  round(gross_monthly, 2),
@@ -531,6 +598,14 @@ def calc_payroll(
         "below_nbcpss_minimum":   below_min,
         "normal_hours":           normal_hours or 0.0,
         "annual_bonus":           round(annual_bonus, 2),
+        # MIBCO Sector 5 fuel station fields
+        "mibco_role":             mibco_role,
+        "mibco_hourly_minimum":   round(mibco_hourly_min, 2),
+        "mibco_monthly_minimum":  round(mibco_monthly_min, 2),
+        "mibco_med_allow":        round(mibco_med_allow, 2),
+        "mibco_scheme_employer":  round(mibco_scheme_empr, 2),
+        "mibco_scheme_employee":  round(mibco_scheme_empe, 2),
+        "below_mibco_minimum":    below_mibco_min,
     }
 
 
@@ -599,12 +674,16 @@ async def calculate_all(
 
     annual_payroll_total = sum(e.gross_salary for e in employees) * 12
     company = db.query(__import__("database").Company).filter_by(id=current_user.company_id).first()
-    is_security_co = getattr(company, "industry", None) == "private_security"
+    _industry = (getattr(company, "industry", None) or "").lower().replace(" ", "_").replace("-", "_")
+    is_security_co     = _industry == "private_security"
+    is_fuel_station_co = _industry == "fuel_station"
 
     for emp in employees:
         sec_grade = getattr(emp, "security_grade", None)
         sec_area  = getattr(emp, "security_area", None) or "1_2"
         is_sec    = is_security_co and bool(sec_grade)
+        mibco_role_val     = getattr(emp, "mibco_role", None)
+        mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
@@ -621,6 +700,9 @@ async def calculate_all(
             security_area=sec_area,
             age=age_at_tax_year_end(getattr(emp, "date_of_birth", None)),
             s11f_carry_forward_annual=s11f_carry_forward_balance(db, emp.id),
+            mibco_role=mibco_role_val,
+            is_fuel_station=is_fuel_station_co and bool(mibco_role_val),
+            mibco_scheme_enrolled=mibco_enrolled_val,
         )
         c["employee_id"]           = emp.id
         c["employee_name"]         = f"{emp.first_name} {emp.last_name}"
@@ -666,6 +748,18 @@ async def calculate_all(
             "provident_rate":       NBCPSS_PROVIDENT_RATE,
             "minimums":             NBCPSS_MINIMUM_MONTHLY,
         },
+        "mibco_sector5": {
+            "active":               is_fuel_station_co,
+            "valid_until":          MIBCO_SECTOR5_VALID_UNTIL,
+            "hourly_rates":         MIBCO_SECTOR5_HOURLY,
+            "weekly_hours":         MIBCO_SECTOR5_WEEKLY_HOURS,
+            "med_allow_weekly":     MIBCO_SECTOR5_MED_ALLOW_WEEKLY,
+            "med_allow_monthly":    round(MIBCO_SECTOR5_MED_ALLOW_WEEKLY * BCEA_WEEKS_PER_MONTH, 2),
+            "scheme_employer":      MIBCO_SECTOR5_SCHEME_EMPLOYER.get(_mibco_scheme_year(), 90.0),
+            "scheme_employee":      MIBCO_SECTOR5_SCHEME_EMPLOYEE,
+            "scheme_year":          _mibco_scheme_year(),
+            "roles":                MIBCO_SECTOR5_ROLES,
+        },
     }
 
 
@@ -703,7 +797,9 @@ async def run_payroll(
     created = []
     annual_payroll_total = sum(e.gross_salary for e in employees) * 12
     company = db.query(__import__("database").Company).filter_by(id=current_user.company_id).first()
-    is_security_co = getattr(company, "industry", None) == "private_security"
+    industry = (getattr(company, "industry", None) or "").lower().replace(" ", "_").replace("-", "_")
+    is_security_co   = industry == "private_security"
+    is_fuel_station_co = industry == "fuel_station"
 
     for emp in employees:
         existing = db.query(Payslip).filter(
@@ -719,6 +815,9 @@ async def run_payroll(
         is_sec    = is_security_co and bool(sec_grade)
         # Annual bonus: gross × 12 / 52 (1 week's pay) per NBCPSS Main Agreement, due in December
         emp_bonus = round(emp.gross_salary * 12 / 52, 2) if (data.include_annual_bonus and is_sec) else 0.0
+        # MIBCO Sector 5 fields
+        mibco_role_val     = getattr(emp, "mibco_role", None)
+        mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
@@ -742,6 +841,9 @@ async def run_payroll(
             annual_bonus=emp_bonus,
             age=age_at_tax_year_end(getattr(emp, "date_of_birth", None)),
             s11f_carry_forward_annual=s11f_carry_forward_balance(db, emp.id),
+            mibco_role=mibco_role_val,
+            is_fuel_station=is_fuel_station_co and bool(mibco_role_val),
+            mibco_scheme_enrolled=mibco_enrolled_val,
         )
         ot = c["overtime"]
         payslip = Payslip(
@@ -778,6 +880,9 @@ async def run_payroll(
             normal_hours=c["normal_hours"],
             annual_bonus=c["annual_bonus"],
             payment_date=_pay_date(getattr(emp, "employment_type", "salaried")),
+            mibco_med_allow=c["mibco_med_allow"],
+            mibco_scheme_employer=c["mibco_scheme_employer"],
+            mibco_scheme_employee=c["mibco_scheme_employee"],
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post

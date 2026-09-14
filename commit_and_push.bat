@@ -34,7 +34,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: payslip payment date (salaried=month-end, hourly=15th); BCEA rate reactive to area; Sunday max raised to 96h [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "fix: add Date to SQLAlchemy import (crash fix); feat: MIBCO Sector 5 fuel station payroll — role selector, min-wage enforcement, medical insurance allowance R19.62/wk, Affinity Health scheme contributions, OT rate banner, payslip lines [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main

@@ -2620,6 +2620,13 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
                 <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}><span style={{color:C.inkMid}}>Taxable Gross (incl. Security Allowances)</span><span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span></div>
               </>
             )}
+            {/* MIBCO Sector 5 fuel station allowances — only rendered if present in payslip */}
+            {(p.mibco_med_allow > 0 || p.mibcoMedAllow > 0) && (
+              <>
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>⛽ Medical Insurance Allowance (MIBCO — R19.62/wk)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.mibco_med_allow||p.mibcoMedAllow)}</span></div>
+                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}><span style={{color:C.inkMid}}>Taxable Gross (incl. MIBCO Allowance)</span><span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span></div>
+              </>
+            )}
           </div>
 
           {/* Deductions */}
@@ -2631,6 +2638,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               ["PAYE (Income Tax)", p.paye, C.red],
               p.medicalTaxCredit > 0 && ["  ↳ Medical Tax Credit (s6A)", -(p.medicalTaxCredit || p.medical_tax_credit), C.green],
               ["UIF (Employee Contribution)", p.uifEmployee, C.gold],
+              (p.mibco_scheme_employee > 0 || p.mibcoSchemeEmployee > 0) && ["⛽ MIBCO Health Scheme (Employee — Affinity Health)", p.mibco_scheme_employee||p.mibcoSchemeEmployee, C.red],
             ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
@@ -2639,7 +2647,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
             ))}
             <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",fontSize:14,fontWeight:800,borderTop:`2px solid ${C.border}`,marginTop:8}}>
               <span>Total Deductions</span>
-              <span style={{color:C.red}}>({fmt(p.paye + p.uifEmployee + (p.pensionEmployee||p.pension_employee||0) + (p.medicalAidEmployee||p.medical_aid_employee_ded||0))})</span>
+              <span style={{color:C.red}}>({fmt(p.paye + p.uifEmployee + (p.pensionEmployee||p.pension_employee||0) + (p.medicalAidEmployee||p.medical_aid_employee_ded||0) + (p.mibco_scheme_employee||p.mibcoSchemeEmployee||0))})</span>
             </div>
           </div>
 
@@ -2664,6 +2672,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               ["SDL (Skills Development Levy)", p.sdl, C.blue],
               p.bc_levy_employer > 0 && ["NBCPSS BC Levy (Bargaining Council)", p.bc_levy_employer, "#c2410c"],
               p.psira_levy_employer > 0 && ["PSIRA Registration Levy", p.psira_levy_employer, "#c2410c"],
+              (p.mibco_scheme_employer > 0 || p.mibcoSchemeEmployer > 0) && ["⛽ MIBCO Health Scheme (Employer — Affinity Health)", p.mibco_scheme_employer||p.mibcoSchemeEmployer, "#92400e"],
             ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
                 <span style={{color:C.inkMid}}>{l}</span>
@@ -3147,7 +3156,7 @@ function Payroll({live = {}, user = {}}) {
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
   const [secArea, setSecArea] = useState("1_2"); // NBCPSS rate area: "1_2" = Urban, "3" = Rural
   const [includeBonus, setIncludeBonus] = useState(false); // NBCPSS annual bonus (December)
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"1_2",shiftType:"day",specialAllowanceType:"none"});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"1_2",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
@@ -3212,6 +3221,8 @@ function Payroll({live = {}, user = {}}) {
           security_area:              form.securityArea || "1_2",
           shift_type:                 form.shiftType || "day",
           special_allowance_type:     form.specialAllowanceType || "none",
+          mibco_role:                 form.mibcoRole || null,
+          mibco_scheme_enrolled:      form.mibcoSchemeEnrolled ?? true,
         }),
       });
       if (live && live.reload) live.reload();
@@ -3287,6 +3298,8 @@ function Payroll({live = {}, user = {}}) {
             security_area:              editForm.securityArea || "1_2",
             shift_type:                 editForm.shiftType || "day",
             special_allowance_type:     editForm.specialAllowanceType || "none",
+            mibco_role:                 editForm.mibcoRole || null,
+            mibco_scheme_enrolled:      editForm.mibcoSchemeEnrolled ?? true,
           }),
         });
         if (live && live.reload) live.reload();
@@ -3731,6 +3744,17 @@ function Payroll({live = {}, user = {}}) {
               </div>
             )}
 
+            {/* ── MIBCO Sector 5 rate info (fuel station companies only) ── */}
+            {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" && (
+              <div style={{background:"#fffbeb",border:"1px solid #fbbf24",borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,fontWeight:700,color:"#92400e"}}>⛽ MIBCO Sector 5 — Minimum Hourly Rates (eff. 22 Dec 2025)</span>
+                <span style={{fontSize:11,color:"#78350f"}}>
+                  Forecourt Attendant: R45.79/hr (R8,929/mo) · Cashier: R45.30/hr (R8,834/mo) · Char/Cleaner: R34.64/hr (R6,755/mo)
+                </span>
+                <span style={{fontSize:10,color:"#a16207"}}>Medical Insurance Allowance R19.62/wk added automatically. Health scheme (Affinity Health via MIBCO) contributions applied if enrolled.</span>
+              </div>
+            )}
+
             {/* ── CSV / Excel upload strip ── */}
             <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:20}}>
               <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
@@ -3835,6 +3859,7 @@ function Payroll({live = {}, user = {}}) {
                   {[
                     "Employee","Grade","BCEA Hourly Rate",
                     ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Normal Hrs (hourly)"] : []),
+                    ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" ? ["MIBCO Role"] : []),
                     "Weekday/Sat OT hrs","Sunday Hrs Worked","PH hrs","OT Pay Preview",
                     ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
                   ].map(h=>(
@@ -3846,12 +3871,17 @@ function Payroll({live = {}, user = {}}) {
                 {employees.map(emp => {
                   const ot = otData[emp.id] || {normalHours:0,otHours:0,sunHours:0,phHours:0};
                   const isSecurity = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
+                  const isFuelStation = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station";
                   // For security employees, effective monthly = max(contracted salary, NBCPSS area+grade minimum)
                   const _NBCPSS = {"1_2":{A:8184,B:7607,C:7003,D:7003,E:7003},"3":{A:7142,B:6726,C:6726,D:6726,E:6726}};
                   const _gradeKey = ((emp.grade||"C").toUpperCase().match(/[A-E]/)||["C"])[0];
                   const _areaRates = _NBCPSS[secArea] || _NBCPSS["1_2"];
                   const _areaMin = _areaRates[_gradeKey] || _areaRates["C"];
-                  const effectiveSalary = isSecurity ? Math.max(emp.salary||0, _areaMin) : (emp.salary||0);
+                  // For fuel station employees, effective monthly = max(contracted salary, MIBCO role minimum)
+                  const _MIBCO_HR = {forecourt_attendant:45.79,cashier:45.30,char:34.64};
+                  const _mibcoHr = _MIBCO_HR[(emp.mibco_role||"").toLowerCase()] || 0;
+                  const _mibcoMonthlyMin = _mibcoHr > 0 ? Math.round(_mibcoHr * 45 * (52/12) * 100) / 100 : 0;
+                  const effectiveSalary = isSecurity ? Math.max(emp.salary||0, _areaMin) : isFuelStation && _mibcoMonthlyMin > 0 ? Math.max(emp.salary||0, _mibcoMonthlyMin) : (emp.salary||0);
                   const hr = bceaHourlyRate(effectiveSalary, emp.hourly_rate||null);
                   const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null);
                   const inpStyle = {width:"60px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
@@ -3866,6 +3896,14 @@ function Payroll({live = {}, user = {}}) {
                         {emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid}}>—</span>}
                       </td>
                       <td style={{padding:"10px 12px",color:C.inkMid}}>{fmt(hr)}/hr</td>
+                      {isFuelStation && (
+                        <td style={{padding:"10px 12px"}}>
+                          {emp.mibco_role
+                            ? <span style={{fontSize:10,fontWeight:600,color:"#92400e",background:"#fffbeb",border:"1px solid #fbbf24",borderRadius:5,padding:"2px 6px"}}>{{"forecourt_attendant":"Forecourt","cashier":"Cashier","char":"Char"}[emp.mibco_role]||emp.mibco_role}</span>
+                            : <span style={{color:C.inkMid,fontSize:11}}>—</span>}
+                          {_mibcoHr > 0 && <div style={{fontSize:9,color:"#a16207",marginTop:2}}>min R{_mibcoHr.toFixed(2)}/hr</div>}
+                        </td>
+                      )}
                       {isSecurity && (
                         <td style={{padding:"10px 12px"}}>
                           {(emp.employment_type||"").toLowerCase().replace(/[\s_]/g,"") === "hourlypaid" || (emp.employment_type||"").toLowerCase() === "hourly"
@@ -4164,6 +4202,42 @@ function Payroll({live = {}, user = {}}) {
             );
           })()}
 
+          {/* MIBCO Fuel Station Section — only shown for fuel_station industry */}
+          {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" && (()=>{
+            const MIBCO_ROLES = {forecourt_attendant:"Forecourt Attendant",cashier:"Cashier",char:"Char / Cleaner"};
+            const MIBCO_HR = {forecourt_attendant:45.79,cashier:45.30,char:34.64};
+            const mibcoHr = MIBCO_HR[form.mibcoRole] || 0;
+            const mibcoMonthMin = mibcoHr > 0 ? Math.round(mibcoHr * 45 * (52/12) * 100) / 100 : 0;
+            const belowMibco = form.mibcoRole && form.salary && mibcoMonthMin > 0 && +form.salary < mibcoMonthMin;
+            return (
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#92400e",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>⛽ MIBCO Sector 5 — Fuel Retail (eff. 22 Dec 2025)</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:8}}>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>MIBCO Role</label>
+                    <select value={form.mibcoRole} onChange={e=>setForm(v=>({...v,mibcoRole:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="">-- Select Role --</option>
+                      {Object.entries(MIBCO_ROLES).map(([k,v])=><option key={k} value={k}>{v} (min R{MIBCO_HR[k].toFixed(2)}/hr)</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Health Scheme (Affinity Health via MIBCO)</label>
+                    <div style={{display:"flex",alignItems:"center",gap:10,height:42}}>
+                      <input type="checkbox" id="mibcoScheme" checked={!!form.mibcoSchemeEnrolled} onChange={e=>setForm(v=>({...v,mibcoSchemeEnrolled:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                      <label htmlFor="mibcoScheme" style={{fontSize:12,color:C.ink,cursor:"pointer"}}>Enrolled — Employee: R174/mo deduction · Employer: R90/mo</label>
+                    </div>
+                  </div>
+                </div>
+                {form.mibcoRole && <div style={{padding:"8px 12px",background:belowMibco?"#fff1f2":"#fffbeb",border:`1px solid ${belowMibco?"#fca5a5":"#fbbf24"}`,borderRadius:8,fontSize:12}}>
+                  {belowMibco
+                    ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+form.salary).toLocaleString("en-ZA")} is below the MIBCO minimum for {MIBCO_ROLES[form.mibcoRole]}: <strong>R{mibcoMonthMin.toLocaleString("en-ZA")}/month</strong> (R{mibcoHr.toFixed(2)}/hr × 45h × 4.33 wks). Adjust before saving.</span>
+                    : <span style={{color:"#78350f"}}>✓ {MIBCO_ROLES[form.mibcoRole]} minimum: <strong>R{mibcoMonthMin.toLocaleString("en-ZA")}/month</strong>. Medical Insurance Allowance R85.00/mo added to gross. Health scheme and BC levy applied automatically.</span>
+                  }
+                </div>}
+              </div>
+            );
+          })()}
+
           {/* NBCPSS Private Security Section — only shown for private_security industry */}
           {user?.industry === "private_security" && (()=>{
             const NBCPSS_MIN = {"1_2":{"A":8184,"B":7607,"C":7003,"D":7003,"E":7003},"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
@@ -4283,6 +4357,14 @@ function Payroll({live = {}, user = {}}) {
                       const below=minW>0&&emp.salary<minW;
                       return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#166534",fontWeight:600}}>{below?`⚠️ Below NBCPSS min (R${minW.toLocaleString("en-ZA")})`:`🔒 Grade ${emp.security_grade} · R${minW.toLocaleString("en-ZA")} min`}</div>;
                     })()}
+                    {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" && emp.mibco_role && (()=>{
+                      const MIBCO_HR={forecourt_attendant:45.79,cashier:45.30,char:34.64};
+                      const hr=MIBCO_HR[emp.mibco_role]||0;
+                      const minW=hr>0?Math.round(hr*45*(52/12)*100)/100:0;
+                      const below=minW>0&&emp.salary<minW;
+                      const roleLabel={forecourt_attendant:"Forecourt",cashier:"Cashier",char:"Char"}[emp.mibco_role]||emp.mibco_role;
+                      return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#92400e",fontWeight:600}}>{below?`⚠️ Below MIBCO min (R${minW.toLocaleString("en-ZA")})`:`⛽ ${roleLabel} · R${hr.toFixed(2)}/hr min`}</div>;
+                    })()}
                   </td>
                   <td style={{padding:"13px 14px"}}>{emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid,fontSize:11}}>—</span>}</td>
                   <td style={{padding:"13px 14px",color:C.inkMid}}>{emp.position}</td>
@@ -4295,7 +4377,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"1_2",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"1_2",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                     </div>
                   </td>
@@ -4504,6 +4586,42 @@ function Payroll({live = {}, user = {}}) {
                       ⚠️ {fmt(p.s11fExcessMonthly)}/month above s11F cap — deducted from after-tax income (contribution is still processed in full, no additional PAYE relief on the excess).
                     </div>
                   )}
+                </div>
+              );
+            })()}
+
+            {/* MIBCO Fuel Station Section — edit employee */}
+            {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" && (()=>{
+              const MIBCO_ROLES = {forecourt_attendant:"Forecourt Attendant",cashier:"Cashier",char:"Char / Cleaner"};
+              const MIBCO_HR = {forecourt_attendant:45.79,cashier:45.30,char:34.64};
+              const mibcoHr = MIBCO_HR[editForm.mibcoRole] || 0;
+              const mibcoMonthMin = mibcoHr > 0 ? Math.round(mibcoHr * 45 * (52/12) * 100) / 100 : 0;
+              const belowMibco = editForm.mibcoRole && editForm.salary && mibcoMonthMin > 0 && +editForm.salary < mibcoMonthMin;
+              return (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#92400e",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>⛽ MIBCO Sector 5 — Fuel Retail (eff. 22 Dec 2025)</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:8}}>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>MIBCO Role</label>
+                      <select value={editForm.mibcoRole||""} onChange={e=>setEditForm(v=>({...v,mibcoRole:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="">-- Select Role --</option>
+                        {Object.entries(MIBCO_ROLES).map(([k,v])=><option key={k} value={k}>{v} (min R{MIBCO_HR[k].toFixed(2)}/hr)</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Health Scheme (Affinity Health via MIBCO)</label>
+                      <div style={{display:"flex",alignItems:"center",gap:10,height:42}}>
+                        <input type="checkbox" id="editMibcoScheme" checked={editForm.mibcoSchemeEnrolled!=null?!!editForm.mibcoSchemeEnrolled:true} onChange={e=>setEditForm(v=>({...v,mibcoSchemeEnrolled:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                        <label htmlFor="editMibcoScheme" style={{fontSize:12,color:C.ink,cursor:"pointer"}}>Enrolled — Employee: R174/mo deduction · Employer: R90/mo</label>
+                      </div>
+                    </div>
+                  </div>
+                  {editForm.mibcoRole && <div style={{padding:"8px 12px",background:belowMibco?"#fff1f2":"#fffbeb",border:`1px solid ${belowMibco?"#fca5a5":"#fbbf24"}`,borderRadius:8,fontSize:12,marginBottom:8}}>
+                    {belowMibco
+                      ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+editForm.salary).toLocaleString("en-ZA")} is below the MIBCO minimum for {MIBCO_ROLES[editForm.mibcoRole]}: <strong>R{mibcoMonthMin.toLocaleString("en-ZA")}/month</strong> (R{mibcoHr.toFixed(2)}/hr × 45h × 4.33 wks). Adjust before saving.</span>
+                      : <span style={{color:"#78350f"}}>✓ {MIBCO_ROLES[editForm.mibcoRole]} minimum: <strong>R{mibcoMonthMin.toLocaleString("en-ZA")}/month</strong>. Medical Insurance Allowance R85.00/mo added to gross. Health scheme and BC levy applied automatically.</span>
+                    }
+                  </div>}
                 </div>
               );
             })()}

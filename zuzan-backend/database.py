@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text, Enum, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Date, ForeignKey, Text, Enum, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -191,6 +191,9 @@ class Employee(Base):
     security_area=Column(String,nullable=True)         # "1_2" (metro/urban) or "3" (rural)
     shift_type=Column(String,nullable=True)            # "day", "night", or "rotating"
     special_allowance_type=Column(String,nullable=True) # "none","armed","nkp","control_centre","canine","mobile_supervisor","armed_response"
+    # MIBCO Sector 5 fuel station fields (active when company.industry = 'fuel_station')
+    mibco_role=Column(String,nullable=True)            # "forecourt_attendant" | "cashier" | "char"
+    mibco_scheme_enrolled=Column(Boolean,default=True) # False if employee opted out of health scheme within 60 days
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
     hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
@@ -263,6 +266,10 @@ class Payslip(Base):
     normal_hours=Column(Float,default=0.0)               # actual hours worked this period (hourly employees)
     annual_bonus=Column(Float,default=0.0)               # NBCPSS annual bonus paid this period (taxable)
     payment_date=Column(Date,nullable=True)              # salaried=last day of month; hourly=15th of month
+    # MIBCO Sector 5 fuel station allowances (2026-09)
+    mibco_med_allow=Column(Float,default=0.0)            # Medical Insurance Allowance R19.62/wk → monthly (taxable, to employee)
+    mibco_scheme_employer=Column(Float,default=0.0)      # Employer health scheme contribution (R90/mo Year 2) — employer cost
+    mibco_scheme_employee=Column(Float,default=0.0)      # Employee health scheme deduction (R174/mo) — deducted from net pay
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -1512,6 +1519,12 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS normal_hours FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS annual_bonus FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS payment_date DATE",
+            # ── MIBCO Sector 5 fuel station payroll (2026-09) ─────────────────────
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS mibco_role VARCHAR",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS mibco_scheme_enrolled BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS mibco_med_allow FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS mibco_scheme_employer FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS mibco_scheme_employee FLOAT DEFAULT 0",
             # ── Accountant Practice / multi-client (2026-08) ───────────────────
             # Belt-and-braces alongside the CompanyMembership model + create_all()
             # above — safe no-op if the table already exists.
