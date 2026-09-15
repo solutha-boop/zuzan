@@ -3810,6 +3810,14 @@ function Payroll({live = {}, user = {}}) {
           const init = {};
           employees.forEach(e => { init[e.id] = {otHours:0, sunHours:0, phHours:0}; });
           setOtData(init);
+          // Auto-detect NBCPSS rate area from employees — default to the majority area
+          // so the modal opens showing correct rates without manual user selection
+          const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
+          if (isSec) {
+            const secEmps = employees.filter(e => e.security_grade);
+            const area3Count = secEmps.filter(e => (e.security_area||"1_2") === "3").length;
+            setSecArea(area3Count > 0 && area3Count >= secEmps.length / 2 ? "3" : "1_2");
+          }
           setShowOtModal(true);
         }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Run Payroll</button>
       </div>
@@ -4018,7 +4026,11 @@ function Payroll({live = {}, user = {}}) {
                   // For security employees, effective monthly = max(contracted salary, NBCPSS area+grade minimum)
                   const _NBCPSS = {"1_2":{A:8184,B:7607,C:7003,D:7003,E:7003},"3":{A:7142,B:6726,C:6726,D:6726,E:6726}};
                   const _gradeKey = ((emp.security_grade||"C").toUpperCase().match(/[A-E]/)||["C"])[0];
-                  const _areaRates = _NBCPSS[secArea] || _NBCPSS["1_2"];
+                  // Use the employee's own registered area (emp.security_area), not the
+                  // run-level secArea banner selector.  Fallback to secArea if not set,
+                  // which itself auto-detects from the majority area when the modal opens.
+                  const _empArea = emp.security_area || secArea || "1_2";
+                  const _areaRates = _NBCPSS[_empArea] || _NBCPSS["1_2"];
                   const _areaMin = _areaRates[_gradeKey] || _areaRates["C"];
                   // For fuel station employees, effective monthly = max(contracted salary, MIBCO role minimum)
                   const _MIBCO_HR = {forecourt_attendant:45.79,cashier:45.30,char:34.64};
