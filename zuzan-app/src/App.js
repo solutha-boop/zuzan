@@ -3233,7 +3233,7 @@ function Payroll({live = {}, user = {}}) {
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
   const [secArea, setSecArea] = useState("3"); // NBCPSS rate area: Area 3 only
   const [includeBonus, setIncludeBonus] = useState(false); // NBCPSS annual bonus (December)
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"1_2",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
@@ -3314,7 +3314,7 @@ function Payroll({live = {}, user = {}}) {
           medical_aid_dependants:     form.medicalAidDependants ? +form.medicalAidDependants : 0,
           psira_number:               form.psiraNumber || null,
           security_grade:             form.securityGrade || null,
-          security_area:              form.securityArea || "1_2",
+          security_area:              form.securityArea || "3",
           shift_type:                 form.shiftType || "day",
           special_allowance_type:     form.specialAllowanceType || "none",
           mibco_role:                 form.mibcoRole || null,
@@ -3391,7 +3391,7 @@ function Payroll({live = {}, user = {}}) {
             medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
             psira_number:               editForm.psiraNumber || null,
             security_grade:             editForm.securityGrade || null,
-            security_area:              editForm.securityArea || "1_2",
+            security_area:              editForm.securityArea || "3",
             shift_type:                 editForm.shiftType || "day",
             special_allowance_type:     editForm.specialAllowanceType || "none",
             mibco_role:                 editForm.mibcoRole || null,
@@ -3923,6 +3923,7 @@ function Payroll({live = {}, user = {}}) {
                     if (!from) return;
                     const to   = prompt("Clocking period TO (yyyy-mm-dd):", today);
                     if (!to) return;
+                    const token = localStorage.getItem("zuzan_token");
                     const resp = await fetch(`https://zuzan-backend.onrender.com/clocking/payroll-hours?date_from=${from}&date_to=${to}&daily_threshold=8`, {
                       headers: { Authorization: `Bearer ${token||""}` }
                     });
@@ -4524,7 +4525,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"1_2",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                     </div>
                   </td>
