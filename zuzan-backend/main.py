@@ -244,6 +244,9 @@ _SUB_EXEMPT_PREFIXES = (
     "/v1/",
     "/companies/",   # settings & company profile
     "/api-keys/",
+    "/clocking/kiosk-info",   # public kiosk bootstrap (no JWT)
+    "/clocking/today-kiosk",  # public kiosk attendance poll
+    "/clocking/clock-kiosk",  # public kiosk clock event
 )
 
 class _SubscriptionGateMiddleware:
@@ -318,7 +321,7 @@ class _SubscriptionGateMiddleware:
 # becomes the outermost (first called). SubGate is outermost → sees the
 # request before CORS. 402 responses sent directly from SubGate bypass the
 # CORS _send_with_cors wrapper, so the CORS header is included manually above.
-# # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
+# # # # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live  # disabled — re-enable when PayFast live
 
 @app.get("/health")
 async def health(): return {"status": "ok"}
@@ -358,6 +361,7 @@ from billing import billing_router
 from recurring_invoices import recurring_router
 from credit_notes import credit_notes_router
 from accountant import router as accountant_router
+from clocking import router as clocking_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -398,6 +402,7 @@ app.include_router(billing_router,         prefix="/billing",            tags=["
 app.include_router(recurring_router,       prefix="/recurring-invoices", tags=["Recurring Invoices"])
 app.include_router(credit_notes_router,    prefix="/credit-notes",       tags=["Credit Notes"])
 app.include_router(accountant_router,      prefix="/accountant",          tags=["Accountant"])
+app.include_router(clocking_router,        prefix="/clocking",             tags=["Clocking"])
 
 
 @app.get("/")

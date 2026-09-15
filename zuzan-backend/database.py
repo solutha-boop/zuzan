@@ -1067,6 +1067,22 @@ class BankInterestRequest(Base):
     company     = relationship("Company")
 
 
+class ClockEvent(Base):
+    """Individual clock-in or clock-out swipe for an employee."""
+    __tablename__ = "clock_events"
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    event_type  = Column(String, nullable=False)        # "in" | "out"
+    timestamp   = Column(DateTime, default=datetime.utcnow, nullable=False)
+    method      = Column(String, default="kiosk")       # "kiosk" | "mobile" | "manual"
+    notes       = Column(String, nullable=True)
+    created_by  = Column(Integer, ForeignKey("users.id"), nullable=True)  # manager who added/edited
+    created_at  = Column(DateTime, default=datetime.utcnow)
+    company     = relationship("Company")
+    employee    = relationship("Employee")
+
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
@@ -1575,6 +1591,22 @@ def init_db():
                 updated_at     TIMESTAMP DEFAULT NOW()
             )""",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_service_items_company_code ON service_items (company_id, code)",
+            # ── Clocking system (2026-09) ─────────────────────────────────────────
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS kiosk_token VARCHAR",
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS kiosk_token_created_at TIMESTAMP",
+            """CREATE TABLE IF NOT EXISTS clock_events (
+                id          SERIAL PRIMARY KEY,
+                company_id  INTEGER NOT NULL REFERENCES companies(id),
+                employee_id INTEGER NOT NULL REFERENCES employees(id),
+                event_type  VARCHAR NOT NULL,
+                timestamp   TIMESTAMP NOT NULL DEFAULT NOW(),
+                method      VARCHAR DEFAULT 'kiosk',
+                notes       VARCHAR,
+                created_by  INTEGER REFERENCES users(id),
+                created_at  TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_clock_events_company_ts ON clock_events (company_id, timestamp)",
+            "CREATE INDEX IF NOT EXISTS ix_clock_events_employee ON clock_events (employee_id)",
         ]:
             try:
                 conn.execute(text(sql))

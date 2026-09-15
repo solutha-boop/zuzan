@@ -3925,6 +3925,50 @@ function Payroll({live = {}, user = {}}) {
                     e.target.value = "";   // allow re-upload of same file
                   }}/>
                 </label>
+                <button onClick={async () => {
+                  // ── Load hours directly from the clocking system ──────────
+                  try {
+                    const today     = new Date().toISOString().slice(0,10);
+                    const monthStart= today.slice(0,8) + '01';
+                    const from = prompt("Clocking period FROM (yyyy-mm-dd):", monthStart);
+                    if (!from) return;
+                    const to   = prompt("Clocking period TO (yyyy-mm-dd):", today);
+                    if (!to) return;
+                    const resp = await fetch(`https://zuzan-backend.onrender.com/clocking/payroll-hours?date_from=${from}&date_to=${to}&daily_threshold=8`, {
+                      headers: { Authorization: `Bearer ${token||""}` }
+                    });
+                    if (!resp.ok) throw new Error(await resp.text());
+                    const rows = await resp.json();
+                    let matched = 0, unmatched = [];
+                    const newOt = {...otData};
+                    const newSec = {};
+                    rows.forEach(row => {
+                      const empNum  = String(row.employee_number || "").trim();
+                      const empName = String(row.name || "").trim().toLowerCase();
+                      const emp = employees.find(e =>
+                        (empNum && (String(e.employee_number||"").trim() === empNum || String(e.id) === empNum)) ||
+                        (empName && e.name.toLowerCase() === empName)
+                      );
+                      if (!emp) { unmatched.push(row.name || empNum || "(unknown)"); return; }
+                      matched++;
+                      newOt[emp.id] = {
+                        normalHours: row.normal_hours || 0,
+                        otHours:     row.ot_hours     || 0,
+                        sunHours:    row.sunday_hours || 0,
+                        phHours:     row.ph_hours     || 0,
+                      };
+                      if (row.night_shift_shifts) newSec[emp.id] = { nightShifts: row.night_shift_shifts, specialShifts: 0 };
+                    });
+                    setOtData(newOt);
+                    if (Object.keys(newSec).length) setSecData(prev => ({...prev, ...newSec}));
+                    if (unmatched.length) alert(`Loaded ${matched} employees from clocking.\n\nCould not match ${unmatched.length}: ${unmatched.join(", ")}`);
+                    else alert(`✅ Loaded ${matched} employee${matched!==1?"s":""} from clocking system (${from} → ${to}).`);
+                  } catch(err) {
+                    alert("Could not load from clocking: " + err.message);
+                  }
+                }} style={{background:"#f0fdf4",color:"#16a34a",border:"1px solid #86efac",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  📍 Load from Clocking
+                </button>
                 <span style={{fontSize:11,color:C.inkMid}}>{(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? "Columns: Employee Number · Employee Name · Normal_Hours · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours · Night_Shift_Shifts · Special_Allow_Shifts" : "Columns: Employee Number · Employee Name · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours"}</span>
               </div>
             </div>
