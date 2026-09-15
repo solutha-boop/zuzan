@@ -1294,6 +1294,7 @@ class EmployeeCreate(BaseModel):
     # MIBCO Sector 5 fuel station fields
     mibco_role:                Optional[str]   = None  # "forecourt_attendant" | "cashier" | "char"
     mibco_scheme_enrolled:     Optional[bool]  = True  # False = opted out of health scheme
+    union_subscription:        Optional[float] = 0.0   # monthly union dues (R) — after-tax deduction
 
 class EmployeeUpdate(BaseModel):
     position:                  Optional[str] = None
@@ -1329,6 +1330,7 @@ class EmployeeUpdate(BaseModel):
     # MIBCO Sector 5 fuel station fields
     mibco_role:                Optional[str]   = None
     mibco_scheme_enrolled:     Optional[bool]  = None
+    union_subscription:        Optional[float] = None  # monthly union dues (R)
 
 
 def _employee_dict(e: Employee) -> dict:
@@ -1370,6 +1372,7 @@ def _employee_dict(e: Employee) -> dict:
         # MIBCO Sector 5 fuel station
         "mibco_role":             getattr(e, "mibco_role", None),
         "mibco_scheme_enrolled":  bool(getattr(e, "mibco_scheme_enrolled", True)),
+        "union_subscription":     getattr(e, "union_subscription", 0.0) or 0.0,
     }
 
 
@@ -1438,6 +1441,7 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         special_allowance_type=data.special_allowance_type or "none",
         mibco_role=data.mibco_role or None,
         mibco_scheme_enrolled=data.mibco_scheme_enrolled if data.mibco_scheme_enrolled is not None else True,
+        union_subscription=data.union_subscription or 0.0,
     )
     db.add(emp)
     db.commit()

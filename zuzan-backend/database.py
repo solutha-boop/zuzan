@@ -194,6 +194,7 @@ class Employee(Base):
     # MIBCO Sector 5 fuel station fields (active when company.industry = 'fuel_station')
     mibco_role=Column(String,nullable=True)            # "forecourt_attendant" | "cashier" | "char"
     mibco_scheme_enrolled=Column(Boolean,default=True) # False if employee opted out of health scheme within 60 days
+    union_subscription=Column(Float,default=0.0)        # monthly union dues (e.g. POPCRU R35/mo) — after-tax deduction
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
     hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
@@ -270,6 +271,13 @@ class Payslip(Base):
     mibco_med_allow=Column(Float,default=0.0)            # Medical Insurance Allowance R19.62/wk → monthly (taxable, to employee)
     mibco_scheme_employer=Column(Float,default=0.0)      # Employer health scheme contribution (R90/mo Year 2) — employer cost
     mibco_scheme_employee=Column(Float,default=0.0)      # Employee health scheme deduction (R174/mo) — deducted from net pay
+    # NBCPSS prescribed provident, medical aid, uniform allowance, union subscription (2026-09)
+    nbcpss_provident_employee=Column(Float,default=0.0)  # PSSPF employee 7.5% of gross
+    nbcpss_provident_employer=Column(Float,default=0.0)  # PSSPF employer 7.5% of gross
+    nbcpss_medical_employee=Column(Float,default=0.0)    # PSSSBC prescribed medical aid employee R197/mo
+    nbcpss_medical_employer=Column(Float,default=0.0)    # PSSSBC prescribed medical aid employer R197/mo
+    uniform_allowance=Column(Float,default=0.0)          # R150/mo non-taxable uniform reimbursement (s10(1)(nA))
+    union_subscription_ded=Column(Float,default=0.0)     # union dues deducted from net pay (POPCRU, SATAWU, etc.)
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -1607,6 +1615,14 @@ def init_db():
             )""",
             "CREATE INDEX IF NOT EXISTS ix_clock_events_company_ts ON clock_events (company_id, timestamp)",
             "CREATE INDEX IF NOT EXISTS ix_clock_events_employee ON clock_events (employee_id)",
+            # ── NBCPSS provident fund, medical insurance, uniform allowance, union subscription (2026-09) ──
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS union_subscription FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS nbcpss_provident_employee FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS nbcpss_provident_employer FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS nbcpss_medical_employee FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS nbcpss_medical_employer FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS uniform_allowance FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS union_subscription_ded FLOAT DEFAULT 0",
         ]:
             try:
                 conn.execute(text(sql))

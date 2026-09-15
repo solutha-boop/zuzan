@@ -2667,11 +2667,12 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               </>
             )}
             {/* NBCPSS security allowances — only rendered if present in payslip */}
-            {(p.night_shift_allowance > 0 || p.special_allowance_amount > 0 || p.cleaning_allowance > 0) && (
+            {(p.night_shift_allowance > 0 || p.special_allowance_amount > 0 || p.cleaning_allowance > 0 || p.uniform_allowance > 0) && (
               <>
                 {p.night_shift_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🌙 Night Shift Allowance ({p.night_shift_shifts} shifts × R8.00)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.night_shift_allowance)}</span></div>}
                 {p.special_allowance_amount > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🔒 Special Duty Allowance ({p.special_allowance_shifts} shifts × R10.50)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.special_allowance_amount)}</span></div>}
                 {p.cleaning_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🧹 Cleaning Allowance</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.cleaning_allowance)}</span></div>}
+                {(p.uniform_allowance > 0) && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>👕 Uniform Allowance <span style={{fontSize:11,color:C.inkDim}}>(non-taxable — s10(1)(nA))</span></span><span style={{fontWeight:600,color:C.green}}>{fmt(p.uniform_allowance)}</span></div>}
                 <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}><span style={{color:C.inkMid}}>Taxable Gross (incl. Security Allowances)</span><span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span></div>
               </>
             )}
@@ -2690,6 +2691,9 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
             {[
               p.s11fDeduction > 0 && ["Pension / Provident (s11F deductible)", p.pensionEmployee || p.pension_employee, C.red],
               p.medicalAidEmployee > 0 && ["Medical Aid (Employee Contribution)", p.medicalAidEmployee || p.medical_aid_employee_ded, C.red],
+              (p.nbcpss_provident_employee > 0 || p.nbcpssProvidentEmployee > 0) && ["🔒 PSSPF Provident Fund (NBCPSS — 7.5%)", p.nbcpss_provident_employee||p.nbcpssProvidentEmployee, C.red],
+              (p.nbcpss_medical_employee > 0 || p.nbcpssMedicalEmployee > 0) && ["🔒 PSSSBC Medical Aid (NBCPSS Prescribed)", p.nbcpss_medical_employee||p.nbcpssMedicalEmployee, C.red],
+              (p.union_subscription_ded > 0 || p.unionSubscriptionDed > 0) && ["🤝 Union Subscription", p.union_subscription_ded||p.unionSubscriptionDed, C.red],
               ["PAYE (Income Tax)", p.paye, C.red],
               p.medicalTaxCredit > 0 && ["  ↳ Medical Tax Credit (s6A)", -(p.medicalTaxCredit || p.medical_tax_credit), C.green],
               ["UIF (Employee Contribution)", p.uifEmployee, C.gold],
@@ -2725,6 +2729,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               (p.medicalAidEmployer||p.medical_aid_employer_con) > 0 && ["Medical Aid (Employer Contribution)", p.medicalAidEmployer||p.medical_aid_employer_con, C.blue],
               ["UIF (Employer Contribution)", p.uifEmployer, C.blue],
               ["SDL (Skills Development Levy)", p.sdl, C.blue],
+              (p.nbcpss_provident_employer > 0 || p.nbcpssProvidentEmployer > 0) && ["🔒 PSSPF Provident Fund (Employer — 7.5%)", p.nbcpss_provident_employer||p.nbcpssProvidentEmployer, "#c2410c"],
+              (p.nbcpss_medical_employer > 0 || p.nbcpssMedicalEmployer > 0) && ["🔒 PSSSBC Medical Aid (Employer)", p.nbcpss_medical_employer||p.nbcpssMedicalEmployer, "#c2410c"],
               p.bc_levy_employer > 0 && ["NBCPSS BC Levy (Bargaining Council)", p.bc_levy_employer, "#c2410c"],
               p.psira_levy_employer > 0 && ["PSIRA Registration Levy", p.psira_levy_employer, "#c2410c"],
               (p.mibco_scheme_employer > 0 || p.mibcoSchemeEmployer > 0) && ["⛽ MIBCO Health Scheme (Employer — Affinity Health)", p.mibco_scheme_employer||p.mibcoSchemeEmployer, "#92400e"],
@@ -3233,7 +3239,7 @@ function Payroll({live = {}, user = {}}) {
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
   const [secArea, setSecArea] = useState("3"); // NBCPSS rate area: Area 3 only
   const [includeBonus, setIncludeBonus] = useState(false); // NBCPSS annual bonus (December)
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true,unionSubscription:0});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
@@ -3319,6 +3325,7 @@ function Payroll({live = {}, user = {}}) {
           special_allowance_type:     form.specialAllowanceType || "none",
           mibco_role:                 form.mibcoRole || null,
           mibco_scheme_enrolled:      form.mibcoSchemeEnrolled ?? true,
+          union_subscription:         form.unionSubscription || 0,
         }),
       });
       if (live && live.reload) live.reload();
@@ -3396,6 +3403,7 @@ function Payroll({live = {}, user = {}}) {
             special_allowance_type:     editForm.specialAllowanceType || "none",
             mibco_role:                 editForm.mibcoRole || null,
             mibco_scheme_enrolled:      editForm.mibcoSchemeEnrolled ?? true,
+            union_subscription:         editForm.unionSubscription || 0,
           }),
         });
         if (live && live.reload) live.reload();
@@ -4129,7 +4137,21 @@ function Payroll({live = {}, user = {}}) {
           </div>
           <div style={{marginTop:16,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <div style={{fontSize:12,color:C.inkMid}}>EMP201 generated · Payslips ready · SARS eFiling export ready</div>
-            <button onClick={()=>setShowBatch(true)} style={{background:C.ink,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download Payment Files</button>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={async()=>{
+                const period=new Date().toISOString().slice(0,7);
+                try{
+                  const resp=await fetch(`${API_URL}/payroll/payslips/${period}/download-all`,{headers:{Authorization:`Bearer ${localStorage.getItem("token")}`}});
+                  if(!resp.ok){console.warn("Download failed",resp.status);return;}
+                  const blob=await resp.blob();
+                  const a=document.createElement("a");
+                  a.href=URL.createObjectURL(blob);
+                  a.download=`payslips_${period}.zip`;
+                  a.click();
+                }catch(err){console.warn("Payslip ZIP download failed:",err.message);}
+              }} style={{background:C.accentLt,color:C.accent,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download All Payslips</button>
+              <button onClick={()=>setShowBatch(true)} style={{background:C.ink,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download Payment Files</button>
+            </div>
           </div>
         </div>
       )}
@@ -4436,6 +4458,10 @@ function Payroll({live = {}, user = {}}) {
                       <option value="mobile_supervisor">Mobile Supervisor (R10.50/shift)</option>
                     </select>
                   </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Union Subscription (R/month)</label>
+                    <input type="number" min="0" step="0.01" placeholder="0.00" value={form.unionSubscription||""} onChange={e=>setForm(v=>({...v,unionSubscription:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  </div>
                 </div>
                 {form.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12}}>
                   {belowMin
@@ -4529,7 +4555,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,unionSubscription:emp.union_subscription||0});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                     </div>
                   </td>
@@ -4823,6 +4849,10 @@ function Payroll({live = {}, user = {}}) {
                         <option value="canine">Canine / Dog Handler (R10.50/shift)</option>
                         <option value="mobile_supervisor">Mobile Supervisor (R10.50/shift)</option>
                       </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Union Subscription (R/month)</label>
+                      <input type="number" min="0" step="0.01" placeholder="0.00" value={editForm.unionSubscription||""} onChange={e=>setEditForm(v=>({...v,unionSubscription:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                     </div>
                   </div>
                   {editForm.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12,marginBottom:8}}>

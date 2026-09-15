@@ -231,6 +231,9 @@ NBCPSS_PRESCRIBED_HOURS         = 208.0   # ordinary hours per month (48 h/week 
 NBCPSS_BC_LEVY                  = 7.00    # R/employee/month — employer pays to NBCPSS
 NBCPSS_PSIRA_FEE                = 4.00    # R/SO/month — employer PSIRA registration fee
 NBCPSS_PROVIDENT_RATE           = 0.075   # 7.5% each (employer + employee) — PSSPF
+NBCPSS_MEDICAL_PRESCRIBED_EMP   = 197.00  # R/month — PSSSBC prescribed medical aid (employee)
+NBCPSS_MEDICAL_PRESCRIBED_EMPR  = 197.00  # R/month — PSSSBC prescribed medical aid (employer)
+NBCPSS_UNIFORM_ALLOWANCE        = 150.00  # R/month non-taxable uniform reimbursement (s10(1)(nA))
 NBCPSS_VALID_UNTIL              = "28 February 2027"
 
 NBCPSS_SPECIAL_CATEGORIES = {
@@ -437,6 +440,7 @@ def calc_payroll(
     mibco_role: str = None,              # "forecourt_attendant" | "cashier" | "char"
     is_fuel_station: bool = False,       # True → apply MIBCO med allow + scheme
     mibco_scheme_enrolled: bool = False, # True → deduct employee scheme + add employer cost
+    union_subscription: float = 0.0,     # monthly union dues (POPCRU, SATAWU, etc.) — after-tax deduction
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -484,6 +488,19 @@ def calc_payroll(
     cleaning_allow = NBCPSS_CLEANING_ALLOWANCE if is_security else 0.0
     bc_levy_emp  = NBCPSS_BC_LEVY  if is_security else 0.0   # employer cost only
     psira_levy   = NBCPSS_PSIRA_FEE if is_security else 0.0  # employer cost only
+    # NBCPSS prescribed provident fund (PSSPF): 7.5% employee + 7.5% employer on gross
+    # Note: treated as after-tax here (employee claims s11F relief on own tax return);
+    # companies that already configure pension_fund_employee/employer_pct for PSSPF should
+    # set those fields and leave this auto-contribution to avoid double-deducting.
+    nbcpss_prov_emp  = round(gross_monthly * NBCPSS_PROVIDENT_RATE, 2) if is_security else 0.0
+    nbcpss_prov_empr = round(gross_monthly * NBCPSS_PROVIDENT_RATE, 2) if is_security else 0.0
+    # NBCPSS prescribed medical aid (PSSSBC scheme)
+    nbcpss_med_emp   = NBCPSS_MEDICAL_PRESCRIBED_EMP  if is_security else 0.0
+    nbcpss_med_empr  = NBCPSS_MEDICAL_PRESCRIBED_EMPR if is_security else 0.0
+    # Uniform allowance: non-taxable reimbursement — NOT in taxable_gross, added directly to net pay
+    uniform_allow    = NBCPSS_UNIFORM_ALLOWANCE if is_security else 0.0
+    # Union subscription: after-tax deduction from net pay
+    union_sub        = union_subscription if union_subscription else 0.0
     # NBCPSS minimum wage warning (does not modify pay — just a flag)
     nbcpss_min   = nbcpss_minimum(security_grade, security_area) if is_security else 0.0
     below_min    = is_security and nbcpss_min > 0 and gross_monthly < nbcpss_min
@@ -570,11 +587,19 @@ def calc_payroll(
     sdl = taxable_gross * SDL_RATE if sdl_applicable else 0
 
     # ── Net pay: cash the employee receives ───────────────────────────────────
-    # MIBCO scheme employee deduction treated as a compulsory after-tax deduction (like medical aid)
-    net_pay = taxable_gross - paye_after_mtc - uif_employee - pension_employee_monthly - medical_aid_employee - mibco_scheme_empe
+    # MIBCO/NBCPSS deductions are compulsory after-tax deductions; uniform allowance is a non-taxable addition.
+    net_pay = (taxable_gross
+               - paye_after_mtc - uif_employee
+               - pension_employee_monthly - medical_aid_employee
+               - mibco_scheme_empe
+               - nbcpss_prov_emp - nbcpss_med_emp - union_sub
+               + uniform_allow)
 
     # ── Total cost to employer ────────────────────────────────────────────────
-    total_cost = taxable_gross + uif_employer + sdl + pension_employer_monthly + medical_aid_employer + bc_levy_emp + psira_levy + mibco_scheme_empr
+    total_cost = (taxable_gross + uif_employer + sdl
+                  + pension_employer_monthly + medical_aid_employer
+                  + bc_levy_emp + psira_levy + mibco_scheme_empr
+                  + nbcpss_prov_empr + nbcpss_med_empr + uniform_allow)
 
     return {
         "gross":                  round(gross_monthly, 2),
@@ -598,17 +623,23 @@ def calc_payroll(
         "total_cost":             round(total_cost, 2),
         "tax_year":               tax_year or CURRENT_TAX_YEAR,
         # NBCPSS security fields
-        "night_shift_shifts":     night_shift_shifts,
-        "night_shift_allowance":  round(night_allow, 2),
-        "special_allowance_shifts": special_allowance_shifts,
-        "special_allowance_amount": round(special_allow, 2),
-        "cleaning_allowance":     round(cleaning_allow, 2),
-        "bc_levy_employer":       round(bc_levy_emp, 2),
-        "psira_levy_employer":    round(psira_levy, 2),
-        "nbcpss_minimum":         nbcpss_min,
-        "below_nbcpss_minimum":   below_min,
-        "normal_hours":           normal_hours or 0.0,
-        "annual_bonus":           round(annual_bonus, 2),
+        "night_shift_shifts":         night_shift_shifts,
+        "night_shift_allowance":      round(night_allow, 2),
+        "special_allowance_shifts":   special_allowance_shifts,
+        "special_allowance_amount":   round(special_allow, 2),
+        "cleaning_allowance":         round(cleaning_allow, 2),
+        "bc_levy_employer":           round(bc_levy_emp, 2),
+        "psira_levy_employer":        round(psira_levy, 2),
+        "nbcpss_provident_employee":  round(nbcpss_prov_emp, 2),
+        "nbcpss_provident_employer":  round(nbcpss_prov_empr, 2),
+        "nbcpss_medical_employee":    round(nbcpss_med_emp, 2),
+        "nbcpss_medical_employer":    round(nbcpss_med_empr, 2),
+        "uniform_allowance":          round(uniform_allow, 2),
+        "union_subscription_ded":     round(union_sub, 2),
+        "nbcpss_minimum":             nbcpss_min,
+        "below_nbcpss_minimum":       below_min,
+        "normal_hours":               normal_hours or 0.0,
+        "annual_bonus":               round(annual_bonus, 2),
         # MIBCO Sector 5 fuel station fields
         "mibco_role":             mibco_role,
         "mibco_hourly_minimum":   round(mibco_hourly_min, 2),
@@ -718,6 +749,7 @@ async def calculate_all(
             mibco_role=mibco_role_val,
             is_fuel_station=is_fuel_station_co and bool(mibco_role_val),
             mibco_scheme_enrolled=mibco_enrolled_val,
+            union_subscription=getattr(emp, "union_subscription", 0.0) or 0.0,
         )
         c["employee_id"]           = emp.id
         c["employee_name"]         = f"{emp.first_name} {emp.last_name}"
@@ -837,6 +869,7 @@ async def run_payroll(
         # MIBCO Sector 5 fields
         mibco_role_val     = getattr(emp, "mibco_role", None)
         mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
+        union_sub_val      = getattr(emp, "union_subscription", 0.0) or 0.0
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
@@ -863,6 +896,7 @@ async def run_payroll(
             mibco_role=mibco_role_val,
             is_fuel_station=is_fuel_station_co and bool(mibco_role_val),
             mibco_scheme_enrolled=mibco_enrolled_val,
+            union_subscription=union_sub_val,
         )
         ot = c["overtime"]
         payslip = Payslip(
@@ -902,6 +936,12 @@ async def run_payroll(
             mibco_med_allow=c["mibco_med_allow"],
             mibco_scheme_employer=c["mibco_scheme_employer"],
             mibco_scheme_employee=c["mibco_scheme_employee"],
+            nbcpss_provident_employee=c["nbcpss_provident_employee"],
+            nbcpss_provident_employer=c["nbcpss_provident_employer"],
+            nbcpss_medical_employee=c["nbcpss_medical_employee"],
+            nbcpss_medical_employer=c["nbcpss_medical_employer"],
+            uniform_allowance=c["uniform_allowance"],
+            union_subscription_ded=c["union_subscription_ded"],
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post
@@ -937,6 +977,173 @@ async def run_payroll(
         "payslips_created": len(created),
         "message":          f"Payroll processed for {len(created)} employees.",
     }
+
+
+# ── Mass payslip download — ZIP of HTML payslips ─────────────────────────────
+
+def _fmt_zar(v: float) -> str:
+    return f"R {v:,.2f}".replace(",", " ")  # narrow no-break space as thousands sep
+
+def _payslip_html(payslip, emp, company_name: str) -> str:
+    """Generate a print-ready HTML payslip for one employee/period."""
+    p = payslip
+    ot_hours   = (p.overtime_hours or 0) + (p.sunday_hours or 0) + (p.ph_hours or 0)
+    has_ot     = ot_hours > 0
+    has_nbcpss = (p.night_shift_allowance or 0) + (p.special_allowance_amount or 0) + (p.cleaning_allowance or 0) > 0
+    has_provident  = (p.nbcpss_provident_employee or 0) > 0
+    has_medical    = (p.nbcpss_medical_employee or 0) > 0
+    has_uniform    = (p.uniform_allowance or 0) > 0
+    has_union      = (p.union_subscription_ded or 0) > 0
+    has_pension    = (p.pension_employee or 0) > 0
+    has_medical_aid= (p.medical_aid_employee_ded or 0) > 0
+    has_bonus      = (p.annual_bonus or 0) > 0
+    taxable_gross  = p.gross_salary + (p.overtime_hours or 0)*0 + (p.overtime_amount or 0) + \
+                     (p.sunday_amount or 0) + (p.ph_amount or 0) + \
+                     (p.night_shift_allowance or 0) + (p.special_allowance_amount or 0) + \
+                     (p.cleaning_allowance or 0) + (p.annual_bonus or 0)
+
+    def row(label, value, color="#222", bold=False):
+        fw = "font-weight:700;" if bold else ""
+        return f'<tr><td style="padding:5px 8px;color:#555;">{label}</td><td style="padding:5px 8px;text-align:right;{fw}color:{color};">{_fmt_zar(value)}</td></tr>'
+
+    earnings_rows = f'<tr><td style="padding:5px 8px;color:#555;">Basic Salary</td><td style="padding:5px 8px;text-align:right;">{_fmt_zar(p.gross_salary)}</td></tr>'
+    if has_ot:
+        if p.overtime_amount: earnings_rows += row(f"Overtime ({p.overtime_hours or 0}h × 1.5×)", p.overtime_amount or 0, "#16a34a")
+        if p.sunday_amount:   earnings_rows += row(f"Sunday Time ({p.sunday_hours or 0}h × 2×)", p.sunday_amount or 0, "#16a34a")
+        if p.ph_amount:       earnings_rows += row(f"Public Holiday ({p.ph_hours or 0}h × 2×)", p.ph_amount or 0, "#16a34a")
+    if has_nbcpss:
+        if p.night_shift_allowance:   earnings_rows += row(f"Night Shift Allowance ({int(p.night_shift_shifts or 0)} shifts × R8.00)", p.night_shift_allowance, "#16a34a")
+        if p.special_allowance_amount: earnings_rows += row(f"Special Duty Allowance ({int(p.special_allowance_shifts or 0)} shifts × R10.50)", p.special_allowance_amount, "#16a34a")
+        if p.cleaning_allowance:      earnings_rows += row("Cleaning Allowance (NBCPSS)", p.cleaning_allowance, "#16a34a")
+    if has_bonus:
+        earnings_rows += row("Annual Bonus (NBCPSS — 1 week's pay)", p.annual_bonus, "#16a34a")
+    if has_uniform:
+        earnings_rows += row("Uniform Allowance (non-taxable — s10(1)(nA))", p.uniform_allowance or 0, "#16a34a")
+    earnings_rows += row("Taxable Gross", taxable_gross, "#15803d", bold=True)
+
+    deductions_rows = ""
+    if has_pension:
+        deductions_rows += row(f"Pension / Provident Fund (s11F)", p.pension_employee or 0, "#dc2626")
+    if has_medical_aid:
+        deductions_rows += row("Medical Aid (Employee)", p.medical_aid_employee_ded or 0, "#dc2626")
+    if has_provident:
+        deductions_rows += row("PSSPF Provident Fund (NBCPSS — 7.5%)", p.nbcpss_provident_employee or 0, "#dc2626")
+    if has_medical:
+        deductions_rows += row("PSSSBC Medical Aid (NBCPSS Prescribed)", p.nbcpss_medical_employee or 0, "#dc2626")
+    if has_union:
+        deductions_rows += row("Union Subscription", p.union_subscription_ded or 0, "#dc2626")
+    deductions_rows += row("PAYE (Income Tax)", p.paye or 0, "#dc2626")
+    if p.medical_tax_credit:
+        deductions_rows += row("  ↳ Medical Tax Credit (s6A)", -(p.medical_tax_credit or 0), "#16a34a")
+    deductions_rows += row("UIF (Employee — 1%)", p.uif_employee or 0, "#b45309")
+
+    employer_rows = ""
+    if p.pension_employer:    employer_rows += row("Pension / Provident (Employer)", p.pension_employer or 0, "#1d4ed8")
+    if p.medical_aid_employer_con: employer_rows += row("Medical Aid (Employer)", p.medical_aid_employer_con or 0, "#1d4ed8")
+    if has_provident:         employer_rows += row("PSSPF Provident Fund (Employer — 7.5%)", p.nbcpss_provident_employer or 0, "#1d4ed8")
+    if has_medical:           employer_rows += row("PSSSBC Medical Aid (Employer)", p.nbcpss_medical_employer or 0, "#1d4ed8")
+    employer_rows += row("UIF (Employer — 1%)", p.uif_employer or 0, "#1d4ed8")
+    employer_rows += row("SDL (Skills Development Levy — 1%)", p.sdl or 0, "#1d4ed8")
+    if p.bc_levy_employer:    employer_rows += row("NBCPSS BC Levy", p.bc_levy_employer or 0, "#c2410c")
+    if p.psira_levy_employer: employer_rows += row("PSIRA Registration Levy", p.psira_levy_employer or 0, "#c2410c")
+
+    emp_name = f"{emp.first_name} {emp.last_name}" if emp else "Unknown"
+    emp_num  = getattr(emp, "employee_number", "") or ""
+    position = getattr(emp, "position", "") or ""
+    dept     = getattr(emp, "department", "") or ""
+    id_num   = getattr(emp, "id_number", "") or ""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Payslip — {emp_name} — {p.period}</title>
+<style>
+  body{{font-family:Arial,sans-serif;font-size:13px;color:#222;margin:0;padding:20px;}}
+  .header{{background:#1e3a5f;color:#fff;padding:16px 20px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;}}
+  .header h1{{margin:0;font-size:18px;}}
+  .header .period{{font-size:12px;opacity:.8;}}
+  .card{{border:1px solid #e5e7eb;border-radius:0 0 6px 6px;overflow:hidden;}}
+  .emp-info{{background:#f8fafc;padding:12px 20px;display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;font-size:12px;border-bottom:1px solid #e5e7eb;}}
+  .emp-info span{{color:#555;}}  .emp-info strong{{color:#222;}}
+  table{{width:100%;border-collapse:collapse;}}
+  .section-header{{background:#f1f5f9;padding:6px 8px;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#475569;border-top:1px solid #e5e7eb;}}
+  .net-pay{{background:#ecfdf5;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;border-top:2px solid #16a34a;}}
+  .net-pay .label{{font-size:11px;color:#555;}}  .net-pay .amount{{font-size:26px;font-weight:800;color:#15803d;font-family:Georgia,serif;}}
+  .total-row td{{font-weight:700;border-top:1px solid #cbd5e1;}}
+  .footer{{font-size:10px;color:#94a3b8;text-align:center;padding:10px;margin-top:8px;}}
+  @media print{{body{{padding:0;}}.card{{border:none;}}.footer{{page-break-after:always;}}}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div><h1>🏢 {company_name}</h1><div class="period">Payslip for period: <strong>{p.period}</strong></div></div>
+  <div style="text-align:right;font-size:12px;">Generated by ZuZan Payroll<br/><span style="opacity:.7;">CONFIDENTIAL</span></div>
+</div>
+<div class="card">
+  <div class="emp-info">
+    <div><span>Employee: </span><strong>{emp_name}</strong></div>
+    <div><span>Emp. No.: </span><strong>{emp_num}</strong></div>
+    <div><span>Position: </span><strong>{position}</strong></div>
+    <div><span>Department: </span><strong>{dept}</strong></div>
+    <div><span>ID Number: </span><strong>{id_num}</strong></div>
+    <div><span>Payment Date: </span><strong>{str(p.payment_date or p.period)}</strong></div>
+  </div>
+  <div class="section-header">Earnings</div>
+  <table>{earnings_rows}</table>
+  <div class="section-header">Deductions</div>
+  <table>{deductions_rows}</table>
+  <div class="net-pay">
+    <div><div class="label">NET PAY THIS PERIOD</div><div style="font-size:11px;color:#555;">Amount payable to employee</div></div>
+    <div class="amount">{_fmt_zar(p.net_pay or 0)}</div>
+  </div>
+  <div class="section-header">Employer Contributions (for information only)</div>
+  <table>{employer_rows}<tr class="total-row"><td style="padding:6px 8px;">Total Cost to Employer</td><td style="padding:6px 8px;text-align:right;">{_fmt_zar(p.total_cost or 0)}</td></tr></table>
+</div>
+<div class="footer">This payslip was generated by ZuZan (zuzan.co.za). PAYE calculated per SARS tax tables 2026/2027. UIF: 1% employee + 1% employer. SDL: 1% if annual payroll ≥ R500,000.</div>
+</body></html>"""
+
+
+@router.get("/payslips/{period}/download-all")
+def download_all_payslips(
+    period: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return a ZIP archive of HTML payslips for every employee in the given period."""
+    import io, zipfile
+    from database import Employee as EmpModel, Company as CompanyModel
+
+    payslips = (
+        db.query(Payslip)
+        .join(EmpModel, Payslip.employee_id == EmpModel.id)
+        .filter(EmpModel.company_id == current_user.company_id, Payslip.period == period)
+        .all()
+    )
+    if not payslips:
+        raise HTTPException(status_code=404, detail=f"No payslips found for period {period}")
+
+    company = db.query(CompanyModel).filter_by(id=current_user.company_id).first()
+    company_name = getattr(company, "name", "Company") or "Company"
+
+    emp_map = {
+        e.id: e
+        for e in db.query(EmpModel).filter(EmpModel.company_id == current_user.company_id).all()
+    }
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in payslips:
+            emp = emp_map.get(p.employee_id)
+            emp_name = f"{emp.first_name}_{emp.last_name}" if emp else f"emp_{p.employee_id}"
+            html = _payslip_html(p, emp, company_name)
+            zf.writestr(f"payslip_{emp_name}_{period}.html", html.encode("utf-8"))
+
+    buf.seek(0)
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="payslips_{period}.zip"'},
+    )
 
 
 # ── IRP5 / EMP501 Annual Returns ──────────────────────────────────────────────
