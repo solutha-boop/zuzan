@@ -36,7 +36,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: clocking system — kiosk/mobile/manager app (clock.html), FastAPI router (clocking.py), Load from Clocking button in OT modal; fix: NBCPSS OT modal auto-detects majority security_area on open + each employee row now uses own area (Area 3 rates correct by default) [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: clocking system (clock.html + clocking.py + Load from Clocking); fix: NBCPSS Area 3 rates only — removed Area 1&2 from all rate tables (frontend + backend), removed area selector UI [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main

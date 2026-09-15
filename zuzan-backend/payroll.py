@@ -221,7 +221,6 @@ BCEA_MAX_OT_WEEKLY   = 10       # max overtime hours per week (s10)
 #   Vanderbijlpark, Vereeniging, Westonaria, Wonderboom, Wynberg.
 # Area 3: All other magisterial districts.
 NBCPSS_MINIMUM_MONTHLY = {
-    "1_2": {"A": 8184.00, "B": 7607.00, "C": 7003.00, "D": 7003.00, "E": 7003.00},
     "3":   {"A": 7142.00, "B": 6726.00, "C": 6726.00, "D": 6726.00, "E": 6726.00},
 }
 NBCPSS_NIGHT_SHIFT_PER_SHIFT    = 8.00    # R/shift (effective 1 March 2026)
@@ -293,12 +292,11 @@ def mibco_minimum_hourly(role: str) -> float:
     return MIBCO_SECTOR5_HOURLY.get((role or "").lower(), 0.0)
 
 
-def nbcpss_minimum(grade: str, area: str) -> float:
-    """Return the NBCPSS minimum monthly salary for a given grade and area.
-    Grade must be A–E; area must be '1_2' or '3'.  Returns 0 if not found."""
+def nbcpss_minimum(grade: str, area: str = None) -> float:
+    """Return the NBCPSS minimum monthly salary for a given grade.
+    Area 3 rates only (Area 1&2 removed).  Returns 0 if grade not found."""
     g = (grade or "").upper()
-    a = area or "1_2"
-    return NBCPSS_MINIMUM_MONTHLY.get(a, {}).get(g, 0.0)
+    return NBCPSS_MINIMUM_MONTHLY.get("3", {}).get(g, 0.0)
 
 
 def bcea_hourly_rate(gross_monthly: float, explicit_hourly_rate: float = None, is_security: bool = False) -> float:
@@ -693,7 +691,7 @@ async def calculate_all(
 
     for emp in employees:
         sec_grade = getattr(emp, "security_grade", None)
-        sec_area  = getattr(emp, "security_area", None) or "1_2"
+        sec_area  = "3"
         is_sec    = is_security_co and bool(sec_grade)
         mibco_role_val     = getattr(emp, "mibco_role", None)
         mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
@@ -824,7 +822,7 @@ async def run_payroll(
         ot_entry  = ot_map.get(emp.id, OvertimeEntry(employee_id=emp.id))
         sec_entry = sec_map.get(emp.id, SecurityAllowanceEntry(employee_id=emp.id))
         sec_grade = getattr(emp, "security_grade", None)
-        sec_area  = data.area_override or getattr(emp, "security_area", None) or "1_2"
+        sec_area  = "3"
         is_sec    = is_security_co and bool(sec_grade)
         # Annual bonus: gross × 12 / 52 (1 week's pay) per NBCPSS Main Agreement, due in December
         emp_bonus = round(emp.gross_salary * 12 / 52, 2) if (data.include_annual_bonus and is_sec) else 0.0
