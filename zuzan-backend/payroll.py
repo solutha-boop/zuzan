@@ -301,15 +301,21 @@ def nbcpss_minimum(grade: str, area: str) -> float:
     return NBCPSS_MINIMUM_MONTHLY.get(a, {}).get(g, 0.0)
 
 
-def bcea_hourly_rate(gross_monthly: float, explicit_hourly_rate: float = None) -> float:
+def bcea_hourly_rate(gross_monthly: float, explicit_hourly_rate: float = None, is_security: bool = False) -> float:
     """
     Return the hourly rate used for BCEA overtime calculations.
     Explicit hourly_rate takes priority (hourly employees).
-    Otherwise derived from gross monthly ÷ (45 h/week × 52/12 weeks).
+    Otherwise derived from gross monthly ÷ prescribed monthly hours:
+      - NBCPSS security employees (audit fix 2026-09-16 — NBCPSS_PRESCRIBED_HOURS
+        was defined but never actually consumed anywhere, so security employees'
+        implied hourly rate was silently computed on the general 45h/week BCEA
+        default instead): 208 h/month (48 h/week × 52/12, NBCPSS Main Agreement).
+      - all other employees: 195 h/month (45 h/week × 52/12, BCEA s9 default).
     """
     if explicit_hourly_rate:
         return explicit_hourly_rate
-    return gross_monthly / (BCEA_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH)
+    monthly_hours = NBCPSS_PRESCRIBED_HOURS if is_security else (BCEA_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH)
+    return gross_monthly / monthly_hours
 
 
 def calc_overtime(
@@ -318,15 +324,19 @@ def calc_overtime(
     sunday_hours: float = 0,
     ph_hours: float = 0,
     explicit_hourly_rate: float = None,
+    is_security: bool = False,
 ) -> dict:
     """
     Calculate BCEA overtime amounts for a single employee in a pay period.
     - overtime_hours : weekday / Saturday OT (1.5x)
     - sunday_hours   : Sunday hours worked  (2x)
     - ph_hours       : public holiday hours (2x)
+    - is_security    : NBCPSS security employee → derive implied hourly rate
+                        from 208 prescribed monthly hours, not the 195 BCEA default
+                        (audit fix 2026-09-16).
     Returns per-category hours, rand amounts, and combined total.
     """
-    hr = bcea_hourly_rate(gross_monthly, explicit_hourly_rate)
+    hr = bcea_hourly_rate(gross_monthly, explicit_hourly_rate, is_security)
     ot_amount  = round(overtime_hours * hr * BCEA_OT_RATE_WEEKDAY, 2)
     sun_amount = round(sunday_hours   * hr * BCEA_OT_RATE_SUNDAY,  2)
     ph_amount_ = round(ph_hours       * hr * BCEA_OT_RATE_PH,      2)
@@ -464,7 +474,10 @@ def calc_payroll(
         effective_gross = round(normal_hours * explicit_hourly_rate, 2)
 
     # ── Overtime ──────────────────────────────────────────────────────────────
-    ot = calc_overtime(effective_gross, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate)
+    # is_security passed through so the implied hourly rate uses the NBCPSS
+    # 208h/month prescribed hours instead of the general 195h/month BCEA default
+    # (audit fix 2026-09-16).
+    ot = calc_overtime(effective_gross, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate, is_security)
     total_overtime = ot["total_overtime"]
 
     # ── NBCPSS security allowances (taxable income added to gross) ───────────
@@ -716,7 +729,7 @@ async def calculate_all(
         c["shift_type"]            = getattr(emp, "shift_type", None)
         c["special_allowance_type"]= getattr(emp, "special_allowance_type", None)
         c["employment_type"]       = emp.employment_type or "salaried"
-        c["hourly_rate_bcea"]      = round(bcea_hourly_rate(emp.gross_salary, getattr(emp, "hourly_rate", None)), 4)
+        c["hourly_rate_bcea"]      = round(bcea_hourly_rate(emp.gross_salary, getattr(emp, "hourly_rate", None), is_sec), 4)
         results.append(c)
         for key in totals:
             totals[key] = round(totals[key] + c.get(key, 0), 2)

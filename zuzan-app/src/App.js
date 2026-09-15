@@ -41,7 +41,14 @@ const DEFAULT_DOC_TEMPLATE = {
 };
 
 const BASE_URL = "https://zuzan-backend.onrender.com";
-const fmt = n => `R${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2})}`;
+// audit fix 2026-09-16 — without maximumFractionDigits, "en-ZA" (which uses "," as
+// the decimal separator, not a thousands separator) defaults to showing up to 3
+// decimal digits for any value with more precision than 2dp (e.g. BCEA hourly
+// rate = salary / 195, a repeating decimal). 6726/195 = 34.4923 was rendering as
+// "R34,492/hr" — visually indistinguishable from thirty-four thousand rand, even
+// though the correct value is R34.49/hr. Capping both min and max at 2 fixes every
+// call site that passes an unrounded number through fmt(), not just this one.
+const fmt = n => `R${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtDate = d => new Date(d).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"});
 
 // ── PAYFAST FORM SUBMIT ───────────────────────────────────────────────────────
@@ -183,14 +190,30 @@ const BCEA_WEEKS_PER_MONTH = 52 / 12;  // 4.3333
 const BCEA_OT_WEEKDAY      = 1.5;      // s10 weekday/Saturday
 const BCEA_OT_SUNDAY       = 2.0;      // s16
 const BCEA_OT_PH           = 2.0;      // s18 public holiday
+// NBCPSS prescribed monthly hours (48h/week × 52/12), per NBCPSS Main Agreement —
+// mirrors backend payroll.py's NBCPSS_PRESCRIBED_HOURS.
+const NBCPSS_PRESCRIBED_HOURS = 208;
+// NBCPSS constants (audit fix 2026-09-16) — mirror backend payroll.py so calcPayroll(),
+// the client-side dashboard/batch-payment estimator, doesn't silently drop these for
+// security employees the way it did before this fix (see [[project_nbcpss_208hr_bug]]).
+const NBCPSS_NIGHT_SHIFT_PER_SHIFT   = 8.00;   // R/shift
+const NBCPSS_SPECIAL_ALLOW_PER_SHIFT = 10.50;  // R/shift
+const NBCPSS_CLEANING_ALLOWANCE      = 32.00;  // R/month — unconditional for every security employee
+const NBCPSS_BC_LEVY                 = 7.00;   // R/employee/month, employer cost
+const NBCPSS_PSIRA_FEE               = 4.00;   // R/SO/month, employer cost
 
-function bceaHourlyRate(grossMonthly, explicitHourlyRate) {
+// audit fix 2026-09-16 — this always divided by the general 45h/week BCEA default
+// (195h/month) even for NBCPSS security employees, who are on a 48h/week schedule
+// (208h/month) per the NBCPSS Main Agreement. Pass isSecurity=true for any employee
+// with a security_grade at a private_security company.
+function bceaHourlyRate(grossMonthly, explicitHourlyRate, isSecurity=false) {
   if (explicitHourlyRate) return explicitHourlyRate;
-  return grossMonthly / (BCEA_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH);
+  const monthlyHours = isSecurity ? NBCPSS_PRESCRIBED_HOURS : (BCEA_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH);
+  return grossMonthly / monthlyHours;
 }
 
-function calcOvertime(grossMonthly, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null) {
-  const hr = bceaHourlyRate(grossMonthly, explicitHourlyRate);
+function calcOvertime(grossMonthly, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null, isSecurity=false) {
+  const hr = bceaHourlyRate(grossMonthly, explicitHourlyRate, isSecurity);
   const otAmt  = Math.round(otHours  * hr * BCEA_OT_WEEKDAY * 100) / 100;
   const sunAmt = Math.round(sunHours * hr * BCEA_OT_SUNDAY  * 100) / 100;
   const phAmt  = Math.round(phHours  * hr * BCEA_OT_PH      * 100) / 100;
@@ -225,10 +248,30 @@ function calcPayroll(
   medicalAidDependants = 0,
   pensionEmployeeFixed = 0,   // optional fixed ZAR/month voluntary top-up
   pensionEmployerFixed = 0,   // optional fixed ZAR/month employer add-on
+  // audit fix 2026-09-16 — trailing options object (not positional, so every existing
+  // call site that omits it keeps behaving exactly as before): NBCPSS security fields.
+  // Mirrors backend calc_payroll's is_security/night_shift_shifts/special_allowance_shifts/
+  // annual_bonus — this dashboard/batch-payment estimator previously ignored all of
+  // these for security employees, unlike the Run Payroll modal (see [[project_nbcpss_208hr_bug]]).
+  nbcpss = {},
 ) {
+  const {
+    isSecurity = false,
+    nightShiftShifts = 0,
+    specialAllowanceShifts = 0,
+    annualBonus = 0,
+  } = nbcpss;
   const yr = TAX_YEARS[taxYear || CURRENT_TAX_YEAR] || TAX_YEARS[CURRENT_TAX_YEAR];
-  const ot = calcOvertime(salary, otHours, sunHours, phHours, explicitHourlyRate);
-  const taxableGross = salary + ot.total;
+  const ot = calcOvertime(salary, otHours, sunHours, phHours, explicitHourlyRate, isSecurity);
+  // NBCPSS allowances — cleaning allowance is unconditional for every security employee
+  // (this is the one most likely to matter for a dashboard/batch-payment total, since
+  // it applies every period regardless of shifts worked).
+  const nightAllow    = isSecurity ? nightShiftShifts * NBCPSS_NIGHT_SHIFT_PER_SHIFT : 0;
+  const specialAllow  = isSecurity ? specialAllowanceShifts * NBCPSS_SPECIAL_ALLOW_PER_SHIFT : 0;
+  const cleaningAllow = isSecurity ? NBCPSS_CLEANING_ALLOWANCE : 0;
+  const bcLevyEmployer    = isSecurity ? NBCPSS_BC_LEVY : 0;
+  const psiraLevyEmployer = isSecurity ? NBCPSS_PSIRA_FEE : 0;
+  const taxableGross = salary + ot.total + nightAllow + specialAllow + cleaningAllow + annualBonus;
 
   // Pension/provident: % of gross + optional fixed top-up (both add to total contribution)
   const pensionEmployee = salary * pensionEmployeePct + pensionEmployeeFixed;
@@ -263,12 +306,18 @@ function calcPayroll(
   const netPay = taxableGross - paye - uifEmp - pensionEmployee - medicalAidEmployee;
 
   // Total employer cost
-  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer;
+  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer + bcLevyEmployer + psiraLevyEmployer;
 
   return {
     gross: salary,
     overtime: ot,
     taxableGross:   Math.round(taxableGross),
+    nightShiftAllowance:  Math.round(nightAllow),
+    specialAllowanceAmount: Math.round(specialAllow),
+    cleaningAllowance:    Math.round(cleaningAllow),
+    annualBonus:          Math.round(annualBonus),
+    bcLevyEmployer:       Math.round(bcLevyEmployer),
+    psiraLevyEmployer:    Math.round(psiraLevyEmployer),
     pensionEmployee: Math.round(pensionEmployee),
     pensionEmployer: Math.round(pensionEmployer),
     s11fDeduction:      Math.round(s11fMonthly),
@@ -691,11 +740,16 @@ function Dashboard({live = {}}) {
       } else if (type === "payroll") {
         const emps = await api("/employees");
         const rows = emps.filter(e=>e.is_active!==false);
+        // audit fix 2026-09-16 — this drill-down is a point-in-time snapshot, not tied
+        // to a specific processed period, so OT/night-shift/bonus aren't applicable here;
+        // but the always-on NBCPSS cleaning allowance + BC levy + PSIRA fee for security
+        // employees were being silently dropped. See [[project_nbcpss_208hr_bug]].
+        const calcRow = e => calcPayroll(e.gross_salary, null, 0,0,0,null, 0,0,0,0,0,0,0, {isSecurity: !!e.security_grade});
         setDrill({type, title:"Payroll — Active Employees", color:C.blue,
-          total: rows.reduce((s,e)=>s+calcPayroll(e.gross_salary).totalCost,0),
+          total: rows.reduce((s,e)=>s+calcRow(e).totalCost,0),
           cols:["Employee","Position","Gross Salary","Net Pay","Employer Cost"],
           rows: rows.map(e=>{
-            const p = calcPayroll(e.gross_salary);
+            const p = calcRow(e);
             return [e.name, e.position||"—", fmt(e.gross_salary), fmt(p.netPay), fmt(p.totalCost)];
           })});
       } else if (type === "vat") {
@@ -727,8 +781,9 @@ function Dashboard({live = {}}) {
           .filter(po=>["received","partial","paid"].includes(po.status))
           .reduce((s,po)=>s+((po.total_amount||0)-(po.vat_amount||0)),0);
         const depr = (deprSchedule||[]).reduce((s,d)=>s+(d.amount||0),0);
+        // audit fix 2026-09-16 — see [[project_nbcpss_208hr_bug]]
         const payrollCost = (emps||[]).filter(e=>e.is_active!==false)
-          .reduce((s,e)=>s+calcPayroll(e.gross_salary).totalCost,0);
+          .reduce((s,e)=>s+calcPayroll(e.gross_salary, null, 0,0,0,null, 0,0,0,0,0,0,0, {isSecurity: !!e.security_grade}).totalCost,0);
         const netProfit = rev - exp - poCogs - depr - payrollCost;
         setDrill({type, title:"Net Profit Breakdown — All Time", color:C.accent,
           total: netProfit,
@@ -2751,15 +2806,37 @@ function buildStdBank(rows) {
   return [header, ...lines].join("\r\n");
 }
 
-function BatchPaymentModal({employees, payroll, period, onClose}) {
+function BatchPaymentModal({employees, payroll, period, onClose, otData={}, secData={}, includeBonus=false}) {
   const periodStr = period || new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
-  const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary).paye, 0);
-  const totalUIF  = employees.reduce((s,e) => s + calcPayroll(e.salary).uifEmployee + calcPayroll(e.salary).uifEmployer, 0);
-  const totalSDL  = employees.reduce((s,e) => s + calcPayroll(e.salary).sdl, 0);
+  // audit fix 2026-09-16 — this generates the actual bank payment files (real money
+  // transferred to employees' accounts), but was recomputing net pay from bare salary
+  // only, silently dropping overtime/night-shift/special-allowance/cleaning-allowance/
+  // annual-bonus for NBCPSS security employees even when those were entered and
+  // included in the payroll run that was just processed. otData/secData/includeBonus
+  // are the same per-period inputs the Run Payroll modal already collected — reuse
+  // them here so the bank file matches what was actually run. See [[project_nbcpss_208hr_bug]].
+  const calcFor = (e) => {
+    const isSecurityEmp = !!e.security_grade;
+    const ot  = otData[e.id]  || {};
+    const sec = secData[e.id] || {};
+    const annualBonus = (includeBonus && isSecurityEmp) ? Math.round(e.salary * 12 / 52 * 100) / 100 : 0;
+    return calcPayroll(
+      e.salary, null,
+      +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, e.hourly_rate||null,
+      (e.pension_fund_employee_pct||0), (e.pension_fund_employer_pct||0),
+      (e.medical_aid_employee||0), (e.medical_aid_employer||0), (e.medical_aid_dependants||0),
+      (e.pension_employee_fixed||0), (e.pension_employer_fixed||0),
+      { isSecurity: isSecurityEmp, nightShiftShifts: +sec.nightShifts||0,
+        specialAllowanceShifts: +sec.specialShifts||0, annualBonus },
+    );
+  };
+  const totalPAYE = employees.reduce((s,e) => s + calcFor(e).paye, 0);
+  const totalUIF  = employees.reduce((s,e) => s + calcFor(e).uifEmployee + calcFor(e).uifEmployer, 0);
+  const totalSDL  = employees.reduce((s,e) => s + calcFor(e).sdl, 0);
   const sarsTotal = totalPAYE + totalUIF + totalSDL;
 
   const empRows = employees.map(e => {
-    const p = calcPayroll(e.salary);
+    const p = calcFor(e);
     return {
       branch:  e.branchCode  || "250655",
       account: e.accountNumber || "000000000",
@@ -3162,11 +3239,30 @@ function Payroll({live = {}, user = {}}) {
   const [editEmp,     setEditEmp]     = useState(null);
   const [editForm,    setEditForm]    = useState({});
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
-  const totalPAYE = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).paye, 0);
-  const totalNet = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).netPay, 0);
-  const totalCost = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).totalCost, 0);
-  const totalUIF = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).uifEmployer, 0);
-  const totalSDL = employees.reduce((s,e) => s + calcPayroll(e.salary, taxYear).sdl, 0);
+  // audit fix 2026-09-16 — same NBCPSS gap as BatchPaymentModal: these drive the
+  // "Payroll Processed" summary cards (Net Disbursed / PAYE / UIF+SDL) shown right
+  // after a real payroll run, so they should reflect this period's actual OT/night-
+  // shift/special-allowance/bonus inputs, not just bare salary. See [[project_nbcpss_208hr_bug]].
+  const calcForSummary = (e) => {
+    const isSecurityEmp = !!e.security_grade;
+    const ot  = otData[e.id]  || {};
+    const sec = secData[e.id] || {};
+    const annualBonus = (includeBonus && isSecurityEmp) ? Math.round(e.salary * 12 / 52 * 100) / 100 : 0;
+    return calcPayroll(
+      e.salary, taxYear,
+      +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, e.hourly_rate||null,
+      (e.pension_fund_employee_pct||0), (e.pension_fund_employer_pct||0),
+      (e.medical_aid_employee||0), (e.medical_aid_employer||0), (e.medical_aid_dependants||0),
+      (e.pension_employee_fixed||0), (e.pension_employer_fixed||0),
+      { isSecurity: isSecurityEmp, nightShiftShifts: +sec.nightShifts||0,
+        specialAllowanceShifts: +sec.specialShifts||0, annualBonus },
+    );
+  };
+  const totalPAYE = employees.reduce((s,e) => s + calcForSummary(e).paye, 0);
+  const totalNet = employees.reduce((s,e) => s + calcForSummary(e).netPay, 0);
+  const totalCost = employees.reduce((s,e) => s + calcForSummary(e).totalCost, 0);
+  const totalUIF = employees.reduce((s,e) => s + calcForSummary(e).uifEmployer, 0);
+  const totalSDL = employees.reduce((s,e) => s + calcForSummary(e).sdl, 0);
   const zuZanFee = Math.max(99, employees.length * 34);
   const handleAdd = async () => {
     const nameParts = form.name.trim().split(" ");
@@ -3381,12 +3477,15 @@ function Payroll({live = {}, user = {}}) {
     };
     const e         = emp201Data;
     const nowD      = new Date();
-    const totalPaye = e ? e.total_paye : employees.reduce((s,emp)=>s+calcPayroll(emp.salary||emp.gross_salary, taxYear).paye,0);
-    const totalUif  = e ? e.total_uif  : employees.reduce((s,emp)=>s+(calcPayroll(emp.salary||emp.gross_salary, taxYear).uifEmployee+calcPayroll(emp.salary||emp.gross_salary, taxYear).uifEmployer),0);
-    const totalSdl  = e ? e.total_sdl  : employees.reduce((s,emp)=>s+calcPayroll(emp.salary||emp.gross_salary, taxYear).sdl,0);
+    // audit fix 2026-09-16 — fallback path only (real numbers normally come from
+    // /reports/emp201); switched to calcForSummary for NBCPSS consistency with the
+    // rest of this component. See [[project_nbcpss_208hr_bug]].
+    const totalPaye = e ? e.total_paye : employees.reduce((s,emp)=>s+calcForSummary({...emp, salary: emp.salary||emp.gross_salary}).paye,0);
+    const totalUif  = e ? e.total_uif  : employees.reduce((s,emp)=>{const p=calcForSummary({...emp, salary: emp.salary||emp.gross_salary});return s+p.uifEmployee+p.uifEmployer;},0);
+    const totalSdl  = e ? e.total_sdl  : employees.reduce((s,emp)=>s+calcForSummary({...emp, salary: emp.salary||emp.gross_salary}).sdl,0);
     const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
     const dueDate   = e ? e.due_date : "7 "+new Date(nowD.getFullYear(),nowD.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
-    const empList   = e ? e.employees : employees.map(emp=>{const p=calcPayroll(emp.salary||emp.gross_salary, taxYear);return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
+    const empList   = e ? e.employees : employees.map(emp=>{const p=calcForSummary({...emp, salary: emp.salary||emp.gross_salary});return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
 
     // ── Annual IRP5 / EMP501 helpers ──────────────────────────────────────
     const loadAnnual = async () => {
@@ -3882,8 +3981,13 @@ function Payroll({live = {}, user = {}}) {
                   const _mibcoHr = _MIBCO_HR[(emp.mibco_role||"").toLowerCase()] || 0;
                   const _mibcoMonthlyMin = _mibcoHr > 0 ? Math.round(_mibcoHr * 45 * (52/12) * 100) / 100 : 0;
                   const effectiveSalary = isSecurity ? Math.max(emp.salary||0, _areaMin) : isFuelStation && _mibcoMonthlyMin > 0 ? Math.max(emp.salary||0, _mibcoMonthlyMin) : (emp.salary||0);
-                  const hr = bceaHourlyRate(effectiveSalary, emp.hourly_rate||null);
-                  const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null);
+                  // audit fix 2026-09-16 — gate on the employee's own security_grade
+                  // (matches backend is_sec = is_security_co and bool(sec_grade)), not
+                  // just the company's industry, so non-security staff at a private
+                  // security company still use the general 195h/month BCEA default.
+                  const isSecurityEmp = isSecurity && !!emp.security_grade;
+                  const hr = bceaHourlyRate(effectiveSalary, emp.hourly_rate||null, isSecurityEmp);
+                  const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null, isSecurityEmp);
                   const inpStyle = {width:"60px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
                   const setOt = (k,v) => setOtData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
                   return (
@@ -3997,6 +4101,9 @@ function Payroll({live = {}, user = {}}) {
           payroll={employees.map(e=>calcPayroll(e.salary))}
           period={new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
           onClose={()=>setShowBatch(false)}
+          otData={otData}
+          secData={secData}
+          includeBonus={includeBonus}
         />
       )}
       {showNew && (
@@ -4129,13 +4236,20 @@ function Payroll({live = {}, user = {}}) {
               </div>
             )}
           </div>
-          {form.salary && (
-            <div style={{background:C.blueLt,border:`1px solid ${C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.inkMid}}>
-              <strong style={{color:C.blue}}>BCEA hourly rate: </strong>
-              {fmt(bceaHourlyRate(+form.salary, form.hourlyRate ? +form.hourlyRate : null))}/hr
-              <span style={{marginLeft:16}}>Weekday OT: {fmt(bceaHourlyRate(+form.salary, form.hourlyRate ? +form.hourlyRate : null) * 1.5)}/hr · Sunday: {fmt(bceaHourlyRate(+form.salary, form.hourlyRate ? +form.hourlyRate : null) * 2)}/hr</span>
-            </div>
-          )}
+          {form.salary && (() => {
+            // audit fix 2026-09-16 — same 208 vs 195 hours fix as the Run Payroll
+            // modal: an NBCPSS security employee's implied hourly rate must use
+            // the 208h/month prescribed hours, not the general 195h/month BCEA default.
+            const _isSecurityEmp = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && !!form.securityGrade;
+            const _rate = bceaHourlyRate(+form.salary, form.hourlyRate ? +form.hourlyRate : null, _isSecurityEmp);
+            return (
+              <div style={{background:C.blueLt,border:`1px solid ${C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.inkMid}}>
+                <strong style={{color:C.blue}}>BCEA hourly rate: </strong>
+                {fmt(_rate)}/hr
+                <span style={{marginLeft:16}}>Weekday OT: {fmt(_rate * 1.5)}/hr · Sunday: {fmt(_rate * 2)}/hr</span>
+              </div>
+            );
+          })()}
 
           {/* Personal Details */}
           <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Personal Details</div>
@@ -4185,6 +4299,8 @@ function Payroll({live = {}, user = {}}) {
               form.medicalAidDependants ? +form.medicalAidDependants : 0,
               form.pensionEmployeeFixed ? +form.pensionEmployeeFixed : 0,
               form.pensionEmployerFixed ? +form.pensionEmployerFixed : 0,
+              // audit fix 2026-09-16 — see [[project_nbcpss_208hr_bug]]
+              { isSecurity: (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && !!form.securityGrade },
             );
             const hasExcess = p.s11fExcessMonthly > 0;
             return (
@@ -4345,7 +4461,12 @@ function Payroll({live = {}, user = {}}) {
           </thead>
           <tbody>
             {employees.map((emp) => {
-              const p = calcPayroll(emp.salary, taxYear);
+              // audit fix 2026-09-16 — was calcPayroll(emp.salary, taxYear) with no
+              // NBCPSS awareness; calcForSummary (defined above) applies the same
+              // period's OT/night-shift/special-allowance/bonus inputs and the
+              // 208h basis, matching what the Run Payroll modal and the actual
+              // backend run would compute. See [[project_nbcpss_208hr_bug]].
+              const p = calcForSummary(emp);
               return (
                 <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
                   <td style={{padding:"13px 14px"}}>
@@ -4390,7 +4511,7 @@ function Payroll({live = {}, user = {}}) {
               <td colSpan={3} style={{padding:"13px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
               <td style={{padding:"13px 14px",fontWeight:800}}>{fmt(totalGross)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.red}}>{fmt(totalPAYE)}</td>
-              <td style={{padding:"13px 14px",fontWeight:800,color:C.gold}}>{fmt(employees.reduce((s,e)=>s+calcPayroll(e.salary).uifEmployee,0))}</td>
+              <td style={{padding:"13px 14px",fontWeight:800,color:C.gold}}>{fmt(employees.reduce((s,e)=>s+calcForSummary(e).uifEmployee,0))}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.blue}}>{fmt(totalSDL)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.green}}>{fmt(totalNet)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.accent}}>{fmt(totalCost)}</td>
@@ -4573,6 +4694,8 @@ function Payroll({live = {}, user = {}}) {
                 editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
                 editForm.pensionEmployeeFixed ? +editForm.pensionEmployeeFixed : 0,
                 editForm.pensionEmployerFixed ? +editForm.pensionEmployerFixed : 0,
+                // audit fix 2026-09-16 — see [[project_nbcpss_208hr_bug]]
+                { isSecurity: (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && !!editForm.securityGrade },
               );
               const hasExcess = p.s11fExcessMonthly > 0;
               return (
@@ -5364,11 +5487,13 @@ function Reports({live = {}, user = null}) {
       } else if (type === "payroll") {
         const emps = await api("/employees");
         const active = emps.filter(e=>e.is_active!==false);
+        // audit fix 2026-09-16 — see [[project_nbcpss_208hr_bug]]
+        const calcRow2 = e => calcPayroll(e.gross_salary, null, 0,0,0,null, 0,0,0,0,0,0,0, {isSecurity: !!e.security_grade});
         setMgmtDrill({type, title:"Payroll — Active Employees", color:C.blue,
-          total: pl ? pl.payroll_cost : active.reduce((s,e)=>s+calcPayroll(e.gross_salary).totalCost,0),
+          total: pl ? pl.payroll_cost : active.reduce((s,e)=>s+calcRow2(e).totalCost,0),
           cols:["Employee","Position","Gross Salary","Net Pay","Total Cost"],
           rows: active.map(e=>{
-            const p = calcPayroll(e.gross_salary);
+            const p = calcRow2(e);
             return [e.name, e.position||"—", fmt(e.gross_salary), fmt(p.netPay), fmt(p.totalCost)];
           })});
       }
