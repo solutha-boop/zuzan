@@ -44,6 +44,11 @@ DEFAULT_ACCOUNTS = [
     # so existing companies get these on the next payroll run.
     {"code": "2250", "name": "NBCPSS BC Levy Payable",       "type": AccountType.liability},
     {"code": "2260", "name": "PSIRA Fee Payable",            "type": AccountType.liability},
+    # MIBCO Sector 5 health scheme liability (audit fix 2026-09-15) — mibco_scheme_employer
+    # and mibco_scheme_employee were computed and stored on the payslip since the
+    # MIBCO feature shipped, but never posted anywhere. init_accounts upserts,
+    # so existing companies get this on the next payroll run.
+    {"code": "2270", "name": "MIBCO Health Scheme Payable",  "type": AccountType.liability},
     {"code": "2126", "name": "Income Tax Payable",           "type": AccountType.liability},
     {"code": "2127", "name": "Provisional Tax Payable",      "type": AccountType.liability},
     # Equity
@@ -58,6 +63,7 @@ DEFAULT_ACCOUNTS = [
     {"code": "5120", "name": "Pension Contributions (Employer)",     "type": AccountType.expense},
     {"code": "5130", "name": "Medical Aid Contributions (Employer)", "type": AccountType.expense},
     {"code": "5140", "name": "NBCPSS Levies (Employer)",             "type": AccountType.expense},
+    {"code": "5150", "name": "MIBCO Health Scheme (Employer)",       "type": AccountType.expense},
     {"code": "5200", "name": "Utilities",                    "type": AccountType.expense},
     {"code": "5210", "name": "Telecoms",                     "type": AccountType.expense},
     {"code": "5220", "name": "Office Expenses",              "type": AccountType.expense},
@@ -402,12 +408,23 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     NBCPSS payroll run with the December bonus toggle on crashed with an
     unbalanced-journal 500. bc_levy_employer/psira_levy_employer were also
     entirely unposted, understating the ledger vs. the Reports dashboard,
-    which sums Payslip.total_cost directly):
-      DR Salaries (Gross)              (gross_salary + overtime amounts + annual_bonus)
+    which sums Payslip.total_cost directly; audit fix 2026-09-15 — the same
+    bug shape was found (unfixed) for three more taxable_gross components that
+    predate this file's last touch: NBCPSS night_shift_allowance,
+    special_allowance_amount and cleaning_allowance (the last is unconditional
+    for every security employee — R32/month — so in practice every NBCPSS
+    payroll run was unbalanced by at least that amount), plus the newly
+    shipped MIBCO Sector 5 mibco_med_allow (added to taxable_gross) and
+    mibco_scheme_employee/mibco_scheme_employer (deducted from net_pay /
+    added to total_cost respectively, like medical aid, but never posted)):
+      DR Salaries (Gross)              (gross_salary + overtime + annual_bonus
+                                         + NBCPSS night/special/cleaning allowances
+                                         + MIBCO medical insurance allowance)
       DR Payroll Levies                (uif_employer + sdl)
       DR Pension Contributions (ER)    (pension_employer)
       DR Medical Aid Contributions (ER)(medical_aid_employer_con)
       DR NBCPSS Levies (ER)            (bc_levy_employer + psira_levy_employer)
+      DR MIBCO Health Scheme (ER)      (mibco_scheme_employer)
       CR PAYE Payable                  (paye, after MTC)
       CR UIF Payable                   (uif_employee + uif_employer)
       CR SDL Payable                   (sdl)
@@ -415,13 +432,18 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
       CR Medical Aid Payable           (medical_aid_employee_ded + medical_aid_employer_con)
       CR NBCPSS BC Levy Payable        (bc_levy_employer)
       CR PSIRA Fee Payable             (psira_levy_employer)
+      CR MIBCO Health Scheme Payable   (mibco_scheme_employer + mibco_scheme_employee)
       CR Bank / Cash                   (net_pay)
 
     Balances for every input combination because
-    net_pay = (gross + overtime + annual_bonus) − paye − uif_employee − pension_employee − medical_aid_employee.
-    bc_levy_employer/psira_levy_employer are pure employer costs (never deducted
-    from the employee), so they don't affect net_pay — they get their own
-    balanced DR/CR pair instead of touching the salary line.
+    net_pay = taxable_gross − paye − uif_employee − pension_employee
+              − medical_aid_employee − mibco_scheme_employee,
+    where taxable_gross = gross_salary + overtime + annual_bonus + NBCPSS
+    night/special/cleaning allowances + mibco_med_allow — i.e. exactly the
+    DR "Salaries (Gross)" line above. bc_levy_employer/psira_levy_employer/
+    mibco_scheme_employer are pure employer costs (never deducted from the
+    employee), so they don't affect net_pay — they get their own balanced
+    DR/CR pair instead of touching the salary line.
     """
     cid = employee.company_id
     entry = _make_entry(cid, payslip.generated_at or datetime.utcnow(),
@@ -436,16 +458,31 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     bank  = get_account(cid, "1000", db)
 
     # Cash remuneration = base gross + all BCEA overtime categories + NBCPSS
-    # annual bonus (audit fix 2026-09-14 — annual_bonus flows into taxable_gross
-    # and therefore net_pay in payroll.py's calc_payroll, so it must be debited
-    # here too or the entry is unbalanced by the bonus amount).
-    # payslip.gross_salary stores the base only; overtime/bonus are stored separately.
+    # annual bonus + NBCPSS night/special/cleaning allowances + MIBCO medical
+    # insurance allowance (audit fixes 2026-09-14/09-15 — every one of these
+    # flows into taxable_gross and therefore net_pay in payroll.py's
+    # calc_payroll, so each must be debited here too or the entry is
+    # unbalanced by that amount).
+    # payslip.gross_salary stores the base only; the rest are stored separately.
     overtime_total = round(
         (getattr(payslip, "overtime_amount", 0) or 0)
         + (getattr(payslip, "sunday_amount", 0) or 0)
         + (getattr(payslip, "ph_amount", 0) or 0), 2)
     annual_bonus = round(getattr(payslip, "annual_bonus", 0) or 0, 2)
-    gross_incl_ot = round((payslip.gross_salary or 0) + overtime_total + annual_bonus, 2)
+    # NBCPSS night shift / special / cleaning allowances (audit fix 2026-09-15 —
+    # these predate this run but were never wired into the journal; cleaning_allowance
+    # in particular is unconditional for every security employee, so this silently
+    # unbalanced every NBCPSS payroll run, not just ones using the bonus toggle).
+    nbcpss_allowances = round(
+        (getattr(payslip, "night_shift_allowance", 0) or 0)
+        + (getattr(payslip, "special_allowance_amount", 0) or 0)
+        + (getattr(payslip, "cleaning_allowance", 0) or 0), 2)
+    # MIBCO Sector 5 medical insurance allowance (audit fix 2026-09-15 — paid to
+    # the employee, taxable, folded into taxable_gross alongside the above).
+    mibco_med_allow = round(getattr(payslip, "mibco_med_allow", 0) or 0, 2)
+    gross_incl_ot = round(
+        (payslip.gross_salary or 0) + overtime_total + annual_bonus
+        + nbcpss_allowances + mibco_med_allow, 2)
 
     employer_contrib = round((payslip.uif_employer or 0) + (payslip.sdl or 0), 2)
 
@@ -459,9 +496,14 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     # stored on the payslip but never posted to the journal at all)
     bc_levy_er    = round(getattr(payslip, "bc_levy_employer", 0) or 0, 2)
     psira_levy_er = round(getattr(payslip, "psira_levy_employer", 0) or 0, 2)
+    # MIBCO Sector 5 health scheme (audit fix 2026-09-15 — same gap as above:
+    # computed and stored on the payslip since the MIBCO feature shipped
+    # 2026-09-14, but never posted to the journal at all)
+    mibco_scheme_er = round(getattr(payslip, "mibco_scheme_employer", 0) or 0, 2)
+    mibco_scheme_ee = round(getattr(payslip, "mibco_scheme_employee", 0) or 0, 2)
 
     lines = [
-        _line(entry.id, sal,  debit=gross_incl_ot,                               description="Gross salary incl. overtime and any annual bonus"),
+        _line(entry.id, sal,  debit=gross_incl_ot,                               description="Gross salary incl. overtime, allowances and any annual bonus"),
         _line(entry.id, levy, debit=employer_contrib,                             description="Employer UIF + SDL"),
         _line(entry.id, paye_acct, credit=round(payslip.paye or 0, 2),           description="PAYE to SARS"),
         _line(entry.id, uif_acct,  credit=round((payslip.uif_employee or 0) + (payslip.uif_employer or 0), 2), description="UIF"),
@@ -489,6 +531,12 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
         if psira_levy_er:
             psira_pay = get_account(cid, "2260", db)
             lines.append(_line(entry.id, psira_pay, credit=psira_levy_er,        description="PSIRA fee payable"))
+    if mibco_scheme_er or mibco_scheme_ee:
+        mibco_exp = get_account(cid, "5150", db)
+        mibco_pay = get_account(cid, "2270", db)
+        if mibco_scheme_er:
+            lines.append(_line(entry.id, mibco_exp, debit=mibco_scheme_er,       description="Employer MIBCO health scheme (Affinity Health) contribution"))
+        lines.append(_line(entry.id, mibco_pay, credit=round(mibco_scheme_er + mibco_scheme_ee, 2), description="MIBCO health scheme (Affinity Health) payable"))
     # Fold pure rounding residue (≤ 5c) into the salary debit: payslip fields are
     # rounded independently, so cent-level drift is possible and must never
     # hard-block a payroll run via _assert_balanced.
