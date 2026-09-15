@@ -693,12 +693,16 @@ async def calculate_all(
         sec_grade = getattr(emp, "security_grade", None)
         sec_area  = "3"
         is_sec    = is_security_co and bool(sec_grade)
+        # NBCPSS OT rate: always use grade minimum ÷ 208h, not contracted salary ÷ 208h
+        # Grade B/C/D/E → R6,726 / 208 = R32.34/hr; Grade A → R7,142 / 208 = R34.34/hr
+        _sec_min_hr = round(nbcpss_minimum(sec_grade) / NBCPSS_PRESCRIBED_HOURS, 4) if is_sec else None
+        _explicit_hr = getattr(emp, "hourly_rate", None) or _sec_min_hr
         mibco_role_val     = getattr(emp, "mibco_role", None)
         mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
-            explicit_hourly_rate=getattr(emp, "hourly_rate", None),
+            explicit_hourly_rate=_explicit_hr,
             pension_employee_pct=getattr(emp, "pension_fund_employee_pct", 0.0) or 0.0,
             pension_employer_pct=getattr(emp, "pension_fund_employer_pct", 0.0) or 0.0,
             pension_employee_fixed=getattr(emp, "pension_employee_fixed", 0.0) or 0.0,
@@ -727,7 +731,7 @@ async def calculate_all(
         c["shift_type"]            = getattr(emp, "shift_type", None)
         c["special_allowance_type"]= getattr(emp, "special_allowance_type", None)
         c["employment_type"]       = emp.employment_type or "salaried"
-        c["hourly_rate_bcea"]      = round(bcea_hourly_rate(emp.gross_salary, getattr(emp, "hourly_rate", None), is_sec), 4)
+        c["hourly_rate_bcea"]      = round(bcea_hourly_rate(emp.gross_salary, _explicit_hr, is_sec), 4)
         results.append(c)
         for key in totals:
             totals[key] = round(totals[key] + c.get(key, 0), 2)
@@ -824,6 +828,10 @@ async def run_payroll(
         sec_grade = getattr(emp, "security_grade", None)
         sec_area  = "3"
         is_sec    = is_security_co and bool(sec_grade)
+        # NBCPSS OT rate: always use grade minimum ÷ 208h, not contracted salary ÷ 208h
+        # Grade B/C/D/E → R6,726 / 208 = R32.34/hr; Grade A → R7,142 / 208 = R34.34/hr
+        _sec_min_hr = round(nbcpss_minimum(sec_grade) / NBCPSS_PRESCRIBED_HOURS, 4) if is_sec else None
+        _explicit_hr = getattr(emp, "hourly_rate", None) or _sec_min_hr
         # Annual bonus: gross × 12 / 52 (1 week's pay) per NBCPSS Main Agreement, due in December
         emp_bonus = round(emp.gross_salary * 12 / 52, 2) if (data.include_annual_bonus and is_sec) else 0.0
         # MIBCO Sector 5 fields
@@ -835,7 +843,7 @@ async def run_payroll(
             overtime_hours=ot_entry.overtime_hours,
             sunday_hours=ot_entry.sunday_hours,
             ph_hours=ot_entry.ph_hours,
-            explicit_hourly_rate=getattr(emp, "hourly_rate", None),
+            explicit_hourly_rate=_explicit_hr,
             pension_employee_pct=getattr(emp, "pension_fund_employee_pct", 0.0) or 0.0,
             pension_employer_pct=getattr(emp, "pension_fund_employer_pct", 0.0) or 0.0,
             pension_employee_fixed=getattr(emp, "pension_employee_fixed", 0.0) or 0.0,

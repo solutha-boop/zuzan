@@ -4020,8 +4020,12 @@ function Payroll({live = {}, user = {}}) {
                   // just the company's industry, so non-security staff at a private
                   // security company still use the general 195h/month BCEA default.
                   const isSecurityEmp = isSecurity && !!emp.security_grade;
-                  const hr = bceaHourlyRate(effectiveSalary, emp.hourly_rate||null, isSecurityEmp);
-                  const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, emp.hourly_rate||null, isSecurityEmp);
+                  // NBCPSS OT rate is always the grade minimum ÷ 208h, not contracted salary ÷ 208h.
+                  // Grade B/C/D/E → R6,726 ÷ 208 = R32.34/hr; Grade A → R7,142 ÷ 208 = R34.34/hr.
+                  const secHrOverride = isSecurity ? (_areaMin / NBCPSS_PRESCRIBED_HOURS) : null;
+                  const hrRate = emp.hourly_rate || secHrOverride || null;
+                  const hr = bceaHourlyRate(effectiveSalary, hrRate, isSecurityEmp);
+                  const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, hrRate, isSecurityEmp);
                   const inpStyle = {width:"60px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
                   const setOt = (k,v) => setOtData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
                   return (
