@@ -9482,6 +9482,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             <select value={form.industry||""} onChange={e=>setForm(v=>({...v,industry:e.target.value}))} style={inputStyle}>
               <option value="">General</option>
               <option value="private_security">Private Security (NBCPSS)</option>
+              <option value="fuel_station">Fuel Retail (MIBCO Sector 5)</option>
               <option value="construction">Construction</option>
               <option value="retail">Retail</option>
               <option value="hospitality">Hospitality</option>
@@ -9496,6 +9497,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               <option value="other">Other</option>
             </select>
             {form.industry==="private_security" && <div style={{marginTop:6,padding:"8px 12px",background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,fontSize:12,color:"#c2410c"}}>🔒 NBCPSS mode active — payroll enforces National Bargaining Council for the Private Security Sector requirements (minimum wages, allowances, levies). Rates effective 1 March 2026 – 28 February 2027.</div>}
+            {form.industry==="fuel_station" && <div style={{marginTop:6,padding:"8px 12px",background:"#fffbeb",border:"1px solid #fbbf24",borderRadius:8,fontSize:12,color:"#92400e"}}>⛽ MIBCO Sector 5 mode active — payroll enforces Motor Industry Bargaining Council (Fuel Retail) requirements (minimum hourly rates, medical insurance allowance, Affinity Health scheme). Rates effective 22 December 2025.</div>}
           </div>
         </div>
 
