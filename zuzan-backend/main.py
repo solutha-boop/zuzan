@@ -27,8 +27,15 @@ limiter = Limiter(key_func=get_remote_address)
 async def lifespan(app: FastAPI):
     logger.info("Starting ZuZan backend...")
     from database import init_db, SessionLocal, Company
-    init_db()
-    logger.info("Database ready")
+    try:
+        init_db()
+        logger.info("Database ready")
+    except Exception as _db_err:
+        # Non-fatal: if the DB is temporarily unavailable on cold-start (Render
+        # free tier, Neon auto-suspend, etc.) the port still binds so Render's
+        # health-check passes.  Requests that need the DB will get 500s until
+        # the database comes up and the service is auto-restarted or redeployed.
+        logger.error(f"init_db() failed at startup (non-fatal): {_db_err}")
     # Backfill journal for any existing companies that have no entries yet
     try:
         from journal import backfill_company, init_accounts

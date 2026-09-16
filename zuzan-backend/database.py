@@ -11,9 +11,12 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./zuzan.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# SQLite needs check_same_thread; PostgreSQL doesn't
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
+# SQLite needs check_same_thread; PostgreSQL needs connect_timeout so a cold
+# DB doesn't hang init_db() for 15+ minutes on Render cold-start.
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") \
+               else {"connect_timeout": 15}
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True,
+                       pool_timeout=20, pool_recycle=300)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
