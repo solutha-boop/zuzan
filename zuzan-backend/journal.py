@@ -49,6 +49,15 @@ DEFAULT_ACCOUNTS = [
     # MIBCO feature shipped, but never posted anywhere. init_accounts upserts,
     # so existing companies get this on the next payroll run.
     {"code": "2270", "name": "MIBCO Health Scheme Payable",  "type": AccountType.liability},
+    # NBCPSS provident fund / medical aid / union dues liabilities (audit fix
+    # 2026-09-16) — nbcpss_provident_employee/employer, nbcpss_medical_employee/
+    # employer and union_subscription_ded were computed and stored on the
+    # payslip since the 2026-09 feature shipped, but never posted anywhere.
+    # This unconditionally unbalanced every private-security payroll run.
+    # init_accounts upserts, so existing companies get these on the next run.
+    {"code": "2280", "name": "NBCPSS Provident Fund Payable", "type": AccountType.liability},
+    {"code": "2290", "name": "NBCPSS Medical Aid Payable",    "type": AccountType.liability},
+    {"code": "2300", "name": "Union Dues Payable",            "type": AccountType.liability},
     {"code": "2126", "name": "Income Tax Payable",           "type": AccountType.liability},
     {"code": "2127", "name": "Provisional Tax Payable",      "type": AccountType.liability},
     # Equity
@@ -64,6 +73,8 @@ DEFAULT_ACCOUNTS = [
     {"code": "5130", "name": "Medical Aid Contributions (Employer)", "type": AccountType.expense},
     {"code": "5140", "name": "NBCPSS Levies (Employer)",             "type": AccountType.expense},
     {"code": "5150", "name": "MIBCO Health Scheme (Employer)",       "type": AccountType.expense},
+    {"code": "5160", "name": "NBCPSS Provident Fund (Employer)",     "type": AccountType.expense},
+    {"code": "5170", "name": "NBCPSS Medical Aid (Employer)",        "type": AccountType.expense},
     {"code": "5200", "name": "Utilities",                    "type": AccountType.expense},
     {"code": "5210", "name": "Telecoms",                     "type": AccountType.expense},
     {"code": "5220", "name": "Office Expenses",              "type": AccountType.expense},
@@ -416,15 +427,24 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     payroll run was unbalanced by at least that amount), plus the newly
     shipped MIBCO Sector 5 mibco_med_allow (added to taxable_gross) and
     mibco_scheme_employee/mibco_scheme_employer (deducted from net_pay /
-    added to total_cost respectively, like medical aid, but never posted)):
+    added to total_cost respectively, like medical aid, but never posted));
+    audit fix 2026-09-16 — the identical gap recurred a fourth time (already
+    live in production) for the NBCPSS prescribed provident fund (PSSPF),
+    prescribed medical aid (PSSSBC), uniform allowance and union subscription
+    fields, all of which are UNCONDITIONAL for every is_security employee
+    (not gated behind a toggle like annual_bonus was), so every
+    private-security payroll run was unbalanced by ~R550+/employee:
       DR Salaries (Gross)              (gross_salary + overtime + annual_bonus
                                          + NBCPSS night/special/cleaning allowances
-                                         + MIBCO medical insurance allowance)
+                                         + MIBCO medical insurance allowance
+                                         + NBCPSS uniform allowance)
       DR Payroll Levies                (uif_employer + sdl)
       DR Pension Contributions (ER)    (pension_employer)
       DR Medical Aid Contributions (ER)(medical_aid_employer_con)
       DR NBCPSS Levies (ER)            (bc_levy_employer + psira_levy_employer)
       DR MIBCO Health Scheme (ER)      (mibco_scheme_employer)
+      DR NBCPSS Provident Fund (ER)    (nbcpss_provident_employer)
+      DR NBCPSS Medical Aid (ER)       (nbcpss_medical_employer)
       CR PAYE Payable                  (paye, after MTC)
       CR UIF Payable                   (uif_employee + uif_employer)
       CR SDL Payable                   (sdl)
@@ -433,17 +453,28 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
       CR NBCPSS BC Levy Payable        (bc_levy_employer)
       CR PSIRA Fee Payable             (psira_levy_employer)
       CR MIBCO Health Scheme Payable   (mibco_scheme_employer + mibco_scheme_employee)
+      CR NBCPSS Provident Fund Payable (nbcpss_provident_employee + nbcpss_provident_employer)
+      CR NBCPSS Medical Aid Payable    (nbcpss_medical_employee + nbcpss_medical_employer)
+      CR Union Dues Payable            (union_subscription_ded)
       CR Bank / Cash                   (net_pay)
 
     Balances for every input combination because
     net_pay = taxable_gross − paye − uif_employee − pension_employee
-              − medical_aid_employee − mibco_scheme_employee,
+              − medical_aid_employee − mibco_scheme_employee
+              − nbcpss_provident_employee − nbcpss_medical_employee
+              − union_subscription_ded + uniform_allowance,
     where taxable_gross = gross_salary + overtime + annual_bonus + NBCPSS
     night/special/cleaning allowances + mibco_med_allow — i.e. exactly the
-    DR "Salaries (Gross)" line above. bc_levy_employer/psira_levy_employer/
-    mibco_scheme_employer are pure employer costs (never deducted from the
-    employee), so they don't affect net_pay — they get their own balanced
-    DR/CR pair instead of touching the salary line.
+    DR "Salaries (Gross)" line above, PLUS uniform_allowance which is folded
+    into that same debit even though it isn't part of taxable_gross (it's a
+    non-taxable cash payment to the employee, so it still needs a debit
+    somewhere or the entry unbalances). bc_levy_employer/psira_levy_employer/
+    mibco_scheme_employer/nbcpss_provident_employer/nbcpss_medical_employer
+    are pure employer costs (never deducted from the employee), so they don't
+    affect net_pay — they get their own balanced DR/CR pair instead of
+    touching the salary line. union_subscription_ded is a pure employee
+    deduction with no employer cost, so it gets a CR-only liability line (the
+    debit side is already covered by the salary line it was never added to).
     """
     cid = employee.company_id
     entry = _make_entry(cid, payslip.generated_at or datetime.utcnow(),
@@ -480,9 +511,14 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     # MIBCO Sector 5 medical insurance allowance (audit fix 2026-09-15 — paid to
     # the employee, taxable, folded into taxable_gross alongside the above).
     mibco_med_allow = round(getattr(payslip, "mibco_med_allow", 0) or 0, 2)
+    # NBCPSS uniform allowance (audit fix 2026-09-16 — non-taxable, added
+    # directly to net_pay rather than taxable_gross, but it's still cash paid
+    # to the employee and must be debited somewhere or the entry unbalances
+    # by this amount; folded into the same salary line as mibco_med_allow).
+    uniform_allowance = round(getattr(payslip, "uniform_allowance", 0) or 0, 2)
     gross_incl_ot = round(
         (payslip.gross_salary or 0) + overtime_total + annual_bonus
-        + nbcpss_allowances + mibco_med_allow, 2)
+        + nbcpss_allowances + mibco_med_allow + uniform_allowance, 2)
 
     employer_contrib = round((payslip.uif_employer or 0) + (payslip.sdl or 0), 2)
 
@@ -501,6 +537,17 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     # 2026-09-14, but never posted to the journal at all)
     mibco_scheme_er = round(getattr(payslip, "mibco_scheme_employer", 0) or 0, 2)
     mibco_scheme_ee = round(getattr(payslip, "mibco_scheme_employee", 0) or 0, 2)
+    # NBCPSS prescribed provident fund (PSSPF), prescribed medical aid (PSSSBC)
+    # and union dues (audit fix 2026-09-16 — computed and stored on the payslip
+    # since the 2026-09 feature shipped, but never posted to the journal at
+    # all. Unlike bc_levy/psira/mibco above, nbcpss_provident_employee and
+    # nbcpss_medical_employee are UNCONDITIONAL for every is_security
+    # employee, so this unbalanced every single private-security payroll run).
+    nbcpss_prov_ee = round(getattr(payslip, "nbcpss_provident_employee", 0) or 0, 2)
+    nbcpss_prov_er = round(getattr(payslip, "nbcpss_provident_employer", 0) or 0, 2)
+    nbcpss_med2_ee = round(getattr(payslip, "nbcpss_medical_employee", 0) or 0, 2)
+    nbcpss_med2_er = round(getattr(payslip, "nbcpss_medical_employer", 0) or 0, 2)
+    union_ded      = round(getattr(payslip, "union_subscription_ded", 0) or 0, 2)
 
     lines = [
         _line(entry.id, sal,  debit=gross_incl_ot,                               description="Gross salary incl. overtime, allowances and any annual bonus"),
@@ -537,6 +584,21 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
         if mibco_scheme_er:
             lines.append(_line(entry.id, mibco_exp, debit=mibco_scheme_er,       description="Employer MIBCO health scheme (Affinity Health) contribution"))
         lines.append(_line(entry.id, mibco_pay, credit=round(mibco_scheme_er + mibco_scheme_ee, 2), description="MIBCO health scheme (Affinity Health) payable"))
+    if nbcpss_prov_ee or nbcpss_prov_er:
+        prov_exp = get_account(cid, "5160", db)
+        prov_pay = get_account(cid, "2280", db)
+        if nbcpss_prov_er:
+            lines.append(_line(entry.id, prov_exp, debit=nbcpss_prov_er,         description="Employer NBCPSS provident fund (PSSPF) contribution"))
+        lines.append(_line(entry.id, prov_pay, credit=round(nbcpss_prov_ee + nbcpss_prov_er, 2), description="NBCPSS provident fund (PSSPF) payable"))
+    if nbcpss_med2_ee or nbcpss_med2_er:
+        med2_exp = get_account(cid, "5170", db)
+        med2_pay = get_account(cid, "2290", db)
+        if nbcpss_med2_er:
+            lines.append(_line(entry.id, med2_exp, debit=nbcpss_med2_er,         description="Employer NBCPSS prescribed medical aid (PSSSBC) contribution"))
+        lines.append(_line(entry.id, med2_pay, credit=round(nbcpss_med2_ee + nbcpss_med2_er, 2), description="NBCPSS prescribed medical aid (PSSSBC) payable"))
+    if union_ded:
+        union_pay = get_account(cid, "2300", db)
+        lines.append(_line(entry.id, union_pay, credit=union_ded, description="Union dues payable"))
     # Fold pure rounding residue (≤ 5c) into the salary debit: payslip fields are
     # rounded independently, so cent-level drift is possible and must never
     # hard-block a payroll run via _assert_balanced.
