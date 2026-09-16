@@ -56,8 +56,9 @@ def patch_main():
 
     # Disable subscription gate until PayFast is live and DB statuses are reliable.
     # The gate was causing Demo Mode for valid trial accounts due to stale DB status.
-    old = "app.add_middleware(_SubscriptionGateMiddleware)"
-    new = "# app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live"
+    # Use newline prefix so we match the bare (uncommented) line only — not the already-commented one.
+    old = "\napp.add_middleware(_SubscriptionGateMiddleware)"
+    new = "\n# app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live"
     if old in src:
         src = src.replace(old, new)
         print("  [main] disabled subscription gate middleware")
@@ -103,10 +104,12 @@ def patch_billing():
     with open(path, "r", encoding="utf-8") as f:
         src = f.read()
     # Fix 1: guard resp before status_code check in adhoc_charge (2026-08-02)
-    src = src.replace(
-        "    try:\n        resp = _requests.post(url, data=body, headers=headers, timeout=30)",
-        "    resp = None\n    try:\n        resp = _requests.post(url, data=body, headers=headers, timeout=30)",
-    )
+    # Idempotent: only insert resp=None if it's not already there
+    if "    resp = None\n    try:\n        resp = _requests.post" not in src:
+        src = src.replace(
+            "    try:\n        resp = _requests.post(url, data=body, headers=headers, timeout=30)",
+            "    resp = None\n    try:\n        resp = _requests.post(url, data=body, headers=headers, timeout=30)",
+        )
     src = src.replace(
         "    if resp.status_code == 200 and result.get(\"code\") == 200:",
         "    if resp and resp.status_code == 200 and result.get(\"code\") == 200:",
