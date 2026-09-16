@@ -441,6 +441,14 @@ def calc_payroll(
     is_fuel_station: bool = False,       # True → apply MIBCO med allow + scheme
     mibco_scheme_enrolled: bool = False, # True → deduct employee scheme + add employer cost
     union_subscription: float = 0.0,     # monthly union dues (POPCRU, SATAWU, etc.) — after-tax deduction
+    # General payroll adjustments (entered per-run or stored on employee)
+    on_maternity_leave: bool = False,           # if True, gross zeroed — employee claims UIF maternity benefit directly
+    garnishee_total: float = 0.0,              # total of all active garnishee orders (court-ordered deductions)
+    advance_deduction: float = 0.0,            # salary advance repayment this period
+    expense_claim: float = 0.0,               # non-taxable expense reimbursement (added to net, not gross)
+    once_off_deduction: float = 0.0,          # once-off deduction (e.g. uniform purchase, damage recovery)
+    once_off_allowance_taxable: float = 0.0,     # once-off taxable allowance (travel, special duty, etc.)
+    once_off_allowance_nontaxable: float = 0.0,  # once-off non-taxable allowance (tools, PPE, subsistence)
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -467,6 +475,10 @@ def calc_payroll(
     portion is also deemed an employee contribution for the s11F deduction.
     """
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
+
+    # ── Maternity leave: zero all pay; employee claims UIF benefit directly ──────
+    if on_maternity_leave:
+        gross_monthly = 0.0
 
     # ── Effective gross for hourly employees who worked fewer than prescribed hours ──
     # If normal_hours is provided and employee has an explicit hourly rate,
@@ -519,7 +531,7 @@ def calc_payroll(
     below_mibco_min   = is_fuel_station and mibco_hourly_min > 0 and effective_gross < mibco_monthly_min
 
     # ── Cash remuneration (for net pay & SDL) ─────────────────────────────────
-    taxable_gross = effective_gross + total_overtime + night_allow + special_allow + cleaning_allow + annual_bonus + mibco_med_allow
+    taxable_gross = effective_gross + total_overtime + night_allow + special_allow + cleaning_allow + annual_bonus + mibco_med_allow + once_off_allowance_taxable
 
     # ── Pension / Provident fund: % + optional fixed ZAR top-up ──────────────
     pension_employee_monthly = round(effective_gross * pension_employee_pct + pension_employee_fixed, 2)
@@ -593,13 +605,18 @@ def calc_payroll(
                - pension_employee_monthly - medical_aid_employee
                - mibco_scheme_empe
                - nbcpss_prov_emp - nbcpss_med_emp - union_sub
-               + uniform_allow)
+               + uniform_allow
+               # General payroll adjustments
+               - garnishee_total - advance_deduction - once_off_deduction
+               + expense_claim + once_off_allowance_nontaxable)
 
     # ── Total cost to employer ────────────────────────────────────────────────
+    # Expense claims and non-taxable allowances are a pass-through employer cost.
     total_cost = (taxable_gross + uif_employer + sdl
                   + pension_employer_monthly + medical_aid_employer
                   + bc_levy_emp + psira_levy + mibco_scheme_empr
-                  + nbcpss_prov_empr + nbcpss_med_empr + uniform_allow)
+                  + nbcpss_prov_empr + nbcpss_med_empr + uniform_allow
+                  + expense_claim + once_off_allowance_nontaxable)
 
     return {
         "gross":                  round(gross_monthly, 2),
@@ -648,6 +665,14 @@ def calc_payroll(
         "mibco_scheme_employer":  round(mibco_scheme_empr, 2),
         "mibco_scheme_employee":  round(mibco_scheme_empe, 2),
         "below_mibco_minimum":    below_mibco_min,
+        # General payroll adjustments
+        "on_maternity_leave":             on_maternity_leave,
+        "garnishee_total":                round(garnishee_total, 2),
+        "advance_deduction":              round(advance_deduction, 2),
+        "expense_claim":                  round(expense_claim, 2),
+        "once_off_deduction":             round(once_off_deduction, 2),
+        "once_off_allowance_taxable":     round(once_off_allowance_taxable, 2),
+        "once_off_allowance_nontaxable":  round(once_off_allowance_nontaxable, 2),
     }
 
 
@@ -687,9 +712,19 @@ class SecurityAllowanceEntry(BaseModel):
     special_allowance_shifts: float = 0  # shifts qualifying for special allowance
 
 
+class OnceOffEntry(BaseModel):
+    """Per-employee once-off items for this payroll run only (not stored on employee record)."""
+    employee_id:                    int
+    expense_claim:                  float = 0.0   # non-taxable expense reimbursement (added to net, not gross)
+    once_off_deduction:             float = 0.0   # once-off deduction (uniform damage, loan, etc.)
+    once_off_allowance_taxable:     float = 0.0   # once-off taxable allowance (travel, special duty, etc.)
+    once_off_allowance_nontaxable:  float = 0.0   # once-off non-taxable allowance (tools, PPE, subsistence)
+
+
 class RunPayrollRequest(BaseModel):
     overtime: list[OvertimeEntry] = []
     security: list[SecurityAllowanceEntry] = []
+    once_off: list[OnceOffEntry] = []             # per-employee once-off items for this run
     area_override: str | None = None         # "1_2" (Urban) or "3" (Rural) — overrides per-employee security_area for this run
     include_annual_bonus: bool = False        # True → add NBCPSS annual bonus (gross × 12/52) for all security employees
 
@@ -750,6 +785,9 @@ async def calculate_all(
             is_fuel_station=is_fuel_station_co and bool(mibco_role_val),
             mibco_scheme_enrolled=mibco_enrolled_val,
             union_subscription=getattr(emp, "union_subscription", 0.0) or 0.0,
+            on_maternity_leave=bool(getattr(emp, "on_maternity_leave", False)),
+            garnishee_total=sum(g.amount for g in getattr(emp, "garnishee_orders", []) if g.active),
+            advance_deduction=getattr(emp, "advance_monthly_deduction", 0.0) or 0.0,
         )
         c["employee_id"]           = emp.id
         c["employee_name"]         = f"{emp.first_name} {emp.last_name}"
@@ -825,8 +863,9 @@ async def run_payroll(
         raise HTTPException(status_code=400, detail="No active employees found")
 
     # Build lookup maps keyed by employee_id
-    ot_map  = {entry.employee_id: entry for entry in (data.overtime or [])}
-    sec_map = {entry.employee_id: entry for entry in (data.security or [])}
+    ot_map      = {entry.employee_id: entry for entry in (data.overtime or [])}
+    sec_map     = {entry.employee_id: entry for entry in (data.security or [])}
+    once_off_map= {entry.employee_id: entry for entry in (data.once_off or [])}
 
     period = datetime.utcnow().strftime("%Y-%m")
     # Helper: pay date depends on employment type
@@ -870,6 +909,8 @@ async def run_payroll(
         mibco_role_val     = getattr(emp, "mibco_role", None)
         mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
         union_sub_val      = getattr(emp, "union_subscription", 0.0) or 0.0
+        once_off_entry     = once_off_map.get(emp.id, OnceOffEntry(employee_id=emp.id))
+        garnishee_total_val= sum(g.amount for g in getattr(emp, "garnishee_orders", []) if g.active)
         c = calc_payroll(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
@@ -897,6 +938,13 @@ async def run_payroll(
             is_fuel_station=is_fuel_station_co and bool(mibco_role_val),
             mibco_scheme_enrolled=mibco_enrolled_val,
             union_subscription=union_sub_val,
+            on_maternity_leave=bool(getattr(emp, "on_maternity_leave", False)),
+            garnishee_total=garnishee_total_val,
+            advance_deduction=getattr(emp, "advance_monthly_deduction", 0.0) or 0.0,
+            expense_claim=once_off_entry.expense_claim,
+            once_off_deduction=once_off_entry.once_off_deduction,
+            once_off_allowance_taxable=once_off_entry.once_off_allowance_taxable,
+            once_off_allowance_nontaxable=once_off_entry.once_off_allowance_nontaxable,
         )
         ot = c["overtime"]
         payslip = Payslip(
@@ -942,6 +990,13 @@ async def run_payroll(
             nbcpss_medical_employer=c["nbcpss_medical_employer"],
             uniform_allowance=c["uniform_allowance"],
             union_subscription_ded=c["union_subscription_ded"],
+            on_maternity_leave=c["on_maternity_leave"],
+            garnishee_total=c["garnishee_total"],
+            advance_deduction=c["advance_deduction"],
+            expense_claim=c["expense_claim"],
+            once_off_deduction=c["once_off_deduction"],
+            once_off_allowance_taxable=c["once_off_allowance_taxable"],
+            once_off_allowance_nontaxable=c["once_off_allowance_nontaxable"],
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post

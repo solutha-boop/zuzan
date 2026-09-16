@@ -1295,6 +1295,8 @@ class EmployeeCreate(BaseModel):
     mibco_role:                Optional[str]   = None  # "forecourt_attendant" | "cashier" | "char"
     mibco_scheme_enrolled:     Optional[bool]  = True  # False = opted out of health scheme
     union_subscription:        Optional[float] = 0.0   # monthly union dues (R) — after-tax deduction
+    advance_monthly_deduction: Optional[float] = 0.0   # monthly salary advance repayment deduction
+    on_maternity_leave:        Optional[bool]  = False  # True → gross zeroed; employee claims UIF maternity benefit
 
 class EmployeeUpdate(BaseModel):
     position:                  Optional[str] = None
@@ -1331,6 +1333,8 @@ class EmployeeUpdate(BaseModel):
     mibco_role:                Optional[str]   = None
     mibco_scheme_enrolled:     Optional[bool]  = None
     union_subscription:        Optional[float] = None  # monthly union dues (R)
+    advance_monthly_deduction: Optional[float] = None  # monthly salary advance repayment
+    on_maternity_leave:        Optional[bool]  = None  # True → gross zeroed this month
 
 
 def _employee_dict(e: Employee) -> dict:
@@ -1373,6 +1377,13 @@ def _employee_dict(e: Employee) -> dict:
         "mibco_role":             getattr(e, "mibco_role", None),
         "mibco_scheme_enrolled":  bool(getattr(e, "mibco_scheme_enrolled", True)),
         "union_subscription":     getattr(e, "union_subscription", 0.0) or 0.0,
+        # General payroll adjustments
+        "advance_monthly_deduction": getattr(e, "advance_monthly_deduction", 0.0) or 0.0,
+        "on_maternity_leave":        bool(getattr(e, "on_maternity_leave", False)),
+        "garnishee_orders": [
+            {"id": g.id, "reference": g.reference, "amount": g.amount, "active": g.active}
+            for g in getattr(e, "garnishee_orders", [])
+        ],
     }
 
 
@@ -1442,6 +1453,8 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         mibco_role=data.mibco_role or None,
         mibco_scheme_enrolled=data.mibco_scheme_enrolled if data.mibco_scheme_enrolled is not None else True,
         union_subscription=data.union_subscription or 0.0,
+        advance_monthly_deduction=data.advance_monthly_deduction or 0.0,
+        on_maternity_leave=data.on_maternity_leave or False,
     )
     db.add(emp)
     db.commit()
@@ -1466,6 +1479,75 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
             setattr(emp, field, value)
     db.commit()
     return _employee_dict(emp)
+
+
+# ── GARNISHEE ORDERS ──────────────────────────────────────────────────────────
+
+class GarnisheeCreate(BaseModel):
+    reference: str
+    amount:    float
+
+@employees_router.get("/{employee_id}/garnishees")
+async def list_garnishees(
+    employee_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    emp = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == current_user.company_id
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    from database import EmployeeGarnishee
+    orders = db.query(EmployeeGarnishee).filter(
+        EmployeeGarnishee.employee_id == employee_id
+    ).order_by(EmployeeGarnishee.id).all()
+    return [{"id": g.id, "reference": g.reference, "amount": g.amount, "active": g.active} for g in orders]
+
+@employees_router.post("/{employee_id}/garnishees")
+async def add_garnishee(
+    employee_id: int,
+    data: GarnisheeCreate,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db)
+):
+    emp = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == current_user.company_id
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    from database import EmployeeGarnishee
+    g = EmployeeGarnishee(employee_id=employee_id, reference=data.reference, amount=data.amount, active=True)
+    db.add(g)
+    db.commit()
+    db.refresh(g)
+    return {"id": g.id, "reference": g.reference, "amount": g.amount, "active": g.active}
+
+@employees_router.delete("/{employee_id}/garnishees/{garnishee_id}")
+async def remove_garnishee(
+    employee_id: int,
+    garnishee_id: int,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db)
+):
+    emp = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == current_user.company_id
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    from database import EmployeeGarnishee
+    g = db.query(EmployeeGarnishee).filter(
+        EmployeeGarnishee.id == garnishee_id,
+        EmployeeGarnishee.employee_id == employee_id
+    ).first()
+    if not g:
+        raise HTTPException(status_code=404, detail="Garnishee order not found")
+    db.delete(g)
+    db.commit()
+    return {"deleted": garnishee_id}
 
 
 # ── BANK STATEMENT IMPORT ─────────────────────────────────────────────────────

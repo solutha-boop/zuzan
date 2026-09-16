@@ -195,6 +195,9 @@ class Employee(Base):
     mibco_role=Column(String,nullable=True)            # "forecourt_attendant" | "cashier" | "char"
     mibco_scheme_enrolled=Column(Boolean,default=True) # False if employee opted out of health scheme within 60 days
     union_subscription=Column(Float,default=0.0)        # monthly union dues (e.g. POPCRU R35/mo) — after-tax deduction
+    # General payroll adjustments
+    advance_monthly_deduction=Column(Float,default=0.0)  # monthly salary advance repayment deduction
+    on_maternity_leave=Column(Boolean,default=False)     # if True, gross=0; employee claims UIF maternity benefit directly
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
     hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
@@ -216,6 +219,18 @@ class Employee(Base):
     payslips=relationship("Payslip",back_populates="employee")
     leave_requests=relationship("LeaveRequest",back_populates="employee")
     leave_balance=relationship("LeaveBalance",back_populates="employee",uselist=False)
+    garnishee_orders=relationship("EmployeeGarnishee",back_populates="employee",cascade="all, delete-orphan")
+
+class EmployeeGarnishee(Base):
+    """Court-ordered emolument attachment orders (garnishee orders) — recurring monthly deduction."""
+    __tablename__ = "employee_garnishees"
+    id=Column(Integer,primary_key=True,index=True)
+    employee_id=Column(Integer,ForeignKey("employees.id"))
+    reference=Column(String,nullable=False)   # e.g. case number / creditor name
+    amount=Column(Float,nullable=False)       # fixed monthly deduction (ZAR)
+    active=Column(Boolean,default=True)       # set False to suspend without deleting
+    created_at=Column(DateTime,default=datetime.utcnow)
+    employee=relationship("Employee",back_populates="garnishee_orders")
 
 class InventoryItem(Base):
     __tablename__ = "inventory"
@@ -278,6 +293,14 @@ class Payslip(Base):
     nbcpss_medical_employer=Column(Float,default=0.0)    # PSSSBC prescribed medical aid employer R197/mo
     uniform_allowance=Column(Float,default=0.0)          # R150/mo non-taxable uniform reimbursement (s10(1)(nA))
     union_subscription_ded=Column(Float,default=0.0)     # union dues deducted from net pay (POPCRU, SATAWU, etc.)
+    # General payroll adjustments — advance repayment, garnishee, once-off items, maternity
+    advance_deduction=Column(Float,default=0.0)          # salary advance repayment this period
+    garnishee_total=Column(Float,default=0.0)            # total of all active garnishee orders this period
+    expense_claim=Column(Float,default=0.0)              # non-taxable expense reimbursement (added to net, not gross)
+    once_off_deduction=Column(Float,default=0.0)         # once-off deduction this period (e.g. uniform purchase)
+    once_off_allowance_taxable=Column(Float,default=0.0)    # once-off taxable allowance (travel, etc.) — added to gross
+    once_off_allowance_nontaxable=Column(Float,default=0.0) # once-off non-taxable allowance (tools, PPE, etc.) — added to net only
+    on_maternity_leave=Column(Boolean,default=False)     # True = gross zeroed; employee on UIF maternity benefit
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -1623,6 +1646,25 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS nbcpss_medical_employer FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS uniform_allowance FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS union_subscription_ded FLOAT DEFAULT 0",
+            # ── General payroll adjustments — advance, garnishee, once-off items, maternity (2026-09) ──
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS advance_monthly_deduction FLOAT DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS on_maternity_leave BOOLEAN DEFAULT FALSE",
+            """CREATE TABLE IF NOT EXISTS employee_garnishees (
+                id          SERIAL PRIMARY KEY,
+                employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+                reference   VARCHAR NOT NULL,
+                amount      FLOAT NOT NULL,
+                active      BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at  TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_garnishees_employee ON employee_garnishees (employee_id)",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS advance_deduction FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS garnishee_total FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS expense_claim FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS once_off_deduction FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS once_off_allowance_taxable FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS once_off_allowance_nontaxable FLOAT DEFAULT 0",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS on_maternity_leave BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 conn.execute(text(sql))

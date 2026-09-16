@@ -2694,6 +2694,13 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               (p.nbcpss_provident_employee > 0 || p.nbcpssProvidentEmployee > 0) && ["🔒 PSSPF Provident Fund (NBCPSS — 7.5%)", p.nbcpss_provident_employee||p.nbcpssProvidentEmployee, C.red],
               (p.nbcpss_medical_employee > 0 || p.nbcpssMedicalEmployee > 0) && ["🔒 PSSSBC Medical Aid (NBCPSS Prescribed)", p.nbcpss_medical_employee||p.nbcpssMedicalEmployee, C.red],
               (p.union_subscription_ded > 0 || p.unionSubscriptionDed > 0) && ["🤝 Union Subscription", p.union_subscription_ded||p.unionSubscriptionDed, C.red],
+              (p.advance_deduction > 0 || p.advanceDeduction > 0) && ["🏦 Salary Advance Repayment", p.advance_deduction||p.advanceDeduction, C.red],
+              (p.garnishee_total > 0 || p.garnisheeTotal > 0) && ["⚖️ Garnishee / EAO", p.garnishee_total||p.garnisheeTotal, C.red],
+              (p.once_off_deduction > 0 || p.onceOffDeduction > 0) && ["✂️ Once-off Deduction", p.once_off_deduction||p.onceOffDeduction, C.red],
+              (p.once_off_allowance_taxable > 0 || p.onceOffAllowanceTaxable > 0) && ["＋ Once-off Taxable Allowance", -(p.once_off_allowance_taxable||p.onceOffAllowanceTaxable), C.green],
+              (p.once_off_allowance_nontaxable > 0 || p.onceOffAllowanceNontaxable > 0) && ["＋ Once-off Non-taxable Allowance", -(p.once_off_allowance_nontaxable||p.onceOffAllowanceNontaxable), C.green],
+              (p.expense_claim > 0 || p.expenseClaim > 0) && ["🧾 Expense Claim (Reimbursement)", -(p.expense_claim||p.expenseClaim), C.green],
+              (p.on_maternity_leave || p.onMaternityLeave) && ["🤱 Maternity Leave (Zero Gross — Employee Claims UIF Directly)", 0, C.gold],
               ["PAYE (Income Tax)", p.paye, C.red],
               p.medicalTaxCredit > 0 && ["  ↳ Medical Tax Credit (s6A)", -(p.medicalTaxCredit || p.medical_tax_credit), C.green],
               ["UIF (Employee Contribution)", p.uifEmployee, C.gold],
@@ -3236,14 +3243,18 @@ function Payroll({live = {}, user = {}}) {
   const [payrollRun, setPayrollRun] = useState(false);
   const [showOtModal, setShowOtModal] = useState(false);
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
+  const [onceOffData, setOnceOffData] = useState({}); // {employeeId: {expenseClaim, onceOffDeduction, onceOffTaxable, onceOffNonTaxable}}
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
   const [secArea, setSecArea] = useState("3"); // NBCPSS rate area: Area 3 only
   const [includeBonus, setIncludeBonus] = useState(false); // NBCPSS annual bonus (December)
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true,unionSubscription:0});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true,unionSubscription:0,advanceMonthlyDeduction:0,onMaternityLeave:false});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
   const [editForm,    setEditForm]    = useState({});
+  const [garnishees,  setGarnishees]  = useState([]);  // active garnishee orders for editEmp
+  const [newGarnRef,  setNewGarnRef]  = useState("");
+  const [newGarnAmt,  setNewGarnAmt]  = useState("");
   const totalGross = employees.reduce((s,e) => s + e.salary, 0);
   // audit fix 2026-09-16 — same NBCPSS gap as BatchPaymentModal: these drive the
   // "Payroll Processed" summary cards (Net Disbursed / PAYE / UIF+SDL) shown right
@@ -3326,6 +3337,8 @@ function Payroll({live = {}, user = {}}) {
           mibco_role:                 form.mibcoRole || null,
           mibco_scheme_enrolled:      form.mibcoSchemeEnrolled ?? true,
           union_subscription:         form.unionSubscription || 0,
+          advance_monthly_deduction:  form.advanceMonthlyDeduction || 0,
+          on_maternity_leave:         form.onMaternityLeave || false,
         }),
       });
       if (live && live.reload) live.reload();
@@ -3333,6 +3346,34 @@ function Payroll({live = {}, user = {}}) {
       console.warn("Employee save failed:", err.message);
     }
   };
+  // Fetch garnishee orders whenever a different employee is opened for editing
+  useEffect(() => {
+    if (!editEmp) { setGarnishees([]); setNewGarnRef(""); setNewGarnAmt(""); return; }
+    const tok = localStorage.getItem("token");
+    fetch(`${API_URL}/employees/${editEmp.id}/garnishees`, {headers:{Authorization:`Bearer ${tok}`}})
+      .then(r=>r.ok?r.json():[])
+      .then(setGarnishees)
+      .catch(()=>setGarnishees([]));
+  }, [editEmp?.id]);
+
+  const addGarnishee = async () => {
+    if (!newGarnRef.trim() || !parseFloat(newGarnAmt)) return;
+    const tok = localStorage.getItem("token");
+    const r = await fetch(`${API_URL}/employees/${editEmp.id}/garnishees`, {
+      method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${tok}`},
+      body:JSON.stringify({reference:newGarnRef.trim(),amount:parseFloat(newGarnAmt)})
+    });
+    if (r.ok) { const g = await r.json(); setGarnishees(v=>[...v,g]); setNewGarnRef(""); setNewGarnAmt(""); }
+  };
+
+  const removeGarnishee = async (gid) => {
+    const tok = localStorage.getItem("token");
+    const r = await fetch(`${API_URL}/employees/${editEmp.id}/garnishees/${gid}`, {
+      method:"DELETE",headers:{Authorization:`Bearer ${tok}`}
+    });
+    if (r.ok) setGarnishees(v=>v.filter(g=>g.id!==gid));
+  };
+
   const handleEditSave = async () => {
     if (!editEmp) return;
     const nameParts = (editForm.name || "").trim().split(" ");
@@ -3404,6 +3445,8 @@ function Payroll({live = {}, user = {}}) {
             mibco_role:                 editForm.mibcoRole || null,
             mibco_scheme_enrolled:      editForm.mibcoSchemeEnrolled ?? true,
             union_subscription:         editForm.unionSubscription || 0,
+            advance_monthly_deduction:  editForm.advanceMonthlyDeduction || 0,
+            on_maternity_leave:         editForm.onMaternityLeave || false,
           }),
         });
         if (live && live.reload) live.reload();
@@ -4098,6 +4141,39 @@ function Payroll({live = {}, user = {}}) {
                 })}
               </tbody>
             </table>
+
+            {/* ── Once-off items ─────────────────────────────────────────── */}
+            <div style={{marginTop:16,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Once-off Items (this pay run only)</div>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:C.surface}}>
+                    <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:C.inkMid,fontSize:11}}>Employee</th>
+                    <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:C.inkMid,fontSize:11}}>Expense Claim (R)</th>
+                    <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:C.inkMid,fontSize:11}}>Once-off Deduction (R)</th>
+                    <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:C.inkMid,fontSize:11}}>Once-off Allow. Taxable (R)</th>
+                    <th style={{padding:"8px 10px",textAlign:"left",fontWeight:600,color:C.inkMid,fontSize:11}}>Once-off Allow. Non-taxable (R)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {employees.map(emp => {
+                    const oo = onceOffData[emp.id] || {};
+                    const setOo = (k,v) => setOnceOffData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
+                    const inpSt = {padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,width:90,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"};
+                    return (
+                      <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                        <td style={{padding:"7px 10px",fontWeight:600,color:C.ink}}>{emp.name}</td>
+                        <td style={{padding:"7px 10px"}}><input type="number" min="0" step="0.01" placeholder="0" value={oo.expenseClaim||""} onChange={e=>setOo("expenseClaim",e.target.value)} style={inpSt}/></td>
+                        <td style={{padding:"7px 10px"}}><input type="number" min="0" step="0.01" placeholder="0" value={oo.onceOffDeduction||""} onChange={e=>setOo("onceOffDeduction",e.target.value)} style={inpSt}/></td>
+                        <td style={{padding:"7px 10px"}}><input type="number" min="0" step="0.01" placeholder="0" value={oo.onceOffTaxable||""} onChange={e=>setOo("onceOffTaxable",e.target.value)} style={inpSt}/></td>
+                        <td style={{padding:"7px 10px"}}><input type="number" min="0" step="0.01" placeholder="0" value={oo.onceOffNonTaxable||""} onChange={e=>setOo("onceOffNonTaxable",e.target.value)} style={inpSt}/></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
             <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
               <button onClick={()=>setShowOtModal(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
               <button onClick={async () => {
@@ -4111,8 +4187,12 @@ function Payroll({live = {}, user = {}}) {
                     const sec = secData[emp.id] || {};
                     return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0 };
                   }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0);
+                  const onceOffPayload = employees.map(emp => {
+                    const oo = onceOffData[emp.id] || {};
+                    return { employee_id: emp.id, expense_claim: +oo.expenseClaim||0, once_off_deduction: +oo.onceOffDeduction||0, once_off_allowance_taxable: +oo.onceOffTaxable||0, once_off_allowance_nontaxable: +oo.onceOffNonTaxable||0 };
+                  }).filter(e => e.expense_claim > 0 || e.once_off_deduction > 0 || e.once_off_allowance_taxable > 0 || e.once_off_allowance_nontaxable > 0);
                   const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
-                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload, ...(isSec ? {area_override: secArea, include_annual_bonus: includeBonus} : {})})});
+                  await api("/payroll/run", {method:"POST", body: JSON.stringify({overtime: otPayload, security: secPayload, once_off: onceOffPayload, ...(isSec ? {area_override: secArea, include_annual_bonus: includeBonus} : {})})});
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); }
                 setPayrollRun(true);
@@ -4462,6 +4542,14 @@ function Payroll({live = {}, user = {}}) {
                     <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Union Subscription (R/month)</label>
                     <input type="number" min="0" step="0.01" placeholder="0.00" value={form.unionSubscription||""} onChange={e=>setForm(v=>({...v,unionSubscription:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                   </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Advance Repayment (R/month)</label>
+                    <input type="number" min="0" step="0.01" placeholder="0.00" value={form.advanceMonthlyDeduction||""} onChange={e=>setForm(v=>({...v,advanceMonthlyDeduction:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
+                    <input type="checkbox" id="addMatLeave" checked={form.onMaternityLeave||false} onChange={e=>setForm(v=>({...v,onMaternityLeave:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                    <label htmlFor="addMatLeave" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>On Maternity Leave <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(zero gross this pay run; employee claims UIF directly)</span></label>
+                  </div>
                 </div>
                 {form.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12}}>
                   {belowMin
@@ -4555,7 +4643,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,unionSubscription:emp.union_subscription||0});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                     </div>
                   </td>
@@ -4854,6 +4942,14 @@ function Payroll({live = {}, user = {}}) {
                       <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Union Subscription (R/month)</label>
                       <input type="number" min="0" step="0.01" placeholder="0.00" value={editForm.unionSubscription||""} onChange={e=>setEditForm(v=>({...v,unionSubscription:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                     </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Advance Repayment (R/month)</label>
+                      <input type="number" min="0" step="0.01" placeholder="0.00" value={editForm.advanceMonthlyDeduction||""} onChange={e=>setEditForm(v=>({...v,advanceMonthlyDeduction:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
+                      <input type="checkbox" id="editMatLeave" checked={editForm.onMaternityLeave||false} onChange={e=>setEditForm(v=>({...v,onMaternityLeave:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
+                      <label htmlFor="editMatLeave" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>On Maternity Leave <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(zero gross this pay run; employee claims UIF directly)</span></label>
+                    </div>
                   </div>
                   {editForm.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12,marginBottom:8}}>
                     {belowMin
@@ -4892,7 +4988,25 @@ function Payroll({live = {}, user = {}}) {
               </div>
             </div>
 
-            <div style={{display:"flex",gap:8}}>
+            {/* ── Garnishee orders ─────────────────────────────────────────── */}
+            <div style={{marginTop:20,padding:"14px 16px",background:C.surfaceAlt||C.bg,border:`1px solid ${C.border}`,borderRadius:12}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Garnishee / Emolument Attachment Orders</div>
+              {garnishees.length===0 && <div style={{fontSize:12,color:C.inkMid,marginBottom:8}}>No active garnishee orders.</div>}
+              {garnishees.map(g=>(
+                <div key={g.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 10px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:6}}>
+                  <span style={{fontSize:13,color:C.ink}}>{g.reference}</span>
+                  <span style={{fontSize:13,fontWeight:700,color:C.ink}}>{fmt(g.amount)}/month</span>
+                  <button onClick={()=>removeGarnishee(g.id)} style={{background:"#fff1f2",color:"#b91c1c",border:"1px solid #fca5a5",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Remove</button>
+                </div>
+              ))}
+              <div style={{display:"flex",gap:8,marginTop:8}}>
+                <input placeholder="Order reference (e.g. court case no.)" value={newGarnRef} onChange={e=>setNewGarnRef(e.target.value)} style={{flex:2,padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+                <input type="number" min="0" step="0.01" placeholder="Amount R" value={newGarnAmt} onChange={e=>setNewGarnAmt(e.target.value)} style={{flex:1,padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+                <button onClick={addGarnishee} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add</button>
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:8,marginTop:16}}>
               <button onClick={handleEditSave} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
               <button onClick={()=>setEditEmp(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
             </div>

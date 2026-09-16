@@ -36,7 +36,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: NBCPSS provident (PSSPF 7.5%%), medical (PSSSBC R197), uniform allow (s10(1)(nA) R150), union subscription — backend+DB+frontend; feat: mass payslip ZIP download; fix: NBCPSS R32.34 grade-min÷208h [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: payroll advances, garnishee orders, maternity leave, expense claims, once-off deductions/allowances — DB+backend+frontend; feat: NBCPSS union sub, provident (PSSPF 7.5%%), medical (PSSSBC R197), uniform allow; feat: mass payslip ZIP download [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main
