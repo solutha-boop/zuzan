@@ -1157,7 +1157,7 @@ def _payslip_html(payslip, emp, company_name: str) -> str:
 </body></html>"""
 
 
-@router.get("/payslips/{period}/download-all")
+@payroll_router.get("/payslips/{period}/download-all")
 def download_all_payslips(
     period: str,
     db: Session = Depends(get_db),
