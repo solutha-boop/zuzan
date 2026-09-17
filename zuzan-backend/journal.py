@@ -58,6 +58,14 @@ DEFAULT_ACCOUNTS = [
     {"code": "2280", "name": "NBCPSS Provident Fund Payable", "type": AccountType.liability},
     {"code": "2290", "name": "NBCPSS Medical Aid Payable",    "type": AccountType.liability},
     {"code": "2300", "name": "Union Dues Payable",            "type": AccountType.liability},
+    # General payroll adjustment liabilities (audit fix 2026-09-17) —
+    # garnishee_total, advance_deduction and once_off_deduction were computed
+    # and stored on the payslip since the 2026-09-16 feature shipped, but
+    # never posted anywhere, unbalancing any payroll run using them for ANY
+    # company (not industry-gated, unlike the NBCPSS/MIBCO fields above).
+    # init_accounts upserts, so existing companies get these on the next run.
+    {"code": "2310", "name": "Garnishee Orders Payable",      "type": AccountType.liability},
+    {"code": "2320", "name": "Payroll Deductions Payable",    "type": AccountType.liability},
     {"code": "2126", "name": "Income Tax Payable",           "type": AccountType.liability},
     {"code": "2127", "name": "Provisional Tax Payable",      "type": AccountType.liability},
     # Equity
@@ -75,6 +83,9 @@ DEFAULT_ACCOUNTS = [
     {"code": "5150", "name": "MIBCO Health Scheme (Employer)",       "type": AccountType.expense},
     {"code": "5160", "name": "NBCPSS Provident Fund (Employer)",     "type": AccountType.expense},
     {"code": "5170", "name": "NBCPSS Medical Aid (Employer)",        "type": AccountType.expense},
+    # Pass-through employer cost for expense-claim reimbursements and once-off
+    # non-taxable allowances (audit fix 2026-09-17) — same gap as above.
+    {"code": "5180", "name": "Employee Reimbursements & Allowances (Non-Taxable)", "type": AccountType.expense},
     {"code": "5200", "name": "Utilities",                    "type": AccountType.expense},
     {"code": "5210", "name": "Telecoms",                     "type": AccountType.expense},
     {"code": "5220", "name": "Office Expenses",              "type": AccountType.expense},
@@ -433,7 +444,14 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     prescribed medical aid (PSSSBC), uniform allowance and union subscription
     fields, all of which are UNCONDITIONAL for every is_security employee
     (not gated behind a toggle like annual_bonus was), so every
-    private-security payroll run was unbalanced by ~R550+/employee:
+    private-security payroll run was unbalanced by ~R550+/employee;
+    audit fix 2026-09-17 — the identical gap recurred a fifth time for the
+    general payroll adjustments feature (garnishee orders, salary advances,
+    once-off deductions/allowances, expense claims), shipped in the same
+    commit as the 09-16 fix but without its own journal wiring. Unlike the
+    prior four instances, these fields are NOT industry-gated — any company
+    using a garnishee order, salary advance, once-off adjustment or expense
+    claim would unbalance every affected payroll run:
       DR Salaries (Gross)              (gross_salary + overtime + annual_bonus
                                          + NBCPSS night/special/cleaning allowances
                                          + MIBCO medical insurance allowance
@@ -456,25 +474,42 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
       CR NBCPSS Provident Fund Payable (nbcpss_provident_employee + nbcpss_provident_employer)
       CR NBCPSS Medical Aid Payable    (nbcpss_medical_employee + nbcpss_medical_employer)
       CR Union Dues Payable            (union_subscription_ded)
+      DR Employee Reimbursements (Non-Taxable) (expense_claim + once_off_allowance_nontaxable)
+      CR Garnishee Orders Payable      (garnishee_total)
+      CR Payroll Deductions Payable    (advance_deduction + once_off_deduction)
       CR Bank / Cash                   (net_pay)
 
     Balances for every input combination because
     net_pay = taxable_gross − paye − uif_employee − pension_employee
               − medical_aid_employee − mibco_scheme_employee
               − nbcpss_provident_employee − nbcpss_medical_employee
-              − union_subscription_ded + uniform_allowance,
+              − union_subscription_ded + uniform_allowance
+              − garnishee_total − advance_deduction − once_off_deduction
+              + expense_claim + once_off_allowance_nontaxable,
     where taxable_gross = gross_salary + overtime + annual_bonus + NBCPSS
-    night/special/cleaning allowances + mibco_med_allow — i.e. exactly the
-    DR "Salaries (Gross)" line above, PLUS uniform_allowance which is folded
-    into that same debit even though it isn't part of taxable_gross (it's a
-    non-taxable cash payment to the employee, so it still needs a debit
-    somewhere or the entry unbalances). bc_levy_employer/psira_levy_employer/
-    mibco_scheme_employer/nbcpss_provident_employer/nbcpss_medical_employer
-    are pure employer costs (never deducted from the employee), so they don't
-    affect net_pay — they get their own balanced DR/CR pair instead of
-    touching the salary line. union_subscription_ded is a pure employee
-    deduction with no employer cost, so it gets a CR-only liability line (the
-    debit side is already covered by the salary line it was never added to).
+    night/special/cleaning allowances + mibco_med_allow + once_off_allowance_taxable
+    — i.e. exactly the DR "Salaries (Gross)" line above, PLUS uniform_allowance
+    which is folded into that same debit even though it isn't part of
+    taxable_gross (it's a non-taxable cash payment to the employee, so it
+    still needs a debit somewhere or the entry unbalances). bc_levy_employer/
+    psira_levy_employer/mibco_scheme_employer/nbcpss_provident_employer/
+    nbcpss_medical_employer are pure employer costs (never deducted from the
+    employee), so they don't affect net_pay — they get their own balanced
+    DR/CR pair instead of touching the salary line. union_subscription_ded/
+    garnishee_total/advance_deduction/once_off_deduction are pure employee
+    deductions with no employer cost, so each gets a CR-only liability line
+    (the debit side is already covered by the salary line it was never added
+    to — net_pay already subtracts them, so crediting them back to a payable
+    exactly offsets that subtraction). expense_claim/once_off_allowance_nontaxable
+    are the mirror image — added to net_pay without ever being added to
+    taxable_gross — so they get a DR-only pass-through-expense line instead
+    (audit fix 2026-09-17 — all six of garnishee_total/advance_deduction/
+    once_off_deduction/expense_claim/once_off_allowance_taxable/
+    once_off_allowance_nontaxable were computed and stored on the payslip
+    since the 2026-09-16 feature shipped, but never posted to the journal at
+    all — and unlike the NBCPSS/MIBCO fields above, these are not gated to
+    any industry, so any company using them would hit an unbalanced-journal
+    500 on every affected payroll run).
     """
     cid = employee.company_id
     entry = _make_entry(cid, payslip.generated_at or datetime.utcnow(),
@@ -516,9 +551,14 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     # to the employee and must be debited somewhere or the entry unbalances
     # by this amount; folded into the same salary line as mibco_med_allow).
     uniform_allowance = round(getattr(payslip, "uniform_allowance", 0) or 0, 2)
+    # Once-off taxable allowance (audit fix 2026-09-17 — added to taxable_gross
+    # in payroll.py's calc_payroll (and therefore to net_pay/PAYE via the same
+    # path as annual_bonus/mibco_med_allow), but never folded into this debit).
+    once_off_allow_tax = round(getattr(payslip, "once_off_allowance_taxable", 0) or 0, 2)
     gross_incl_ot = round(
         (payslip.gross_salary or 0) + overtime_total + annual_bonus
-        + nbcpss_allowances + mibco_med_allow + uniform_allowance, 2)
+        + nbcpss_allowances + mibco_med_allow + uniform_allowance
+        + once_off_allow_tax, 2)
 
     employer_contrib = round((payslip.uif_employer or 0) + (payslip.sdl or 0), 2)
 
@@ -548,6 +588,19 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     nbcpss_med2_ee = round(getattr(payslip, "nbcpss_medical_employee", 0) or 0, 2)
     nbcpss_med2_er = round(getattr(payslip, "nbcpss_medical_employer", 0) or 0, 2)
     union_ded      = round(getattr(payslip, "union_subscription_ded", 0) or 0, 2)
+    # General payroll adjustments (audit fix 2026-09-17 — garnishee_total,
+    # advance_deduction and once_off_deduction are computed and stored on the
+    # payslip, subtracted from net_pay in payroll.py's calc_payroll, but were
+    # never posted to the journal at all — same gap as the fields above, but
+    # not gated to any industry, so this affected any company's payroll run).
+    garnishee_total   = round(getattr(payslip, "garnishee_total", 0) or 0, 2)
+    advance_deduction = round(getattr(payslip, "advance_deduction", 0) or 0, 2)
+    once_off_ded      = round(getattr(payslip, "once_off_deduction", 0) or 0, 2)
+    # Pass-through employer costs added to net_pay without ever being added to
+    # taxable_gross (mirror image of the deductions above — these increase
+    # net_pay/CR Bank, so they need a DR line rather than a CR line).
+    expense_claim         = round(getattr(payslip, "expense_claim", 0) or 0, 2)
+    once_off_allow_nontax = round(getattr(payslip, "once_off_allowance_nontaxable", 0) or 0, 2)
 
     lines = [
         _line(entry.id, sal,  debit=gross_incl_ot,                               description="Gross salary incl. overtime, allowances and any annual bonus"),
@@ -599,6 +652,15 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     if union_ded:
         union_pay = get_account(cid, "2300", db)
         lines.append(_line(entry.id, union_pay, credit=union_ded, description="Union dues payable"))
+    if garnishee_total:
+        garnishee_pay = get_account(cid, "2310", db)
+        lines.append(_line(entry.id, garnishee_pay, credit=garnishee_total, description="Garnishee (emolument attachment) order(s) payable"))
+    if advance_deduction or once_off_ded:
+        deductions_pay = get_account(cid, "2320", db)
+        lines.append(_line(entry.id, deductions_pay, credit=round(advance_deduction + once_off_ded, 2), description="Salary advance repayment / once-off deduction recovered from employee"))
+    if expense_claim or once_off_allow_nontax:
+        reimb_exp = get_account(cid, "5180", db)
+        lines.append(_line(entry.id, reimb_exp, debit=round(expense_claim + once_off_allow_nontax, 2), description="Expense claim reimbursement / once-off non-taxable allowance"))
     # Fold pure rounding residue (≤ 5c) into the salary debit: payslip fields are
     # rounded independently, so cent-level drift is possible and must never
     # hard-block a payroll run via _assert_balanced.
