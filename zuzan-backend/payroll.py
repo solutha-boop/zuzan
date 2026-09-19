@@ -267,7 +267,10 @@ MIBCO_SECTOR5_SCHEME_EMPLOYER = {
     2: 90.00,   # Sep 2026 – Aug 2027 (current as of Sep 2026)
     3: 95.00,   # Sep 2027 – Aug 2028
 }
-MIBCO_SECTOR5_SCHEME_EMPLOYEE    = 174.00  # employee deduction R/month (Year 1 confirmed; Year 2 TBC → using Year 1)
+MIBCO_SECTOR5_SCHEME_EMPLOYEE    = 174.00  # employee deduction R/month (Year 1 confirmed; Year 2 still TBC as of
+                                            # 2026-09-18 per external MIBCO compliance sources — using Year 1 rate
+                                            # until MIBCO/Affinity Health publish the Year 2 figure. Re-check when
+                                            # a Year 2 employee rate is published.)
 MIBCO_SECTOR5_VALID_UNTIL        = "31 August 2028"
 
 MIBCO_SECTOR5_ROLES = {
@@ -2463,6 +2466,130 @@ def _vat_net_for_month(db: Session, cid: int, year: int, month: int) -> float:
     return round(output_vat - (input_vat + po_input_vat), 2)
 
 
+def _annual_tax_estimate(db: Session, cid: int, as_of: _date) -> float:
+    """Estimated annual CIT liability from a trailing-12-month run rate.
+
+    (revenue - expenses - payroll cost) x SA_CIT_RATE, floored at 0. Mirrors
+    the revenue/expense/payroll methodology used by /reports/management
+    (paid invoices + bank-import income; ex-VAT expenses + delivered PO COGS
+    + period depreciation; Payslip.total_cost), just over a rolling 365-day
+    window instead of a calendar period. This is a forecasting estimate only
+    — not a substitute for the company's own IRP6 "basic amount" / actual
+    estimate computation filed with SARS.
+    """
+    from fixed_assets import SA_CIT_RATE as _CIT_RATE
+
+    hist_start = datetime.combine(as_of - timedelta(days=365), datetime.min.time())
+    hist_end   = datetime.combine(as_of, datetime.min.time())
+
+    paid_invoices = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status == InvoiceStatus.paid,
+        Invoice.paid_date >= hist_start,
+        Invoice.paid_date < hist_end,
+    ).all()
+    revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
+    revenue = round(revenue + _bank_import_income(db, cid, hist_start, hist_end), 2)
+
+    expenses = db.query(Expense).filter(
+        Expense.company_id == cid,
+        Expense.expense_date >= hist_start,
+        Expense.expense_date < hist_end,
+    ).all()
+    total_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
+
+    po_items = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+        PurchaseOrder.received_date >= hist_start,
+        PurchaseOrder.received_date < hist_end,
+    ).all()
+    total_expenses = round(total_expenses + sum(_po_delivered_net(po) for po in po_items), 2)
+
+    from_period = hist_start.strftime("%Y-%m")
+    to_period   = hist_end.strftime("%Y-%m")
+    period_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
+        DepreciationEntry.company_id == cid,
+        DepreciationEntry.period >= from_period,
+        DepreciationEntry.period <= to_period,
+    ).scalar() or 0
+    total_expenses = round(total_expenses + period_depreciation, 2)
+
+    payroll_cost = db.query(func.sum(Payslip.total_cost)).join(Employee).filter(
+        Employee.company_id == cid,
+        Payslip.generated_at >= hist_start,
+        Payslip.generated_at < hist_end,
+    ).scalar() or 0
+
+    ebit = round(revenue - total_expenses - payroll_cost, 2)
+    return round(max(0.0, ebit * _CIT_RATE), 2)
+
+
+def _add_months(d: _date, n: int) -> _date:
+    """Return d shifted by n calendar months, clipping the day to the target
+    month's length (e.g. 31 Jan + 1 month -> 28/29 Feb)."""
+    total_month = d.month - 1 + n
+    year  = d.year + total_month // 12
+    month = total_month % 12 + 1
+    day   = min(d.day, _calendar.monthrange(year, month)[1])
+    return _date(year, month, day)
+
+
+def _provisional_tax_due(db: Session, cid: int, company, week_start: _date, window_end: _date):
+    """Projected SARS provisional tax (IRP6) payments due within the window.
+
+    Companies must pay provisional tax in two compulsory instalments per
+    year of assessment: the first due on the last day of the 6th month of
+    the financial year (targeting 50% of the estimated annual liability),
+    and the second due on the last day of the financial year (bringing the
+    total paid to 100% of the estimated liability). A third, voluntary
+    "top-up" payment (due ~6-7 months after year end, to true up any
+    under-estimation once the actual assessed result is known) is NOT
+    modelled here, since — unlike the two compulsory dates — it depends on
+    the finalised assessment rather than a projection, and is optional.
+
+    Financial year end is read from Company.financial_year_end ("MM-DD",
+    e.g. "02-28"); defaults to the standard SA 28/29 February year end used
+    elsewhere in the app (financial_statements.py's fy_dates()) when unset.
+
+    (audit fix 2026-09-18, action item 6: the 13-week forecast previously
+    did not model provisional tax as a distinct outflow at all — only
+    PAYE/UIF/SDL and VAT201 were projected.)
+    """
+    fye_str = (getattr(company, "financial_year_end", None) or "02-28")
+    try:
+        fye_month, fye_day = (int(x) for x in fye_str.split("-"))
+    except (ValueError, AttributeError):
+        fye_month, fye_day = 2, 28
+
+    def _fy_end_for(year: int) -> _date:
+        # Feb 28/29 is treated as "last day of February" dynamically (matching
+        # financial_statements.py's fy_dates()), so a leap-year FY correctly
+        # ends 29 Feb rather than always clipping to the stored default "28".
+        if fye_month == 2 and fye_day in (28, 29):
+            day = _calendar.monthrange(year, 2)[1]
+        else:
+            day = min(fye_day, _calendar.monthrange(year, fye_month)[1])
+        return _date(year, fye_month, day)
+
+    due_dates = []  # [date, ...] — compulsory 1st and 2nd provisional payment dates
+    for y in range(week_start.year - 1, window_end.year + 2):
+        fy_end   = _fy_end_for(y)
+        fy_start = _fy_end_for(y - 1) + timedelta(days=1)
+        due1 = _add_months(fy_start, 6) - timedelta(days=1)
+        due2 = fy_end
+        for d in (due1, due2):
+            if week_start <= d <= window_end:
+                due_dates.append(d)
+
+    if not due_dates:
+        return []
+
+    annual_est = _annual_tax_estimate(db, cid, week_start)
+    half = round(annual_est / 2, 2)
+    return [(d, half) for d in sorted(set(due_dates))]
+
+
 @reports_router.get("/cash-flow-13week")
 async def cash_flow_13week(
     opening_balance: float = 0.0,
@@ -2485,10 +2612,15 @@ async def cash_flow_13week(
 
     cid   = current_user.company_id
     today = _date.today()
+    company = db.query(Company).filter(Company.id == cid).first()
 
     # Monday of the current week
     week_start = today - timedelta(days=today.weekday())
     window_end = week_start + timedelta(weeks=13) - timedelta(days=1)
+
+    # ── Projected provisional tax (IRP6) payments due in the window ───────
+    # (audit fix 2026-09-18, action item 6)
+    prov_tax_due = _provisional_tax_due(db, cid, company, week_start, window_end)
 
     # ── Trailing expense average (last 8 weeks) ────────────────────────────
     hist_start = datetime.combine(week_start - timedelta(weeks=8), datetime.min.time())
@@ -2644,6 +2776,10 @@ async def cash_flow_13week(
         # or if the projected period is a net refund rather than a liability)
         vat_payment = round(sum(a for d, a in vat_due if w_start <= d <= w_end), 2)
 
+        # Projected provisional tax (IRP6) payment due this week (audit fix
+        # 2026-09-18, action item 6 — see _provisional_tax_due() docstring).
+        provisional_tax = round(sum(a for d, a in prov_tax_due if w_start <= d <= w_end), 2)
+
         weeks.append({
             "week":               i + 1,
             "week_start":         w_start.isoformat(),
@@ -2656,6 +2792,7 @@ async def cash_flow_13week(
             "creditor_payments":  creditor_payments,
             "other_payments":     0.0,
             "vat_payment":        vat_payment,
+            "provisional_tax":    provisional_tax,
         })
 
     return {

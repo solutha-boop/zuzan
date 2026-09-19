@@ -222,3 +222,8 @@ __marimo__/
 *.db-shm
 *.db-wal
 *.db-journal
+
+# Linux FUSE editor lock/temp artifacts (seen recurring under zuzan-backend/
+# when a file is open for edit through a network/cloud-synced mount) —
+# audit fix 2026-09-18, standing Low item from the 09-17/09-18 reports.
+.fuse_hidden*

@@ -59,11 +59,13 @@ class SMTTotals(BaseModel):
 
 class SMTInvoice(BaseModel):
     quoteId: Optional[str] = None
-    documentNo: str                # used as Zuzan invoice_number + dedup key
-    documentDate: str              # ISO date e.g. "2026-09-04"
+    documentNo: str                 # used as Zuzan invoice_number + dedup key
+    documentDate: str               # ISO date e.g. "2026-09-04"
+    dueDate: Optional[str] = None   # ISO date for payment due date e.g. "2026-10-04"
     travelDate: Optional[str] = None
     currency: Optional[str] = "ZAR"
     exchangeRate: Optional[float] = None  # units of ZAR per 1 unit of foreign currency; required if currency != ZAR
+    status: Optional[str] = None    # "sent" (default) or "draft" — controls Zuzan invoice status on creation
     client: SMTClient
     traveller: Optional[SMTTraveller] = None
     lineItems: List[SMTLineItem] = []
@@ -173,6 +175,35 @@ def _resolve_currency_and_rate(doc_no: str, currency_in: Optional[str], exchange
     return currency, float(exchange_rate_in)
 
 
+def _post_journal_safe(invoice, db: Session) -> bool:
+    """Post the invoice-raised journal entry using a DB SAVEPOINT.
+
+    Using begin_nested() (SAVEPOINT) means a failure inside
+    post_invoice_raised() — whether a Python exception or a DB-level
+    IntegrityError that would otherwise abort the PostgreSQL transaction —
+    is rolled back only to the savepoint.  The outer transaction (invoice
+    create/update) remains valid and db.commit() can proceed normally.
+
+    Without the savepoint, a DB exception inside post_invoice_raised()
+    would abort the PostgreSQL transaction, leaving the SQLAlchemy session
+    in an invalid state.  The subsequent db.commit() would then raise
+    PendingRollbackError, which propagates as an unhandled 500 even though
+    the invoice itself was saved correctly.  (Fix 2026-09-19.)
+    """
+    nested = db.begin_nested()
+    try:
+        post_invoice_raised(invoice, db)
+        nested.commit()
+        return True
+    except Exception:
+        nested.rollback()
+        logger.error(
+            "Journal post failed for invoice id=%s (doc_no=%s, company_id=%s)",
+            invoice.id, invoice.invoice_number, invoice.company_id, exc_info=True,
+        )
+        return False
+
+
 # ── ENDPOINT ──────────────────────────────────────────────────────────────────
 
 @router.post("/invoice")
@@ -183,6 +214,14 @@ async def inbound_invoice(
 ):
     """
     Accept an invoice from an external back-office system and post it into Zuzan.
+
+    New fields (2026-09-19):
+      invoice.dueDate  — ISO date string for the payment due date (optional).
+                         Integration invoices previously had due_date = null;
+                         passing dueDate now populates it correctly.
+      invoice.status   — "sent" (default) or "draft".  Pass "draft" to hold
+                         the invoice without it appearing as an outstanding
+                         debtor until you're ready to send it.
 
     Returns:
       {
@@ -198,7 +237,7 @@ async def inbound_invoice(
       409 — existing invoice is already paid in Zuzan and the resubmitted
             totals differ (amount edits on paid invoices are blocked)
       422 — payload validation failure (FastAPI auto), or non-ZAR currency
-            with no exchangeRate supplied
+            with no exchangeRate supplied, or unparseable date
       500 — unexpected server error
     """
     company, key_record = get_company_from_api_key(x_api_key, db)
@@ -224,6 +263,18 @@ async def inbound_invoice(
         issue_date = _parse_date(inv.documentDate)
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid documentDate: {inv.documentDate}")
+
+    # ── Parse optional dueDate ────────────────────────────────────────────────
+    due_date = None
+    if inv.dueDate:
+        try:
+            due_date = _parse_date(inv.dueDate)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Invalid dueDate: {inv.dueDate}")
+
+    # ── Resolve target InvoiceStatus ──────────────────────────────────────────
+    _status_map = {"sent": InvoiceStatus.sent, "draft": InvoiceStatus.draft}
+    target_status = _status_map.get((inv.status or "sent").lower(), InvoiceStatus.sent)
 
     # ── Check for duplicate ───────────────────────────────────────────────────
     existing = db.query(Invoice).filter(
@@ -257,31 +308,27 @@ async def inbound_invoice(
         # UPDATE path — reverse old journals, then repost
         _delete_existing_journals(existing.id, company.id, db)
 
-        existing.client_name   = customer.name
-        existing.client_email  = (inv.traveller.email if inv.traveller else None) or existing.client_email
-        existing.amount        = subtotal
-        existing.vat_amount    = vat_amount
-        existing.total_amount  = total
-        existing.currency      = currency
-        existing.exchange_rate = exchange_rate
-        existing.issue_date    = issue_date
-        existing.quote_ref     = inv.quoteId or existing.quote_ref
-        existing.tax_ref       = inv.client.taxReference or existing.tax_ref
-        existing.travel_date   = inv.travelDate or existing.travel_date
-        existing.pax_count     = (inv.traveller.pax if inv.traveller else None) or existing.pax_count
-        existing.passenger_name= (inv.traveller.name if inv.traveller else None) or existing.passenger_name
-        existing.items_json    = items_json
-        existing.notes         = f"Re-posted from {payload.source or 'external'} at {payload.postedAt or datetime.utcnow().isoformat()}"
+        existing.client_name    = customer.name
+        existing.client_email   = (inv.traveller.email if inv.traveller else None) or existing.client_email
+        existing.amount         = subtotal
+        existing.vat_amount     = vat_amount
+        existing.total_amount   = total
+        existing.currency       = currency
+        existing.exchange_rate  = exchange_rate
+        existing.issue_date     = issue_date
+        existing.due_date       = due_date if due_date is not None else existing.due_date
+        existing.quote_ref      = inv.quoteId or existing.quote_ref
+        existing.tax_ref        = inv.client.taxReference or existing.tax_ref
+        existing.travel_date    = inv.travelDate or existing.travel_date
+        existing.pax_count      = (inv.traveller.pax if inv.traveller else None) or existing.pax_count
+        existing.passenger_name = (inv.traveller.name if inv.traveller else None) or existing.passenger_name
+        existing.items_json     = items_json
+        existing.notes          = f"Re-posted from {payload.source or 'external'} at {payload.postedAt or datetime.utcnow().isoformat()}"
+        if inv.status is not None:
+            existing.status = target_status
         db.flush()
-        journal_posted = True
-        try:
-            post_invoice_raised(existing, db)
-        except Exception:
-            journal_posted = False  # invoice save must not be blocked by a journal failure
-            logger.error(
-                "Journal post failed for invoice id=%s (doc_no=%s, company_id=%s) on integration update",
-                existing.id, doc_no, company.id, exc_info=True,
-            )
+
+        journal_posted = _post_journal_safe(existing, db)
         db.commit()
         return {
             "status":           "updated",
@@ -306,8 +353,9 @@ async def inbound_invoice(
             total_amount   = total,
             currency       = currency,
             exchange_rate  = exchange_rate,
-            status         = InvoiceStatus.sent,
+            status         = target_status,
             issue_date     = issue_date,
+            due_date       = due_date,
             quote_ref      = inv.quoteId or None,
             tax_ref        = inv.client.taxReference or None,
             travel_date    = inv.travelDate or None,
@@ -318,15 +366,8 @@ async def inbound_invoice(
         )
         db.add(new_inv)
         db.flush()
-        journal_posted = True
-        try:
-            post_invoice_raised(new_inv, db)
-        except Exception:
-            journal_posted = False
-            logger.error(
-                "Journal post failed for invoice id=%s (doc_no=%s, company_id=%s) on integration create",
-                new_inv.id, doc_no, company.id, exc_info=True,
-            )
+
+        journal_posted = _post_journal_safe(new_inv, db)
         db.commit()
         db.refresh(new_inv)
         return {

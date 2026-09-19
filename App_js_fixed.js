@@ -446,11 +446,17 @@ const DEFAULT_COA = [
   {code:"4220",name:"Discount Received",type:"Detail",group:"Income",normal:"Credit",description:"Discounts received from suppliers"},
   {code:"4230",name:"Government Grants",type:"Detail",group:"Income",normal:"Credit",description:"SEDA, SEFA or government grants"},
   {code:"5000",name:"COST OF SALES",type:"Header",group:"Cost of Sales",normal:"Debit",description:"Direct costs of generating revenue"},
-  {code:"5110",name:"Purchases",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Goods purchased for resale"},
-  {code:"5120",name:"Freight and Delivery",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Delivery costs for goods purchased"},
-  {code:"5130",name:"Import Duties",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Customs and import duties"},
-  {code:"5140",name:"Direct Labour",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Labour directly used in production"},
-  {code:"5150",name:"Direct Materials",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Raw materials used in production"},
+  // Codes 5010-5050 (audit fix 2026-09-19 — previously 5110-5150, which silently
+  // collided with unrelated ledger accounts of the same code in journal.py's
+  // DEFAULT_ACCOUNTS, e.g. "5110 - Purchases" here vs "Payroll Levies (UIF/SDL)"
+  // there — an expense categorised as Purchases was posting to the payroll
+  // levies account. Renumbered to a free range; only affects new selections,
+  // existing stored category strings on old expenses are unaffected.
+  {code:"5010",name:"Purchases",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Goods purchased for resale"},
+  {code:"5020",name:"Freight and Delivery",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Delivery costs for goods purchased"},
+  {code:"5030",name:"Import Duties",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Customs and import duties"},
+  {code:"5040",name:"Direct Labour",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Labour directly used in production"},
+  {code:"5050",name:"Direct Materials",type:"Detail",group:"Cost of Sales",normal:"Debit",description:"Raw materials used in production"},
   {code:"6000",name:"OPERATING EXPENSES",type:"Header",group:"Expenses",normal:"Debit",description:"All operating expenses"},
   {code:"6110",name:"Salaries and Wages",type:"Detail",group:"Expenses",normal:"Debit",description:"Gross salaries paid to employees"},
   {code:"6120",name:"Employer UIF Contributions",type:"Detail",group:"Expenses",normal:"Debit",description:"Employer portion of UIF 1 percent of salary"},
@@ -6841,7 +6847,7 @@ function Budgeting({live = {}}) {
     const calc = (forecastData?.weeks || []).map((_, i) => {
       const opening   = running;
       const receipts  = fcGet(i,"invoice_receipts") + fcGet(i,"recurring_income");
-      const payments  = fcGet(i,"payroll") + fcGet(i,"operating_expenses") + fcGet(i,"creditor_payments") + fcGet(i,"other_payments") + fcGet(i,"vat_payment");
+      const payments  = fcGet(i,"payroll") + fcGet(i,"operating_expenses") + fcGet(i,"creditor_payments") + fcGet(i,"other_payments") + fcGet(i,"vat_payment") + fcGet(i,"provisional_tax");
       const net       = receipts - payments;
       const closing   = opening + net;
       running = closing;
@@ -6850,10 +6856,10 @@ function Budgeting({live = {}}) {
 
     const exportCsv = () => {
       const rows = [
-        ["Week","Period","Opening Balance","Invoice Receipts","Recurring Income","Total Receipts","Payroll","Operating Expenses","Creditor/PO Payments","Other Payments","VAT/Tax","Total Payments","Net Cash Flow","Closing Balance"],
+        ["Week","Period","Opening Balance","Invoice Receipts","Recurring Income","Total Receipts","Payroll","Operating Expenses","Creditor/PO Payments","Other Payments","VAT/Tax","Provisional Tax","Total Payments","Net Cash Flow","Closing Balance"],
         ...(forecastData?.weeks || []).map((w,i) => {
           const c = calc[i];
-          return [w.week, w.label, c.opening.toFixed(2), fcGet(i,"invoice_receipts").toFixed(2), fcGet(i,"recurring_income").toFixed(2), c.receipts.toFixed(2), fcGet(i,"payroll").toFixed(2), fcGet(i,"operating_expenses").toFixed(2), fcGet(i,"creditor_payments").toFixed(2), fcGet(i,"other_payments").toFixed(2), fcGet(i,"vat_payment").toFixed(2), c.payments.toFixed(2), c.net.toFixed(2), c.closing.toFixed(2)];
+          return [w.week, w.label, c.opening.toFixed(2), fcGet(i,"invoice_receipts").toFixed(2), fcGet(i,"recurring_income").toFixed(2), c.receipts.toFixed(2), fcGet(i,"payroll").toFixed(2), fcGet(i,"operating_expenses").toFixed(2), fcGet(i,"creditor_payments").toFixed(2), fcGet(i,"other_payments").toFixed(2), fcGet(i,"vat_payment").toFixed(2), fcGet(i,"provisional_tax").toFixed(2), c.payments.toFixed(2), c.net.toFixed(2), c.closing.toFixed(2)];
         }),
       ];
       const csv = rows.map(r=>r.join(",")).join("\n");
@@ -6871,6 +6877,7 @@ function Budgeting({live = {}}) {
       {field:"creditor_payments",  label:"Creditor / PO Payments", color:C.red, dir:"out"},
       {field:"other_payments",     label:"Other Payments",      color:C.red,    dir:"out"},
       {field:"vat_payment",        label:"VAT / Tax",           color:C.accent, dir:"out"},
+      {field:"provisional_tax",    label:"Provisional Tax (IRP6)", color:C.accent, dir:"out"},
     ];
 
     const cellStyle = (color, editable=false) => ({

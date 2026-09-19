@@ -175,6 +175,56 @@ def get_account(company_id: int, code: str, db: Session) -> Account:
     return acct
 
 
+_COA_GROUP_TO_ACCOUNT_TYPE = {
+    "Assets":        AccountType.asset,
+    "Liabilities":   AccountType.liability,
+    "Equity":        AccountType.equity,
+    "Income":        AccountType.revenue,
+    "Cost of Sales": AccountType.expense,
+    "Expenses":      AccountType.expense,
+}
+
+
+def _sync_custom_account(company_id: int, code: str, db: Session):
+    """Mirror a /coa custom Chart-of-Accounts entry into the ledger's `accounts`
+    table, creating it there the first time it's needed for a posting.
+
+    /coa (companies.py's coa_router) stores custom COA rows in a separate
+    `CompanyAccount` table used only to render the Chart of Accounts screen
+    (merged with the frontend's DEFAULT_COA) — nothing ever copied those rows
+    into the `accounts` table that journal postings actually query. So a
+    custom account added via /coa was invisible to expense_account(), and
+    every expense posted against it silently fell back to General Expenses
+    (5900) instead of the account the user actually selected.
+    (audit fix 2026-09-18, action item 7 — found while performing the
+    standing recommended functional test: add a custom /coa account, post an
+    expense against it, confirm it doesn't fall back to 5900.)
+
+    Only called when no `Account` row already exists for the code, so this
+    can't override or collide with an existing default/system account.
+    """
+    from database import CompanyAccount
+    custom = db.query(CompanyAccount).filter(
+        CompanyAccount.company_id == company_id,
+        CompanyAccount.code == code,
+        CompanyAccount.is_deleted == False,  # noqa: E712
+    ).first()
+    if not custom:
+        return None
+    acct_type = _COA_GROUP_TO_ACCOUNT_TYPE.get(custom.group, AccountType.expense)
+    acct = Account(
+        company_id=company_id,
+        code=custom.code,
+        name=custom.name,
+        type=acct_type,
+        is_system=False,
+    )
+    db.add(acct)
+    db.commit()
+    db.refresh(acct)
+    return acct
+
+
 def expense_account(company_id: int, category: str, db: Session) -> Account:
     """Resolve expense category → account, falling back to General Expenses.
 
@@ -187,18 +237,50 @@ def expense_account(company_id: int, category: str, db: Session) -> Account:
     only matched CATEGORY_TO_CODE's bare-name keys, so that format never hit —
     every expense silently posted to 5900 General Expenses regardless of the
     account actually selected. Matching the leading code directly also makes
-    custom accounts added via /coa (which have no CATEGORY_TO_CODE entry at
-    all) resolve correctly instead of falling back to 5900.
+    custom accounts added via /coa resolve correctly instead of falling back
+    to 5900 — audit fix 2026-09-18 closes the remaining gap: those accounts
+    weren't in the `accounts` table at all until first posted, so this only
+    worked by coincidence before (see _sync_custom_account()).
+
+    Audit fix 2026-09-19: the frontend's built-in Chart-of-Accounts picker
+    (DEFAULT_COA in App_js_fixed.js, ~90 "code - name" options across the
+    Cost of Sales and Expenses groups) turned out to use a code scheme that's
+    almost entirely disjoint from — and in five cases (5110-5150) silently
+    collides with different-meaning entries in — journal.py's own
+    DEFAULT_ACCOUNTS. So picking almost any built-in option either fell back
+    to 5900 (the code doesn't exist in the ledger) or posted to a real but
+    wrongly-named account (the 5110-5150 collision, e.g. "5110 - Purchases"
+    landing on "Payroll Levies (UIF/SDL)"). The 5110-5150 collision was fixed
+    by renumbering those 5 DEFAULT_COA codes to the free 5010-5050 range
+    (frontend-only change — existing stored category strings on old Expense
+    rows are untouched). The much larger "doesn't exist in the ledger at
+    all" case is fixed below: any code+name pair that doesn't match an
+    existing ledger Account or a custom /coa account is now auto-vivified as
+    a new expense-type Account exactly as selected, the first time it's
+    posted, instead of silently falling back to General Expenses. This is
+    forward-looking only — it does not retroactively repost or reclassify
+    expenses that were already journalled under the old, wrong routing.
     """
     cat = (category or "").strip()
     code = None
+    name = None
     if " - " in cat:
-        prefix = cat.split(" - ", 1)[0].strip()
+        prefix, rest = cat.split(" - ", 1)
+        prefix = prefix.strip()
         if prefix.isdigit():
             code = prefix
+            name = rest.strip() or None
     if code is None:
         code = CATEGORY_TO_CODE.get(cat, "5900")
     acct = db.query(Account).filter(Account.company_id==company_id, Account.code==code).first()
+    if not acct:
+        acct = _sync_custom_account(company_id, code, db)
+    if not acct and name:
+        acct = Account(company_id=company_id, code=code, name=name,
+                        type=AccountType.expense, is_system=False)
+        db.add(acct)
+        db.commit()
+        db.refresh(acct)
     if not acct:
         acct = get_account(company_id, "5900", db)
     return acct
