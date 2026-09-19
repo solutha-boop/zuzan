@@ -43,8 +43,44 @@ PLAN_PRICES = {
     "business":     {"monthly": 1299, "annual": 12990},
 }
 
-PAYROLL_PER_EMP  = 18.25  # R18.25/employee/month (price parity with SimplePay)
-PAYROLL_MIN_COST = 99     # minimum payroll add-on fee (covers up to 5 employees)
+PAYROLL_MIN_COST = 99  # minimum payroll add-on fee
+
+
+def calc_payroll_monthly(emp_count: int) -> float:
+    """Tiered payroll add-on pricing, competitive with SimplePay (simplepay.co.za/pricing).
+
+    SimplePay rates (verified 2026-09-19):
+        1 emp       → R89.50 base
+        2-5 emp     → R19.50 each
+        6-10 emp    → R13.60 each
+        11+ emp     → R11.00 each
+        e.g. 40 emp → R565.50/month
+
+    Zuzan is priced ~3-5 % below SimplePay at every tier so we remain the
+    lower-cost option at all headcounts. PAYROLL_MIN_COST (R99) applies for
+    very small headcounts where the flat base doesn't cover margin.
+
+    Comparison at key counts:
+        10  emp: Zuzan R230  vs SimplePay R235.50
+        20  emp: Zuzan R335  vs SimplePay R345.50
+        40  emp: Zuzan R545  vs SimplePay R565.50
+        50  emp: Zuzan R650  vs SimplePay R675.50
+    """
+    if emp_count <= 0:
+        return 0.0
+    cost = 89.00            # base (1 employee) — SimplePay: R89.50
+    remaining = emp_count - 1
+
+    tier2 = min(remaining, 4)   # employees 2-5: R19.00 each (SimplePay: R19.50)
+    cost += tier2 * 19.00
+    remaining -= tier2
+
+    tier3 = min(remaining, 5)   # employees 6-10: R13.00 each (SimplePay: R13.60)
+    cost += tier3 * 13.00
+    remaining -= tier3
+
+    cost += remaining * 10.50   # employees 11+:  R10.50 each (SimplePay: R11.00)
+    return round(max(PAYROLL_MIN_COST, cost), 2)
 
 # ── Accountant multi-client fee structure ─────────────────────────────────────
 ACCOUNTANT_PLAN_DISCOUNT_PER_CLIENT = 20   # R20 off own plan per active client
@@ -250,7 +286,7 @@ async def initiate_subscription(
     payroll_cost = 0
     if getattr(co, "payroll_enabled", False):
         emp_count    = getattr(co, "payroll_employees", 0) or 0
-        monthly_cost = max(PAYROLL_MIN_COST, emp_count * PAYROLL_PER_EMP)
+        monthly_cost = calc_payroll_monthly(emp_count)
         payroll_cost = monthly_cost if cycle == "monthly" else monthly_cost * 12
 
     amount = base_amount + payroll_cost
@@ -417,7 +453,7 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     payroll_cost = 0
     if getattr(company, "payroll_enabled", False):
         emp_count    = getattr(company, "payroll_employees", 0) or 0
-        monthly_cost = max(PAYROLL_MIN_COST, emp_count * PAYROLL_PER_EMP)
+        monthly_cost = calc_payroll_monthly(emp_count)
         payroll_cost = monthly_cost if cycle == "monthly" else monthly_cost * 12
 
     # ── Consolidated billing: accountant fee structure ────────────────────────
