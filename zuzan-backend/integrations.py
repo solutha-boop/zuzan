@@ -18,7 +18,7 @@ from datetime import datetime
 import json
 import logging
 
-from database import get_db, Invoice, InvoiceStatus, Customer, JournalEntry
+from database import get_db, Invoice, InvoiceStatus, Customer, JournalEntry, JournalLine
 from api_keys import get_company_from_api_key
 from journal import post_invoice_raised
 
@@ -134,20 +134,35 @@ def _parse_date(date_str: str) -> datetime:
 
 
 def _delete_existing_journals(invoice_id: int, company_id: int, db: Session):
-    """Remove journal entries for a prior posting of this invoice.
+    """Remove journal entries (and their lines) for a prior posting of this invoice.
 
-    NOTE: post_invoice_raised() (journal.py) posts its entry with
-    source="invoice" (see journal.py's _make_entry call and
-    companies.py's _has_active_raised_entry, which filters on the same
-    string) — NOT "invoice_raised". Using the wrong string here meant this
-    delete matched zero rows, so every re-post duplicated the AR/Revenue/
-    VAT journal entry instead of replacing it. Fixed 2026-09-10.
+    NOTE on source string: post_invoice_raised() (journal.py) posts with
+    source="invoice", NOT "invoice_raised". Using the wrong string matched zero
+    rows, duplicating the AR/Revenue/VAT entry on every re-post. Fixed 2026-09-10.
+
+    NOTE on delete order: JournalLine rows MUST be deleted before JournalEntry rows.
+    The live DB's journal_lines.entry_id FK was created without ON DELETE CASCADE —
+    the migration SQL uses CREATE TABLE IF NOT EXISTS, which is a no-op on existing
+    tables, so the CASCADE clause never applied to any deployment where the table
+    already existed. Deleting the entry first raises ForeignKeyViolation (Sentry
+    6db1d0695588450cb5ccd28f15570687, 2026-09-19). A retroactive migration to add
+    CASCADE runs via init_db() on next deploy, but we also delete lines explicitly
+    here as a permanent belt-and-suspenders guard. (Fix 2026-09-19.)
     """
-    db.query(JournalEntry).filter(
-        JournalEntry.company_id == company_id,
-        JournalEntry.source == "invoice",
-        JournalEntry.source_id == invoice_id,
-    ).delete(synchronize_session=False)
+    entry_ids = [
+        row[0] for row in db.query(JournalEntry.id).filter(
+            JournalEntry.company_id == company_id,
+            JournalEntry.source == "invoice",
+            JournalEntry.source_id == invoice_id,
+        ).all()
+    ]
+    if entry_ids:
+        db.query(JournalLine).filter(
+            JournalLine.entry_id.in_(entry_ids),
+        ).delete(synchronize_session=False)
+        db.query(JournalEntry).filter(
+            JournalEntry.id.in_(entry_ids),
+        ).delete(synchronize_session=False)
 
 
 def _resolve_currency_and_rate(doc_no: str, currency_in: Optional[str], exchange_rate_in: Optional[float]) -> tuple:

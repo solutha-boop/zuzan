@@ -1668,6 +1668,13 @@ def init_db():
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS once_off_allowance_taxable FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS once_off_allowance_nontaxable FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS on_maternity_leave BOOLEAN DEFAULT FALSE",
+            # Retrofit ON DELETE CASCADE to journal_lines FK (2026-09-19).
+            # The original CREATE TABLE IF NOT EXISTS was a no-op on existing
+            # tables, so CASCADE was never applied to live deployments.
+            # Deleting a JournalEntry before its JournalLines raised
+            # ForeignKeyViolation (Sentry 6db1d0695588450cb5ccd28f15570687).
+            "ALTER TABLE journal_lines DROP CONSTRAINT IF EXISTS journal_lines_entry_id_fkey",
+            "ALTER TABLE journal_lines ADD CONSTRAINT journal_lines_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE",
         ]:
             try:
                 conn.execute(text(sql))
