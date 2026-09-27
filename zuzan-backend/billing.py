@@ -299,8 +299,10 @@ async def initiate_subscription(
     # PayFast frequency: 3 = monthly, 6 = annual
     pf_frequency = "3" if cycle == "monthly" else "6"
 
-    # Billing date = tomorrow (trial is already done; first charge is immediate)
-    billing_date = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Billing date = 1 month (or 1 year) after today — client pays now at checkout,
+    # so the NEXT recurring charge should be one full cycle later.
+    billing_days = 365 if cycle == "annual" else 30
+    billing_date = (datetime.utcnow() + timedelta(days=billing_days)).strftime("%Y-%m-%d")
 
     # Build item description (include payroll add-on if applicable)
     item_desc = f"ZuZan {plan.title()} Plan ({cycle})"
