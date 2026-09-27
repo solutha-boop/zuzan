@@ -9527,6 +9527,80 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       </div>
       )}
       </>}
+      {/* Clear trial data */}
+      {(()=>{
+        const [showClear, setShowClear] = React.useState(false);
+        const [clearSt, setClearSt] = React.useState({
+          sales:false,expenses:false,customers:false,suppliers:false,
+          employees:false,inventory:false,banking:false,budgets_assets:false,documents:false,
+        });
+        const [clearing, setClearing] = React.useState(false);
+        const OPTS = [
+          {key:"sales",          label:"Sales",                 sub:"Invoices, Quotes, Credit Notes, Recurring"},
+          {key:"expenses",       label:"Expenses",              sub:"All expense records"},
+          {key:"customers",      label:"Customers",             sub:"Customer contact records"},
+          {key:"suppliers",      label:"Suppliers & Purchases", sub:"Suppliers and Purchase Orders"},
+          {key:"employees",      label:"Employees & Payroll",   sub:"Employees, Payslips, Leave, Clocking"},
+          {key:"inventory",      label:"Inventory",             sub:"Stock items and quantities"},
+          {key:"banking",        label:"Bank Transactions",     sub:"Imported transactions and connections"},
+          {key:"budgets_assets", label:"Budgets & Fixed Assets",sub:"Budget entries and asset register"},
+          {key:"documents",      label:"Documents",             sub:"Uploaded files in Document Repository"},
+        ];
+        const anyTicked = Object.values(clearSt).some(Boolean);
+        return (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:showClear?16:0}}>
+              <div>
+                <div style={{fontSize:14,fontWeight:700,color:C.ink}}>Clear Trial Data</div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Remove test records created during your trial before you start using ZuZan for real.</div>
+              </div>
+              <button onClick={()=>setShowClear(s=>!s)} style={{padding:"8px 16px",borderRadius:8,border:`1px solid ${C.border}`,background:showClear?C.bg:"transparent",fontSize:12,fontWeight:600,color:C.inkMid,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>
+                {showClear ? "Cancel" : "Clear Data…"}
+              </button>
+            </div>
+            {showClear && (<>
+              {OPTS.map(({key,label,sub})=>(
+                <label key={key} style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:10,cursor:"pointer"}}>
+                  <input type="checkbox" checked={clearSt[key]} onChange={e=>setClearSt(p=>({...p,[key]:e.target.checked}))}
+                    style={{marginTop:3,width:15,height:15,accentColor:C.red,flexShrink:0}}/>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:clearSt[key]?C.red:C.ink}}>{label}</div>
+                    <div style={{fontSize:11,color:C.inkDim}}>{sub}</div>
+                  </div>
+                </label>
+              ))}
+              {anyTicked && (
+                <div style={{background:"#FFF3CD",border:"1px solid #FFC107",borderRadius:8,padding:"9px 12px",fontSize:12,color:"#856404",marginBottom:12}}>
+                  ⚠️ Ticked data will be <strong>permanently deleted</strong>. This cannot be undone.
+                </div>
+              )}
+              <button
+                disabled={!anyTicked || clearing}
+                onClick={async()=>{
+                  if(!window.confirm("Delete the selected data permanently? This cannot be undone.")) return;
+                  setClearing(true);
+                  try {
+                    const toDelete = Object.keys(clearSt).filter(k=>clearSt[k]);
+                    await api("/companies/clear-data",{method:"POST",body:JSON.stringify({categories:toDelete,confirm:true})});
+                    alert("Done! Selected trial data has been cleared.");
+                    setShowClear(false);
+                    setClearSt({sales:false,expenses:false,customers:false,suppliers:false,employees:false,inventory:false,banking:false,budgets_assets:false,documents:false});
+                  } catch(e) {
+                    alert("Error: " + (e.message||"Please try again."));
+                  }
+                  setClearing(false);
+                }}
+                style={{padding:"10px 22px",borderRadius:10,border:"none",
+                  background:anyTicked?C.red:"#ccc",color:"#fff",fontSize:13,fontWeight:700,
+                  cursor:anyTicked&&!clearing?"pointer":"not-allowed",fontFamily:"inherit",
+                  opacity:clearing?0.6:1}}>
+                {clearing ? "Clearing…" : "Delete Selected"}
+              </button>
+            </>)}
+          </div>
+        );
+      })()}
+
       {/* Account actions */}
       <div style={{background:C.surface,border:`1px solid ${C.red}30`,borderRadius:16,padding:28}}>
         <div style={{fontSize:11,fontWeight:700,color:C.red,letterSpacing:1,textTransform:"uppercase",marginBottom:16}}>Account</div>
