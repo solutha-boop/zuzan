@@ -261,6 +261,26 @@ def _clear_journal_for_sources(db: Session, company_id: int, sources: set):
             JournalEntry.id.in_(entry_ids)
         ).delete(synchronize_session=False)
 
+@router.post("/cancel-subscription")
+async def cancel_subscription(
+    current_user: User = Depends(require_role("owner")),
+    db: Session = Depends(get_db),
+):
+    """Cancel the company's PayFast subscription and mark as cancelled in DB."""
+    from billing import cancel_payfast_subscription
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    cur = company.subscription_status.value if hasattr(company.subscription_status, "value") else str(company.subscription_status)
+    if cur not in ("trial", "active"):
+        raise HTTPException(status_code=400, detail=f"Cannot cancel a subscription with status '{cur}'.")
+    try:
+        result = cancel_payfast_subscription(company, db)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True, "message": "Subscription cancelled. You retain access until the end of your current billing period."}
+
+
 @router.post("/clear-data")
 async def clear_company_data(
     req: ClearDataRequest,

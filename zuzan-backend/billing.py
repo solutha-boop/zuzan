@@ -549,6 +549,59 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
         raise RuntimeError(f"PayFast charge failed: {result}")
 
 
+# ── Cancel PayFast subscription ──────────────────────────────────────────────
+PAYFAST_CANCEL_URL = "https://api.payfast.co.za/subscriptions/{token}/cancel"
+
+def cancel_payfast_subscription(company: "Company", db: Session) -> dict:
+    """
+    Cancel the PayFast recurring subscription for a company.
+    Calls the PayFast cancel API, then sets subscription_status to 'cancelled' in DB.
+    Returns {"ok": True} on success or raises on failure.
+    """
+    if not company.payfast_token:
+        # No token means they never completed PayFast signup — just mark cancelled locally
+        company.subscription_status = SubscriptionStatus.cancelled
+        db.commit()
+        logger.info(f"Cancel (no token) company {company.id} — marked cancelled locally")
+        return {"ok": True, "payfast_cancelled": False}
+
+    pf_id  = (decrypt_field(company.payfast_merchant_id)  if company.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
+    pf_pp  = (decrypt_field(company.payfast_passphrase)   if company.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
+
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+
+    # PayFast cancel uses the same auth header pattern as adhoc
+    header_data = {"merchant-id": pf_id, "timestamp": ts, "version": "v1"}
+    sig = _pf_adhoc_signature(header_data, pf_pp)
+
+    headers = {
+        "merchant-id": pf_id,
+        "version":     "v1",
+        "timestamp":   ts,
+        "signature":   sig,
+    }
+
+    url = PAYFAST_CANCEL_URL.format(token=company.payfast_token)
+
+    try:
+        resp = _requests.put(url, headers=headers, timeout=30)
+        result = resp.json() if resp.content else {}
+    except Exception as e:
+        logger.error(f"PayFast cancel network error for company {company.id}: {e}")
+        raise RuntimeError(f"Could not reach PayFast: {e}")
+
+    # PayFast returns 200 + code 200 on success, or 404 if token not found/already cancelled
+    if resp.status_code in (200, 404):
+        company.subscription_status = SubscriptionStatus.cancelled
+        company.payfast_token = None  # token is now void
+        db.commit()
+        logger.info(f"PayFast subscription cancelled for company {company.id} ({company.name})")
+        return {"ok": True, "payfast_cancelled": True}
+    else:
+        logger.warning(f"PayFast cancel failed for company {company.id}: {resp.status_code} {result}")
+        raise RuntimeError(f"PayFast cancel failed ({resp.status_code}): {result.get('data', {}).get('message', 'Unknown error')}")
+
+
 # ── AFS once-off payment ──────────────────────────────────────────────────────
 AFS_PRICE = 1999.00
 

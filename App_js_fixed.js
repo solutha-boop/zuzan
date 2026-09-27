@@ -9177,11 +9177,14 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   };
 
   const handleCancelSub = async () => {
-    if (!window.confirm("Are you sure you want to cancel your subscription? Your account will revert to the free tier at the end of your billing period.")) return;
+    if (!window.confirm("Are you sure you want to cancel your subscription?\n\nYour PayFast recurring charge will be stopped and your account will revert to the free tier at the end of your current billing period.")) return;
     try {
-      await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: "cancelled"})});
-      alert("Your subscription has been cancelled. You will retain access until the end of your current billing period.");
-    } catch(e) { alert("Could not cancel subscription. Please email support@solutha.co.za."); }
+      await api("/companies/cancel-subscription", {method:"POST"});
+      alert("Subscription cancelled. Your PayFast recurring charge has been stopped. You retain full access until the end of your current billing period.");
+      onUserUpdate && onUserUpdate();
+    } catch(e) {
+      alert("Could not cancel subscription: " + (e.message || "Please email support@solutha.co.za."));
+    }
   };
   const [pinForm, setPinForm] = useState({newPin:"", confirmPin:""});
   const [pinMsg,  setPinMsg]  = useState("");
@@ -9354,12 +9357,20 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
           <button
             onClick={async () => {
               const turningOff = subInfo.status !== "cancelled";
-              if (turningOff && !window.confirm("Turn off auto-renewal? Access continues until end of period.")) return;
-              const newStatus = turningOff ? "cancelled" : "active";
-              try {
-                await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: newStatus})});
-                setSubInfo(s => ({...s, status: newStatus}));
-              } catch(e) { alert("Could not update. Please try again."); }
+              if (turningOff) {
+                if (!window.confirm("Turn off auto-renewal? Your PayFast recurring charge will be stopped and access continues until the end of your current period.")) return;
+                try {
+                  await api("/companies/cancel-subscription", {method:"POST"});
+                  setSubInfo(s => ({...s, status: "cancelled"}));
+                  onUserUpdate && onUserUpdate();
+                } catch(e) { alert("Could not cancel: " + (e.message || "Please try again.")); }
+              } else {
+                // Re-enable: just update status locally — they'll need to re-subscribe via PayFast
+                try {
+                  await api("/companies/me", {method:"PUT", body: JSON.stringify({subscription_status: "active"})});
+                  setSubInfo(s => ({...s, status: "active"}));
+                } catch(e) { alert("Could not update. Please re-subscribe via the Subscribe button."); }
+              }
             }}
             style={{width:48,height:26,borderRadius:13,border:"none",cursor:"pointer",
               background:subInfo.status==="cancelled"?C.border:C.green,
