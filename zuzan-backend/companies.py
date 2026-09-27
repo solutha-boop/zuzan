@@ -220,6 +220,47 @@ def _del(db: Session, Model, company_id: int):
     """Delete all rows for company_id in one bulk query (synchronize_session=False)."""
     db.query(Model).filter(Model.company_id == company_id).delete(synchronize_session=False)
 
+# Journal `source` values each category posts under (see journal.py's
+# post_invoice_raised/post_invoice_paid/post_invoice_cogs, post_expense/
+# post_expense_paid, post_payroll, journal.post_bank_income,
+# post_po_received/post_po_paid, post_asset_acquisition/post_depreciation/
+# post_asset_disposal, post_stock_adjustment). A reversal of a source-X entry
+# is posted as "X_reversal" (journal.reverse_journal_entries), so both are
+# cleared together. Every category whose records can post to the journal
+# must be listed here — omitting one leaves an orphaned journal balance
+# with no supporting sub-ledger rows once that category is cleared (audit
+# finding, reports_debtors_creditors_2026-09-27.md action item 1).
+_CATEGORY_JOURNAL_SOURCES = {
+    "sales":          ["invoice", "invoice_payment", "invoice_cogs"],
+    "expenses":       ["expense", "expense_payment"],
+    "employees":      ["payroll"],
+    "banking":        ["bank_import_income"],
+    "suppliers":      ["purchase_order", "po_payment"],
+    "budgets_assets": ["fixed_asset", "depreciation", "asset_disposal"],
+    "inventory":      ["stock_adjustment"],
+    # "customers" and "documents" own no journal source — nothing to clear.
+}
+
+def _clear_journal_for_sources(db: Session, company_id: int, sources: set):
+    """Delete JournalLines then JournalEntries for exactly these `source`
+    values (plus each one's "<source>_reversal" counterpart) — scoped by
+    source, never a blanket company-wide wipe, so clearing one category can
+    never erase another category's journal postings."""
+    if not sources:
+        return
+    all_sources = set(sources) | {f"{s}_reversal" for s in sources}
+    entry_ids = [r[0] for r in db.query(JournalEntry.id).filter(
+        JournalEntry.company_id == company_id,
+        JournalEntry.source.in_(all_sources),
+    ).all()]
+    if entry_ids:
+        db.query(JournalLine).filter(
+            JournalLine.entry_id.in_(entry_ids)
+        ).delete(synchronize_session=False)
+        db.query(JournalEntry).filter(
+            JournalEntry.id.in_(entry_ids)
+        ).delete(synchronize_session=False)
+
 @router.post("/clear-data")
 async def clear_company_data(
     req: ClearDataRequest,
@@ -231,7 +272,9 @@ async def clear_company_data(
     Pass {"categories": [...], "confirm": true} to proceed.
     Valid categories: sales, expenses, customers, suppliers, employees,
                       inventory, banking, budgets_assets, documents.
-    Accounting journals are always cleared when any financial category is chosen.
+    Each category's own journal postings (invoices, expenses, payroll, bank
+    income, purchase orders, fixed-asset/depreciation, stock adjustments) are
+    cleared alongside it — see _CATEGORY_JOURNAL_SOURCES.
     """
     invalid = set(req.categories) - _CLEARABLE
     if invalid:
@@ -243,19 +286,13 @@ async def clear_company_data(
 
     cid = current_user.company_id
     cats = set(req.categories)
-    financial_cats = {"sales", "expenses", "employees", "banking"}
 
-    # ── Journals: always clear when any financial category is selected ─────────
-    # Delete JournalLines before JournalEntries (FK — CASCADE may not be live).
-    if cats & financial_cats:
-        entry_ids = [r[0] for r in db.query(JournalEntry.id).filter(
-            JournalEntry.company_id == cid
-        ).all()]
-        if entry_ids:
-            db.query(JournalLine).filter(
-                JournalLine.entry_id.in_(entry_ids)
-            ).delete(synchronize_session=False)
-        _del(db, JournalEntry, cid)
+    # ── Journals: clear exactly the postings owned by the selected categories ──
+    # (never a blanket company-wide wipe — see _clear_journal_for_sources)
+    journal_sources = set()
+    for cat in cats:
+        journal_sources.update(_CATEGORY_JOURNAL_SOURCES.get(cat, []))
+    _clear_journal_for_sources(db, cid, journal_sources)
 
     # ── Sales ─────────────────────────────────────────────────────────────────
     if "sales" in cats:
