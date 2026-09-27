@@ -761,6 +761,19 @@ async def admin_extend_trial(company_id: int, request: Request, db: Session = De
     return {"ok": True, "company": co.name, "trial_ends": co.trial_ends.strftime("%Y-%m-%d")}
 
 
+@app.post("/admin/api/clients/{company_id}/activate", tags=["Admin"])
+async def admin_activate_subscription(company_id: int, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    """Manually activate a subscription — use when ITN webhook was missed but payment is confirmed."""
+    co = db.query(_Company).filter(_Company.id == company_id).first()
+    if not co:
+        raise HTTPException(status_code=404, detail="Company not found")
+    from database import SubscriptionStatus
+    co.subscription_status = SubscriptionStatus.active
+    db.commit()
+    logger.info(f"Admin manually activated subscription for company {co.id} ({co.name})")
+    return {"ok": True, "company": co.name, "status": "active"}
+
+
 @app.post("/admin/api/clients/{company_id}/billing-exempt", tags=["Admin"])
 async def admin_toggle_billing_exempt(company_id: int, request: Request, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
     """Toggle billing_exempt flag on a company (Partner tier)."""
@@ -1265,6 +1278,7 @@ function renderTable(data) {
     <td style="white-space:nowrap">
       ${d.billing_exempt ? '<span class="badge" style="background:#e8f5e9;color:#1b5e20;margin-right:4px">Partner</span>' : ''}
       <button onclick="extendTrial(${d.id},'${d.company.replace(/'/g,"\\'")}','${d.trial_ends||''}')" style="background:#1A3A6B;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">+ Extend Trial</button>
+      ${d.status !== 'active' ? `<button onclick="activateSub(${d.id},'${d.company.replace(/'/g,"\\'")}')" style="background:#e67e22;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">✓ Activate</button>` : ''}
       <button onclick="toggleExempt(${d.id},'${d.company.replace(/'/g,"\\'")}',${d.billing_exempt})" style="background:${d.billing_exempt?'#c0392b':'#27ae60'};color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer">${d.billing_exempt?'Remove Partner':'Set Partner'}</button>
     </td>
   </tr>`).join('');
@@ -1282,6 +1296,20 @@ async function toggleExempt(companyId, companyName, currentExempt) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Failed');
     alert((data.billing_exempt ? 'Partner status granted to ' : 'Partner status removed from ') + data.company);
+    load();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function activateSub(companyId, companyName) {
+  if (!confirm('Manually activate subscription for ' + companyName + '?\n\nOnly do this if you have confirmed payment was received (e.g. PayFast confirmation email). This cannot be undone automatically.')) return;
+  try {
+    const res = await fetch('/admin/api/clients/' + companyId + '/activate', {
+      method: 'POST',
+      headers: { 'X-Admin-Secret': secret, 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed');
+    alert('✓ Subscription activated for ' + data.company);
     load();
   } catch(e) { alert('Error: ' + e.message); }
 }
