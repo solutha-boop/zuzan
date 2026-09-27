@@ -1278,7 +1278,7 @@ function renderTable(data) {
     <td style="white-space:nowrap">
       ${d.billing_exempt ? '<span class="badge" style="background:#e8f5e9;color:#1b5e20;margin-right:4px">Partner</span>' : ''}
       <button onclick="extendTrial(${d.id},'${d.company.replace(/'/g,"\\'")}','${d.trial_ends||''}')" style="background:#1A3A6B;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">+ Extend Trial</button>
-      ${d.status !== 'active' ? `<button onclick="activateSub(${d.id},'${d.company.replace(/'/g,"\\'")}')" style="background:#e67e22;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">✓ Activate</button>` : ''}
+      ${d.status !== 'active' ? '<button onclick="activateSub(' + d.id + ',\\'' + d.company.replace(/'/g,"\\'") + '\\')" style="background:#e67e22;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">✓ Activate</button>' : ''}
       <button onclick="toggleExempt(${d.id},'${d.company.replace(/'/g,"\\'")}',${d.billing_exempt})" style="background:${d.billing_exempt?'#c0392b':'#27ae60'};color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer">${d.billing_exempt?'Remove Partner':'Set Partner'}</button>
     </td>
   </tr>`).join('');
