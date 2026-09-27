@@ -9146,6 +9146,53 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   const [upgrading,    setUpgrading]    = useState(false);
   const [upgradeMsg,   setUpgradeMsg]   = useState("");
 
+  // ── Trial-to-live data selection modal ──────────────────────────────────────
+  const [pendingPfData,    setPendingPfData]    = useState(null); // {url, data}
+  const [showTrialModal,   setShowTrialModal]   = useState(false);
+  const [clearSels,        setClearSels]        = useState({
+    sales: false, expenses: false, customers: false, suppliers: false,
+    employees: false, inventory: false, banking: false,
+    budgets_assets: false, documents: false,
+  });
+  const [clearingData,     setClearingData]     = useState(false);
+
+  // Call this instead of pfSubmit directly when on trial.
+  // On live accounts it goes straight to PayFast (no modal).
+  const subscribeWithDataChoice = (pfUrl, pfData) => {
+    const status = subInfo?.status || user?.subscriptionStatus;
+    if (status === "trial" || status === "expired") {
+      setPendingPfData({url: pfUrl, data: pfData});
+      setClearSels({
+        sales: false, expenses: false, customers: false, suppliers: false,
+        employees: false, inventory: false, banking: false,
+        budgets_assets: false, documents: false,
+      });
+      setShowTrialModal(true);
+    } else {
+      pfSubmit(pfUrl, pfData);
+    }
+  };
+
+  const confirmTrialDataAndProceed = async () => {
+    const toDelete = Object.keys(clearSels).filter(k => clearSels[k]);
+    if (toDelete.length > 0) {
+      setClearingData(true);
+      try {
+        await api("/companies/clear-data", {
+          method: "POST",
+          body: JSON.stringify({categories: toDelete, confirm: true}),
+        });
+      } catch(e) {
+        alert("Could not clear data: " + (e.message || "Please try again."));
+        setClearingData(false);
+        return;
+      }
+      setClearingData(false);
+    }
+    setShowTrialModal(false);
+    if (pendingPfData) pfSubmit(pendingPfData.url, pendingPfData.data);
+  };
+
   const handleUpgrade = async (planId) => {
     setUpgrading(true); setUpgradeMsg("");
     try {
@@ -9155,7 +9202,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       // 2. Build the PayFast subscription form for this plan and redirect
       const res = await api("/billing/subscribe", {method:"POST"});
       if (res.payfast_url) {
-        pfSubmit(res.payfast_url, res.payfast_data);
+        subscribeWithDataChoice(res.payfast_url, res.payfast_data);
       } else {
         setUpgradeMsg("✓ Plan updated. Use Subscribe Now to complete payment.");
         setTimeout(() => { setShowUpgrade(false); setUpgradeMsg(""); }, 2000);
@@ -9312,7 +9359,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
             <button onClick={async()=>{
               try {
                 const res = await api("/billing/subscribe", {method:"POST"});
-                if (res.payfast_url) pfSubmit(res.payfast_url, res.payfast_data);
+                if (res.payfast_url) subscribeWithDataChoice(res.payfast_url, res.payfast_data);
               } catch(e) { alert("Could not start subscription. " + (e.message||"")); }
             }} style={{padding:"10px 22px",background:C.green,border:"none",borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
               {subInfo.status === "trial" ? "🔑 Subscribe Now" : "🔑 Reactivate Subscription"}
@@ -9892,6 +9939,56 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               );
             })}
             {upgradeMsg && <div style={{marginTop:12,fontSize:13,color:upgradeMsg.startsWith("✓")?C.green:C.red,fontWeight:600,textAlign:"center"}}>{upgradeMsg}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ── Trial-to-Live Data Selection Modal ── */}
+      {showTrialModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:500,boxShadow:"0 8px 40px rgba(0,0,0,0.22)"}}>
+            <div style={{fontSize:20,fontWeight:800,color:C.ink,marginBottom:6}}>Going Live 🚀</div>
+            <p style={{fontSize:13,color:C.inkMid,marginTop:0,marginBottom:20,lineHeight:1.6}}>
+              Before you subscribe, would you like to clear any trial data? Tick what you want removed — unticked items are kept. This cannot be undone.
+            </p>
+            {[
+              {key:"sales",       label:"Sales",                 sub:"Invoices, Quotes, Credit Notes, Recurring Invoices"},
+              {key:"expenses",    label:"Expenses",              sub:"All expense records"},
+              {key:"customers",   label:"Customers",             sub:"Customer contact records"},
+              {key:"suppliers",   label:"Suppliers & Purchases", sub:"Suppliers and Purchase Orders"},
+              {key:"employees",   label:"Employees & Payroll",   sub:"Employees, Payslips, Leave, Clocking"},
+              {key:"inventory",   label:"Inventory",             sub:"Stock items and quantities"},
+              {key:"banking",     label:"Bank Transactions",     sub:"Imported bank transactions and connections"},
+              {key:"budgets_assets", label:"Budgets & Fixed Assets", sub:"Budget entries and asset register"},
+              {key:"documents",   label:"Documents",             sub:"Uploaded files in Document Repository"},
+            ].map(({key, label, sub}) => (
+              <label key={key} style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:12,cursor:"pointer"}}>
+                <input type="checkbox" checked={clearSels[key]} onChange={e=>setClearSels(p=>({...p,[key]:e.target.checked}))}
+                  style={{marginTop:3,width:16,height:16,accentColor:C.red,flexShrink:0}}/>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:clearSels[key]?C.red:C.ink}}>{label}</div>
+                  <div style={{fontSize:11,color:C.inkDim}}>{sub}</div>
+                </div>
+              </label>
+            ))}
+            {Object.values(clearSels).some(Boolean) && (
+              <div style={{background:"#FFF3CD",border:"1px solid #FFC107",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#856404",marginTop:8,marginBottom:4}}>
+                ⚠️ The ticked data will be <strong>permanently deleted</strong> before payment. This cannot be reversed.
+              </div>
+            )}
+            <div style={{display:"flex",gap:10,marginTop:20}}>
+              <button onClick={()=>{setShowTrialModal(false); if(pendingPfData) pfSubmit(pendingPfData.url, pendingPfData.data);}}
+                style={{flex:1,padding:"11px 0",borderRadius:10,border:`1px solid ${C.border}`,background:"transparent",color:C.inkMid,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                Keep All & Subscribe
+              </button>
+              <button onClick={confirmTrialDataAndProceed} disabled={clearingData}
+                style={{flex:1,padding:"11px 0",borderRadius:10,border:"none",
+                  background: Object.values(clearSels).some(Boolean) ? C.red : C.green,
+                  color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                  opacity: clearingData ? 0.6 : 1}}>
+                {clearingData ? "Clearing…" : Object.values(clearSels).some(Boolean) ? "Clear Selected & Subscribe" : "Subscribe Now"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -14851,7 +14948,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
           if (status === "expired") return (
             <div style={{background:C.red,color:"#fff",borderRadius:12,padding:"12px 20px",marginBottom:24,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}}>
               <div><strong>Subscription expired.</strong><span style={{fontSize:13,marginLeft:8,opacity:0.9}}>Reactivate to keep using ZuZan.</span></div>
-              <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)pfSubmit(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to reactivate.");}}} style={{background:"#fff",color:C.red,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Reactivate</button>
+              <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)subscribeWithDataChoice(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to reactivate.");}}} style={{background:"#fff",color:C.red,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Reactivate</button>
             </div>
           );
           if (status === "trial" && trialEnds) {
@@ -14859,7 +14956,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
             if (d <= 5) return (
               <div style={{background:d===0?C.red:C.gold,color:"#fff",borderRadius:12,padding:"12px 20px",marginBottom:24,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}}>
                 <div><strong>{d===0?"Trial expired.":"Trial ends in "+d+" day"+(d===1?"":"s")+"."}</strong><span style={{fontSize:13,marginLeft:8,opacity:0.9}}>{d===0?"Subscribe to continue.":"Subscribe now to keep your data."}</span></div>
-                <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)pfSubmit(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to subscribe.");}}} style={{background:"#fff",color:d===0?C.red:C.gold,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Subscribe Now</button>
+                <button onClick={async()=>{try{const r=await api("/billing/subscribe",{method:"POST"});if(r.payfast_url)subscribeWithDataChoice(r.payfast_url,r.payfast_data);}catch(e){alert("Go to Settings → Subscription to subscribe.");}}} style={{background:"#fff",color:d===0?C.red:C.gold,border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Subscribe Now</button>
               </div>
             );
           }

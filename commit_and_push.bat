@@ -36,7 +36,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: payroll advances, garnishee orders, maternity leave, expense claims, once-off deductions/allowances — DB+backend+frontend; feat: NBCPSS union sub, provident (PSSPF 7.5%%), medical (PSSSBC R197), uniform allow; feat: mass payslip ZIP download [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "feat: trial-to-live data selection modal — checklist to clear sales/expenses/customers/suppliers/employees/inventory/banking/budgets+assets/documents before subscribing; feat: POST /companies/clear-data endpoint; fix: tiered payroll pricing competitive with SimplePay (40 emp R545 vs R730); fix: integrations 500 FK order + SAVEPOINT; fix: journal CASCADE migration [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main

@@ -7,7 +7,22 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from database import get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus, CompanyMembership, CompanyAccount, ServiceItem
+from database import (
+    get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus,
+    CompanyMembership, CompanyAccount, ServiceItem,
+    # clear-data endpoint
+    Customer, Supplier, PurchaseOrder, PurchaseOrderItem,
+    Quote, CreditNote, RecurringInvoice, Payment,
+    JournalEntry, JournalLine, InventoryItem, Budget,
+    FixedAsset, DepreciationEntry, LeaveRequest, LeaveBalance,
+    EmployeeGarnishee, ClockEvent, CompanyDocument,
+    StitchConnection, StitchBankAccount, StitchTransaction,
+    SaltEdgeConnection, SaltEdgeBankAccount, SaltEdgeTransaction,
+    AbsaConnection, AbsaBankAccount, AbsaTransaction,
+    NedbankConnection, NedbankBankAccount, NedbankTransaction,
+    InvestecConnection, InvestecBankAccount, InvestecTransaction,
+    StandardBankConnection, StandardBankBankAccount, StandardBankTransaction,
+)
 from auth import get_current_user, require_role, log_action, User
 from crypto import encrypt_field, decrypt_field
 from passlib.context import CryptContext
@@ -190,6 +205,148 @@ async def verify_payroll_pin(data: PayrollPinVerify, current_user: User = Depend
 async def payroll_pin_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     return {"pin_set": bool(company.payroll_pin_hash)}
+
+
+# ── CLEAR TRIAL DATA ──────────────────────────────────────────────────────────
+
+_CLEARABLE = {"sales", "expenses", "customers", "suppliers", "employees",
+              "inventory", "banking", "budgets_assets", "documents"}
+
+class ClearDataRequest(BaseModel):
+    categories: List[str]
+    confirm: bool = False  # must be True to proceed (safety gate)
+
+def _del(db: Session, Model, company_id: int):
+    """Delete all rows for company_id in one bulk query (synchronize_session=False)."""
+    db.query(Model).filter(Model.company_id == company_id).delete(synchronize_session=False)
+
+@router.post("/clear-data")
+async def clear_company_data(
+    req: ClearDataRequest,
+    current_user: User = Depends(require_role("owner")),
+    db: Session = Depends(get_db),
+):
+    """Selectively wipe company data — typically used before going live from trial.
+
+    Pass {"categories": [...], "confirm": true} to proceed.
+    Valid categories: sales, expenses, customers, suppliers, employees,
+                      inventory, banking, budgets_assets, documents.
+    Accounting journals are always cleared when any financial category is chosen.
+    """
+    invalid = set(req.categories) - _CLEARABLE
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Unknown categories: {sorted(invalid)}")
+    if not req.confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true — this action is irreversible.")
+    if not req.categories:
+        return {"cleared": [], "message": "Nothing to clear."}
+
+    cid = current_user.company_id
+    cats = set(req.categories)
+    financial_cats = {"sales", "expenses", "employees", "banking"}
+
+    # ── Journals: always clear when any financial category is selected ─────────
+    # Delete JournalLines before JournalEntries (FK — CASCADE may not be live).
+    if cats & financial_cats:
+        entry_ids = [r[0] for r in db.query(JournalEntry.id).filter(
+            JournalEntry.company_id == cid
+        ).all()]
+        if entry_ids:
+            db.query(JournalLine).filter(
+                JournalLine.entry_id.in_(entry_ids)
+            ).delete(synchronize_session=False)
+        _del(db, JournalEntry, cid)
+
+    # ── Sales ─────────────────────────────────────────────────────────────────
+    if "sales" in cats:
+        _del(db, CreditNote,        cid)   # FK → invoices — delete before invoices
+        _del(db, RecurringInvoice,  cid)
+        _del(db, Quote,             cid)
+        _del(db, Invoice,           cid)
+
+    # ── Expenses ──────────────────────────────────────────────────────────────
+    if "expenses" in cats:
+        _del(db, Expense, cid)
+
+    # ── Customers ─────────────────────────────────────────────────────────────
+    if "customers" in cats:
+        _del(db, Customer, cid)
+
+    # ── Suppliers & Purchase Orders ───────────────────────────────────────────
+    if "suppliers" in cats:
+        # PurchaseOrderItems → PurchaseOrders → Suppliers
+        po_ids = [r[0] for r in db.query(PurchaseOrder.id).filter(
+            PurchaseOrder.company_id == cid
+        ).all()]
+        if po_ids:
+            db.query(PurchaseOrderItem).filter(
+                PurchaseOrderItem.purchase_order_id.in_(po_ids)
+            ).delete(synchronize_session=False)
+        _del(db, PurchaseOrder, cid)
+        _del(db, Supplier,      cid)
+
+    # ── Employees & Payroll ───────────────────────────────────────────────────
+    if "employees" in cats:
+        emp_ids = [r[0] for r in db.query(Employee.id).filter(
+            Employee.company_id == cid
+        ).all()]
+        if emp_ids:
+            db.query(EmployeeGarnishee).filter(
+                EmployeeGarnishee.employee_id.in_(emp_ids)
+            ).delete(synchronize_session=False)
+            db.query(LeaveRequest).filter(
+                LeaveRequest.employee_id.in_(emp_ids)
+            ).delete(synchronize_session=False)
+            db.query(LeaveBalance).filter(
+                LeaveBalance.employee_id.in_(emp_ids)
+            ).delete(synchronize_session=False)
+            db.query(ClockEvent).filter(
+                ClockEvent.employee_id.in_(emp_ids)
+            ).delete(synchronize_session=False)
+        _del(db, Payslip,  cid)
+        _del(db, Employee, cid)
+
+    # ── Inventory ─────────────────────────────────────────────────────────────
+    if "inventory" in cats:
+        _del(db, InventoryItem, cid)
+
+    # ── Banking (transactions + accounts + connections for all providers) ──────
+    if "banking" in cats:
+        for TxModel, AccModel, ConnModel in [
+            (StitchTransaction,       StitchBankAccount,       StitchConnection),
+            (SaltEdgeTransaction,     SaltEdgeBankAccount,     SaltEdgeConnection),
+            (AbsaTransaction,         AbsaBankAccount,         AbsaConnection),
+            (NedbankTransaction,      NedbankBankAccount,      NedbankConnection),
+            (InvestecTransaction,     InvestecBankAccount,     InvestecConnection),
+            (StandardBankTransaction, StandardBankBankAccount, StandardBankConnection),
+        ]:
+            _del(db, TxModel,   cid)
+            _del(db, AccModel,  cid)
+            _del(db, ConnModel, cid)
+
+    # ── Budgets & Fixed Assets ────────────────────────────────────────────────
+    if "budgets_assets" in cats:
+        asset_ids = [r[0] for r in db.query(FixedAsset.id).filter(
+            FixedAsset.company_id == cid
+        ).all()]
+        if asset_ids:
+            db.query(DepreciationEntry).filter(
+                DepreciationEntry.asset_id.in_(asset_ids)
+            ).delete(synchronize_session=False)
+        _del(db, FixedAsset, cid)
+        _del(db, Budget,     cid)
+
+    # ── Documents ─────────────────────────────────────────────────────────────
+    if "documents" in cats:
+        _del(db, CompanyDocument, cid)
+
+    db.commit()
+    logger.info("clear-data: company_id=%s cleared categories=%s by user_id=%s",
+                cid, sorted(cats), current_user.id)
+    return {
+        "cleared":  sorted(cats),
+        "message":  f"Cleared: {', '.join(sorted(cats))}.",
+    }
 
 
 class NewCompanyRequest(BaseModel):
