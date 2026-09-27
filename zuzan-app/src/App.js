@@ -9057,6 +9057,14 @@ function ServiceCatalog() {
 // ── SETTINGS ──────────────────────────────────────────────────────────────────
 function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChange, onNavigate, onSubscribeFlow}) {
   const [settingsTab, setSettingsTab] = useState("subscription");
+  // Clear Trial Data panel state — hooks must live at component top level,
+  // not inside the render-time IIFE below (react-hooks/rules-of-hooks).
+  const [showClear, setShowClear] = useState(false);
+  const [clearSt, setClearSt] = useState({
+    sales:false,expenses:false,customers:false,suppliers:false,
+    employees:false,inventory:false,banking:false,budgets_assets:false,documents:false,
+  });
+  const [clearing, setClearing] = useState(false);
   const [form, setForm] = useState({
     companyName:          user?.companyName          || "",
     regNumber:            user?.regNumber            || "",
@@ -9529,12 +9537,6 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       </>}
       {/* Clear trial data */}
       {(()=>{
-        const [showClear, setShowClear] = React.useState(false);
-        const [clearSt, setClearSt] = React.useState({
-          sales:false,expenses:false,customers:false,suppliers:false,
-          employees:false,inventory:false,banking:false,budgets_assets:false,documents:false,
-        });
-        const [clearing, setClearing] = React.useState(false);
         const OPTS = [
           {key:"sales",          label:"Sales",                 sub:"Invoices, Quotes, Credit Notes, Recurring"},
           {key:"expenses",       label:"Expenses",              sub:"All expense records"},
