@@ -1301,7 +1301,7 @@ async function toggleExempt(companyId, companyName, currentExempt) {
 }
 
 async function activateSub(companyId, companyName) {
-  if (!confirm('Manually activate subscription for ' + companyName + '?\n\nOnly do this if you have confirmed payment was received (e.g. PayFast confirmation email). This cannot be undone automatically.')) return;
+  if (!confirm('Manually activate subscription for ' + companyName + '?\\n\\nOnly do this if you have confirmed payment was received (e.g. PayFast confirmation email). This cannot be undone automatically.')) return;
   try {
     const res = await fetch('/admin/api/clients/' + companyId + '/activate', {
       method: 'POST',
