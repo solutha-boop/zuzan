@@ -792,6 +792,54 @@ async def admin_toggle_billing_exempt(company_id: int, request: Request, db: Ses
     return {"ok": True, "company": co.name, "billing_exempt": exempt}
 
 
+@app.post("/admin/api/clients/{company_id}/clear-data", tags=["Admin"])
+async def admin_clear_company_data(company_id: int, request: Request, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    """Wipe all transactional data for a company (admin use — e.g. client wants fresh start)."""
+    from companies import (
+        _CLEARABLE, _CATEGORY_JOURNAL_SOURCES, _clear_journal_for_sources, _del,
+        CreditNote, RecurringInvoice, Quote, Invoice, Expense,
+    )
+    from database import (
+        Customer, Supplier, PurchaseOrder, Employee, Payslip, LeaveRequest, LeaveBalance,
+        InventoryItem, StockMovement, BankTransaction, Budget, FixedAsset, DepreciationEntry,
+        Document, CategoryRule, CompanyAccount, ServiceItem, ClockEvent,
+    )
+    co = db.query(_Company).filter(_Company.id == company_id).first()
+    if not co:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    cats = set(_CLEARABLE)  # clear everything
+    journal_sources = set()
+    for cat in cats:
+        journal_sources.update(_CATEGORY_JOURNAL_SOURCES.get(cat, []))
+    _clear_journal_for_sources(db, company_id, journal_sources)
+
+    _del(db, CreditNote, company_id)
+    _del(db, RecurringInvoice, company_id)
+    _del(db, Quote, company_id)
+    _del(db, Invoice, company_id)
+    _del(db, Expense, company_id)
+    _del(db, Customer, company_id)
+    _del(db, Supplier, company_id)
+    _del(db, PurchaseOrder, company_id)
+    _del(db, Payslip, company_id)
+    _del(db, LeaveRequest, company_id)
+    _del(db, LeaveBalance, company_id)
+    _del(db, Employee, company_id)
+    _del(db, StockMovement, company_id)
+    _del(db, InventoryItem, company_id)
+    _del(db, BankTransaction, company_id)
+    _del(db, Budget, company_id)
+    _del(db, DepreciationEntry, company_id)
+    _del(db, FixedAsset, company_id)
+    _del(db, Document, company_id)
+    _del(db, CategoryRule, company_id)
+    _del(db, ClockEvent, company_id)
+    db.commit()
+    logger.info(f"Admin wiped ALL data for company {co.id} ({co.name})")
+    return {"ok": True, "company": co.name, "cleared": sorted(cats)}
+
+
 @app.get("/admin/api/subscriptions", tags=["Admin"])
 async def admin_subscriptions(db: Session = Depends(get_db_session), _=Depends(_check_admin)):
     from database import SubscriptionPayment as _SubPay
@@ -1283,7 +1331,8 @@ function renderTable(data) {
       ${d.billing_exempt ? '<span class="badge" style="background:#e8f5e9;color:#1b5e20;margin-right:4px">Partner</span>' : ''}
       <button onclick="extendTrial(${d.id},'${d.company.replace(/'/g,"\\'")}','${d.trial_ends||''}')" style="background:#1A3A6B;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">+ Extend Trial</button>
       ${d.status !== 'active' ? '<button onclick="activateSub(' + d.id + ',\\'' + d.company.replace(/'/g,"\\'") + '\\')" style="background:#e67e22;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">✓ Activate</button>' : ''}
-      <button onclick="toggleExempt(${d.id},'${d.company.replace(/'/g,"\\'")}',${d.billing_exempt})" style="background:${d.billing_exempt?'#c0392b':'#27ae60'};color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer">${d.billing_exempt?'Remove Partner':'Set Partner'}</button>
+      <button onclick="toggleExempt(${d.id},'${d.company.replace(/'/g,"\\'")}',${d.billing_exempt})" style="background:${d.billing_exempt?'#c0392b':'#27ae60'};color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-right:4px">${d.billing_exempt?'Remove Partner':'Set Partner'}</button>
+      <button onclick="clearAllData(${d.id},'${d.company.replace(/'/g,"\\'")}')\" style="background:#7f1010;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer">🗑 Clear Data</button>
     </td>
   </tr>`).join('');
 }
@@ -1300,6 +1349,22 @@ async function toggleExempt(companyId, companyName, currentExempt) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Failed');
     alert((data.billing_exempt ? 'Partner status granted to ' : 'Partner status removed from ') + data.company);
+    load();
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function clearAllData(companyId, companyName) {
+  if (!confirm('⚠️ PERMANENTLY delete ALL data for ' + companyName + '?\\n\\nThis wipes invoices, expenses, employees, payroll, inventory, banking, documents — everything. This cannot be undone.\\n\\nType the company name to confirm you mean it.')) return;
+  const typed = prompt('Type the company name exactly to confirm:');
+  if (!typed || typed.trim() !== companyName.trim()) { alert('Name did not match — cancelled.'); return; }
+  try {
+    const res = await fetch('/admin/api/clients/' + companyId + '/clear-data', {
+      method: 'POST',
+      headers: { 'X-Admin-Secret': secret, 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed');
+    alert('✓ All data cleared for ' + data.company);
     load();
   } catch(e) { alert('Error: ' + e.message); }
 }

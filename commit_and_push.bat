@@ -36,7 +36,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "fix: subscription_status enum serialized as .value in _company_dict (was returning raw enum object, frontend fell back to trial); fix: admin activate now sets next_billing_date 30 days out; feat: POST /companies/cancel-subscription calls PayFast cancel API; fix: admin dashboard \\n syntax error [%STAMP%]" --allow-empty
+git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "fix: subscription_status enum serialized as .value in _company_dict; fix: admin activate sets next_billing_date 30 days out; feat: POST /companies/cancel-subscription calls PayFast API; fix: sidebar Trial expired label; feat: admin Clear Data button + POST /admin/api/clients/{id}/clear-data [%STAMP%]" --allow-empty
 
 echo === Pushing ===
 git push origin main
