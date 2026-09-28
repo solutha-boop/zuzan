@@ -768,7 +768,11 @@ async def admin_activate_subscription(company_id: int, db: Session = Depends(get
     if not co:
         raise HTTPException(status_code=404, detail="Company not found")
     from database import SubscriptionStatus
+    from datetime import datetime, timedelta
     co.subscription_status = SubscriptionStatus.active
+    # Set next_billing_date 30 days out so the auto-charge job doesn't immediately fire
+    if not co.next_billing_date or co.next_billing_date < datetime.utcnow():
+        co.next_billing_date = datetime.utcnow() + timedelta(days=30)
     db.commit()
     logger.info(f"Admin manually activated subscription for company {co.id} ({co.name})")
     return {"ok": True, "company": co.name, "status": "active"}

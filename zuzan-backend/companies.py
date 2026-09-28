@@ -95,7 +95,7 @@ def _company_dict(c: Company) -> dict:
         "invoice_template_html": c.invoice_template_html or "",
         "billing_exempt": bool(c.billing_exempt),
         "plan": c.plan, "billing_cycle": c.billing_cycle,
-        "subscription_status": c.subscription_status,
+        "subscription_status": c.subscription_status.value if hasattr(c.subscription_status, "value") else (c.subscription_status or "trial"),
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
         "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
         "afs_enabled": c.afs_enabled,
