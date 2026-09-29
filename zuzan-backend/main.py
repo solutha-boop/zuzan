@@ -794,9 +794,10 @@ async def admin_toggle_billing_exempt(company_id: int, request: Request, db: Ses
 
 @app.post("/admin/api/clients/{company_id}/clear-data", tags=["Admin"])
 async def admin_clear_company_data(company_id: int, request: Request, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
-    """Wipe all transactional data for a company (admin use — e.g. client wants fresh start)."""
+    """Wipe all transactional data for a company (admin use — e.g. client wants fresh start).
+    Requires JSON body {"confirm_company_name": "<exact company name>"} — enforced server-side."""
     from companies import (
-        _CLEARABLE, _CATEGORY_JOURNAL_SOURCES, _clear_journal_for_sources, _del,
+        _CLEARABLE, _journal_sources_for_categories, _clear_journal_for_sources, _del,
         CreditNote, RecurringInvoice, Quote, Invoice, Expense,
     )
     from database import (
@@ -808,10 +809,15 @@ async def admin_clear_company_data(company_id: int, request: Request, db: Sessio
     if not co:
         raise HTTPException(status_code=404, detail="Company not found")
 
+    try:
+        _body = await request.json()
+    except Exception:
+        _body = {}
+    if not isinstance(_body, dict) or (_body.get("confirm_company_name") or "").strip() != (co.name or "").strip():
+        raise HTTPException(status_code=400, detail="confirm_company_name must exactly match the company name — this action is irreversible.")
+
     cats = set(_CLEARABLE)  # clear everything
-    journal_sources = set()
-    for cat in cats:
-        journal_sources.update(_CATEGORY_JOURNAL_SOURCES.get(cat, []))
+    journal_sources = _journal_sources_for_categories(cats)
     _clear_journal_for_sources(db, company_id, journal_sources)
 
     _del(db, CreditNote, company_id)
@@ -1360,7 +1366,8 @@ async function clearAllData(companyId, companyName) {
   try {
     const res = await fetch('/admin/api/clients/' + companyId + '/clear-data', {
       method: 'POST',
-      headers: { 'X-Admin-Secret': secret, 'Content-Type': 'application/json' }
+      headers: { 'X-Admin-Secret': secret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm_company_name: typed.trim() })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Failed');

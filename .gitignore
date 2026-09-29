@@ -227,3 +227,8 @@ __marimo__/
 # when a file is open for edit through a network/cloud-synced mount) —
 # audit fix 2026-09-18, standing Low item from the 09-17/09-18 reports.
 .fuse_hidden*
+
+# ZuZan local DB backups / scratch
+zuzan.db.bak-*
+*.db.bak*
+.fuse_hidden*

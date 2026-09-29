@@ -231,7 +231,7 @@ def _del(db: Session, Model, company_id: int):
 # with no supporting sub-ledger rows once that category is cleared (audit
 # finding, reports_debtors_creditors_2026-09-27.md action item 1).
 _CATEGORY_JOURNAL_SOURCES = {
-    "sales":          ["invoice", "invoice_payment", "invoice_cogs"],
+    "sales":          ["invoice", "invoice_payment", "invoice_cogs", "credit_note"],
     "expenses":       ["expense", "expense_payment"],
     "employees":      ["payroll"],
     "banking":        ["bank_import_income"],
@@ -240,6 +240,20 @@ _CATEGORY_JOURNAL_SOURCES = {
     "inventory":      ["stock_adjustment"],
     # "customers" and "documents" own no journal source — nothing to clear.
 }
+
+def _journal_sources_for_categories(cats) -> set:
+    """Journal sources to purge for the selected clear-data categories.
+    CSV-imported journal lines (source="import") are shared between invoice,
+    expense and journal (equity/opening-balance) imports, so they are only
+    purged when BOTH "sales" and "expenses" are cleared — otherwise clearing
+    one category would silently erase the other's imported balances."""
+    cats = set(cats)
+    sources = set()
+    for cat in cats:
+        sources.update(_CATEGORY_JOURNAL_SOURCES.get(cat, []))
+    if {"sales", "expenses"} <= cats:
+        sources.add("import")
+    return sources
 
 def _clear_journal_for_sources(db: Session, company_id: int, sources: set):
     """Delete JournalLines then JournalEntries for exactly these `source`
@@ -309,9 +323,7 @@ async def clear_company_data(
 
     # ── Journals: clear exactly the postings owned by the selected categories ──
     # (never a blanket company-wide wipe — see _clear_journal_for_sources)
-    journal_sources = set()
-    for cat in cats:
-        journal_sources.update(_CATEGORY_JOURNAL_SOURCES.get(cat, []))
+    journal_sources = _journal_sources_for_categories(cats)
     _clear_journal_for_sources(db, cid, journal_sources)
 
     # ── Sales ─────────────────────────────────────────────────────────────────
