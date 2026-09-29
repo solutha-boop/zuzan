@@ -391,6 +391,17 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     co.subscription_status = SubscriptionStatus.active
     db.commit()
 
+    # Delete seeded example data now that account is live
+    try:
+        from database import Invoice as _Inv, Employee as _Emp
+        db.query(_Inv).filter(_Inv.company_id == co.id, _Inv.notes == "[zuzan-example]").delete(synchronize_session=False)
+        db.query(_Emp).filter(_Emp.company_id == co.id, _Emp.notes == "[zuzan-example]").delete(synchronize_session=False)
+        db.commit()
+        logger.info(f"PayFast ITN: deleted example data for company {co.id}")
+    except Exception as _e:
+        logger.warning(f"PayFast ITN: example cleanup failed for company {co.id}: {_e}")
+        db.rollback()
+
     # Log subscription payment
     owner = db.query(User).filter(User.company_id == co.id, User.role == "owner").first()
     sub_pay = SubscriptionPayment(

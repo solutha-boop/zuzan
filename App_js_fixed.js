@@ -9065,6 +9065,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     employees:false,inventory:false,banking:false,budgets_assets:false,documents:false,
   });
   const [clearing, setClearing] = useState(false);
+  const [clearDone, setClearDone] = useState(false);
   const [form, setForm] = useState({
     companyName:          user?.companyName          || "",
     regNumber:            user?.regNumber            || "",
@@ -9571,6 +9572,11 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                 {showClear ? "Cancel" : "Clear Data…"}
               </button>
             </div>
+            {clearDone && (
+              <div style={{background:"#e8f5e9",border:"1px solid #a5d6a7",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"#1b5e20",fontWeight:600}}>
+                ✅ Done — selected trial data has been cleared.
+              </div>
+            )}
             {showClear && (<>
               {OPTS.map(({key,label,sub})=>(
                 <label key={key} style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:10,cursor:"pointer"}}>
@@ -9595,11 +9601,12 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                   try {
                     const toDelete = Object.keys(clearSt).filter(k=>clearSt[k]);
                     await api("/companies/clear-data",{method:"POST",body:JSON.stringify({categories:toDelete,confirm:true})});
-                    alert("Done! Selected trial data has been cleared.");
+                    setClearDone(true);
                     setShowClear(false);
                     setClearSt({sales:false,expenses:false,customers:false,suppliers:false,employees:false,inventory:false,banking:false,budgets_assets:false,documents:false});
+                    setTimeout(()=>setClearDone(false), 4000);
                   } catch(e) {
-                    alert("Error: " + (e.message||"Please try again."));
+                    alert("Error clearing data: " + (e.message||"Please try again."));
                   }
                   setClearing(false);
                 }}

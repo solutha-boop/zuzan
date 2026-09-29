@@ -761,6 +761,19 @@ async def admin_extend_trial(company_id: int, request: Request, db: Session = De
     return {"ok": True, "company": co.name, "trial_ends": co.trial_ends.strftime("%Y-%m-%d")}
 
 
+def _delete_example_data(company_id: int, db):
+    """Delete seeded example invoice + employee tagged [zuzan-example]."""
+    try:
+        from database import Invoice as _Inv, Employee as _Emp
+        db.query(_Inv).filter(_Inv.company_id == company_id, _Inv.notes == "[zuzan-example]").delete(synchronize_session=False)
+        db.query(_Emp).filter(_Emp.company_id == company_id, _Emp.notes == "[zuzan-example]").delete(synchronize_session=False)
+        db.commit()
+        logger.info(f"Deleted example data for company {company_id}")
+    except Exception as e:
+        logger.warning(f"Example data cleanup failed for company {company_id}: {e}")
+        db.rollback()
+
+
 @app.post("/admin/api/clients/{company_id}/activate", tags=["Admin"])
 async def admin_activate_subscription(company_id: int, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
     """Manually activate a subscription — use when ITN webhook was missed but payment is confirmed."""
@@ -775,6 +788,7 @@ async def admin_activate_subscription(company_id: int, db: Session = Depends(get
         co.next_billing_date = datetime.utcnow() + timedelta(days=30)
     db.commit()
     logger.info(f"Admin manually activated subscription for company {co.id} ({co.name})")
+    _delete_example_data(co.id, db)
     return {"ok": True, "company": co.name, "status": "active"}
 
 

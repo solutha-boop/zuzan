@@ -213,6 +213,41 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
     db.add(payment)
     db.commit()
 
+    # Seed example invoice + employee so new accounts aren't empty on first login.
+    # These are tagged [zuzan-example] in notes and are auto-deleted on first activation.
+    try:
+        from database import Invoice as _Inv, InvoiceStatus as _IS, Employee as _Emp
+        from datetime import timedelta
+        _today = datetime.utcnow()
+        _due   = _today + timedelta(days=30)
+        _ex_inv = _Inv(
+            company_id=company.id,
+            invoice_number="EXAMPLE-001",
+            client_name="Example Client",
+            client_email="client@example.com",
+            description="Example service invoice — delete before going live",
+            amount=1000.00, vat_amount=150.00, total_amount=1150.00,
+            status=_IS.draft,
+            issue_date=_today, due_date=_due,
+            notes="[zuzan-example]",
+        )
+        _ex_emp = _Emp(
+            company_id=company.id,
+            first_name="Example", last_name="Employee",
+            employee_number="EMP-000",
+            position="Example Position",
+            gross_salary=10000.00,
+            start_date=_today,
+            is_active=True,
+            notes="[zuzan-example]",
+        )
+        db.add(_ex_inv); db.add(_ex_emp)
+        db.commit()
+    except Exception as _seed_err:
+        import logging as _log
+        _log.getLogger("zuzan.auth").warning("Example seed failed (non-fatal): %s", _seed_err)
+        db.rollback()
+
     # Send verification email only — welcome email fires after they click the link
     background_tasks.add_task(
         send_verification_email, data.first_name, data.email, verify_token
