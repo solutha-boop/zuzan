@@ -62,3 +62,26 @@ Standing reminders unchanged: replace provisional 2027/2028 `TAX_YEARS` after Bu
 4. **`.fuse_hidden*` files** — all deleted from `zuzan-backend/`.
 5. **Commit hygiene** — `commit_and_push.bat` now takes the message as an argument (`commit_and_push.bat "msg"`), falling back to `chore: update [stamp]`; it also stages `journal_check.py`.
 6. **Not fixable from here:** the expense reclass script (`reclass_expenses_2026-09-28.py`) — cannot confirm it was run against production Postgres; run it there deliberately. `zuzan.db.bak-20260928-184955` left on disk (now git-ignored) — delete when no longer needed.
+
+---
+
+# Follow-up run — 29 Sep 2026, 22:07 UTC (scheduled)
+**Prior report:** the 19:06 run above (PASS). **Change detection:** HEAD is now `798be6a` (was `45a5aa8`). `git diff --stat 45a5aa8 HEAD` shows changes only in `auth.py` (+35), `billing.py` (+11), `companies.py`, `main.py`, `App_js_fixed.js`/`zuzan-app/src/App.js` (sidebar label), `.gitignore`, `commit_and_push.bat`, new `journal_check.py`, and `zuzan.db` removed from the index (item 1 of §9 done and committed). `payroll.py`, `financial_statements.py`, `journal.py`, `purchase_orders.py`, `database.py`, `csv_import.py`, `suppliers.py`, `customers.py` are unchanged, so Reports, Debtors, Creditors, cross-module journal coverage, IFRS and tax verdicts from the 19:06 run stand (anchors re-grepped: `deferred_tax` `financial_statements.py:606`, `TAX_YEARS["2026/2027"]` `payroll.py:132`, `CORP_TAX_RATE=0.27` `:3151`). Standards and SARS rates: no change since this morning's web check.
+
+## New finding
+**Medium — example-data seed/cleanup references a non-existent `Employee.notes` column.**
+- `auth.py:238-243` builds `Employee(..., notes="[zuzan-example]")` and `billing.py:398` filters on `_Emp.notes`. `class Employee` (`database.py:181`) has no `notes` column (grep confirms; `Invoice.notes` does exist).
+- Effect at signup: the `Employee(...)` constructor raises `TypeError`, which the `try/except` at `auth.py:~247` swallows (logs a warning). Result: **neither the example invoice nor the example employee is seeded** — the feature silently does nothing.
+- Effect at activation (`billing.py:395-404`): `_Emp.notes` raises `AttributeError`; the `except` runs `db.rollback()`. The example-invoice delete on the line before is uncommitted at that point, so it is rolled back too. Harmless today only because nothing gets seeded — but if someone adds the column to fix the seed, verify the cleanup then works.
+- Fix: add `notes = Column(Text)` to `Employee` plus an `ALTER TABLE employees ADD COLUMN IF NOT EXISTS notes TEXT` inside the `database.py` migrations list literal (Postgres path), or tag the example employee via `employee_number="EMP-EXAMPLE"` and filter on that instead. Not edited (audit is report-only outside §5b).
+- Design note (Low): if seeding does start working, the example employee is `is_active=True` with gross R10,000 and would be picked up by payroll runs/EMP201 for trial accounts, and the example invoice is `draft` (correctly excluded from AR/revenue). Consider `is_active=False` or excluding `[zuzan-example]` records from payroll runs.
+
+## Action items (changes vs 19:06 list)
+1. **Medium (new)** — fix `Employee.notes` mismatch above.
+2. Items 1–5 of §9 remain as previously reported (history purge decision for `zuzan.db` in origin; production run of `reclass_expenses_2026-09-28.py`; delete `zuzan.db.bak-20260928-184955`).
+3. Standing reminders unchanged (2027/2028 TAX_YEARS after Budget Feb 2027; IFRS for SMEs 3rd edition / IFRS 18 from 1 Jan 2027; VAT s7(4) ConCourt ruling).
+
+**Overall follow-up verdict: PASS with one new Medium.** No Critical/High findings.
+
+## Fix applied (30 Sep 2026, at user request)
+**Medium (`Employee.notes`) — fixed.** `database.py`: added `notes = Column(Text, nullable=True)` to `Employee`, and `"ALTER TABLE employees ADD COLUMN notes TEXT"` inside the migrations list literal (after the `hourly_rate` migration). All other fields used by the `auth.py` seed and `billing.py` cleanup (Invoice and Employee) were verified to exist; `database.py` passes `py_compile`. Not runtime-tested. The seed and cleanup code itself is unchanged. Still open (Low): the seeded example employee is `is_active=True` (R10,000 gross) so it would be included in trial accounts' payroll runs/EMP201 until activation removes it — consider `is_active=False` or excluding `[zuzan-example]` from payroll runs.

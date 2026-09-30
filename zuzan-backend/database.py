@@ -188,6 +188,7 @@ class Employee(Base):
     appointment_date=Column(DateTime); address=Column(String)
     position=Column(String); department=Column(String)
     grade=Column(String,nullable=True)                # e.g. "A", "B", "Senior", "Grade 7"
+    notes=Column(Text,nullable=True)                  # internal tag/notes, e.g. "[zuzan-example]" seeded record
     # NBCPSS private security fields (active when company.industry = 'private_security')
     psira_number=Column(String,nullable=True)          # PSIRA registration number
     security_grade=Column(String,nullable=True)        # A, B, C, D, or E (NBCPSS grading)
@@ -1257,6 +1258,7 @@ def init_db():
             "ALTER TABLE employees ADD COLUMN grade VARCHAR",
             "ALTER TABLE employees ADD COLUMN employment_type VARCHAR DEFAULT 'salaried'",
             "ALTER TABLE employees ADD COLUMN hourly_rate FLOAT",
+            "ALTER TABLE employees ADD COLUMN notes TEXT",
             "ALTER TABLE payslips ADD COLUMN overtime_hours FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN overtime_amount FLOAT DEFAULT 0",
             "ALTER TABLE payslips ADD COLUMN sunday_hours FLOAT DEFAULT 0",
