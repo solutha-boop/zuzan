@@ -15220,10 +15220,10 @@ export default function App() {
     setScreen("login");
   };
 
-  // ── Auto-logout after 10 minutes of inactivity ──
+  // ── Auto-logout after 30 minutes of inactivity ──
   useEffect(() => {
     if (screen !== "app") return;
-    const TIMEOUT_MS = 10 * 60 * 1000;
+    const TIMEOUT_MS = 30 * 60 * 1000;
     let timer;
     const reset = () => {
       clearTimeout(timer);
@@ -15232,7 +15232,7 @@ export default function App() {
         setUser(null);
         setScreen("login");
         // Brief delay so React can unmount cleanly before the alert
-        setTimeout(() => alert("You were signed out due to 10 minutes of inactivity."), 50);
+        setTimeout(() => alert("You were signed out due to 30 minutes of inactivity."), 50);
       }, TIMEOUT_MS);
     };
     const events = ["mousemove","mousedown","keydown","touchstart","scroll","click"];
