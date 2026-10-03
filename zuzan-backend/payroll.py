@@ -188,6 +188,13 @@ PRIMARY_REBATE = TAX_YEARS[CURRENT_TAX_YEAR]["primary_rebate"]
 UIF_CEIL       = TAX_YEARS[CURRENT_TAX_YEAR]["uif_ceil"]
 UIF_RATE        = 0.01
 SDL_RATE        = 0.01
+
+def _not_example_emp():
+    """SQL filter excluding the seeded '[zuzan-example]' employee so trial
+    accounts' payroll runs, EMP201/IRP5 and cost estimates never include it."""
+    from sqlalchemy import or_
+    return or_(Employee.notes.is_(None), Employee.notes != "[zuzan-example]")
+
 PAYROLL_PER_EMP = 34.00
 PAYROLL_MIN     = 99.00
 
@@ -739,7 +746,8 @@ async def calculate_all(
 ):
     employees = db.query(Employee).filter(
         Employee.company_id == current_user.company_id,
-        Employee.is_active == True
+        Employee.is_active == True,
+        _not_example_emp()
     ).all()
 
     results = []
@@ -859,7 +867,8 @@ async def run_payroll(
 ):
     employees = db.query(Employee).filter(
         Employee.company_id == current_user.company_id,
-        Employee.is_active == True
+        Employee.is_active == True,
+        _not_example_emp()
     ).all()
 
     if not employees:
@@ -1231,7 +1240,7 @@ async def get_irp5(
 
     employees = (
         db.query(Employee)
-        .filter(Employee.company_id == cid, Employee.is_active == True)
+        .filter(Employee.company_id == cid, Employee.is_active == True, _not_example_emp())
         .all()
     )
 
@@ -1448,7 +1457,7 @@ async def get_easyfile_export(
     # ── EMPLOYEE CERTIFICATE RECORDS ──────────────────────────────────────────
     employees = (
         db.query(Employee)
-        .filter(Employee.company_id == cid, Employee.is_active == True)
+        .filter(Employee.company_id == cid, Employee.is_active == True, _not_example_emp())
         .all()
     )
 
@@ -1692,7 +1701,8 @@ async def dashboard(
 
     employees = db.query(Employee).filter(
         Employee.company_id == cid,
-        Employee.is_active == True
+        Employee.is_active == True,
+        _not_example_emp()
     ).all()
     # Sum ALL payslips for the company (including terminated employees) so that historical
     # payroll cost is never understated when headcount has changed.
@@ -2935,7 +2945,8 @@ async def management_accounts(
 
     active_employees = db.query(Employee).filter(
         Employee.company_id == cid,
-        Employee.is_active == True
+        Employee.is_active == True,
+        _not_example_emp()
     ).all()
     # Sum payslips for ALL employees (including terminated) so that periods where headcount
     # changed are not understated. Active employees are still used for the fallback estimate.
