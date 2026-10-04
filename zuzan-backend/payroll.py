@@ -2895,20 +2895,25 @@ async def management_accounts(
         if date_from and date_to else now.strftime("%B %Y")
     )
 
+    # Use COALESCE so invoices with NULL paid_date (legacy records) fall back to
+    # invoice_date then created_at — keeps management report consistent with dashboard.
+    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.invoice_date, Invoice.created_at)
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
-        Invoice.paid_date >= period_start,
-        Invoice.paid_date < period_end,
+        _eff_paid >= period_start,
+        _eff_paid < period_end,
     ).all()
     revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
     # Add bank-import income in the same date range
     revenue = round(revenue + _bank_import_income(db, cid, period_start, period_end), 2)
 
+    # COALESCE expense_date → created_at so expenses with NULL date are still captured
+    _eff_exp = func.coalesce(Expense.expense_date, Expense.created_at)
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
-        Expense.expense_date >= period_start,
-        Expense.expense_date < period_end,
+        _eff_exp >= period_start,
+        _eff_exp < period_end,
     ).all()
     # Ex-VAT expenses for P&L — consistent with dashboard and monthly-trend endpoints
     total_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
