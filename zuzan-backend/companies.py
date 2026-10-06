@@ -1614,11 +1614,11 @@ def _employee_dict(e: Employee) -> dict:
 
 
 @employees_router.get("/")
-async def list_employees(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    emps = db.query(Employee).filter(
-        Employee.company_id == current_user.company_id,
-        Employee.is_active == True
-    ).all()
+async def list_employees(include_inactive: bool = False, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(Employee).filter(Employee.company_id == current_user.company_id)
+    if not include_inactive:
+        q = q.filter(Employee.is_active == True)
+    emps = q.all()
     return [_employee_dict(e) for e in emps]
 
 

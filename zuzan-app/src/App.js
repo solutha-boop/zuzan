@@ -107,7 +107,7 @@ function useLiveData() {
         api("/reports/dashboard").catch(() => null),
         api("/expenses/").catch(() => null),
         api("/invoices/").catch(() => null),
-        api("/employees/").catch(() => null),
+        api("/employees/?include_inactive=true").catch(() => null),
         api("/reports/monthly-trend").catch(() => null),
       ]);
       if (dash) { setDashboard(dash); setConnected(true); }
@@ -3285,9 +3285,9 @@ function Payroll({live = {}, user = {}}) {
   const [editEmp,     setEditEmp]     = useState(null);
   const [editForm,    setEditForm]    = useState({});
   const [garnishees,  setGarnishees]  = useState([]);  // active garnishee orders for editEmp
+  const [showTerminated, setShowTerminated] = useState(false);
   const [newGarnRef,  setNewGarnRef]  = useState("");
   const [newGarnAmt,  setNewGarnAmt]  = useState("");
-  const totalGross = employees.reduce((s,e) => s + e.salary, 0);
   // audit fix 2026-09-16 — same NBCPSS gap as BatchPaymentModal: these drive the
   // "Payroll Processed" summary cards (Net Disbursed / PAYE / UIF+SDL) shown right
   // after a real payroll run, so they should reflect this period's actual OT/night-
@@ -3307,12 +3307,14 @@ function Payroll({live = {}, user = {}}) {
         specialAllowanceShifts: +sec.specialShifts||0, annualBonus },
     );
   };
-  const totalPAYE = employees.reduce((s,e) => s + calcForSummary(e).paye, 0);
-  const totalNet = employees.reduce((s,e) => s + calcForSummary(e).netPay, 0);
-  const totalCost = employees.reduce((s,e) => s + calcForSummary(e).totalCost, 0);
-  const totalUIF = employees.reduce((s,e) => s + calcForSummary(e).uifEmployer, 0);
-  const totalSDL = employees.reduce((s,e) => s + calcForSummary(e).sdl, 0);
-  const zuZanFee = Math.max(99, employees.length * 34);
+  const activeEmployees = employees.filter(e=>e.is_active!==false);
+  const totalGross = activeEmployees.reduce((s,e) => s + e.salary, 0);
+  const totalPAYE = activeEmployees.reduce((s,e) => s + calcForSummary(e).paye, 0);
+  const totalNet = activeEmployees.reduce((s,e) => s + calcForSummary(e).netPay, 0);
+  const totalCost = activeEmployees.reduce((s,e) => s + calcForSummary(e).totalCost, 0);
+  const totalUIF = activeEmployees.reduce((s,e) => s + calcForSummary(e).uifEmployer, 0);
+  const totalSDL = activeEmployees.reduce((s,e) => s + calcForSummary(e).sdl, 0);
+  const zuZanFee = Math.max(99, activeEmployees.length * 34);
   const handleAdd = async () => {
     const nameParts = form.name.trim().split(" ");
     const firstName = nameParts[0] || form.name;
@@ -3542,7 +3544,7 @@ function Payroll({live = {}, user = {}}) {
     return (
       <div>
         <SectionTabs/>
-        <LeaveManagement employees={employees} />
+        <LeaveManagement employees={employees.filter(e=>e.is_active!==false)} />
       </div>
     );
   }
@@ -3563,12 +3565,13 @@ function Payroll({live = {}, user = {}}) {
     // audit fix 2026-09-16 — fallback path only (real numbers normally come from
     // /reports/emp201); switched to calcForSummary for NBCPSS consistency with the
     // rest of this component. See [[project_nbcpss_208hr_bug]].
-    const totalPaye = e ? e.total_paye : employees.reduce((s,emp)=>s+calcForSummary({...emp, salary: emp.salary||emp.gross_salary}).paye,0);
-    const totalUif  = e ? e.total_uif  : employees.reduce((s,emp)=>{const p=calcForSummary({...emp, salary: emp.salary||emp.gross_salary});return s+p.uifEmployee+p.uifEmployer;},0);
-    const totalSdl  = e ? e.total_sdl  : employees.reduce((s,emp)=>s+calcForSummary({...emp, salary: emp.salary||emp.gross_salary}).sdl,0);
+    const activeEmps = employees.filter(emp=>emp.is_active!==false);
+    const totalPaye = e ? e.total_paye : activeEmps.reduce((s,emp)=>s+calcForSummary({...emp, salary: emp.salary||emp.gross_salary}).paye,0);
+    const totalUif  = e ? e.total_uif  : activeEmps.reduce((s,emp)=>{const p=calcForSummary({...emp, salary: emp.salary||emp.gross_salary});return s+p.uifEmployee+p.uifEmployer;},0);
+    const totalSdl  = e ? e.total_sdl  : activeEmps.reduce((s,emp)=>s+calcForSummary({...emp, salary: emp.salary||emp.gross_salary}).sdl,0);
     const totalDue  = e ? e.total_due_sars : totalPaye+totalUif+totalSdl;
     const dueDate   = e ? e.due_date : "7 "+new Date(nowD.getFullYear(),nowD.getMonth()+1).toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
-    const empList   = e ? e.employees : employees.map(emp=>{const p=calcForSummary({...emp, salary: emp.salary||emp.gross_salary});return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
+    const empList   = e ? e.employees : activeEmps.map(emp=>{const p=calcForSummary({...emp, salary: emp.salary||emp.gross_salary});return {employee_name:emp.name,employee_number:emp.id,gross_salary:p.gross,paye:p.paye,uif_employee:p.uifEmployee,uif_employer:p.uifEmployer,sdl:p.sdl,net_pay:p.netPay};});
 
     // ── Annual IRP5 / EMP501 helpers ──────────────────────────────────────
     const loadAnnual = async () => {
@@ -3891,7 +3894,7 @@ function Payroll({live = {}, user = {}}) {
         <button onClick={() => {
           // Initialise overtime entries for all employees (default 0)
           const init = {};
-          employees.forEach(e => { init[e.id] = {otHours:0, sunHours:0, phHours:0}; });
+          employees.filter(e=>e.is_active!==false).forEach(e => { init[e.id] = {otHours:0, sunHours:0, phHours:0}; });
           setOtData(init);
           setSecArea("3"); // NBCPSS Area 3 rates only
           setShowOtModal(true);
@@ -3933,7 +3936,7 @@ function Payroll({live = {}, user = {}}) {
                 <button onClick={() => {
                   // Generate and download a template CSV/XLSX with employee list pre-filled
                   const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
-                  const rows = employees.map(e => ({
+                  const rows = activeEmployees.map(e => ({
                     "Employee Number":      e.employee_number || e.id,
                     "Employee Name":        e.name,
                     ...(isSec ? {"Normal_Hours": 208} : {}),
@@ -4051,7 +4054,7 @@ function Payroll({live = {}, user = {}}) {
               const mo = new Date().getMonth(); // 0-based: 10=Nov, 11=Dec
               if (mo < 10) return null;
               const isDec = mo === 11;
-              const bonusTotal = employees.reduce((s,e)=>s+Math.round(e.salary*12/52*100)/100,0);
+              const bonusTotal = activeEmployees.reduce((s,e)=>s+Math.round(e.salary*12/52*100)/100,0);
               return (
                 <div style={{background:isDec?"#fefce8":"#f0fdf4",border:`1px solid ${isDec?"#fbbf24":"#86efac"}`,borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
                   <span style={{fontSize:20}}>{isDec?"🎁":"📅"}</span>
@@ -4084,7 +4087,7 @@ function Payroll({live = {}, user = {}}) {
                 </tr>
               </thead>
               <tbody>
-                {employees.map(emp => {
+                {activeEmployees.map(emp => {
                   const ot = otData[emp.id] || {normalHours:0,otHours:0,sunHours:0,phHours:0};
                   const isSecurity = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
                   const isFuelStation = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station";
@@ -4188,7 +4191,7 @@ function Payroll({live = {}, user = {}}) {
                   </tr>
                 </thead>
                 <tbody>
-                  {employees.map(emp => {
+                  {activeEmployees.map(emp => {
                     const oo = onceOffData[emp.id] || {};
                     const setOo = (k,v) => setOnceOffData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
                     const inpSt = {padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,width:90,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"};
@@ -4211,15 +4214,15 @@ function Payroll({live = {}, user = {}}) {
               <button onClick={async () => {
                 setShowOtModal(false);
                 try {
-                  const otPayload = employees.map(emp => {
+                  const otPayload = activeEmployees.map(emp => {
                     const ot = otData[emp.id] || {};
                     return { employee_id: emp.id, normal_hours: +ot.normalHours||0, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
                   }).filter(e => e.normal_hours > 0 || e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
-                  const secPayload = employees.map(emp => {
+                  const secPayload = activeEmployees.map(emp => {
                     const sec = secData[emp.id] || {};
                     return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0 };
                   }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0);
-                  const onceOffPayload = employees.map(emp => {
+                  const onceOffPayload = activeEmployees.map(emp => {
                     const oo = onceOffData[emp.id] || {};
                     return { employee_id: emp.id, expense_claim: +oo.expenseClaim||0, once_off_deduction: +oo.onceOffDeduction||0, once_off_allowance_taxable: +oo.onceOffTaxable||0, once_off_allowance_nontaxable: +oo.onceOffNonTaxable||0 };
                   }).filter(e => e.expense_claim > 0 || e.once_off_deduction > 0 || e.once_off_allowance_taxable > 0 || e.once_off_allowance_nontaxable > 0);
@@ -4269,8 +4272,8 @@ function Payroll({live = {}, user = {}}) {
       )}
       {showBatch && (
         <BatchPaymentModal
-          employees={employees}
-          payroll={employees.map(e=>calcPayroll(e.salary))}
+          employees={activeEmployees}
+          payroll={activeEmployees.map(e=>calcPayroll(e.salary))}
           period={new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
           onClose={()=>setShowBatch(false)}
           otData={otData}
@@ -4637,7 +4640,7 @@ function Payroll({live = {}, user = {}}) {
             </tr>
           </thead>
           <tbody>
-            {employees.map((emp) => {
+            {employees.filter(e=>e.is_active!==false).map((emp) => {
               // audit fix 2026-09-16 — was calcPayroll(emp.salary, taxYear) with no
               // NBCPSS awareness; calcForSummary (defined above) applies the same
               // period's OT/night-shift/special-allowance/bonus inputs and the
@@ -4677,6 +4680,7 @@ function Payroll({live = {}, user = {}}) {
                     <div style={{display:"flex",gap:6}}>
                       <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
+                      <button onClick={async()=>{if(!window.confirm(`Terminate ${emp.name}? They will be excluded from payroll. You can reinstate them later.`))return;try{await api(`/employees/${emp.id}`,{method:"PATCH",body:JSON.stringify({is_active:false})});setEmployees(employees.map(e=>e.id===emp.id?{...e,is_active:false}:e));}catch(e){alert("Could not terminate employee. Please try again.");}}} style={{background:"#fee2e2",color:"#b91c1c",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Terminate</button>
                     </div>
                   </td>
                 </tr>
@@ -4688,7 +4692,7 @@ function Payroll({live = {}, user = {}}) {
               <td colSpan={3} style={{padding:"13px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
               <td style={{padding:"13px 14px",fontWeight:800}}>{fmt(totalGross)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.red}}>{fmt(totalPAYE)}</td>
-              <td style={{padding:"13px 14px",fontWeight:800,color:C.gold}}>{fmt(employees.reduce((s,e)=>s+calcForSummary(e).uifEmployee,0))}</td>
+              <td style={{padding:"13px 14px",fontWeight:800,color:C.gold}}>{fmt(activeEmployees.reduce((s,e)=>s+calcForSummary(e).uifEmployee,0))}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.blue}}>{fmt(totalSDL)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.green}}>{fmt(totalNet)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.accent}}>{fmt(totalCost)}</td>
@@ -4704,6 +4708,42 @@ function Payroll({live = {}, user = {}}) {
         <strong style={{color:C.ink}}>BCEA Overtime (s9/s10/s16/s18):</strong> Normal week = 45 hrs · OT max 10 hrs/week · Weekday/Sat OT = 1.5× · Sunday = 2× · Public holiday = 2× · Hourly rate derived from salary ÷ 195 hrs/month
         {user?.industry==="private_security" && <><br/><strong style={{color:"#c2410c"}}>🔒 NBCPSS (1 Mar 2026 – 28 Feb 2027):</strong> Night shift R8.00/shift · Special allowance R10.50/shift · Cleaning R32.00/month · BC levy R9.40/month (employer) · PSIRA fee R5.00/month (employer) · PSSPF 7.5% each · All allowances are taxable income.</>}
       </div>
+
+      {/* ── Terminated Employees ──────────────────────────────────────────────── */}
+      {employees.filter(e=>e.is_active===false).length > 0 && (
+        <div style={{marginTop:8}}>
+          <button onClick={()=>setShowTerminated(v=>!v)} style={{background:"none",border:"none",color:C.inkMid,fontSize:12,cursor:"pointer",padding:"4px 0",display:"flex",alignItems:"center",gap:6,fontFamily:"inherit"}}>
+            <span style={{fontSize:10}}>{showTerminated?"▼":"▶"}</span>
+            Terminated Employees ({employees.filter(e=>e.is_active===false).length})
+          </button>
+          {showTerminated && (
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",marginTop:8}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+                    {["Employee","Position","Dept",""].map(h=><th key={h} style={{textAlign:"left",padding:"10px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {employees.filter(e=>e.is_active===false).map(emp=>(
+                    <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`,opacity:0.7}}>
+                      <td style={{padding:"11px 14px"}}>
+                        <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
+                        <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
+                      </td>
+                      <td style={{padding:"11px 14px",color:C.inkMid}}>{emp.position||"—"}</td>
+                      <td style={{padding:"11px 14px",color:C.inkMid}}>{emp.dept||"—"}</td>
+                      <td style={{padding:"11px 14px"}}>
+                        <button onClick={async()=>{if(!window.confirm(`Reinstate ${emp.name}? They will be included in future payroll runs.`))return;try{await api(`/employees/${emp.id}`,{method:"PATCH",body:JSON.stringify({is_active:true})});setEmployees(employees.map(e=>e.id===emp.id?{...e,is_active:true}:e));}catch(err){alert("Could not reinstate employee. Please try again.");}}} style={{background:"#dcfce7",color:"#166534",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Reinstate</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {viewPayslip && (
         <PayslipModal
