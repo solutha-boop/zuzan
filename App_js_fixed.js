@@ -3383,7 +3383,7 @@ function Payroll({live = {}, user = {}}) {
   // Fetch garnishee orders whenever a different employee is opened for editing
   useEffect(() => {
     if (!editEmp) { setGarnishees([]); setNewGarnRef(""); setNewGarnAmt(""); return; }
-    const tok = localStorage.getItem("token");
+    const tok = localStorage.getItem("zuzan_token");
     fetch(`${BASE_URL}/employees/${editEmp.id}/garnishees`, {headers:{Authorization:`Bearer ${tok}`}})
       .then(r=>r.ok?r.json():[])
       .then(setGarnishees)
@@ -3392,7 +3392,7 @@ function Payroll({live = {}, user = {}}) {
 
   const addGarnishee = async () => {
     if (!newGarnRef.trim() || !parseFloat(newGarnAmt)) return;
-    const tok = localStorage.getItem("token");
+    const tok = localStorage.getItem("zuzan_token");
     const r = await fetch(`${BASE_URL}/employees/${editEmp.id}/garnishees`, {
       method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${tok}`},
       body:JSON.stringify({reference:newGarnRef.trim(),amount:parseFloat(newGarnAmt)})
@@ -3401,7 +3401,7 @@ function Payroll({live = {}, user = {}}) {
   };
 
   const removeGarnishee = async (gid) => {
-    const tok = localStorage.getItem("token");
+    const tok = localStorage.getItem("zuzan_token");
     const r = await fetch(`${BASE_URL}/employees/${editEmp.id}/garnishees/${gid}`, {
       method:"DELETE",headers:{Authorization:`Bearer ${tok}`}
     });
@@ -4256,7 +4256,7 @@ function Payroll({live = {}, user = {}}) {
               <button onClick={async()=>{
                 const period=new Date().toISOString().slice(0,7);
                 try{
-                  const resp=await fetch(`${BASE_URL}/payroll/payslips/${period}/download-all`,{headers:{Authorization:`Bearer ${localStorage.getItem("token")}`}});
+                  const resp=await fetch(`${BASE_URL}/payroll/payslips/${period}/download-all`,{headers:{Authorization:`Bearer ${localStorage.getItem("zuzan_token")}`}});
                   if(!resp.ok){console.warn("Download failed",resp.status);return;}
                   const blob=await resp.blob();
                   const a=document.createElement("a");

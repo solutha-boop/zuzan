@@ -351,9 +351,14 @@ def calc_overtime(
     Returns per-category hours, rand amounts, and combined total.
     """
     hr = bcea_hourly_rate(gross_monthly, explicit_hourly_rate, is_security)
+    # NBCPSS security employees: Sunday treated as Saturday (1.5×); PH = additional
+    # only (1.0×) because monthly salary already covers the base day's pay.
+    # All other employees: BCEA statutory rates (Sunday 2×, PH 2×).
+    _sun_rate = 1.5                  if is_security else BCEA_OT_RATE_SUNDAY
+    _ph_rate  = 1.0                  if is_security else BCEA_OT_RATE_PH
     ot_amount  = round(overtime_hours * hr * BCEA_OT_RATE_WEEKDAY, 2)
-    sun_amount = round(sunday_hours   * hr * BCEA_OT_RATE_SUNDAY,  2)
-    ph_amount_ = round(ph_hours       * hr * BCEA_OT_RATE_PH,      2)
+    sun_amount = round(sunday_hours   * hr * _sun_rate,             2)
+    ph_amount_ = round(ph_hours       * hr * _ph_rate,              2)
     total_ot   = round(ot_amount + sun_amount + ph_amount_, 2)
     return {
         "hourly_rate":     round(hr, 4),
@@ -511,8 +516,8 @@ def calc_payroll(
     night_allow  = round(night_shift_shifts * NBCPSS_NIGHT_SHIFT_PER_SHIFT, 2)   if is_security else 0.0
     special_allow= round(special_allowance_shifts * NBCPSS_SPECIAL_ALLOW_PER_SHIFT, 2) if is_security else 0.0
     cleaning_allow = NBCPSS_CLEANING_ALLOWANCE if is_security else 0.0
-    bc_levy_emp  = NBCPSS_BC_LEVY  if is_security else 0.0   # employer cost only
-    psira_levy   = NBCPSS_PSIRA_FEE if is_security else 0.0  # employer cost only
+    bc_levy_emp  = NBCPSS_BC_LEVY  if is_security else 0.0   # deducted from employee + remitted by employer
+    psira_levy   = 0.0  # PSIRA registration paid upfront annually — excluded from monthly payroll
     # NBCPSS prescribed provident fund (PSSPF): 7.5% employee + 7.5% employer on gross
     # Note: treated as after-tax here (employee claims s11F relief on own tax return);
     # companies that already configure pension_fund_employee/employer_pct for PSSPF should
@@ -523,8 +528,8 @@ def calc_payroll(
     _med_area = security_area if security_area in ("1_2", "3") else "1_2"
     nbcpss_med_emp   = NBCPSS_MEDICAL_PRESCRIBED_EMP[_med_area]  if is_security else 0.0
     nbcpss_med_empr  = NBCPSS_MEDICAL_PRESCRIBED_EMPR[_med_area] if is_security else 0.0
-    # Uniform allowance: non-taxable reimbursement — NOT in taxable_gross, added directly to net pay
-    uniform_allow    = NBCPSS_UNIFORM_ALLOWANCE if is_security else 0.0
+    # Uniform allowance: not included in monthly payroll (excluded per company agreement)
+    uniform_allow    = 0.0
     # Union subscription: after-tax deduction from net pay
     union_sub        = union_subscription if union_subscription else 0.0
     # NBCPSS minimum wage warning (does not modify pay — just a flag)
@@ -558,7 +563,9 @@ def calc_payroll(
     # employee contribution for s11F (audit fix 2026-07-15). Below the s11F
     # caps the two effects cancel (tax-neutral); once the 27.5%/R430k cap
     # binds, PAYE correctly increases.
-    paye_base_monthly = taxable_gross + medical_aid_employer + pension_employer_monthly
+    # NBCPSS employer provident (para 12D) and employer medical (7th Sched s2(i))
+    # are taxable fringe benefits — added to PAYE base alongside the general params.
+    paye_base_monthly = taxable_gross + medical_aid_employer + pension_employer_monthly + nbcpss_prov_empr + nbcpss_med_empr
     paye_base_annual  = paye_base_monthly * 12
 
     # ── Section 11F deduction (annual, applied pre-PAYE) ─────────────────────
@@ -568,7 +575,9 @@ def calc_payroll(
     # Any excess contribution above the cap is still deducted from pay but
     # provides no additional PAYE relief in the month (SARS carries excess
     # forward on assessment).
-    pension_total_annual = (pension_employee_monthly + pension_employer_monthly) * 12
+    # NBCPSS PSSPF provident contributions (emp + empr) included in the s11F pool:
+    # employee contributes directly; employer contribution deemed employee's per para 12D.
+    pension_total_annual = (pension_employee_monthly + pension_employer_monthly + nbcpss_prov_emp + nbcpss_prov_empr) * 12
     # s11F(3) carry-forward (audit fix 2026-07-19): contributions disallowed by
     # the cap in earlier years roll over and are deductible in later years,
     # subject to the same annual limits. The deductible pool = this year's
@@ -595,7 +604,9 @@ def calc_payroll(
     monthly_paye = annual_paye / 12
 
     # ── Section 6A MTC: only applies when employee is on medical aid ──────────
-    on_medical_aid = (medical_aid_employee > 0 or medical_aid_employer > 0)
+    # MTC applies whenever the employee is on any registered medical scheme,
+    # including the NBCPSS PSSSBC scheme (nbcpss_med_emp > 0).
+    on_medical_aid = (medical_aid_employee > 0 or medical_aid_employer > 0 or nbcpss_med_emp > 0)
     mtc = calc_medical_tax_credit(medical_aid_dependants) if on_medical_aid else 0.0
     paye_after_mtc = max(0.0, monthly_paye - mtc)
 
@@ -603,7 +614,8 @@ def calc_payroll(
     # Audit fix 2026-07-15: UIF remuneration INCLUDES overtime (commission is
     # the notable exclusion — SARS UIF-GEN-01-G01). Previously overtime was
     # wrongly excluded, understating UIF for sub-ceiling earners.
-    uif_base     = min(taxable_gross, yr["uif_ceil"])
+    # NBCPSS employer provident is part of UIF remuneration (deemed fringe benefit).
+    uif_base     = min(taxable_gross + nbcpss_prov_empr, yr["uif_ceil"])
     uif_employee = uif_base * UIF_RATE
     uif_employer = uif_base * UIF_RATE
 
@@ -618,7 +630,7 @@ def calc_payroll(
                - paye_after_mtc - uif_employee
                - pension_employee_monthly - medical_aid_employee
                - mibco_scheme_empe
-               - nbcpss_prov_emp - nbcpss_med_emp - union_sub
+               - nbcpss_prov_emp - nbcpss_med_emp - bc_levy_emp - union_sub
                + uniform_allow
                # General payroll adjustments
                - garnishee_total - advance_deduction - once_off_deduction
