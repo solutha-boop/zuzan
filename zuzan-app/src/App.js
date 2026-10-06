@@ -3954,7 +3954,7 @@ function Payroll({live = {}, user = {}}) {
                   ⬇ Download Template
                 </button>
                 <label style={{background:C.blueLt,color:C.blue,border:`1px solid ${C.blue}40`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                  ⬆ Upload CSV / Excel
+                  ⬆ {Object.values(otData).some(o=>o.otHours||o.sunHours||o.phHours||o.normalHours) ? "Change File" : "Upload CSV / Excel"}
                   <input type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}} onChange={e => {
                     const file = e.target.files[0];
                     if (!file) return;
@@ -4045,6 +4045,12 @@ function Payroll({live = {}, user = {}}) {
                 }} style={{background:"#f0fdf4",color:"#16a34a",border:"1px solid #86efac",borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                   📍 Load from Clocking
                 </button>
+                {Object.values(otData).some(o=>o.otHours||o.sunHours||o.phHours||o.normalHours) && (
+                  <button onClick={()=>{setOtData({});setSecData({});}}
+                    style={{background:C.redLt,color:C.red,border:`1px solid ${C.red}40`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    🗑 Clear Upload
+                  </button>
+                )}
                 <span style={{fontSize:11,color:C.inkMid}}>{(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? "Columns: Employee Number · Employee Name · Normal_Hours · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours · Night_Shift_Shifts · Special_Allow_Shifts" : "Columns: Employee Number · Employee Name · Weekday_Sat_OT_Hours · Sunday_Hours · Public_Holiday_Hours"}</span>
               </div>
             </div>
@@ -4072,8 +4078,9 @@ function Payroll({live = {}, user = {}}) {
               );
             })()}
 
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:20}}>
-              <thead>
+            <div style={{overflowX:"auto",overflowY:"auto",maxHeight:480,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:20,scrollbarWidth:"thin",scrollbarColor:`${C.border} transparent`}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:800}}>
+              <thead style={{position:"sticky",top:0,zIndex:2}}>
                 <tr style={{background:C.bg}}>
                   {[
                     "Employee","Grade","BCEA Hourly Rate",
@@ -4176,6 +4183,7 @@ function Payroll({live = {}, user = {}}) {
                 })}
               </tbody>
             </table>
+            </div>
 
             {/* ── Once-off items ─────────────────────────────────────────── */}
             <div style={{marginTop:16,borderTop:`1px solid ${C.border}`,paddingTop:14}}>

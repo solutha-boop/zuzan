@@ -37,7 +37,7 @@ git diff --cached --stat
 echo === Committing ===
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
-if "%~1"=="" (set MSG=fix: NBCPSS payroll engine — Sunday 1.5x, PH 1.0x additional, s11F includes PSSPF, MTC on PSSSBC scheme, UIF base includes empr provident, BC levy employee deduction, PSIRA excluded monthly [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=fix: NBCPSS payroll engine rules; feat: payroll review table scrollable + Change File / Clear Upload buttons [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
