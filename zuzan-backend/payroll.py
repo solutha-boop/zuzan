@@ -238,8 +238,11 @@ NBCPSS_PRESCRIBED_HOURS         = 208.0   # ordinary hours per month (48 h/week 
 NBCPSS_BC_LEVY                  = 7.00    # R/employee/month — employer pays to NBCPSS
 NBCPSS_PSIRA_FEE                = 4.00    # R/SO/month — employer PSIRA registration fee
 NBCPSS_PROVIDENT_RATE           = 0.075   # 7.5% each (employer + employee) — PSSPF
-NBCPSS_MEDICAL_PRESCRIBED_EMP   = 197.00  # R/month — PSSSBC prescribed medical aid (employee)
-NBCPSS_MEDICAL_PRESCRIBED_EMPR  = 197.00  # R/month — PSSSBC prescribed medical aid (employer)
+# PSSSBC medical aid — rates differ by area (NBCPSS Main Agreement)
+# Area 1 & 2 (metro/urban): R197 employee / R197 employer
+# Area 3 (rural / all other districts): R122 employee / R172.50 employer
+NBCPSS_MEDICAL_PRESCRIBED_EMP   = {"1_2": 197.00, "3": 122.00}
+NBCPSS_MEDICAL_PRESCRIBED_EMPR  = {"1_2": 197.00, "3": 172.50}
 NBCPSS_UNIFORM_ALLOWANCE        = 150.00  # R/month non-taxable uniform reimbursement (s10(1)(nA))
 NBCPSS_VALID_UNTIL              = "28 February 2027"
 
@@ -516,9 +519,10 @@ def calc_payroll(
     # set those fields and leave this auto-contribution to avoid double-deducting.
     nbcpss_prov_emp  = round(gross_monthly * NBCPSS_PROVIDENT_RATE, 2) if is_security else 0.0
     nbcpss_prov_empr = round(gross_monthly * NBCPSS_PROVIDENT_RATE, 2) if is_security else 0.0
-    # NBCPSS prescribed medical aid (PSSSBC scheme)
-    nbcpss_med_emp   = NBCPSS_MEDICAL_PRESCRIBED_EMP  if is_security else 0.0
-    nbcpss_med_empr  = NBCPSS_MEDICAL_PRESCRIBED_EMPR if is_security else 0.0
+    # NBCPSS prescribed medical aid (PSSSBC scheme) — rate depends on area
+    _med_area = security_area if security_area in ("1_2", "3") else "1_2"
+    nbcpss_med_emp   = NBCPSS_MEDICAL_PRESCRIBED_EMP[_med_area]  if is_security else 0.0
+    nbcpss_med_empr  = NBCPSS_MEDICAL_PRESCRIBED_EMPR[_med_area] if is_security else 0.0
     # Uniform allowance: non-taxable reimbursement — NOT in taxable_gross, added directly to net pay
     uniform_allow    = NBCPSS_UNIFORM_ALLOWANCE if is_security else 0.0
     # Union subscription: after-tax deduction from net pay
@@ -768,7 +772,7 @@ async def calculate_all(
 
     for emp in employees:
         sec_grade = getattr(emp, "security_grade", None)
-        sec_area  = "3"
+        sec_area  = getattr(emp, "security_area", None) or "1_2"
         is_sec    = is_security_co and bool(sec_grade)
         # NBCPSS OT rate: always use grade minimum ÷ 208h, not contracted salary ÷ 208h
         # Grade B/C/D/E → R6,726 / 208 = R32.34/hr; Grade A → R7,142 / 208 = R34.34/hr
@@ -909,7 +913,7 @@ async def run_payroll(
         ot_entry  = ot_map.get(emp.id, OvertimeEntry(employee_id=emp.id))
         sec_entry = sec_map.get(emp.id, SecurityAllowanceEntry(employee_id=emp.id))
         sec_grade = getattr(emp, "security_grade", None)
-        sec_area  = "3"
+        sec_area  = getattr(emp, "security_area", None) or "1_2"
         is_sec    = is_security_co and bool(sec_grade)
         # NBCPSS OT rate: always use grade minimum ÷ 208h, not contracted salary ÷ 208h
         # Grade B/C/D/E → R6,726 / 208 = R32.34/hr; Grade A → R7,142 / 208 = R34.34/hr
