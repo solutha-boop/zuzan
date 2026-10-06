@@ -9123,6 +9123,8 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
   const [activatingPayroll, setActivatingPayroll] = useState(false);
   const [myClientsData, setMyClientsData] = useState(null);  // full accountant fee response
   const [myClientsLoading, setMyClientsLoading] = useState(false);
+  const [overdueReminders, setOverdueReminders] = useState(true);
+  const [overdueRemindersSaving, setOverdueRemindersSaving] = useState(false);
 
   // Fetch client accounts for consolidated billing display
   useEffect(() => {
@@ -9153,6 +9155,10 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         invoiceTemplateHtml:  data.invoice_template_html || f.invoiceTemplateHtml,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
         financialYearEnd:     data.financial_year_end    || f.financialYearEnd,
+      }));
+      setOverdueReminders(data.overdue_reminders_enabled !== false);
+      setForm(f => ({
+        ...f,
         payeRef:     data.paye_ref     || f.payeRef,
         sdlRef:      data.sdl_ref      || f.sdlRef,
         uifRef:      data.uif_ref      || f.uifRef,
@@ -9850,6 +9856,32 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               <input placeholder={f.p} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
             </div>
           ))}
+        </div>
+
+        {/* Overdue Invoice Reminders toggle */}
+        <div style={{borderTop:`1px solid ${C.border}`,paddingTop:20,marginTop:4,marginBottom:20}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:12}}>Automated Email Reminders</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:overdueReminders?C.accentLt:"#f5f5f5",border:`1px solid ${overdueReminders?C.accent+"40":C.border}`,borderRadius:12,padding:"14px 18px"}}>
+            <div>
+              <div style={{fontSize:14,fontWeight:600,color:C.ink}}>Overdue invoice reminders</div>
+              <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>Automatically email clients at 7, 14 and 30 days past due date</div>
+            </div>
+            <button
+              disabled={overdueRemindersSaving}
+              onClick={async()=>{
+                const next=!overdueReminders;
+                setOverdueRemindersSaving(true);
+                try{
+                  await api("/billing/overdue-reminders",{method:"PATCH",body:JSON.stringify({enabled:next})});
+                  setOverdueReminders(next);
+                }catch(e){alert("Could not update setting. Please try again.");}
+                finally{setOverdueRemindersSaving(false);}
+              }}
+              style={{flexShrink:0,width:52,height:28,borderRadius:14,border:"none",cursor:overdueRemindersSaving?"wait":"pointer",background:overdueReminders?C.accent:"#ccc",transition:"background 0.2s",position:"relative",padding:0}}
+            >
+              <span style={{position:"absolute",top:3,left:overdueReminders?26:3,width:22,height:22,borderRadius:"50%",background:"#fff",transition:"left 0.2s",boxShadow:"0 1px 4px rgba(0,0,0,0.2)"}}/>
+            </button>
+          </div>
         </div>
 
         <div style={{display:"flex",alignItems:"center",gap:14}}>
