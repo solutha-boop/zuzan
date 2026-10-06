@@ -3263,6 +3263,7 @@ function Payroll({live = {}, user = {}}) {
   useEffect(() => { if (liveEmployees && liveEmployees.length > 0) setEmployees(liveEmployees.map(e => ({...e, name: `${e.first_name} ${e.last_name}`, salary: e.gross_salary, dept: e.department || "General"}))); }, [liveEmployees]);
   const [showNew, setShowNew] = useState(false);
   const [payrollRun, setPayrollRun] = useState(false);
+  const [payrollPeriod, setPayrollPeriod] = useState(null);
   const [showOtModal, setShowOtModal] = useState(false);
   const [otData, setOtData] = useState({});  // {employeeId: {otHours, sunHours, phHours}}
   const [onceOffData, setOnceOffData] = useState({}); // {employeeId: {expenseClaim, onceOffDeduction, onceOffTaxable, onceOffNonTaxable}}
@@ -3961,11 +3962,15 @@ function Payroll({live = {}, user = {}}) {
                           // Accept employee_number, employee name, or id as lookup key
                           const empNum = String(row["Employee Number"] || row["employee_number"] || row["EmpNo"] || "").trim();
                           const empName = String(row["Employee Name"]   || row["employee_name"]   || row["Name"]  || "").trim().toLowerCase();
+                          // Skip legend/notes/header rows that are clearly not employee records
+                          const rawKey = empNum || empName;
+                          if (!rawKey) return; // blank row
+                          if (/^notes?[:\s]|special_allow|=|^[0-9\s,]+$/.test(rawKey)) return; // notes / column labels
                           const emp = employees.find(e =>
                             (empNum && (String(e.employee_number||"").trim() === empNum || String(e.id) === empNum)) ||
                             (empName && e.name.toLowerCase() === empName)
                           );
-                          if (!emp) { unmatched.push(empNum || empName || "(unknown)"); return; }
+                          if (!emp) { unmatched.push(rawKey); return; }
                           matched++;
                           newOt[emp.id] = {
                             normalHours: +(row["Normal_Hours"] || row["normal_hours"] || row["Hours Worked"] || row["Ordinary Hours"] || 0),
@@ -4229,6 +4234,7 @@ function Payroll({live = {}, user = {}}) {
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); }
                 setPayrollRun(true);
+                setPayrollPeriod(new Date().toISOString().slice(0,7));
               }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                 Confirm &amp; Run Payroll
               </button>
@@ -4252,16 +4258,23 @@ function Payroll({live = {}, user = {}}) {
             <div style={{fontSize:12,color:C.inkMid}}>EMP201 generated · Payslips ready · SARS eFiling export ready</div>
             <div style={{display:"flex",gap:8}}>
               <button onClick={async()=>{
-                const period=new Date().toISOString().slice(0,7);
+                const period = payrollPeriod || new Date().toISOString().slice(0,7);
                 try{
                   const resp=await fetch(`${BASE_URL}/payroll/payslips/${period}/download-all`,{headers:{Authorization:`Bearer ${localStorage.getItem("zuzan_token")}`}});
-                  if(!resp.ok){console.warn("Download failed",resp.status);return;}
+                  if(!resp.ok){
+                    const msg = await resp.text().catch(()=>"");
+                    alert(`Payslip download failed (${resp.status}): ${msg||"No payslips found for this period."}`);
+                    return;
+                  }
                   const blob=await resp.blob();
                   const a=document.createElement("a");
                   a.href=URL.createObjectURL(blob);
                   a.download=`payslips_${period}.zip`;
+                  document.body.appendChild(a);
                   a.click();
-                }catch(err){console.warn("Payslip ZIP download failed:",err.message);}
+                  document.body.removeChild(a);
+                  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+                }catch(err){alert(`Payslip download error: ${err.message}`);}
               }} style={{background:C.accentLt,color:C.accent,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download All Payslips</button>
               <button onClick={()=>setShowBatch(true)} style={{background:C.ink,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download Payment Files</button>
             </div>
