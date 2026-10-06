@@ -2666,56 +2666,46 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
           </div>
 
           {/* Earnings */}
-          <div style={{marginBottom:20}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:10,borderBottom:`1px solid ${C.border}`,paddingBottom:4}}>Earnings</div>
-            <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
-              <span style={{color:C.inkMid}}>Basic Salary</span>
-              <span style={{fontWeight:600,color:C.green}}>{fmt(p.gross)}</span>
-            </div>
-            {p.overtime && p.overtime.total > 0 && (
-              <>
-                {p.overtime.overtime_amount > 0 && (
+          {(()=>{
+            const isSec = !!employee.security_grade;
+            const row = (label, amount, sub) => amount > 0 ? (
+              <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
+                <span style={{color:C.inkMid}}>{label}{sub ? <span style={{fontSize:11,color:C.inkDim,marginLeft:6}}>{sub}</span> : null}</span>
+                <span style={{fontWeight:600,color:C.green}}>{fmt(amount)}</span>
+              </div>
+            ) : null;
+            const taxGross = p.taxable_gross || p.taxableGross || p.gross;
+            return (
+              <div style={{marginBottom:20}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:1,textTransform:"uppercase",marginBottom:10,borderBottom:`1px solid ${C.border}`,paddingBottom:4}}>Earnings</div>
+                {row("Basic Salary", p.gross)}
+                {/* OT lines — each shown separately */}
+                {p.overtime?.overtime_amount > 0 && row(`Weekday / Sat Overtime (${p.overtime.overtime_hours}h × 1.5)`, p.overtime.overtime_amount)}
+                {p.overtime?.sunday_amount  > 0 && row(`Sunday Work (${p.overtime.sunday_hours}h × ${isSec?"1.5":"2.0"})`, p.overtime.sunday_amount)}
+                {p.overtime?.ph_amount      > 0 && row(`Public Holiday Additional (${p.overtime.ph_hours}h × ${isSec?"1.0":"2.0"})`, p.overtime.ph_amount, isSec?"base pay already in salary":null)}
+                {/* NBCPSS security allowances */}
+                {p.night_shift_allowance   > 0 && row(`Night Shift Allowance (${p.night_shift_shifts} shifts × R8.00)`,   p.night_shift_allowance)}
+                {p.special_allowance_amount> 0 && row(`Special Duty Allowance (${p.special_allowance_shifts} shifts × R10.50)`, p.special_allowance_amount)}
+                {p.cleaning_allowance      > 0 && row("Cleaning Allowance", p.cleaning_allowance)}
+                {/* Uniform — non-taxable note */}
+                {(p.uniform_allowance||0)  > 0 && (
                   <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
-                    <span style={{color:C.inkMid}}>Weekday/Sat Overtime ({p.overtime.overtime_hours}h × 1.5×)</span>
-                    <span style={{fontWeight:600,color:C.green}}>{fmt(p.overtime.overtime_amount)}</span>
+                    <span style={{color:C.inkMid}}>Uniform Allowance <span style={{fontSize:11,color:C.inkDim}}>(non-taxable — s10(1)(nA))</span></span>
+                    <span style={{fontWeight:600,color:C.green}}>{fmt(p.uniform_allowance)}</span>
                   </div>
                 )}
-                {p.overtime.sunday_amount > 0 && (
-                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
-                    <span style={{color:C.inkMid}}>Sunday Time ({p.overtime.sunday_hours}h × 2×)</span>
-                    <span style={{fontWeight:600,color:C.green}}>{fmt(p.overtime.sunday_amount)}</span>
-                  </div>
-                )}
-                {p.overtime.ph_amount > 0 && (
-                  <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
-                    <span style={{color:C.inkMid}}>Public Holiday ({p.overtime.ph_hours}h × 2×)</span>
-                    <span style={{fontWeight:600,color:C.green}}>{fmt(p.overtime.ph_amount)}</span>
-                  </div>
-                )}
-                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}>
-                  <span style={{color:C.inkMid}}>Taxable Gross (incl. OT)</span>
-                  <span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span>
+                {/* MIBCO */}
+                {(p.mibco_med_allow||p.mibcoMedAllow||0) > 0 && row("Medical Insurance Allowance (MIBCO — R19.62/wk)", p.mibco_med_allow||p.mibcoMedAllow)}
+                {/* Once-off taxable */}
+                {(p.once_off_allowance_taxable||p.onceOffAllowanceTaxable||0) > 0 && row("Once-off Taxable Allowance", p.once_off_allowance_taxable||p.onceOffAllowanceTaxable)}
+                {/* Single taxable gross total */}
+                <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",fontSize:13,fontWeight:800,borderTop:`2px solid ${C.border}`,marginTop:4}}>
+                  <span style={{color:C.ink}}>Taxable Gross</span>
+                  <span style={{color:C.green}}>{fmt(taxGross)}</span>
                 </div>
-              </>
-            )}
-            {/* NBCPSS security allowances — only rendered if present in payslip */}
-            {(p.night_shift_allowance > 0 || p.special_allowance_amount > 0 || p.cleaning_allowance > 0 || p.uniform_allowance > 0) && (
-              <>
-                {p.night_shift_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🌙 Night Shift Allowance ({p.night_shift_shifts} shifts × R8.00)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.night_shift_allowance)}</span></div>}
-                {p.special_allowance_amount > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🔒 Special Duty Allowance ({p.special_allowance_shifts} shifts × R10.50)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.special_allowance_amount)}</span></div>}
-                {p.cleaning_allowance > 0 && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>🧹 Cleaning Allowance</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.cleaning_allowance)}</span></div>}
-                {(p.uniform_allowance > 0) && <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>👕 Uniform Allowance <span style={{fontSize:11,color:C.inkDim}}>(non-taxable — s10(1)(nA))</span></span><span style={{fontWeight:600,color:C.green}}>{fmt(p.uniform_allowance)}</span></div>}
-                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}><span style={{color:C.inkMid}}>Taxable Gross (incl. Security Allowances)</span><span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span></div>
-              </>
-            )}
-            {/* MIBCO Sector 5 fuel station allowances — only rendered if present in payslip */}
-            {(p.mibco_med_allow > 0 || p.mibcoMedAllow > 0) && (
-              <>
-                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}><span style={{color:"#92400e"}}>⛽ Medical Insurance Allowance (MIBCO — R19.62/wk)</span><span style={{fontWeight:600,color:C.green}}>{fmt(p.mibco_med_allow||p.mibcoMedAllow)}</span></div>
-                <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`,fontWeight:700}}><span style={{color:C.inkMid}}>Taxable Gross (incl. MIBCO Allowance)</span><span style={{color:C.green}}>{fmt(p.taxableGross || p.gross)}</span></div>
-              </>
-            )}
-          </div>
+              </div>
+            );
+          })()}
 
           {/* Deductions */}
           <div style={{marginBottom:20}}>
