@@ -45,3 +45,10 @@ No Critical / High / Medium items.
 3. **Resolved** — seeded example employee excluded from payroll/EMP201/IRP5/dashboard via `_not_example_emp()`. Suggest a regression test that a trial account's `run_payroll` ignores `[zuzan-example]`.
 
 Standing reminders: replace provisional 2027/2028 `TAX_YEARS` after Budget Feb 2027; IFRS-for-SMEs 3rd edition / IFRS 18 checklist early 2027; ConCourt VAT s7(4) ruling pending; MIBCO Sector 5 Year 2 contributions TBC.
+
+---
+## Addendum — second scheduled run, 4 Oct 2026 ~22:20 UTC
+**Change detection:** HEAD `f2f08d3` (was `ac4aa80`). Only `zuzan-backend/payroll.py` (+9/-4) changed. In `management_accounts()` the paid-invoice and expense period filters now use `COALESCE` (`_eff_paid` `payroll.py:2900`, `_eff_exp` `:2912`) so legacy rows with NULL `paid_date` / `expense_date` are still captured, matching the dashboard. `func` is imported (`:8`), `py_compile` passes, and revenue still sums only paid invoices via `_to_zar()` (`:2907`). Line anchors from the earlier report shift by about +5 after `:2895`; `debtors_aging` is now `:3268`, `creditors_aging` `:3331`, `CORP_TAX_RATE` `:3167`.
+
+**Verdict: PASS (unchanged).** Reports, Debtors, Creditors, cross-module, IFRS (incl. 5b deferred tax, already implemented) and tax tables (`TAX_YEARS["2026/2027"]` `:132`) are unchanged. No edits made and no web re-check this run (same-day, no standards or rate changes since the earlier run). Action items are as in the report above; there are no new findings.
+- **Low (note):** the COALESCE fallback to `created_at` can attribute a legacy paid invoice with NULL `paid_date` and `invoice_date` to its creation date, which is acceptable. Consider backfilling `paid_date` so the filter can use the index.

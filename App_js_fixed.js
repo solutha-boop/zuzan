@@ -1322,6 +1322,29 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
     ? <img src={user.logoUrl} alt="logo" style={{height:56,maxWidth:180,objectFit:"contain",display:"block",marginBottom:2}}/>
     : <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:pc}}>{user.companyName||"Your Company"}</div>;
 
+  // Company details shown beneath logo/name on all built-in layouts
+  const _addr  = user.address || user.companyAddress || "";
+  const _vat   = user.vatNumber || user.vat_number || "";
+  const _reg   = user.regNumber || user.reg_number || "";
+  const _phone = user.phone || user.companyPhone || "";
+  const _email = user.email || user.companyEmail || "";
+  const companyDetailsLight = (_addr||_vat||_reg||_phone||_email) ? (
+    <div style={{fontSize:10,color:"#666",marginTop:5,lineHeight:1.65,fontFamily:ff}}>
+      {_addr  && <div>{_addr}</div>}
+      {_vat   && <div>VAT No: {_vat}</div>}
+      {_reg   && <div>Reg: {_reg}</div>}
+      {(_phone||_email) && <div>{[_phone,_email].filter(Boolean).join(" · ")}</div>}
+    </div>
+  ) : null;
+  const companyDetailsWhite = (_addr||_vat||_reg||_phone||_email) ? (
+    <div style={{fontSize:10,color:"rgba(255,255,255,0.75)",marginTop:5,lineHeight:1.65,fontFamily:ff}}>
+      {_addr  && <div>{_addr}</div>}
+      {_vat   && <div>VAT No: {_vat}</div>}
+      {_reg   && <div>Reg: {_reg}</div>}
+      {(_phone||_email) && <div>{[_phone,_email].filter(Boolean).join(" · ")}</div>}
+    </div>
+  ) : null;
+
   const headerImageBlock = user.headerImageUrl
     ? <div style={{width:"100%",marginBottom:0,lineHeight:0}}>
         <img src={user.headerImageUrl} alt="header" style={{width:"100%",maxHeight:140,objectFit:"cover",display:"block",borderRadius:"8px 8px 0 0"}}/>
@@ -1368,7 +1391,7 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
     <div style={{fontFamily:ff,color:"#1A1209"}}>
       {headerImageBlock}
       <div style={{display:"flex",justifyContent:"space-between",marginBottom:28,paddingBottom:16,borderBottom:`2px solid ${pc}`,marginTop:headerImageBlock?16:0}}>
-        <div>{logoBlock}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,marginTop:2}}>{user.companyName||""}</div>}</div>
+        <div>{logoBlock}{user.logoUrl&&<div style={{fontSize:12,fontWeight:700,marginTop:2}}>{user.companyName||""}</div>}{companyDetailsLight}</div>
         <div style={{textAlign:"right"}}>
           <div style={{fontSize:20,fontWeight:800,color:"#1A1209"}}>{title}</div>
           <div style={{fontSize:13,color:"#888",marginTop:4}}>{doc.id}</div>
@@ -1409,6 +1432,7 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
               </div>
             : <div style={{fontSize:22,fontWeight:800,color:"#fff"}}>{user.companyName||"Your Company"}</div>}
           {user.logoUrl&&<div style={{fontSize:11,color:"rgba(255,255,255,0.85)",marginTop:6}}>{user.companyName}</div>}
+          {companyDetailsWhite}
         </div>
         <div style={{textAlign:"right"}}>
           <div style={{fontSize:22,fontWeight:800,color:"#fff"}}>{title}</div>
@@ -1452,6 +1476,7 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
             ? <img src={user.logoUrl} alt="logo" style={{height:40,maxWidth:140,objectFit:"contain",display:"block",marginBottom:4}}/>
             : <div style={{fontSize:16,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"#1A1209"}}>{user.companyName||"Your Company"}</div>}
           {user.logoUrl&&<div style={{fontSize:11,color:"#888",marginTop:2,letterSpacing:1}}>{user.companyName}</div>}
+          {companyDetailsLight}
         </div>
         <div style={{textAlign:"right"}}>
           <div style={{fontSize:11,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:pc}}>{title}</div>
@@ -1499,6 +1524,7 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
                 <img src={user.logoUrl} alt="logo" style={{height:42,maxWidth:150,objectFit:"contain",display:"block"}}/>
               </div>
             : <div style={{fontSize:20,fontWeight:800,color:"#fff"}}>{user.companyName||"Your Company"}</div>}
+          {companyDetailsWhite}
         </div>
         <div style={{textAlign:"right"}}>
           <div style={{fontSize:11,fontWeight:700,letterSpacing:3,color:pc,textTransform:"uppercase"}}>{title}</div>
