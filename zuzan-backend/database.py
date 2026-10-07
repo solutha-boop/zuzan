@@ -199,6 +199,7 @@ class Employee(Base):
     mibco_role=Column(String,nullable=True)            # "forecourt_attendant" | "cashier" | "char"
     mibco_scheme_enrolled=Column(Boolean,default=True) # False if employee opted out of health scheme within 60 days
     union_subscription=Column(Float,default=0.0)        # monthly union dues (e.g. POPCRU R35/mo) — after-tax deduction
+    pay_schedule=Column(String,default="salaried")      # "salaried" | "security" — determines which payroll run includes this employee
     # General payroll adjustments
     advance_monthly_deduction=Column(Float,default=0.0)  # monthly salary advance repayment deduction
     on_maternity_leave=Column(Boolean,default=False)     # if True, gross=0; employee claims UIF maternity benefit directly
@@ -1677,6 +1678,8 @@ def init_db():
             # ForeignKeyViolation (Sentry 6db1d0695588450cb5ccd28f15570687).
             "ALTER TABLE journal_lines DROP CONSTRAINT IF EXISTS journal_lines_entry_id_fkey",
             "ALTER TABLE journal_lines ADD CONSTRAINT journal_lines_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE",
+            # ── Dual pay schedule (2026-10) ──────────────────────────────────────────
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS pay_schedule VARCHAR DEFAULT 'salaried'",
         ]:
             try:
                 conn.execute(text(sql))

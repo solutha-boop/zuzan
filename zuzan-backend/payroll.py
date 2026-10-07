@@ -753,6 +753,7 @@ class RunPayrollRequest(BaseModel):
     once_off: list[OnceOffEntry] = []             # per-employee once-off items for this run
     area_override: str | None = None         # "1_2" (Urban) or "3" (Rural) — overrides per-employee security_area for this run
     include_annual_bonus: bool = False        # True → add NBCPSS annual bonus (gross × 12/52) for all security employees
+    pay_schedule: str | None = None          # "security" | "salaried" | None (None = run all employees)
 
 
 @payroll_router.get("/calculate")
@@ -881,14 +882,27 @@ async def run_payroll(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    employees = db.query(Employee).filter(
+    emp_q = db.query(Employee).filter(
         Employee.company_id == current_user.company_id,
         Employee.is_active == True,
         _not_example_emp()
-    ).all()
+    )
+    if data.pay_schedule:
+        # Filter by explicit pay_schedule; fall back to security_grade heuristic for old records
+        if data.pay_schedule == "security":
+            emp_q = emp_q.filter(
+                (Employee.pay_schedule == "security") |
+                ((Employee.pay_schedule == None) & (Employee.security_grade != None))
+            )
+        else:  # "salaried"
+            emp_q = emp_q.filter(
+                (Employee.pay_schedule == "salaried") |
+                ((Employee.pay_schedule == None) & (Employee.security_grade == None))
+            )
+    employees = emp_q.all()
 
     if not employees:
-        raise HTTPException(status_code=400, detail="No active employees found")
+        raise HTTPException(status_code=400, detail="No active employees found for this pay schedule")
 
     # Build lookup maps keyed by employee_id
     ot_map      = {entry.employee_id: entry for entry in (data.overtime or [])}

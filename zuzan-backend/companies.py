@@ -1523,6 +1523,7 @@ class EmployeeCreate(BaseModel):
     union_subscription:        Optional[float] = 0.0   # monthly union dues (R) — after-tax deduction
     advance_monthly_deduction: Optional[float] = 0.0   # monthly salary advance repayment deduction
     on_maternity_leave:        Optional[bool]  = False  # True → gross zeroed; employee claims UIF maternity benefit
+    pay_schedule:              Optional[str]   = "salaried"  # "salaried" | "security"
 
 class EmployeeUpdate(BaseModel):
     position:                  Optional[str] = None
@@ -1561,6 +1562,7 @@ class EmployeeUpdate(BaseModel):
     union_subscription:        Optional[float] = None  # monthly union dues (R)
     advance_monthly_deduction: Optional[float] = None  # monthly salary advance repayment
     on_maternity_leave:        Optional[bool]  = None  # True → gross zeroed this month
+    pay_schedule:              Optional[str]   = None  # "salaried" | "security"
 
 
 def _employee_dict(e: Employee) -> dict:
@@ -1603,6 +1605,7 @@ def _employee_dict(e: Employee) -> dict:
         "mibco_role":             getattr(e, "mibco_role", None),
         "mibco_scheme_enrolled":  bool(getattr(e, "mibco_scheme_enrolled", True)),
         "union_subscription":     getattr(e, "union_subscription", 0.0) or 0.0,
+        "pay_schedule":           getattr(e, "pay_schedule", None) or ("security" if getattr(e, "security_grade", None) else "salaried"),
         # General payroll adjustments
         "advance_monthly_deduction": getattr(e, "advance_monthly_deduction", 0.0) or 0.0,
         "on_maternity_leave":        bool(getattr(e, "on_maternity_leave", False)),
@@ -1681,6 +1684,7 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         union_subscription=data.union_subscription or 0.0,
         advance_monthly_deduction=data.advance_monthly_deduction or 0.0,
         on_maternity_leave=data.on_maternity_leave or False,
+        pay_schedule=data.pay_schedule or ("security" if data.security_grade else "salaried"),
     )
     db.add(emp)
     db.commit()
