@@ -1680,6 +1680,9 @@ def init_db():
             "ALTER TABLE journal_lines ADD CONSTRAINT journal_lines_entry_id_fkey FOREIGN KEY (entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE",
             # ── Dual pay schedule (2026-10) ──────────────────────────────────────────
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS pay_schedule VARCHAR DEFAULT 'salaried'",
+            # Backfill: the ADD COLUMN DEFAULT set every existing row to 'salaried',
+            # including security officers.  Correct those employees now.
+            "UPDATE employees SET pay_schedule = 'security' WHERE security_grade IS NOT NULL AND security_grade != '' AND pay_schedule = 'salaried'",
         ]:
             try:
                 conn.execute(text(sql))

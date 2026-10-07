@@ -1605,7 +1605,10 @@ def _employee_dict(e: Employee) -> dict:
         "mibco_role":             getattr(e, "mibco_role", None),
         "mibco_scheme_enrolled":  bool(getattr(e, "mibco_scheme_enrolled", True)),
         "union_subscription":     getattr(e, "union_subscription", 0.0) or 0.0,
-        "pay_schedule":           getattr(e, "pay_schedule", None) or ("security" if getattr(e, "security_grade", None) else "salaried"),
+        # If the employee has a security_grade they are always on the security
+        # schedule — the stored value may be 'salaried' if it was set by the
+        # DEFAULT on the ADD COLUMN migration before the backfill ran.
+        "pay_schedule":           "security" if getattr(e, "security_grade", None) else (getattr(e, "pay_schedule", None) or "salaried"),
         # General payroll adjustments
         "advance_monthly_deduction": getattr(e, "advance_monthly_deduction", 0.0) or 0.0,
         "on_maternity_leave":        bool(getattr(e, "on_maternity_leave", False)),
