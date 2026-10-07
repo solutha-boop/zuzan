@@ -860,6 +860,26 @@ async def admin_clear_company_data(company_id: int, request: Request, db: Sessio
     return {"ok": True, "company": co.name, "cleared": sorted(cats)}
 
 
+@app.post("/admin/api/clients/{company_id}/clear-payroll", tags=["Admin"])
+async def admin_clear_payroll(company_id: int, db: Session = Depends(get_db_session), _=Depends(_check_admin)):
+    """Delete all payslip records for a company — employees and all other data are untouched."""
+    from database import Payslip as _Payslip, LeaveRequest as _LR, LeaveBalance as _LB
+    from companies import _del
+    co = db.query(_Company).filter(_Company.id == company_id).first()
+    if not co:
+        raise HTTPException(status_code=404, detail="Company not found")
+    # Also clear payroll journal entries so the ledger stays consistent
+    from companies import _clear_journal_for_sources
+    _clear_journal_for_sources(db, company_id, {"payroll"})
+    payslip_count = db.query(_Payslip).filter(_Payslip.company_id == company_id).count()
+    _del(db, _Payslip, company_id)
+    _del(db, _LR, company_id)
+    _del(db, _LB, company_id)
+    db.commit()
+    logger.info(f"Admin cleared payroll for company {co.id} ({co.name}): {payslip_count} payslips deleted")
+    return {"ok": True, "company": co.name, "payslips_deleted": payslip_count}
+
+
 @app.get("/admin/api/subscriptions", tags=["Admin"])
 async def admin_subscriptions(db: Session = Depends(get_db_session), _=Depends(_check_admin)):
     from database import SubscriptionPayment as _SubPay
