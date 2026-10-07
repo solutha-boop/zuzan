@@ -3274,7 +3274,7 @@ function Payroll({live = {}, user = {}}) {
   useEffect(() => { if (liveEmployees && liveEmployees.length > 0) setEmployees(liveEmployees.map(e => ({...e, name: `${e.first_name} ${e.last_name}`, salary: e.gross_salary, dept: e.department || "General"}))); }, [liveEmployees]);
   const [showNew, setShowNew] = useState(false);
   // ── Dual pay schedule state ───────────────────────────────────────────────
-  const [payScheduleTab, setPayScheduleTab] = useState("security"); // "security" | "salaried"
+  const [payScheduleTab, setPayScheduleTab] = useState("salaried"); // "security" | "salaried" — default to salaried so run-payroll button is immediately visible
   const [payrollRunBySchedule,    setPayrollRunBySchedule]    = useState({security:false, salaried:false});
   const [payrollPeriodBySchedule, setPayrollPeriodBySchedule] = useState({security:null,  salaried:null});
   // Derived helpers for current tab
