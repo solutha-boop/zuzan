@@ -1982,7 +1982,6 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
       {invTab==="invoices" && <>
       <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
         <KPI label="Paid This Month" value={fmt(totalPaidThisMonth)} color={C.green} icon="✓" sub="Current month" active={false}/>
-        <KPI label="Archive" value={fmt(totalPaid)}    color={C.inkMid} icon="📦" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"} sub="All paid invoices"/>
         <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
       </div>
@@ -2187,6 +2186,13 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {filterStatus !== "paid" && (
+        <div style={{textAlign:"center",marginTop:8,marginBottom:4}}>
+          <button onClick={()=>toggleFilter("paid")} style={{background:"none",border:"none",color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline",padding:"4px 8px"}}>
+            📦 View archived invoices
+          </button>
         </div>
       )}
       </>}
