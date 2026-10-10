@@ -1990,10 +1990,12 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
       {filterStatus && (
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"10px 16px",background:filterStatus==="paid"?"#f3f4f6":C.accentLt,border:`1px solid ${filterStatus==="paid"?C.border:C.accent}30`,borderRadius:10}}>
           {filterStatus==="paid"
-            ? <span style={{fontSize:13,color:C.inkMid,fontWeight:600}}>📦 Archive — Paid Invoices ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
+            ? <span style={{fontSize:13,color:C.inkMid,fontWeight:600}}>📦 Archive — All Paid Invoices ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
+            : filterStatus==="paid_this_month"
+            ? <span style={{fontSize:13,color:C.green,fontWeight:600}}>✓ Paid This Month ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
             : <span style={{fontSize:13,color:C.accent,fontWeight:600,textTransform:"capitalize"}}>Showing: {filterStatus} ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
           }
-          <button onClick={()=>setFilterStatus(null)} style={{marginLeft:"auto",background:"none",border:`1px solid ${filterStatus==="paid"?C.border:C.accent}40`,borderRadius:6,padding:"4px 10px",fontSize:12,color:filterStatus==="paid"?C.inkMid:C.accent,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{filterStatus==="paid"?"← Active Invoices":"✕ Show All"}</button>
+          <button onClick={()=>setFilterStatus(null)} style={{marginLeft:"auto",background:"none",border:`1px solid ${filterStatus==="paid"||filterStatus==="paid_this_month"?C.border:C.accent}40`,borderRadius:6,padding:"4px 10px",fontSize:12,color:filterStatus==="paid"||filterStatus==="paid_this_month"?C.inkMid:C.accent,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{filterStatus==="paid"||filterStatus==="paid_this_month"?"← Active Invoices":"✕ Show All"}</button>
         </div>
       )}
 
