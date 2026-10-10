@@ -4309,6 +4309,37 @@ function Payroll({live = {}, user = {}}) {
         </div>
       )}
 
+      {/* ── Persistent payslip download — always accessible ─────────────────── */}
+      {scheduleEmployees.length > 0 && (() => {
+        const dlPeriodKey = `dlPeriod_${payScheduleTab}`;
+        return (
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,fontWeight:600,color:C.ink}}>⬇ Download Payslips</span>
+            <input type="month" defaultValue={new Date().toISOString().slice(0,7)}
+              id={dlPeriodKey}
+              style={{border:`1px solid ${C.border}`,borderRadius:8,padding:"6px 10px",fontSize:13,fontFamily:"inherit",color:C.ink,background:C.bg}}/>
+            <button onClick={async()=>{
+              const period = document.getElementById(dlPeriodKey)?.value || new Date().toISOString().slice(0,7);
+              try{
+                const resp=await fetch(`${BASE_URL}/payroll/payslips/${period}/download-all`,{headers:{Authorization:`Bearer ${localStorage.getItem("zuzan_token")}`}});
+                if(!resp.ok){
+                  const msg=await resp.text().catch(()=>"");
+                  alert(`No payslips found for ${period}. Run payroll for this period first.`);
+                  return;
+                }
+                const blob=await resp.blob();
+                const a=document.createElement("a");
+                a.href=URL.createObjectURL(blob);
+                a.download=`payslips_${period}.zip`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+              }catch(err){alert(`Download error: ${err.message}`);}
+            }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"7px 18px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Download ZIP</button>
+            <span style={{fontSize:11,color:C.inkMid}}>HTML payslips — open in browser to print / save as PDF</span>
+          </div>
+        );
+      })()}
+
       {payrollRun && (
         <div style={{background:C.surface,border:`2px solid ${C.green}`,borderRadius:16,padding:20,marginBottom:20}}>
           <div style={{fontSize:16,fontWeight:700,color:C.green,marginBottom:12}}>Payroll Processed - {new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
