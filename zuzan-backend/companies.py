@@ -1565,9 +1565,18 @@ class EmployeeUpdate(BaseModel):
     pay_schedule:              Optional[str]   = None  # "salaried" | "security"
 
 
-def _employee_dict(e: Employee) -> dict:
+def _employee_dict(e: Employee, company_industry: str = None) -> dict:
     """Return employee as dict with bank fields decrypted."""
     from payroll import bcea_hourly_rate
+    _is_sec_co = (company_industry or "").lower().replace(" ", "_").replace("-", "_") == "private_security"
+    _has_grade  = bool(getattr(e, "security_grade", None))
+    _stored_sch = getattr(e, "pay_schedule", None)
+    # Derive schedule: security_grade always wins; private_security co defaults
+    # to "security" unless the employee was explicitly overridden to "salaried".
+    if _has_grade or (_is_sec_co and _stored_sch != "salaried"):
+        _derived_schedule = "security"
+    else:
+        _derived_schedule = _stored_sch or "salaried"
     return {
         "id": e.id, "company_id": e.company_id,
         "employee_number": e.employee_number,
@@ -1605,10 +1614,7 @@ def _employee_dict(e: Employee) -> dict:
         "mibco_role":             getattr(e, "mibco_role", None),
         "mibco_scheme_enrolled":  bool(getattr(e, "mibco_scheme_enrolled", True)),
         "union_subscription":     getattr(e, "union_subscription", 0.0) or 0.0,
-        # If the employee has a security_grade they are always on the security
-        # schedule — the stored value may be 'salaried' if it was set by the
-        # DEFAULT on the ADD COLUMN migration before the backfill ran.
-        "pay_schedule":           "security" if getattr(e, "security_grade", None) else (getattr(e, "pay_schedule", None) or "salaried"),
+        "pay_schedule":           _derived_schedule,
         # General payroll adjustments
         "advance_monthly_deduction": getattr(e, "advance_monthly_deduction", 0.0) or 0.0,
         "on_maternity_leave":        bool(getattr(e, "on_maternity_leave", False)),
@@ -1625,7 +1631,9 @@ async def list_employees(include_inactive: bool = False, current_user: User = De
     if not include_inactive:
         q = q.filter(Employee.is_active == True)
     emps = q.all()
-    return [_employee_dict(e) for e in emps]
+    _co = db.query(Company).filter(Company.id == current_user.company_id).first()
+    _industry = _co.industry if _co else None
+    return [_employee_dict(e, _industry) for e in emps]
 
 
 @employees_router.post("/")
@@ -1692,7 +1700,7 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
     db.add(emp)
     db.commit()
     db.refresh(emp)
-    return _employee_dict(emp)
+    return _employee_dict(emp, company.industry)
 
 
 _EMPLOYEE_BANK_FIELDS = {"bank_name", "bank_account", "account_number", "branch_code"}
@@ -1711,7 +1719,8 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
         else:
             setattr(emp, field, value)
     db.commit()
-    return _employee_dict(emp)
+    _co = db.query(Company).filter(Company.id == current_user.company_id).first()
+    return _employee_dict(emp, _co.industry if _co else None)
 
 
 # ── GARNISHEE ORDERS ──────────────────────────────────────────────────────────

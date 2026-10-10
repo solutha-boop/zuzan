@@ -3326,7 +3326,15 @@ function Payroll({live = {}, user = {}}) {
   };
   const activeEmployees = employees.filter(e=>e.is_active!==false);
   // Filter by active schedule tab
-  const empSchedule = e => e.security_grade ? "security" : (e.pay_schedule || "salaried");
+  // Classification rule: security_grade always wins. For private security companies,
+  // employees default to "security" unless pay_schedule is explicitly "salaried".
+  const isSecurityCo = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_") === "private_security";
+  const empSchedule = e => {
+    if (e.security_grade) return "security";
+    if (e.pay_schedule === "salaried") return "salaried"; // explicitly overridden
+    if (isSecurityCo) return "security"; // company default for private security
+    return e.pay_schedule || "salaried";
+  };
   const scheduleEmployees = activeEmployees.filter(e => empSchedule(e) === payScheduleTab);
   const totalGross = scheduleEmployees.reduce((s,e) => s + e.salary, 0);
   const totalPAYE = scheduleEmployees.reduce((s,e) => s + calcForSummary(e).paye, 0);
