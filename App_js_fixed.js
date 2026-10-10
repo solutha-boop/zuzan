@@ -1906,6 +1906,8 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
     ? invoices.filter(i => i.status === "sent" && !isOverdue(i))
     : filterStatus === "paid"
     ? invoices.filter(i => i.status === "paid") // archive view: all paid
+    : filterStatus === "paid_this_month"
+    ? invoices.filter(i => i.status === "paid" && isCurrentMonth(i)) // current month paid only
     : filterStatus
     ? invoices.filter(i => i.status === filterStatus)
     : invoices.filter(i => i.status !== "paid" || isCurrentMonth(i)); // default: show active + current-month paid; archive prior-month paid
@@ -1981,7 +1983,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
       </div>
       {invTab==="invoices" && <>
       <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
-        <KPI label="Paid This Month" value={fmt(totalPaidThisMonth)} color={C.green} icon="✓" sub="Current month" active={false}/>
+        <KPI label="Paid This Month" value={fmt(totalPaidThisMonth)} color={C.green} icon="✓" sub="Current month" onClick={()=>toggleFilter("paid_this_month")} active={filterStatus==="paid_this_month"}/>
         <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
       </div>
