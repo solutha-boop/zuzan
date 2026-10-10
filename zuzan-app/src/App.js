@@ -2163,7 +2163,14 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                   </td>
                   <td style={{padding:"13px 16px",color:C.inkMid}}>{fmtDate(inv.date)}</td>
                   <td style={{padding:"13px 16px",color:isOverdue(inv)?C.red:C.inkMid}}>{fmtDate(inv.due)}</td>
-                  <td style={{padding:"13px 16px"}}><StatusBadge status={isOverdue(inv)?"overdue":inv.status}/></td>
+                  <td style={{padding:"13px 16px"}}>
+                    {inv.status === "paid" && isCurrentMonth(inv)
+                      ? <span style={{display:"inline-flex",alignItems:"center",gap:4,background:C.greenLt,color:C.green,border:`1.5px solid ${C.green}`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:800,letterSpacing:0.5,textTransform:"uppercase",boxShadow:`0 0 0 2px ${C.green}22`}}>✓ Paid</span>
+                      : inv.status === "paid"
+                      ? <span style={{display:"inline-flex",alignItems:"center",gap:4,background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:600,letterSpacing:0.3}}>📦 Archived</span>
+                      : <StatusBadge status={isOverdue(inv)?"overdue":inv.status}/>
+                    }
+                  </td>
                   <td style={{padding:"13px 16px"}}>
                     <div style={{display:"flex",gap:6}}>
                       <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
