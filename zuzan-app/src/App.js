@@ -3334,7 +3334,7 @@ function Payroll({live = {}, user = {}}) {
   const totalCost = scheduleEmployees.reduce((s,e) => s + calcForSummary(e).totalCost, 0);
   const totalUIF = scheduleEmployees.reduce((s,e) => s + calcForSummary(e).uifEmployer, 0);
   const totalSDL = scheduleEmployees.reduce((s,e) => s + calcForSummary(e).sdl, 0);
-  const zuZanFee = Math.max(99, activeEmployees.length * 34);
+  const zuZanFee = Math.max(99, activeEmployees.length * 15.5);
   const handleAdd = async () => {
     const nameParts = form.name.trim().split(" ");
     const firstName = nameParts[0] || form.name;
@@ -3899,7 +3899,7 @@ function Payroll({live = {}, user = {}}) {
         </div>
       </div>
       <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R34 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
+        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R15.50 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
         <Badge label="Active" color={C.green} bg={C.greenLt}/>
       </div>
       {/* ── Pay Schedule Tabs ──────────────────────────────────────────────── */}
@@ -9569,7 +9569,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               <div>
                 <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Payroll</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>PAYE, UIF &amp; SDL calculations · Payslips · EMP201 reports</div>
-                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>R34 per employee · min <strong style={{color:C.ink}}>R99/month</strong></div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>R15.50 per employee · min <strong style={{color:C.ink}}>R99/month</strong></div>
               </div>
             </div>
             {user?.payrollEnabled
@@ -9593,7 +9593,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                     </div>
                     <div>
                       <div style={{fontSize:11,color:C.inkMid,marginBottom:4}}>Cost/mo</div>
-                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,Math.round(payrollEmpCount*34))}/mo</div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,Math.round(payrollEmpCount*15.5))}/mo</div>
                     </div>
                     <button
                       disabled={activatingPayroll}
@@ -10751,7 +10751,7 @@ function Registration({onComplete, onLogin}) {
   const [errors, setErrors] = useState({});
 
   const planPrice = selectedPlan ? (billing === "monthly" ? selectedPlan.monthly : Math.round(selectedPlan.annual / 12)) : 0;
-  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 34)) : 0;
+  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 15.5)) : 0;
   const totalMonthly = planPrice + payrollCost;
 
   const validateStep2 = () => {

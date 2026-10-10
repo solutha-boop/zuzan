@@ -3702,7 +3702,7 @@ except ImportError:
         "professional": {"monthly": 699,  "annual": 6990},
         "business":     {"monthly": 1299, "annual": 12990},
     }
-    PAYROLL_PER_EMP = 34.00
+    PAYROLL_PER_EMP = 15.50
     PAYROLL_MIN     = 99.00
 
 
