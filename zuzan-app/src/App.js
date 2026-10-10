@@ -3326,10 +3326,8 @@ function Payroll({live = {}, user = {}}) {
   };
   const activeEmployees = employees.filter(e=>e.is_active!==false);
   // Filter by active schedule tab
-  const scheduleEmployees = activeEmployees.filter(e => {
-    const sched = e.pay_schedule || (e.security_grade ? "security" : "salaried");
-    return sched === payScheduleTab;
-  });
+  const empSchedule = e => e.security_grade ? "security" : (e.pay_schedule || "salaried");
+  const scheduleEmployees = activeEmployees.filter(e => empSchedule(e) === payScheduleTab);
   const totalGross = scheduleEmployees.reduce((s,e) => s + e.salary, 0);
   const totalPAYE = scheduleEmployees.reduce((s,e) => s + calcForSummary(e).paye, 0);
   const totalNet = scheduleEmployees.reduce((s,e) => s + calcForSummary(e).netPay, 0);
@@ -3901,7 +3899,7 @@ function Payroll({live = {}, user = {}}) {
         </div>
       </div>
       <div style={{background:C.goldLt,border:`1px solid ${C.gold}40`,borderRadius:12,padding:"12px 18px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R18.25 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
+        <div style={{fontSize:12,color:C.inkMid}}>ZuZan Payroll Module - {employees.length} employees x R34 = <strong style={{color:C.accent}}>{fmt(zuZanFee)}/month</strong></div>
         <Badge label="Active" color={C.green} bg={C.greenLt}/>
       </div>
       {/* ── Pay Schedule Tabs ──────────────────────────────────────────────── */}
@@ -3914,7 +3912,7 @@ function Payroll({live = {}, user = {}}) {
             {label}
             <span style={{marginLeft:6,background:payScheduleTab===key?C.accent:"#e5e7eb",color:payScheduleTab===key?"#fff":C.inkMid,
               borderRadius:10,padding:"1px 7px",fontSize:11,fontWeight:700}}>
-              {activeEmployees.filter(e=>(e.pay_schedule||(e.security_grade?"security":"salaried"))===key).length}
+              {activeEmployees.filter(e=>empSchedule(e)===key).length}
             </span>
           </button>
         ))}
@@ -9571,7 +9569,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               <div>
                 <div style={{fontSize:15,fontWeight:700,color:C.ink}}>Payroll</div>
                 <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>PAYE, UIF &amp; SDL calculations · Payslips · EMP201 reports</div>
-                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>R18.25 per employee · min <strong style={{color:C.ink}}>R99/month</strong></div>
+                <div style={{fontSize:12,color:C.inkMid,marginTop:2}}>R34 per employee · min <strong style={{color:C.ink}}>R99/month</strong></div>
               </div>
             </div>
             {user?.payrollEnabled
@@ -9595,7 +9593,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                     </div>
                     <div>
                       <div style={{fontSize:11,color:C.inkMid,marginBottom:4}}>Cost/mo</div>
-                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,Math.round(payrollEmpCount*18.25))}/mo</div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.green,padding:"8px 10px"}}>R{Math.max(99,Math.round(payrollEmpCount*34))}/mo</div>
                     </div>
                     <button
                       disabled={activatingPayroll}
@@ -10753,7 +10751,7 @@ function Registration({onComplete, onLogin}) {
   const [errors, setErrors] = useState({});
 
   const planPrice = selectedPlan ? (billing === "monthly" ? selectedPlan.monthly : Math.round(selectedPlan.annual / 12)) : 0;
-  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 18.25)) : 0;
+  const payrollCost = payrollEnabled ? Math.max(99, Math.round(empCount * 34)) : 0;
   const totalMonthly = planPrice + payrollCost;
 
   const validateStep2 = () => {

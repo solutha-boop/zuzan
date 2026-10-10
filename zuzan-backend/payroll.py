@@ -3695,13 +3695,15 @@ BACKEND_URL          = _os.environ.get("BACKEND_URL", "https://zuzan-backend.onr
 FRONTEND_URL         = _os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
 
 try:
-    from config import PLAN_PRICES  # single source of truth — see config.py
+    from config import PLAN_PRICES, PAYROLL_PER_EMP, PAYROLL_MIN  # single source of truth — see config.py
 except ImportError:
     PLAN_PRICES = {
         "starter":      {"monthly": 399,  "annual": 3990},
         "professional": {"monthly": 699,  "annual": 6990},
         "business":     {"monthly": 1299, "annual": 12990},
     }
+    PAYROLL_PER_EMP = 34.00
+    PAYROLL_MIN     = 99.00
 
 
 class PaymentInitRequest(BaseModel):
@@ -3726,7 +3728,7 @@ async def initiate_payment(
     db: Session = Depends(get_db)
 ):
     plan_price   = PLAN_PRICES.get(data.plan, {}).get(data.billing_cycle, 299)
-    payroll_cost = max(65, data.employee_count * 18.25) if data.payroll_enabled else 0
+    payroll_cost = max(PAYROLL_MIN, data.employee_count * PAYROLL_PER_EMP) if data.payroll_enabled else 0
     total        = round(plan_price + payroll_cost, 2)
 
     payment = Payment(
@@ -3844,7 +3846,7 @@ async def subscription_status(
     plan_str    = str(company.plan).split(".")[-1]
     billing_str = str(company.billing_cycle).split(".")[-1]
     plan_price  = PLAN_PRICES.get(plan_str, {}).get(billing_str, 299)
-    payroll_cost = max(65, company.payroll_employees * 18.25) if company.payroll_enabled else 0
+    payroll_cost = max(PAYROLL_MIN, company.payroll_employees * PAYROLL_PER_EMP) if company.payroll_enabled else 0
 
     return {
         "plan":              company.plan,
