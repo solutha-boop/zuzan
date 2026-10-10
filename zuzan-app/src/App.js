@@ -3315,6 +3315,8 @@ function Payroll({live = {}, user = {}}) {
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
+  const [editOpenSec, setEditOpenSec] = useState(new Set(["basic","personal","sector","bank"]));
+  const toggleEditSec = k => setEditOpenSec(prev => { const s = new Set(prev); s.has(k) ? s.delete(k) : s.add(k); return s; });
   const [editForm,    setEditForm]    = useState({});
   const [garnishees,  setGarnishees]  = useState([]);  // active garnishee orders for editEmp
   const [showTerminated, setShowTerminated] = useState(false);
@@ -4897,14 +4899,22 @@ function Payroll({live = {}, user = {}}) {
       {/* ── Edit Employee Modal ─────────────────────────────────────────────── */}
       {editEmp && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:300,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"20px 16px",overflowY:"auto"}}>
-          <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:680,boxShadow:"0 8px 40px #00000030",margin:"auto"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Edit Employee</h3>
+          <div style={{background:C.surface,borderRadius:20,width:"100%",maxWidth:920,boxShadow:"0 8px 40px #00000030",margin:"auto",display:"flex",flexDirection:"column",maxHeight:"calc(100vh - 40px)"}}>
+            {/* Sticky header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"24px 32px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Edit Employee — {editEmp.first_name} {editEmp.last_name}</h3>
               <button onClick={()=>setEditEmp(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
+            {/* Scrollable body */}
+            <div style={{overflowY:"auto",padding:"24px 32px",flex:1}}>
 
+            {/* ── Section toggle helper ── */}
             {/* Basic Info */}
-            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Basic Information</div>
+            <div onClick={()=>toggleEditSec("basic")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:editOpenSec.has("basic")?10:16,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1}}>Basic Information</span>
+              <span style={{fontSize:14,color:C.inkMid,transition:"transform 0.2s",display:"inline-block",transform:editOpenSec.has("basic")?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+            </div>
+            {editOpenSec.has("basic") && <>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
               {[
                 {l:"Full Name",             k:"name",     p:"Jane Smith",    t:"text"},
@@ -5010,8 +5020,14 @@ function Payroll({live = {}, user = {}}) {
               )}
             </div>
 
+            </>}
+
             {/* Personal Details */}
-            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Personal Details</div>
+            <div onClick={()=>toggleEditSec("personal")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:editOpenSec.has("personal")?10:16,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1}}>Personal Details</span>
+              <span style={{fontSize:14,color:C.inkMid,display:"inline-block",transform:editOpenSec.has("personal")?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+            </div>
+            {editOpenSec.has("personal") && <>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:20}}>
               {[
                 {l:"SA ID Number",      k:"idNumber",        p:"8001015009087", t:"text"},
@@ -5030,8 +5046,14 @@ function Payroll({live = {}, user = {}}) {
               </div>
             </div>
 
+            </>}
+
             {/* Benefits */}
-            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Pension / Provident Fund &amp; Medical Aid</div>
+            <div onClick={()=>toggleEditSec("benefits")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:editOpenSec.has("benefits")?10:16,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1}}>Pension / Provident Fund &amp; Medical Aid</span>
+              <span style={{fontSize:14,color:C.inkMid,display:"inline-block",transform:editOpenSec.has("benefits")?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+            </div>
+            {editOpenSec.has("benefits") && <>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:12}}>
               {[
                 {l:"Employee Pension %",              k:"pensionEmployeePct",   p:"7.5",  t:"number"},
@@ -5076,6 +5098,17 @@ function Payroll({live = {}, user = {}}) {
               );
             })()}
 
+            </>}
+
+            {/* Sector Section (MIBCO / NBCPSS) */}
+            {((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" || user?.industry==="private_security") && <>
+            <div onClick={()=>toggleEditSec("sector")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:editOpenSec.has("sector")?10:16,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1}}>
+                {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" ? "⛽ MIBCO Sector 5 — Fuel Retail" : "🔒 NBCPSS — Private Security Sector"}
+              </span>
+              <span style={{fontSize:14,color:C.inkMid,display:"inline-block",transform:editOpenSec.has("sector")?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+            </div>
+            {editOpenSec.has("sector") && <>
             {/* MIBCO Fuel Station Section — edit employee */}
             {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" && (()=>{
               const MIBCO_ROLES = {forecourt_attendant:"Forecourt Attendant",cashier:"Cashier",char:"Char / Cleaner"};
@@ -5179,8 +5212,15 @@ function Payroll({live = {}, user = {}}) {
               );
             })()}
 
+            </>}{/* end sector content */}
+            </>}{/* end sector wrapper */}
+
             {/* Bank Details */}
-            <div style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Bank Details</div>
+            <div onClick={()=>toggleEditSec("bank")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:editOpenSec.has("bank")?10:16,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1}}>Bank Details</span>
+              <span style={{fontSize:14,color:C.inkMid,display:"inline-block",transform:editOpenSec.has("bank")?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+            </div>
+            {editOpenSec.has("bank") && <>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12,marginBottom:24}}>
               <div>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Bank Name</label>
@@ -5206,8 +5246,14 @@ function Payroll({live = {}, user = {}}) {
               </div>
             </div>
 
+            </>}
+
             {/* ── Garnishee orders ─────────────────────────────────────────── */}
-            <div style={{marginTop:20,padding:"14px 16px",background:C.surfaceAlt||C.bg,border:`1px solid ${C.border}`,borderRadius:12}}>
+            <div onClick={()=>toggleEditSec("garnishee")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",marginBottom:editOpenSec.has("garnishee")?10:16,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:11,fontWeight:700,color:C.accent,textTransform:"uppercase",letterSpacing:1}}>Garnishee / Emolument Attachment Orders</span>
+              <span style={{fontSize:14,color:C.inkMid,display:"inline-block",transform:editOpenSec.has("garnishee")?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
+            </div>
+            {editOpenSec.has("garnishee") && <div style={{padding:"14px 16px",background:C.surfaceAlt||C.bg,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:16}}>
               <div style={{fontSize:12,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Garnishee / Emolument Attachment Orders</div>
               {garnishees.length===0 && <div style={{fontSize:12,color:C.inkMid,marginBottom:8}}>No active garnishee orders.</div>}
               {garnishees.map(g=>(
@@ -5224,7 +5270,12 @@ function Payroll({live = {}, user = {}}) {
               </div>
             </div>
 
-            <div style={{display:"flex",gap:8,marginTop:16}}>
+            </div>}
+
+            </div>{/* end scrollable body */}
+
+            {/* Sticky footer */}
+            <div style={{display:"flex",gap:8,padding:"16px 32px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
               <button onClick={handleEditSave} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Save Changes</button>
               <button onClick={()=>setEditEmp(null)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
             </div>
