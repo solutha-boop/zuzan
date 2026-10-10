@@ -5258,7 +5258,6 @@ function Payroll({live = {}, user = {}}) {
               <span style={{fontSize:14,color:C.inkMid,display:"inline-block",transform:editOpenSec.has("garnishee")?"rotate(180deg)":"rotate(0deg)"}}>▾</span>
             </div>
             {editOpenSec.has("garnishee") && <div style={{padding:"14px 16px",background:C.surfaceAlt||C.bg,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:16}}>
-              <div style={{fontSize:12,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Garnishee / Emolument Attachment Orders</div>
               {garnishees.length===0 && <div style={{fontSize:12,color:C.inkMid,marginBottom:8}}>No active garnishee orders.</div>}
               {garnishees.map(g=>(
                 <div key={g.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 10px",background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:6}}>
@@ -5272,8 +5271,6 @@ function Payroll({live = {}, user = {}}) {
                 <input type="number" min="0" step="0.01" placeholder="Amount R" value={newGarnAmt} onChange={e=>setNewGarnAmt(e.target.value)} style={{flex:1,padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
                 <button onClick={addGarnishee} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add</button>
               </div>
-            </div>
-
             </div>}
 
             </div>{/* end scrollable body */}
