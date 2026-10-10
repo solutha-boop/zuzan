@@ -1896,7 +1896,8 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
   const isOverdue = i => i.status === "sent" && i.due && new Date(i.due) < today;
   // Paid invoices from the current calendar month are still "active" — only prior-month paid invoices are archived
   const isCurrentMonth = i => { const d = new Date(i.paid_date || i.date || 0); return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth(); };
-  const totalPaid    = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
+  const totalPaid          = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
+  const totalPaidThisMonth = invoices.filter(i => i.status === "paid" && isCurrentMonth(i)).reduce((s,i) => s + toZar(i), 0);
   const totalOverdue = invoices.filter(isOverdue).reduce((s,i) => s + toZar(i), 0);
   const totalPending = invoices.filter(i => i.status === "sent" && !isOverdue(i)).reduce((s,i) => s + toZar(i), 0);
   const displayedInvoices = filterStatus === "overdue"
@@ -1980,7 +1981,8 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
       </div>
       {invTab==="invoices" && <>
       <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
-        <KPI label="Archive" value={fmt(totalPaid)}    color={C.inkMid} icon="📦" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"} sub="Prior-month paid"/>
+        <KPI label="Paid This Month" value={fmt(totalPaidThisMonth)} color={C.green} icon="✓" sub="Current month" active={false}/>
+        <KPI label="Archive" value={fmt(totalPaid)}    color={C.inkMid} icon="📦" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"} sub="All paid invoices"/>
         <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
       </div>
