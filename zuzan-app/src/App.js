@@ -1901,9 +1901,11 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
     ? invoices.filter(isOverdue)
     : filterStatus === "sent"
     ? invoices.filter(i => i.status === "sent" && !isOverdue(i))
+    : filterStatus === "paid"
+    ? invoices.filter(i => i.status === "paid")
     : filterStatus
     ? invoices.filter(i => i.status === filterStatus)
-    : invoices;
+    : invoices.filter(i => i.status !== "paid"); // default: hide paid (archived)
   const toggleFilter = (status) => setFilterStatus(prev => prev === status ? null : status);
 
   const openPayModal = (inv) => {
@@ -1976,14 +1978,17 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
       </div>
       {invTab==="invoices" && <>
       <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
-        <KPI label="Paid"    value={fmt(totalPaid)}    color={C.green} icon="✅" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"}/>
+        <KPI label="Archive" value={fmt(totalPaid)}    color={C.inkMid} icon="📦" onClick={()=>toggleFilter("paid")}    active={filterStatus==="paid"} sub="Paid — click to view"/>
         <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
       </div>
       {filterStatus && (
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"10px 16px",background:C.accentLt,border:`1px solid ${C.accent}30`,borderRadius:10}}>
-          <span style={{fontSize:13,color:C.accent,fontWeight:600,textTransform:"capitalize"}}>Showing: {filterStatus} ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
-          <button onClick={()=>setFilterStatus(null)} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.accent}40`,borderRadius:6,padding:"4px 10px",fontSize:12,color:C.accent,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✕ Show All</button>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"10px 16px",background:filterStatus==="paid"?"#f3f4f6":C.accentLt,border:`1px solid ${filterStatus==="paid"?C.border:C.accent}30`,borderRadius:10}}>
+          {filterStatus==="paid"
+            ? <span style={{fontSize:13,color:C.inkMid,fontWeight:600}}>📦 Archive — Paid Invoices ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
+            : <span style={{fontSize:13,color:C.accent,fontWeight:600,textTransform:"capitalize"}}>Showing: {filterStatus} ({displayedInvoices.length} invoice{displayedInvoices.length!==1?"s":""})</span>
+          }
+          <button onClick={()=>setFilterStatus(null)} style={{marginLeft:"auto",background:"none",border:`1px solid ${filterStatus==="paid"?C.border:C.accent}40`,borderRadius:6,padding:"4px 10px",fontSize:12,color:filterStatus==="paid"?C.inkMid:C.accent,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{filterStatus==="paid"?"← Active Invoices":"✕ Show All"}</button>
         </div>
       )}
 
