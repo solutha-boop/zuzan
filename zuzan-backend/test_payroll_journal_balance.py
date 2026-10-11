@@ -169,6 +169,9 @@ SCENARIOS = {
     "once-off taxable allowance": dict(once_off_allowance_taxable=700.0),
     "once-off non-taxable allowance": dict(once_off_allowance_nontaxable=450.0),
     "maternity leave (gross zeroed)": dict(on_maternity_leave=True),
+    "NBCPSS security officer on maternity leave (employer PSSPF + cover continue)": dict(
+        is_security=True, security_grade="C", security_area="1_2", on_maternity_leave=True, union_subscription=100.0,
+    ),
     "KITCHEN SINK — everything on at once": dict(
         overtime_hours=10, sunday_hours=5, ph_hours=2,
         pension_employee_pct=0.075, pension_employer_pct=0.075,

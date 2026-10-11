@@ -203,6 +203,7 @@ class Employee(Base):
     # General payroll adjustments
     advance_monthly_deduction=Column(Float,default=0.0)  # monthly salary advance repayment deduction
     on_maternity_leave=Column(Boolean,default=False)     # if True, gross=0; employee claims UIF maternity benefit directly
+    psspf_exempt=Column(Boolean,default=False)           # True = NOT a PSSPF member (excluded/ineligible): no automatic provident deduction
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
     hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
     gross_salary=Column(Float,nullable=False); start_date=Column(DateTime)
@@ -300,8 +301,8 @@ class Payslip(Base):
     # NBCPSS prescribed provident, medical aid, uniform allowance, union subscription (2026-09)
     nbcpss_provident_employee=Column(Float,default=0.0)  # PSSPF employee 7.5% of gross
     nbcpss_provident_employer=Column(Float,default=0.0)  # PSSPF employer 7.5% of gross
-    nbcpss_medical_employee=Column(Float,default=0.0)    # PSSSBC prescribed medical aid employee R197/mo
-    nbcpss_medical_employer=Column(Float,default=0.0)    # PSSSBC prescribed medical aid employer R197/mo
+    nbcpss_medical_employee=Column(Float,default=0.0)    # PSSSBC prescribed medical aid employee R122/mo
+    nbcpss_medical_employer=Column(Float,default=0.0)    # PSSSBC prescribed medical aid employer R172.50/mo
     uniform_allowance=Column(Float,default=0.0)          # R150/mo non-taxable uniform reimbursement (s10(1)(nA))
     union_subscription_ded=Column(Float,default=0.0)     # union dues deducted from net pay (POPCRU, SATAWU, etc.)
     # General payroll adjustments — advance repayment, garnishee, once-off items, maternity
@@ -1661,6 +1662,7 @@ def init_db():
             # ── General payroll adjustments — advance, garnishee, once-off items, maternity (2026-09) ──
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS advance_monthly_deduction FLOAT DEFAULT 0",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS on_maternity_leave BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS psspf_exempt BOOLEAN DEFAULT FALSE",
             """CREATE TABLE IF NOT EXISTS employee_garnishees (
                 id          SERIAL PRIMARY KEY,
                 employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,

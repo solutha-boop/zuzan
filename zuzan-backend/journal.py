@@ -573,11 +573,13 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     — i.e. exactly the DR "Salaries (Gross)" line above, PLUS uniform_allowance
     which is folded into that same debit even though it isn't part of
     taxable_gross (it's a non-taxable cash payment to the employee, so it
-    still needs a debit somewhere or the entry unbalances). bc_levy_employer/
-    psira_levy_employer/mibco_scheme_employer/nbcpss_provident_employer/
-    nbcpss_medical_employer are pure employer costs (never deducted from the
-    employee), so they don't affect net_pay — they get their own balanced
-    DR/CR pair instead of touching the salary line. union_subscription_ded/
+    still needs a debit somewhere or the entry unbalances). psira_levy_employer/
+    mibco_scheme_employer/nbcpss_provident_employer/nbcpss_medical_employer are
+    pure employer costs (never deducted from the employee), so they don't affect
+    net_pay — they get their own balanced DR/CR pair instead of touching the
+    salary line. EXCEPTION: bc_levy_employer is ALSO deducted from the
+    employee's net pay (calc_payroll, since 2026-10-06), so its payable line
+    credits the employee deduction plus the employer share. union_subscription_ded/
     garnishee_total/advance_deduction/once_off_deduction are pure employee
     deductions with no employer cost, so each gets a CR-only liability line
     (the debit side is already covered by the salary line it was never added
@@ -709,7 +711,13 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
         lines.append(_line(entry.id, nbcpss_exp, debit=round(bc_levy_er + psira_levy_er, 2), description="NBCPSS BC levy + PSIRA fee (employer)"))
         if bc_levy_er:
             bc_pay = get_account(cid, "2250", db)
-            lines.append(_line(entry.id, bc_pay, credit=bc_levy_er,              description="NBCPSS BC levy payable"))
+            # Since 2026-10-06 calc_payroll() ALSO deducts the BC levy from the
+            # employee's net pay (same amount as the employer cost), so the
+            # amount owed to the council is employee deduction + employer share.
+            # Crediting only the employer share left every NBCPSS journal short
+            # by the levy amount (R7) and aborted the payroll run.
+            bc_levy_ee = bc_levy_er
+            lines.append(_line(entry.id, bc_pay, credit=round(bc_levy_er + bc_levy_ee, 2), description="NBCPSS BC levy payable (employee deduction + employer share)"))
         if psira_levy_er:
             psira_pay = get_account(cid, "2260", db)
             lines.append(_line(entry.id, psira_pay, credit=psira_levy_er,        description="PSIRA fee payable"))

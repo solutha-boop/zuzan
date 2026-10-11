@@ -1524,6 +1524,7 @@ class EmployeeCreate(BaseModel):
     union_subscription:        Optional[float] = 0.0   # monthly union dues (R) — after-tax deduction
     advance_monthly_deduction: Optional[float] = 0.0   # monthly salary advance repayment deduction
     on_maternity_leave:        Optional[bool]  = False  # True → gross zeroed; employee claims UIF maternity benefit
+    psspf_exempt:              Optional[bool]  = False  # True → NOT a PSSPF member (no automatic provident deduction)
     pay_schedule:              Optional[str]   = "salaried"  # "salaried" | "security"
     employment_category:       Optional[str]   = "permanent"  # "permanent"|"fixed_term"|"temp_labour"|"learnership"|"public_servant"|"foreign_national"
 
@@ -1567,6 +1568,7 @@ class EmployeeUpdate(BaseModel):
     union_subscription:        Optional[float] = None  # monthly union dues (R)
     advance_monthly_deduction: Optional[float] = None  # monthly salary advance repayment
     on_maternity_leave:        Optional[bool]  = None  # True → gross zeroed this month
+    psspf_exempt:              Optional[bool]  = None  # True → NOT a PSSPF member
     pay_schedule:              Optional[str]   = None  # "salaried" | "security"
     employment_category:       Optional[str]   = None  # "permanent"|"fixed_term"|"temp_labour"|"learnership"|"public_servant"|"foreign_national"
 
@@ -1628,6 +1630,7 @@ def _employee_dict(e: Employee, company_industry: str = None) -> dict:
         # General payroll adjustments
         "advance_monthly_deduction": getattr(e, "advance_monthly_deduction", 0.0) or 0.0,
         "on_maternity_leave":        bool(getattr(e, "on_maternity_leave", False)),
+        "psspf_exempt":              bool(getattr(e, "psspf_exempt", False)),
         "garnishee_orders": [
             {"id": g.id, "reference": g.reference, "amount": g.amount, "active": g.active}
             for g in getattr(e, "garnishee_orders", [])
@@ -1705,6 +1708,7 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         union_subscription=data.union_subscription or 0.0,
         advance_monthly_deduction=data.advance_monthly_deduction or 0.0,
         on_maternity_leave=data.on_maternity_leave or False,
+        psspf_exempt=data.psspf_exempt or False,
         pay_schedule=data.pay_schedule or ("security" if data.security_grade else "salaried"),
         employment_category=data.employment_category or "permanent",
     )

@@ -193,6 +193,32 @@ const BCEA_OT_PH           = 2.0;      // s18 public holiday
 // NBCPSS prescribed monthly hours (48h/week × 52/12), per NBCPSS Main Agreement —
 // mirrors backend payroll.py's NBCPSS_PRESCRIBED_HOURS.
 const NBCPSS_PRESCRIBED_HOURS = 208;
+// NBCPSS minimum monthly wage by area + grade (1 Mar 2026 - 28 Feb 2027) -
+// mirrors backend NBCPSS_MINIMUM_MONTHLY. "1_2" = Areas 1 & 2, "3" = Area 3.
+const NBCPSS_MIN_BY_AREA = {
+  "1_2": {A:8184, B:7607, C:7003, D:7003, E:7003},
+  "3":   {A:7142, B:6726, C:6726, D:6726, E:6726},
+};
+const nbcpssMinMonthly = (grade, area) =>
+  (NBCPSS_MIN_BY_AREA[area==="3" ? "3" : "1_2"][String(grade||"").toUpperCase()]) || 0;
+// NBCPSS annual bonus (Main Agreement clause 8) - mirrors backend nbcpss_annual_bonus()/nbcpss_bonus_due():
+//   bonus = ((A x 12) - (B x C)) / 12   A = monthly salary, B = hourly equivalent, C = UNAUTHORISED absence hours
+// Paid on the start-date anniversary (after at least 12 completed months).
+const nbcpssBonusAmount = (salary, hourly, unauthHrs) =>
+  Math.max(0, Math.round((((+salary||0)*12 - (+hourly||0)*Math.max(0,+unauthHrs||0))/12)*100)/100);
+const nbcpssBonusDue = (startDate, ym) => {
+  if (!startDate || !ym) return false;
+  const sy = +String(startDate).slice(0,4), sm = +String(startDate).slice(5,7);
+  return sm === +ym.slice(5,7) && (+ym.slice(0,4) - sy) >= 1;
+};
+// sec = this employee's secData entry; bonusOn (true/false) is a manual override of the automatic anniversary rule
+const nbcpssBonusOn = (emp, sec, ym) =>
+  !!emp.security_grade && ((sec && sec.bonusOn != null) ? !!sec.bonusOn : nbcpssBonusDue(emp.start_date, ym));
+const nbcpssBonusFor = (emp, sec, ym) => {
+  if (!nbcpssBonusOn(emp, sec, ym)) return 0;
+  const hr = emp.hourly_rate || nbcpssMinMonthly(emp.security_grade, emp.security_area||"1_2")/NBCPSS_PRESCRIBED_HOURS;
+  return nbcpssBonusAmount(emp.salary||emp.gross_salary, hr, sec && sec.unauthHrs);
+};
 // NBCPSS constants (audit fix 2026-09-16) — mirror backend payroll.py so calcPayroll(),
 // the client-side dashboard/batch-payment estimator, doesn't silently drop these for
 // security employees the way it did before this fix (see [[project_nbcpss_208hr_bug]]).
@@ -2750,7 +2776,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
             {[
               p.s11fDeduction > 0 && ["Pension / Provident (s11F deductible)", p.pensionEmployee || p.pension_employee, C.red],
               p.medicalAidEmployee > 0 && ["Medical Aid (Employee Contribution)", p.medicalAidEmployee || p.medical_aid_employee_ded, C.red],
-              (p.nbcpss_provident_employee > 0 || p.nbcpssProvidentEmployee > 0) && ["🔒 PSSPF Provident Fund (NBCPSS — 7.5%)", p.nbcpss_provident_employee||p.nbcpssProvidentEmployee, C.red],
+              (p.nbcpss_provident_employee > 0 || p.nbcpssProvidentEmployee > 0) && ["🔒 PSSPF Provident Fund (NBCPSS)", p.nbcpss_provident_employee||p.nbcpssProvidentEmployee, C.red],
               (p.nbcpss_medical_employee > 0 || p.nbcpssMedicalEmployee > 0) && ["🔒 PSSSBC Medical Aid (NBCPSS Prescribed)", p.nbcpss_medical_employee||p.nbcpssMedicalEmployee, C.red],
               (p.union_subscription_ded > 0 || p.unionSubscriptionDed > 0) && ["🤝 Union Subscription", p.union_subscription_ded||p.unionSubscriptionDed, C.red],
               (p.advance_deduction > 0 || p.advanceDeduction > 0) && ["🏦 Salary Advance Repayment", p.advance_deduction||p.advanceDeduction, C.red],
@@ -2795,7 +2821,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               (p.medicalAidEmployer||p.medical_aid_employer_con) > 0 && ["Medical Aid (Employer Contribution)", p.medicalAidEmployer||p.medical_aid_employer_con, C.blue],
               ["UIF (Employer Contribution)", p.uifEmployer, C.blue],
               ["SDL (Skills Development Levy)", p.sdl, C.blue],
-              (p.nbcpss_provident_employer > 0 || p.nbcpssProvidentEmployer > 0) && ["🔒 PSSPF Provident Fund (Employer — 7.5%)", p.nbcpss_provident_employer||p.nbcpssProvidentEmployer, "#c2410c"],
+              (p.nbcpss_provident_employer > 0 || p.nbcpssProvidentEmployer > 0) && ["🔒 PSSPF Provident Fund (Employer)", p.nbcpss_provident_employer||p.nbcpssProvidentEmployer, "#c2410c"],
               (p.nbcpss_medical_employer > 0 || p.nbcpssMedicalEmployer > 0) && ["🔒 PSSSBC Medical Aid (Employer)", p.nbcpss_medical_employer||p.nbcpssMedicalEmployer, "#c2410c"],
               p.bc_levy_employer > 0 && ["NBCPSS BC Levy (Bargaining Council)", p.bc_levy_employer, "#c2410c"],
               p.psira_levy_employer > 0 && ["PSIRA Registration Levy", p.psira_levy_employer, "#c2410c"],
@@ -2820,7 +2846,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
             {(p.medicalTaxCredit||p.medical_tax_credit) > 0 && <>Section 6A Medical Tax Credit: R{p.medicalTaxCredit||p.medical_tax_credit}/month (direct PAYE reduction)<br/></>}
             UIF: 1% employee + 1% employer — capped at R17,712/month (on basic salary only)<br/>
             SDL: 1% of taxable gross payroll<br/>
-            {p.overtime && p.overtime.total > 0 && `BCEA Overtime: Weekday/Sat 1.5× · Sunday 2× · Public Holiday 2× · Hourly rate: ${fmt(p.overtime.hourly_rate||p.overtime.hourlyRate)}/hr`}
+            {p.overtime && p.overtime.total > 0 && `${employee?.security_grade ? "NBCPSS Overtime: Weekday/Sat 1.5× · Sunday 1.5× · Public Holiday 1.0× on top of salary" : "BCEA Overtime: Weekday/Sat 1.5× · Sunday 2× · Public Holiday 2×"} · Hourly rate: ${fmt(p.overtime.hourly_rate||p.overtime.hourlyRate)}/hr`}
           </div>
 
         </div>
@@ -2878,47 +2904,37 @@ function buildStdBank(rows) {
   return [header, ...lines].join("\r\n");
 }
 
-function BatchPaymentModal({employees, payroll, period, onClose, otData={}, secData={}, includeBonus=false}) {
+function BatchPaymentModal({employees, payroll, period, ym, onClose}) {
   const periodStr = period || new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"});
-  // audit fix 2026-09-16 — this generates the actual bank payment files (real money
-  // transferred to employees' accounts), but was recomputing net pay from bare salary
-  // only, silently dropping overtime/night-shift/special-allowance/cleaning-allowance/
-  // annual-bonus for NBCPSS security employees even when those were entered and
-  // included in the payroll run that was just processed. otData/secData/includeBonus
-  // are the same per-period inputs the Run Payroll modal already collected — reuse
-  // them here so the bank file matches what was actually run. See [[project_nbcpss_208hr_bug]].
-  const calcFor = (e) => {
-    const isSecurityEmp = !!e.security_grade;
-    const ot  = otData[e.id]  || {};
-    const sec = secData[e.id] || {};
-    const annualBonus = (includeBonus && isSecurityEmp) ? Math.round(e.salary * 12 / 52 * 100) / 100 : 0;
-    return calcPayroll(
-      e.salary, null,
-      +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, e.hourly_rate||null,
-      (e.pension_fund_employee_pct||0), (e.pension_fund_employer_pct||0),
-      (e.medical_aid_employee||0), (e.medical_aid_employer||0), (e.medical_aid_dependants||0),
-      (e.pension_employee_fixed||0), (e.pension_employer_fixed||0),
-      { isSecurity: isSecurityEmp, nightShiftShifts: +sec.nightShifts||0,
-        specialAllowanceShifts: +sec.specialShifts||0, annualBonus },
-    );
-  };
-  const totalPAYE = employees.reduce((s,e) => s + calcFor(e).paye, 0);
-  const totalUIF  = employees.reduce((s,e) => s + calcFor(e).uifEmployee + calcFor(e).uifEmployer, 0);
-  const totalSDL  = employees.reduce((s,e) => s + calcFor(e).sdl, 0);
+  // The bank files move real money, so they use ONLY the figures the server saved when
+  // payroll was run (GET /payroll/payslips/{ym}/summary). The old client-side calcPayroll
+  // estimate drifted from the server (overtime, NBCPSS allowances, bonus, PSSPF, UIF...).
+  const [srv, setSrv] = useState(null);      // {employee_id: {net_pay, paye, ...}}
+  const [srvErr, setSrvErr] = useState("");
+  useEffect(() => {
+    let dead = false;
+    api(`/payroll/payslips/${ym}/summary`)
+      .then(r => { if (!dead) setSrv(Object.fromEntries((r.payslips||[]).map(x => [x.employee_id, x]))); })
+      .catch(err => { if (!dead) setSrvErr(err.message || "could not load processed payslips"); });
+    return () => { dead = true; };
+  }, [ym]);
+  const missing = srv ? employees.filter(e => !srv[e.id]) : [];
+  const ready = !!srv && missing.length === 0;
+  const sum = (k) => employees.reduce((s,e) => s + ((srv && srv[e.id] && srv[e.id][k]) || 0), 0);
+  const totalPAYE = sum("paye");
+  const totalUIF  = sum("uif_employee") + sum("uif_employer");
+  const totalSDL  = sum("sdl");
   const sarsTotal = totalPAYE + totalUIF + totalSDL;
 
-  const empRows = employees.map(e => {
-    const p = calcFor(e);
-    return {
-      branch:  e.branchCode  || "250655",
-      account: e.accountNumber || "000000000",
-      type:    e.accountType  || "Cheque",
-      name:    e.name,
-      amount:  p.netPay,
-      ownRef:  `SALARY ${periodStr}`,
-      benRef:  `SALARY ${periodStr}`,
-    };
-  });
+  const empRows = employees.map(e => ({
+    branch:  e.branchCode  || e.branch_code || "250655",
+    account: e.accountNumber || e.account_number || "000000000",
+    type:    e.accountType  || e.account_type || "Cheque",
+    name:    e.name,
+    amount:  (srv && srv[e.id] && srv[e.id].net_pay) || 0,
+    ownRef:  `SALARY ${periodStr}`,
+    benRef:  `SALARY ${periodStr}`,
+  }));
 
   const sarsRow = [{
     branch:  SARS_BANKING.branch,
@@ -2975,6 +2991,11 @@ function BatchPaymentModal({employees, payroll, period, onClose, otData={}, secD
 
         {/* Format rows */}
         <div style={{padding:"20px 28px"}}>
+          {!ready && <div style={{padding:"10px 14px",marginBottom:14,borderRadius:8,background:"#fff1f2",border:"1px solid #fca5a5",color:"#b91c1c",fontSize:12,fontWeight:600}}>
+            {srvErr ? `Cannot build payment files: ${srvErr}`
+              : !srv ? "Loading processed payslips from the server..."
+              : `Payment files are disabled: no processed payslip for ${missing.map(m=>m.name).join(", ")} in ${ym}. Run payroll for this period first.`}
+          </div>}
           <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:14}}>Select your bank format</div>
           {FORMATS.map((f,i)=>(
             <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 16px",borderRadius:12,border:`1px solid ${C.border}`,marginBottom:10,background:C.bg}}>
@@ -2983,8 +3004,8 @@ function BatchPaymentModal({employees, payroll, period, onClose, otData={}, secD
                 <span style={{fontSize:13,fontWeight:600,color:C.ink}}>{f.label}</span>
               </div>
               <div style={{display:"flex",gap:8}}>
-                <button onClick={f.dlSalary} style={{background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Salary EFT</button>
-                <button onClick={f.dlSars}   style={{background:C.redLt,  color:C.red,  border:`1px solid ${C.red}30`,  borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ SARS EMP201</button>
+                <button disabled={!ready} onClick={f.dlSalary} style={{opacity:ready?1:0.4,background:C.greenLt,color:C.green,border:`1px solid ${C.green}30`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Salary EFT</button>
+                <button disabled={!ready} onClick={f.dlSars} style={{opacity:ready?1:0.4,background:C.redLt,  color:C.red,  border:`1px solid ${C.red}30`,  borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ SARS EMP201</button>
               </div>
             </div>
           ))}
@@ -3302,6 +3323,7 @@ function Payroll({live = {}, user = {}}) {
   // ── Dual pay schedule state ───────────────────────────────────────────────
   const [payScheduleTab, setPayScheduleTab] = useState("salaried"); // "security" | "salaried" — default to salaried so run-payroll button is immediately visible
   const [payrollRunBySchedule,    setPayrollRunBySchedule]    = useState({security:false, salaried:false});
+  const [runError, setRunError] = useState(""); // set when /payroll/run fails, so a failed run is never shown as "Payroll Processed"
   const [payrollPeriodBySchedule, setPayrollPeriodBySchedule] = useState({security:null,  salaried:null});
   // Derived helpers for current tab
   const payrollRun    = payrollRunBySchedule[payScheduleTab];
@@ -3314,7 +3336,6 @@ function Payroll({live = {}, user = {}}) {
   const [onceOffData, setOnceOffData] = useState({}); // {employeeId: {expenseClaim, onceOffDeduction, onceOffTaxable, onceOffNonTaxable}}
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
   const [secArea, setSecArea] = useState("3"); // NBCPSS rate area: Area 3 only
-  const [includeBonus, setIncludeBonus] = useState(false); // NBCPSS annual bonus (December)
   const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",paySchedule:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true,unionSubscription:0,advanceMonthlyDeduction:0,onMaternityLeave:false,employmentCategory:"permanent"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
@@ -3335,7 +3356,7 @@ function Payroll({live = {}, user = {}}) {
     const isSecurityEmp = !!e.security_grade;
     const ot  = otData[e.id]  || {};
     const sec = secData[e.id] || {};
-    const annualBonus = (includeBonus && isSecurityEmp) ? Math.round(e.salary * 12 / 52 * 100) / 100 : 0;
+    const annualBonus = nbcpssBonusFor(e, sec, new Date().toISOString().slice(0,7));
     return calcPayroll(
       e.salary, taxYear,
       +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, e.hourly_rate||null,
@@ -3420,6 +3441,7 @@ function Payroll({live = {}, user = {}}) {
           special_allowance_type:     form.specialAllowanceType || "none",
           mibco_role:                 form.mibcoRole || null,
           mibco_scheme_enrolled:      form.mibcoSchemeEnrolled ?? true,
+          psspf_exempt:               !!form.psspfExempt,
           union_subscription:         form.unionSubscription || 0,
           advance_monthly_deduction:  form.advanceMonthlyDeduction || 0,
           on_maternity_leave:         form.onMaternityLeave || false,
@@ -3530,6 +3552,7 @@ function Payroll({live = {}, user = {}}) {
             special_allowance_type:     editForm.specialAllowanceType || "none",
             mibco_role:                 editForm.mibcoRole || null,
             mibco_scheme_enrolled:      editForm.mibcoSchemeEnrolled ?? true,
+            psspf_exempt:               !!editForm.psspfExempt,
             union_subscription:         editForm.unionSubscription || 0,
             advance_monthly_deduction:  editForm.advanceMonthlyDeduction || 0,
             on_maternity_leave:         editForm.onMaternityLeave || false,
@@ -3998,7 +4021,9 @@ function Payroll({live = {}, user = {}}) {
               <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
-            <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter hours per employee for this pay period. <strong>Weekday/Sat OT</strong> = extra hours above normal shift (×1.5). <strong>Sunday Hrs Worked</strong> = total hours worked on Sunday (×2, all hours). Default shift = 12 h; enter 12 per Sunday, 24 for two Sundays, etc. <strong>Public Holiday</strong> = hours worked on a PH (×2).</p>
+            <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter hours per employee for this pay period. <strong>Weekday/Sat OT</strong> = extra hours above normal shift (×1.5). {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"
+              ? <><strong>Sunday Hrs Worked</strong> = total hours worked on Sundays, paid at 1.5× the hourly rate (NBCPSS rate for officers who ordinarily work Sundays). Enter 12 per 12-hour Sunday shift, 24 for two Sundays, etc. <strong>Public Holiday Hrs Worked</strong> = hours actually worked on a public holiday, paid at 1.0× on top of salary (the normal day&apos;s pay is already in the monthly salary). Night shifts and special-allowance shifts are entered in the columns on the right.</>
+              : <><strong>Sunday Hrs Worked</strong> = total hours worked on Sunday (×2, all hours). Default shift = 12 h; enter 12 per Sunday, 24 for two Sundays, etc. <strong>Public Holiday Hrs Worked</strong> = hours worked on a PH (×2).</>}</p>
 
             {/* ── NBCPSS rate area info (Area 3 only) ── */}
             {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (
@@ -4149,25 +4174,20 @@ function Payroll({live = {}, user = {}}) {
               </div>
             </div>
 
-            {/* ── NBCPSS Annual Bonus banner (November / December only) ── */}
+            {/* ── NBCPSS Annual Bonus banner: officers whose employment anniversary falls in this pay month ── */}
             {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (()=>{
-              const mo = new Date().getMonth(); // 0-based: 10=Nov, 11=Dec
-              if (mo < 10) return null;
-              const isDec = mo === 11;
-              const bonusTotal = scheduleEmployees.reduce((s,e)=>s+Math.round(e.salary*12/52*100)/100,0);
+              const ym = new Date().toISOString().slice(0,7);
+              const dueEmps = scheduleEmployees.filter(e=>e.security_grade && nbcpssBonusDue(e.start_date, ym));
+              const noStart = scheduleEmployees.filter(e=>e.security_grade && !e.start_date).length;
+              if (dueEmps.length === 0 && noStart === 0) return null;
+              const bonusTotal = scheduleEmployees.reduce((t,e)=>t+nbcpssBonusFor(e, secData[e.id], ym),0);
               return (
-                <div style={{background:isDec?"#fefce8":"#f0fdf4",border:`1px solid ${isDec?"#fbbf24":"#86efac"}`,borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-                  <span style={{fontSize:20}}>{isDec?"🎁":"📅"}</span>
+                <div style={{background:"#fefce8",border:"1px solid #fbbf24",borderRadius:12,padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                  <span style={{fontSize:20}}>🎁</span>
                   <div style={{flex:1}}>
-                    <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{isDec?"NBCPSS Annual Bonus — Due before 15 December":"NBCPSS Annual Bonus — Payable next month (December)"}</div>
-                    <div style={{fontSize:11,color:C.inkMid}}>1 week's pay per employee (gross × 12/52). Total this run: <strong>{fmt(bonusTotal)}</strong></div>
+                    <div style={{fontSize:12,fontWeight:700,color:C.ink}}>NBCPSS Annual Bonus — {dueEmps.length} officer{dueEmps.length===1?"":"s"} reach{dueEmps.length===1?"es":""} their employment anniversary this month</div>
+                    <div style={{fontSize:11,color:C.inkMid}}>Clause 8: one month's salary less pay for unauthorised absence hours ((A×12 − B×C) ÷ 12). Tick or untick each officer in the Annual Bonus column, and enter any unauthorised absence hours. Total included in this run: <strong>{fmt(bonusTotal)}</strong>{noStart>0 && <> · {noStart} officer{noStart===1?" has":"s have"} no start date, so the bonus can only be added by ticking it manually.</>}</div>
                   </div>
-                  {isDec && (
-                    <button onClick={()=>setIncludeBonus(b=>!b)}
-                      style={{padding:"8px 16px",fontSize:12,fontWeight:700,borderRadius:8,border:`2px solid ${includeBonus?"#16a34a":"#d1d5db"}`,background:includeBonus?"#dcfce7":C.surface,color:includeBonus?"#15803d":C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
-                      {includeBonus?"✓ Bonus included":"Include bonus"}
-                    </button>
-                  )}
                 </div>
               );
             })()}
@@ -4180,8 +4200,8 @@ function Payroll({live = {}, user = {}}) {
                     "Employee","Grade","BCEA Hourly Rate",
                     ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Normal Hrs (hourly)"] : []),
                     ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" ? ["MIBCO Role"] : []),
-                    "Weekday/Sat OT hrs","Sunday Hrs Worked","PH hrs","OT Pay Preview",
-                    ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Security Preview"] : [])
+                    "Weekday/Sat OT hrs","Sunday Hrs Worked","Public Holiday Hrs Worked","OT Pay Preview",
+                    ...((user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" ? ["Night Shift Shifts","Special Allow. Shifts","Unauth. Absence Hrs","Annual Bonus","Security Preview"] : [])
                   ].map(h=>(
                     <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
                   ))}
@@ -4193,10 +4213,9 @@ function Payroll({live = {}, user = {}}) {
                   const isSecurity = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
                   const isFuelStation = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station";
                   // For security employees, effective monthly = max(contracted salary, NBCPSS area+grade minimum)
-                  const _NBCPSS = {"3":{A:7142,B:6726,C:6726,D:6726,E:6726}};
                   const _gradeKey = ((emp.security_grade||"C").toUpperCase().match(/[A-E]/)||["C"])[0];
-                  const _areaRates = _NBCPSS["3"];
-                  const _areaMin = _areaRates[_gradeKey] || _areaRates["C"];
+                  // area-aware (matches backend: an employee with no area is treated as Areas 1 & 2)
+                  const _areaMin = nbcpssMinMonthly(_gradeKey, emp.security_area||"1_2") || nbcpssMinMonthly("C", emp.security_area||"1_2");
                   // For fuel station employees, effective monthly = max(contracted salary, MIBCO role minimum)
                   const _MIBCO_HR = {forecourt_attendant:45.79,cashier:45.30,char:34.64};
                   const _mibcoHr = _MIBCO_HR[(emp.mibco_role||"").toLowerCase()] || 0;
@@ -4267,6 +4286,20 @@ function Payroll({live = {}, user = {}}) {
                           <td style={{padding:"10px 12px"}}>
                             <input style={inpStyle} type="number" min="0" step="1" value={sec.specialShifts||""} placeholder="0" onChange={e=>setSec("specialShifts",e.target.value)}/>
                           </td>
+                          <td style={{padding:"10px 12px"}}>
+                            <input style={inpStyle} type="number" min="0" step="0.5" value={sec.unauthHrs||""} placeholder="0" title="Hours lost to UNAUTHORISED absence or late coming. Approved leave never counts." onChange={e=>setSec("unauthHrs",e.target.value)}/>
+                          </td>
+                          <td style={{padding:"10px 12px",whiteSpace:"nowrap"}}>
+                            {emp.security_grade ? (()=>{
+                              const _ym = new Date().toISOString().slice(0,7);
+                              const _on = nbcpssBonusOn(emp, sec, _ym);
+                              const _due = nbcpssBonusDue(emp.start_date, _ym);
+                              return (<label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:11,color:_on?"#15803d":C.inkMid,fontWeight:_on?700:400}}>
+                                <input type="checkbox" checked={_on} onChange={e=>setSec("bonusOn", e.target.checked)}/>
+                                {_on ? `+ ${fmt(nbcpssBonusFor(emp, sec, _ym))}` : (_due ? "skipped" : "not due")}
+                              </label>);
+                            })() : <span style={{color:C.inkMid}}>—</span>}
+                          </td>
                           <td style={{padding:"10px 12px",fontWeight:700,color:secTotal>0?"#c2410c":C.inkMid}}>
                             {secTotal > 0 ? `+ ${fmt(secTotal)}` : "—"}
                           </td>
@@ -4320,18 +4353,23 @@ function Payroll({live = {}, user = {}}) {
                     const ot = otData[emp.id] || {};
                     return { employee_id: emp.id, normal_hours: +ot.normalHours||0, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
                   }).filter(e => e.normal_hours > 0 || e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
+                  const _bonusYm = new Date().toISOString().slice(0,7);
                   const secPayload = scheduleEmployees.map(emp => {
                     const sec = secData[emp.id] || {};
-                    return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0 };
-                  }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0);
+                    // pay_annual_bonus is sent explicitly (true/false) for every officer so the backend pays exactly what the screen shows
+                    return { employee_id: emp.id, night_shift_shifts: +sec.nightShifts||0, special_allowance_shifts: +sec.specialShifts||0,
+                             unauthorised_absence_hours: +sec.unauthHrs||0,
+                             pay_annual_bonus: emp.security_grade ? nbcpssBonusOn(emp, sec, _bonusYm) : null };
+                  }).filter(e => e.night_shift_shifts > 0 || e.special_allowance_shifts > 0 || e.pay_annual_bonus !== null);
                   const onceOffPayload = scheduleEmployees.map(emp => {
                     const oo = onceOffData[emp.id] || {};
                     return { employee_id: emp.id, expense_claim: +oo.expenseClaim||0, once_off_deduction: +oo.onceOffDeduction||0, once_off_allowance_taxable: +oo.onceOffTaxable||0, once_off_allowance_nontaxable: +oo.onceOffNonTaxable||0 };
                   }).filter(e => e.expense_claim > 0 || e.once_off_deduction > 0 || e.once_off_allowance_taxable > 0 || e.once_off_allowance_nontaxable > 0);
                   const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
-                  await api("/payroll/run", {method:"POST", body: JSON.stringify({pay_schedule: payScheduleTab, overtime: otPayload, security: secPayload, once_off: onceOffPayload, ...(isSec ? {area_override: secArea, include_annual_bonus: includeBonus} : {})})});
+                  await api("/payroll/run", {method:"POST", body: JSON.stringify({pay_schedule: payScheduleTab, overtime: otPayload, security: secPayload, once_off: onceOffPayload, ...(isSec ? {area_override: secArea} : {})})});
                   if (live && live.reload) live.reload();
-                } catch(err) { console.warn("Payroll run failed:", err.message); }
+                } catch(err) { console.warn("Payroll run failed:", err.message); setRunError(`Payroll was NOT saved - the server rejected the run: ${err.message}. No payslips or journal entries were created for this run.`); return; }
+                setRunError("");
                 setPayrollRun(true);
                 setPayrollPeriod(new Date().toISOString().slice(0,7));
               }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -4373,6 +4411,14 @@ function Payroll({live = {}, user = {}}) {
         );
       })()}
 
+      {runError && (
+        <div style={{background:"#fef2f2",border:"2px solid #dc2626",borderRadius:16,padding:"14px 18px",marginBottom:20,display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:20}}>⚠️</span>
+          <div style={{flex:1,fontSize:13,fontWeight:600,color:"#991b1b"}}>{runError}</div>
+          <button onClick={()=>setRunError("")} style={{background:"transparent",border:"1px solid #dc2626",color:"#991b1b",borderRadius:8,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Dismiss</button>
+        </div>
+      )}
+
       {payrollRun && (
         <div style={{background:C.surface,border:`2px solid ${C.green}`,borderRadius:16,padding:20,marginBottom:20}}>
           <div style={{fontSize:16,fontWeight:700,color:C.green,marginBottom:12}}>Payroll Processed - {new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</div>
@@ -4406,6 +4452,22 @@ function Payroll({live = {}, user = {}}) {
                   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
                 }catch(err){alert(`Payslip download error: ${err.message}`);}
               }} style={{background:C.accentLt,color:C.accent,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download All Payslips</button>
+              {payScheduleTab==="security" && <button onClick={async()=>{
+                try{
+                  const ym=payrollPeriod||new Date().toISOString().slice(0,7);
+                  const r=await api(`/payroll/nbcpss-remittance/${ym}`);
+                  const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
+                  const lines=[
+                    ["NBCPSS consolidated remittance (cl 35A)",ym,"Due",r.due_date].map(q).join(","),
+                    ["Levy",r.levy,"PSSPF",r.psspf,"Health insurance",r.health_insurance,"TOTAL",r.total_clause_35a].map(q).join(","),
+                    ["PSIRA fee (separate, not cl 35A)",r.psira_fee_separate].map(q).join(","),
+                    "",
+                    ["Employee No","Name","Grade","Area","Levy","PSSPF","Health","Total"].map(q).join(","),
+                    ...r.employees.map(e=>[e.employee_number,e.name,e.grade,e.area,e.levy,e.psspf,e.health,e.total].map(q).join(","))
+                  ];
+                  downloadCSV(`nbcpss-remittance-${ym}.csv`,lines.join("\n"));
+                }catch(err){alert(`Remittance schedule failed: ${err.message}`);}
+              }} style={{background:C.accentLt,color:C.accent,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ NBCPSS Remittance (due 7th)</button>}
               <button onClick={()=>setShowBatch(true)} style={{background:C.ink,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download Payment Files</button>
             </div>
           </div>
@@ -4414,12 +4476,9 @@ function Payroll({live = {}, user = {}}) {
       {showBatch && (
         <BatchPaymentModal
           employees={scheduleEmployees}
-          payroll={scheduleEmployees.map(e=>calcPayroll(e.salary))}
-          period={new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
+          period={new Date((payrollPeriod||new Date().toISOString().slice(0,7))+"-01T00:00:00").toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
+          ym={payrollPeriod||new Date().toISOString().slice(0,7)}
           onClose={()=>setShowBatch(false)}
-          otData={otData}
-          secData={secData}
-          includeBonus={includeBonus}
         />
       )}
       {showNew && (
@@ -4581,7 +4640,7 @@ function Payroll({live = {}, user = {}}) {
               <div style={{background:C.blueLt,border:`1px solid ${C.blue}30`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.inkMid}}>
                 <strong style={{color:C.blue}}>BCEA hourly rate: </strong>
                 {fmt(_rate)}/hr
-                <span style={{marginLeft:16}}>Weekday OT: {fmt(_rate * 1.5)}/hr · Sunday: {fmt(_rate * 2)}/hr</span>
+                <span style={{marginLeft:16}}>Weekday OT: {fmt(_rate * 1.5)}/hr · Sunday: {fmt(_rate * (_isSecurityEmp ? 1.5 : 2))}/hr</span>
               </div>
             );
           })()}
@@ -4691,11 +4750,10 @@ function Payroll({live = {}, user = {}}) {
 
           {/* NBCPSS Private Security Section — only shown for private_security industry */}
           {user?.industry === "private_security" && (()=>{
-            const NBCPSS_MIN = {"A":7142,"B":6726,"C":6726,"D":6726,"E":6726};
-            const minWage = NBCPSS_MIN[form.securityGrade] || 0;
+            const minWage = nbcpssMinMonthly(form.securityGrade, form.securityArea||"3");
             const belowMin = form.salary && form.securityGrade && +form.salary < minWage;
-            const _medEmp  = form.securityArea==="1_2" ? 197 : 122;
-            const _medEmpr = form.securityArea==="1_2" ? 197 : 172.50;
+            const _medEmp  = form.securityArea==="1_2" ? 122 : 122;
+            const _medEmpr = form.securityArea==="1_2" ? 172.50 : 172.50;
             const _areaLabel = form.securityArea==="1_2" ? "Area 1 & 2 (Urban/Metro)" : "Area 3 (Rural / All Other)";
             return (
               <div style={{marginBottom:16}}>
@@ -4751,6 +4809,7 @@ function Payroll({live = {}, user = {}}) {
                     <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Advance Repayment (R/month)</label>
                     <input type="number" min="0" step="0.01" placeholder="0.00" value={form.advanceMonthlyDeduction||""} onChange={e=>setForm(v=>({...v,advanceMonthlyDeduction:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                   </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="addPsspfEx" checked={form.psspfExempt||false} onChange={e=>setForm(v=>({...v,psspfExempt:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="addPsspfEx" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Not a PSSPF member <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(tick only if exempt - otherwise PSSPF provident is applied automatically and any pension fields above are ignored)</span></label></div>
                   <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
                     <input type="checkbox" id="addMatLeave" checked={form.onMaternityLeave||false} onChange={e=>setForm(v=>({...v,onMaternityLeave:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
                     <label htmlFor="addMatLeave" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>On Maternity Leave <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(zero gross this pay run; employee claims UIF directly)</span></label>
@@ -4759,7 +4818,7 @@ function Payroll({live = {}, user = {}}) {
                 {form.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12}}>
                   {belowMin
                     ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+form.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {form.securityGrade} ({_areaLabel}): <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
-                    : <span style={{color:"#166534"}}>✓ Grade {form.securityGrade} · {_areaLabel} · Min R{minWage.toLocaleString("en-ZA")}/mo · Med aid R{_medEmp}/R{_medEmpr} (emp/empr) · Cleaning R32 · BC levy R7 · PSIRA R4 · Provident 7.5% each.</span>
+                    : <span style={{color:"#166534"}}>✓ Grade {form.securityGrade} · {_areaLabel} · Min R{minWage.toLocaleString("en-ZA")}/mo · Med aid R{_medEmp}/R{_medEmpr} (emp/empr) · Cleaning R32 · BC levy R7 · PSIRA R4 · PSSPF provident (employee + employer).</span>
                   }
                 </div>}
               </div>
@@ -4823,10 +4882,9 @@ function Payroll({live = {}, user = {}}) {
                     <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
                     <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
                     {user?.industry==="private_security" && emp.security_grade && (()=>{
-                      const NBCPSS_MIN={"A":7142,"B":6726,"C":6726,"D":6726,"E":6726};
-                      const minW=NBCPSS_MIN[emp.security_grade]||0;
+                      const minW=nbcpssMinMonthly(emp.security_grade, emp.security_area||"1_2");
                       const below=minW>0&&emp.salary<minW;
-                      const areaLbl=emp.security_area==="1_2"?"Urban":"Rural";
+                      const areaLbl=!emp.security_area?"area not set (Areas 1 & 2 assumed)":emp.security_area==="3"?"Area 3":"Areas 1 & 2";
                       return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#166534",fontWeight:600}}>{below?`⚠️ Below NBCPSS min (R${minW.toLocaleString("en-ZA")})`:`🔒 Grade ${emp.security_grade} · ${areaLbl} · R${minW.toLocaleString("en-ZA")} min`}</div>;
                     })()}
                     {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" && emp.mibco_role && (()=>{
@@ -4849,7 +4907,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false,paySchedule:emp.pay_schedule||(emp.security_grade?"security":"salaried"),employmentCategory:emp.employment_category||"permanent"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,psspfExempt:!!emp.psspf_exempt,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false,paySchedule:emp.pay_schedule||(emp.security_grade?"security":"salaried"),employmentCategory:emp.employment_category||"permanent"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                       <button onClick={()=>setTermModal({emp,reason:"resignation",date:new Date().toISOString().split("T")[0]})} style={{background:"#fee2e2",color:"#b91c1c",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Terminate</button>
                     </div>
@@ -4877,7 +4935,7 @@ function Payroll({live = {}, user = {}}) {
         UIF: 1% employee + 1% employer · Capped at R17,712/month · Overtime excluded from UIF base<br/>
         SDL: 1% of gross payroll · Payable if annual payroll ≥ R500,000<br/>
         <strong style={{color:C.ink}}>BCEA Overtime (s9/s10/s16/s18):</strong> Normal week = 45 hrs · OT max 10 hrs/week · Weekday/Sat OT = 1.5× · Sunday = 2× · Public holiday = 2× · Hourly rate derived from salary ÷ 195 hrs/month
-        {user?.industry==="private_security" && <><br/><strong style={{color:"#c2410c"}}>🔒 NBCPSS (1 Mar 2026 – 28 Feb 2027):</strong> Night shift R8.00/shift · Special allowance R10.50/shift · Cleaning R32.00/month · BC levy R9.40/month (employer) · PSIRA fee R5.00/month (employer) · PSSPF 7.5% each · All allowances are taxable income.</>}
+        {user?.industry==="private_security" && <><br/><strong style={{color:"#c2410c"}}>🔒 NBCPSS (1 Mar 2026 – 28 Feb 2027):</strong> Night shift R8.00/shift · Special allowance R10.50/shift · Cleaning R32.00/month · BC levy R9.40/month (employer) · PSIRA fee R5.00/month (employer) · PSSPF provident (employee + employer) · All allowances are taxable income.</>}
       </div>
 
       {/* ── Terminated Employees ──────────────────────────────────────────────── */}
@@ -5247,11 +5305,10 @@ function Payroll({live = {}, user = {}}) {
 
             {/* NBCPSS Private Security Section — edit employee */}
             {user?.industry === "private_security" && (()=>{
-              const NBCPSS_MIN = {"A":7142,"B":6726,"C":6726,"D":6726,"E":6726};
-              const minWage = NBCPSS_MIN[editForm.securityGrade] || 0;
+              const minWage = nbcpssMinMonthly(editForm.securityGrade, editForm.securityArea||"3");
               const belowMin = editForm.salary && editForm.securityGrade && +editForm.salary < minWage;
-              const _medEmp  = editForm.securityArea==="1_2" ? 197 : 122;
-              const _medEmpr = editForm.securityArea==="1_2" ? 197 : 172.50;
+              const _medEmp  = editForm.securityArea==="1_2" ? 122 : 122;
+              const _medEmpr = editForm.securityArea==="1_2" ? 172.50 : 172.50;
               const _areaLabel = editForm.securityArea==="1_2" ? "Area 1 & 2 (Urban/Metro)" : "Area 3 (Rural / All Other)";
               return (
                 <div style={{marginBottom:16}}>
@@ -5307,6 +5364,7 @@ function Payroll({live = {}, user = {}}) {
                       <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Advance Repayment (R/month)</label>
                       <input type="number" min="0" step="0.01" placeholder="0.00" value={editForm.advanceMonthlyDeduction||""} onChange={e=>setEditForm(v=>({...v,advanceMonthlyDeduction:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                     </div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="editPsspfEx" checked={editForm.psspfExempt||false} onChange={e=>setEditForm(v=>({...v,psspfExempt:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="editPsspfEx" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Not a PSSPF member <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(tick only if exempt - otherwise PSSPF provident is applied automatically and any pension fields above are ignored)</span></label></div>
                     <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
                       <input type="checkbox" id="editMatLeave" checked={editForm.onMaternityLeave||false} onChange={e=>setEditForm(v=>({...v,onMaternityLeave:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
                       <label htmlFor="editMatLeave" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>On Maternity Leave <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(zero gross this pay run; employee claims UIF directly)</span></label>
@@ -5315,7 +5373,7 @@ function Payroll({live = {}, user = {}}) {
                   {editForm.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12,marginBottom:8}}>
                     {belowMin
                       ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+editForm.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {editForm.securityGrade} ({_areaLabel}): <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
-                      : <span style={{color:"#166534"}}>✓ Grade {editForm.securityGrade} · {_areaLabel} · Min R{minWage.toLocaleString("en-ZA")}/mo · Med aid R{_medEmp}/R{_medEmpr} (emp/empr) · Cleaning R32 · BC levy R7 · PSIRA R4 · Provident 7.5% each.</span>
+                      : <span style={{color:"#166534"}}>✓ Grade {editForm.securityGrade} · {_areaLabel} · Min R{minWage.toLocaleString("en-ZA")}/mo · Med aid R{_medEmp}/R{_medEmpr} (emp/empr) · Cleaning R32 · BC levy R7 · PSIRA R4 · PSSPF provident (employee + employer).</span>
                     }
                   </div>}
                 </div>
@@ -14417,7 +14475,7 @@ function DataImport() {
     suppliers:          ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
     invoices:           ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
     expenses:           ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
-    employees:          ["Employee Number","First Name","Last Name","ID Number","Tax Number","Date of Birth","Appointment Date","Start Date","Address","Position","Department","Grade","Employment Type","Employment Category","Gross Salary","Hourly Rate","Bank Name","Account Number","Branch Code","Account Type","Pension Employee Pct","Pension Employer Pct","Pension Employee Fixed","Pension Employer Fixed","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Union Subscription","Advance Monthly Deduction","On Maternity Leave","Security Grade","Security Area","PSIRA Number","Shift Type","Pay Schedule"],
+    employees:          ["Employee Number","First Name","Last Name","ID Number","Tax Number","Date of Birth","Appointment Date","Start Date","Address","Position","Department","Grade","Employment Type","Employment Category","Gross Salary","Hourly Rate","Bank Name","Account Number","Branch Code","Account Type","Pension Employee Pct","Pension Employer Pct","Pension Employee Fixed","Pension Employer Fixed","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Union Subscription","Advance Monthly Deduction","On Maternity Leave","Security Grade","Security Area","PSIRA Number","Shift Type","Pay Schedule","Special Allowance Type","PSSPF Exempt"],
     payroll_adjustments:["ID Number","Employee Number","First Name","Last Name","Gross Salary","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Position","Department","Grade"],
     trial_balance:      ["Code","Account Name","Type","Debit","Credit"],
     balance_sheet:      ["Classification","Code","Account Name","Balance"],
@@ -14446,7 +14504,7 @@ function DataImport() {
     suppliers:          "Xero: Contact Name · QBO: Vendor",
     invoices:           "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
     expenses:           "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
-    employees:          "Required: First Name, Last Name, Gross Salary. Existing employees are UPDATED (matched by Employee Number, then ID Number, then First+Last Name) — new rows are created. Dates as YYYY-MM-DD. Employment Type: salaried or hourly. Employment Category: permanent/fixed_term/temp_labour/learnership. Account Type: Cheque/Savings/Transmission. Security Area: 1_2 (urban) or 3 (rural). On Maternity Leave: true/false. Only columns present in your file are applied — leave columns out to keep existing values unchanged.",
+    employees:          "Required: First Name, Last Name, Gross Salary. Existing employees are UPDATED (matched by Employee Number, then ID Number, then First+Last Name) — new rows are created. Dates as YYYY-MM-DD. Employment Type: salaried or hourly. Employment Category: permanent/fixed_term/temp_labour/learnership. Account Type: Cheque/Savings/Transmission. Security officers: Security Grade A-E and Security Area (1_2 = Areas 1 & 2, 3 = Area 3) are both required - officers are placed on the security pay schedule automatically. Special Allowance Type: none, armed, armed_response, nkp, control_centre, canine or mobile_supervisor. Blank cells never overwrite existing values. On Maternity Leave: true/false. PSSPF Exempt: yes only if the officer is not a PSSPF member (pension columns are ignored for security officers). Only columns present in your file are applied — leave columns out to keep existing values unchanged.",
     payroll_adjustments:"Match employees by ID Number, Employee Number, or First+Last Name. Only columns present in the CSV are updated — partial CSVs are fine.",
     trial_balance:      "Xero: Account Code, Account, Debit, Credit · QBO: Account, Type, Debit Balance, Credit Balance",
     balance_sheet:      "Use Classification column (Asset/Liability/Equity) + Account Name + Balance. Xero/QBO balance sheet exports work directly.",
@@ -14461,7 +14519,7 @@ function DataImport() {
   }
 
   const SAMPLE_ROWS = {
-    employees: ["EMP001","Jane","Smith","8001015009087","9012345678","1980-01-01","2023-03-01","2023-03-01","123 Main St","Bookkeeper","Finance","B1","salaried","permanent","25000","","FNB","62012345678","250655","Cheque","0.05","0.05","0","0","1500","1500","2","0","0","false","","","","day","salaried"],
+    employees: ["EMP001","Jane","Smith","8001015009087","9012345678","1980-01-01","2023-03-01","2023-03-01","123 Main St","Bookkeeper","Finance","B1","salaried","permanent","25000","","FNB","62012345678","250655","Cheque","0.05","0.05","0","0","1500","1500","2","0","0","false","","","","day","salaried","none"],
     customers: ["ABC Trading (Pty) Ltd","accounts@abc.co.za","011 000 0000","123 Main St, JHB","4670123456","30","VIP client"],
     suppliers: ["Office World","ap@officeworld.co.za","010 000 0001","45 Park Rd, CPT","4670098765","ABSA","4098765432","632005","Cheque","30","Stationery supplier"],
     invoices:  ["INV-001","Motswedi Motors","accounts@motswedi.co.za","Consulting services","8695.65","1304.35","10000","ZAR","2026-09-01","2026-09-30","sent"],

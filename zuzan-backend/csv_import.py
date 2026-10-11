@@ -1193,6 +1193,7 @@ EMPLOYEE_ALIASES: dict[str, list[str]] = {
     "security_area":             ["security_area", "area"],
     "shift_type":                ["shift_type", "shift"],
     "special_allowance_type":    ["special_allowance_type", "special_allowance"],
+    "psspf_exempt":              ["psspf_exempt", "psspf_not_member", "not_psspf_member"],
     "employment_category":       ["employment_category", "emp_category", "category",
                                   "contract_category", "worker_type"],
     "union_subscription":        ["union_subscription", "union_dues", "union_fee",
@@ -1244,6 +1245,23 @@ def _parse_int_field(val: str) -> int:
         return 0
 
 
+_NBCPSS_GRADES = ("A", "B", "C", "D", "E")
+_NBCPSS_SPECIAL_TYPES = ("none", "armed", "armed_response", "nkp", "control_centre", "canine", "mobile_supervisor")
+
+
+def _normalise_security_area(val: str) -> Optional[str]:
+    """Map the many ways people type an NBCPSS area onto the two stored values:
+    "1_2" (Areas 1 & 2) or "3" (Area 3).  Returns None when unrecognisable.
+    Excel often turns a typed 3 into 3.0, so that is handled too."""
+    import re as _re
+    v = str(val or "").strip().lower().replace("areas", "").replace("area", "").replace(" and ", "")
+    v = _re.sub(r"[^a-z0-9.]", "", v)
+    if v.endswith(".0"):
+        v = v[:-2]
+    return {"12": "1_2", "1": "1_2", "2": "1_2", "urban": "1_2", "metro": "1_2",
+            "3": "3", "rural": "3"}.get(v)
+
+
 @router.post("/employees")
 async def import_employees(
     file: UploadFile = File(...),
@@ -1268,6 +1286,7 @@ async def import_employees(
 
     created = updated = errors = 0
     error_rows: list[dict] = []
+    warning_rows: list[dict] = []
 
     def _bool_field(val: str) -> Optional[bool]:
         if not val:
@@ -1286,6 +1305,36 @@ async def import_employees(
 
         if gross <= 0:
             error_rows.append({"row": i, "name": f"{first} {last}", "reason": "gross_salary missing or zero"})
+            errors += 1
+            continue
+
+        # ── NBCPSS values: validate + normalise BEFORE touching any employee ──────
+        # (a bad value skips only this row; nothing is half-applied)
+        nb: dict = {}
+        _bad = None
+        _raw_grade = _get(row, m, "security_grade")
+        if _raw_grade:
+            _g = _raw_grade.strip().upper()
+            if _g in _NBCPSS_GRADES:
+                nb["security_grade"] = _g
+            else:
+                _bad = f"security_grade '{_raw_grade}' must be A, B, C, D or E"
+        _raw_area = _get(row, m, "security_area")
+        if _raw_area and not _bad:
+            _a = _normalise_security_area(_raw_area)
+            if _a:
+                nb["security_area"] = _a
+            else:
+                _bad = f"security_area '{_raw_area}' not recognised - use 1_2 (Areas 1 & 2) or 3 (Area 3)"
+        _raw_sat = _get(row, m, "special_allowance_type")
+        if _raw_sat and not _bad:
+            _t = _raw_sat.strip().lower().replace(" ", "_").replace("-", "_")
+            if _t in _NBCPSS_SPECIAL_TYPES:
+                nb["special_allowance_type"] = _t
+            else:
+                _bad = f"special_allowance_type '{_raw_sat}' must be one of: {', '.join(_NBCPSS_SPECIAL_TYPES)}"
+        if _bad:
+            error_rows.append({"row": i, "name": f"{first} {last}", "reason": _bad})
             errors += 1
             continue
 
@@ -1312,6 +1361,8 @@ async def import_employees(
             if key not in m:
                 return
             raw = _get(row, m, key)
+            if raw == "":
+                return          # blank cell = leave the existing value alone
             val = parse(raw) if parse else (raw or fallback)
             if val is not None:
                 setattr(emp, field, val)
@@ -1355,6 +1406,10 @@ async def import_employees(
             v = _bool_field(_get(row, m, "mibco_scheme_enrolled"))
             if v is not None:
                 emp.mibco_scheme_enrolled = v
+        if "psspf_exempt" in m:
+            v = _bool_field(_get(row, m, "psspf_exempt"))
+            if v is not None:
+                emp.psspf_exempt = v
 
         # Encrypted bank fields
         if "bank_name" in m:
@@ -1382,6 +1437,48 @@ async def import_employees(
                 if parsed:
                     setattr(emp, field, parsed)
 
+        # Apply the validated NBCPSS values (override the raw text set above)
+        for _k, _v in nb.items():
+            setattr(emp, _k, _v)
+
+        # Pay schedule: a guard (has an NBCPSS grade) MUST be on the security
+        # schedule, otherwise run_payroll skips them in both runs.
+        _has_grade = bool((emp.security_grade or "").strip())
+        _ps_raw = (_get(row, m, "pay_schedule") or "").strip().lower()
+        if _has_grade:
+            if _ps_raw == "salaried":
+                warning_rows.append({"row": i, "name": f"{first} {last}",
+                                     "reason": "has a security grade so was put on the security pay schedule (not salaried)"})
+            emp.pay_schedule = "security"
+        elif _ps_raw in ("security", "salaried"):
+            emp.pay_schedule = _ps_raw
+        elif is_new:
+            emp.pay_schedule = "salaried"
+
+        if _has_grade:
+            if is_new and not (emp.security_area or "").strip():
+                error_rows.append({"row": i, "name": f"{first} {last}",
+                                   "reason": "security_area is required for security officers (1_2 = Areas 1 & 2, 3 = Area 3)"})
+                errors += 1
+                continue
+            if not (emp.security_area or "").strip():
+                warning_rows.append({"row": i, "name": f"{first} {last}", "reason": "no security_area set - payroll will assume Areas 1 & 2"})
+            if any((getattr(emp, f, 0) or 0) for f in ("pension_fund_employee_pct", "pension_fund_employer_pct",
+                                                       "pension_employee_fixed", "pension_employer_fixed")) \
+                    and not getattr(emp, "psspf_exempt", False):
+                warning_rows.append({"row": i, "name": f"{first} {last}",
+                                     "reason": "pension/provident columns are ignored for security officers - PSSPF 7.5% each is applied automatically (set psspf_exempt=yes if not a member)"})
+            if not getattr(emp, "start_date", None):
+                warning_rows.append({"row": i, "name": f"{first} {last}", "reason": "no start_date (needed for annual bonus anniversary and leave)"})
+            try:
+                from payroll import nbcpss_minimum as _nbcpss_min
+                _min = _nbcpss_min(emp.security_grade, emp.security_area or "1_2")
+                if _min and (emp.gross_salary or 0) < _min:
+                    warning_rows.append({"row": i, "name": f"{first} {last}",
+                                         "reason": f"gross_salary R{emp.gross_salary:,.2f} is below the NBCPSS Grade {emp.security_grade} minimum of R{_min:,.2f}"})
+            except Exception:
+                pass
+
         if is_new:
             db.add(emp)
             created += 1
@@ -1397,6 +1494,7 @@ async def import_employees(
         "updated":    updated,
         "skipped":    0,
         "errors":     [{"row": e["row"], "message": f"{e['name']}: {e['reason']}"} for e in error_rows],
+        "warnings":   [{"row": e["row"], "message": f"{e['name']}: {e['reason']}"} for e in warning_rows],
     }
 
 

@@ -227,7 +227,10 @@ BCEA_MAX_OT_WEEKLY   = 10       # max overtime hours per week (s10)
 #   Somerset West, Springs, Stellenbosch, Strand, The Cape, Uitenhage,
 #   Vanderbijlpark, Vereeniging, Westonaria, Wonderboom, Wynberg.
 # Area 3: All other magisterial districts.
+# NBCPSS has TWO rate columns: Areas 1 & 2 combined ("1_2") and Area 3 ("3").
+# Source: NBCPSS wage circular, 1 Mar 2026 - 28 Feb 2027 (Year 4).
 NBCPSS_MINIMUM_MONTHLY = {
+    "1_2": {"A": 8184.00, "B": 7607.00, "C": 7003.00, "D": 7003.00, "E": 7003.00},
     "3":   {"A": 7142.00, "B": 6726.00, "C": 6726.00, "D": 6726.00, "E": 6726.00},
 }
 NBCPSS_NIGHT_SHIFT_PER_SHIFT    = 8.00    # R/shift (effective 1 March 2026)
@@ -237,14 +240,67 @@ NBCPSS_CLEANING_ALLOWANCE       = 32.00   # R/month (all employees)
 NBCPSS_PRESCRIBED_HOURS         = 208.0   # ordinary hours per month (48 h/week × 52/12) per NBCPSS Main Agreement
 NBCPSS_BC_LEVY                  = 7.00    # R/employee/month — employer pays to NBCPSS
 NBCPSS_PSIRA_FEE                = 4.00    # R/SO/month — employer PSIRA registration fee
-NBCPSS_PROVIDENT_RATE           = 0.075   # 7.5% each (employer + employee) — PSSPF
-# PSSSBC medical aid — rates differ by area (NBCPSS Main Agreement)
-# Area 1 & 2 (metro/urban): R197 employee / R197 employer
-# Area 3 (rural / all other districts): R122 employee / R172.50 employer
-NBCPSS_MEDICAL_PRESCRIBED_EMP   = {"1_2": 197.00, "3": 122.00}
-NBCPSS_MEDICAL_PRESCRIBED_EMPR  = {"1_2": 197.00, "3": 172.50}
+NBCPSS_PROVIDENT_RATE           = 0.075   # 7.5% each (employer + employee) — PSSPF (current rate; see schedule below)
+# PSSPF contribution rate (employee % = employer %, MCA clause 30(3)(b)); each entry applies from its date.
+# Years 3 and 4 of the agreement (from 1 Mar 2025) are 7.5% each.
+# WATCH: a PSSPF member communication (June 2026) announces a temporary 9-month reduction of 2.5%,
+# but it still needs FSCA approval and says the current rules apply until then. When the fund confirms
+# the new rate and dates, add entries here, e.g. ("2026-07-01", 0.05) and ("2027-04-01", 0.075).
+NBCPSS_PROVIDENT_RATE_SCHEDULE = [("2025-03-01", 0.075)]
+
+
+def nbcpss_provident_rate(on_date=None) -> float:
+    """PSSPF contribution rate (each of employee and employer) in force on on_date (default: today)."""
+    d = (on_date or datetime.utcnow()).strftime("%Y-%m-%d")
+    rate = NBCPSS_PROVIDENT_RATE_SCHEDULE[0][1]
+    for start, r in NBCPSS_PROVIDENT_RATE_SCHEDULE:
+        if start <= d:
+            rate = r
+    return rate
+# PSSSBC hospital cover. EMPLOYER cost is R172.50/month in BOTH areas, unchanged between Year 3 and Year 4
+# (NBCPSS Illustrative Pricing Guide; confirmed by the user). EMPLOYEE share is R122.00 in both areas
+# (stated by the user; the guide does not show the employee share).
+NBCPSS_MEDICAL_PRESCRIBED_EMP   = {"1_2": 122.00, "3": 122.00}
+NBCPSS_MEDICAL_PRESCRIBED_EMPR  = {"1_2": 172.50, "3": 172.50}
 NBCPSS_UNIFORM_ALLOWANCE        = 150.00  # R/month non-taxable uniform reimbursement (s10(1)(nA))
 NBCPSS_VALID_UNTIL              = "28 February 2027"
+
+
+def nbcpss_annual_bonus(monthly_salary: float, hourly_rate: float, unauthorised_hours: float = 0.0) -> float:
+    """NBCPSS Main Agreement clause 8 (annual bonus), per completed 12 months of service:
+
+        bonus = ((A x 12) - (B x C)) / 12
+
+    A = the officer's monthly (ordinary) salary on the date the bonus is payable
+    B = the officer's hourly equivalent rate on that date
+    C = hours lost to UNAUTHORISED absence / late coming (approved leave, sick leave,
+        maternity, study, family-responsibility leave and protected strikes never count)
+
+    i.e. one month's ordinary salary less the pay for unauthorised hours spread over 12 months.
+    Sources: the earlier Main Agreement text reads (Ax12)-(BxC) over 12, and the NBCPSS
+    Illustrative Pricing Guide's statutory bonus equals one month's salary
+    (e.g. Area 3 Grade A R7,142 -> R892.75 = R7,142/12 x 1.5 reliever factor).
+    The Year-4 clause shows the formula only as an image - confirm with the Council.
+    Replaced the old 'gross x 12/52' (one week's pay) which paid about a quarter of this.
+    """
+    a = float(monthly_salary or 0.0)
+    b = float(hourly_rate or 0.0)
+    c = max(0.0, float(unauthorised_hours or 0.0))
+    return max(0.0, round(((a * 12.0) - (b * c)) / 12.0, 2))
+
+
+def nbcpss_bonus_due(start_date, run_period: str) -> bool:
+    """True when this pay month contains the officer's employment anniversary and at
+    least 12 months have been completed (bonus is paid on the anniversary, clause 8(2),
+    unless a different date was agreed in writing - use the per-employee override for that).
+    run_period is 'YYYY-MM'.  No start_date -> not due (use the override)."""
+    if not start_date:
+        return False
+    try:
+        y, m = int(run_period[:4]), int(run_period[5:7])
+        return start_date.month == m and (y - start_date.year) >= 1
+    except Exception:
+        return False
 
 NBCPSS_SPECIAL_CATEGORIES = {
     "armed":            "Armed Security Officer",
@@ -309,10 +365,14 @@ def mibco_minimum_hourly(role: str) -> float:
 
 
 def nbcpss_minimum(grade: str, area: str = None) -> float:
-    """Return the NBCPSS minimum monthly salary for a given grade.
-    Area 3 rates only (Area 1&2 removed).  Returns 0 if grade not found."""
-    g = (grade or "").upper()
-    return NBCPSS_MINIMUM_MONTHLY.get("3", {}).get(g, 0.0)
+    """Return the NBCPSS minimum monthly salary for a grade and area.
+    area is "1_2" (Areas 1 & 2) or "3" (Area 3).  When area is missing or
+    unrecognised this keeps the historic behaviour of using Area 3 rates, so
+    callers that know the employee's area MUST pass it.  Returns 0 if the
+    grade is not found."""
+    g = (grade or "").strip().upper()
+    a = area if area in NBCPSS_MINIMUM_MONTHLY else "3"
+    return NBCPSS_MINIMUM_MONTHLY[a].get(g, 0.0)
 
 
 def bcea_hourly_rate(gross_monthly: float, explicit_hourly_rate: float = None, is_security: bool = False) -> float:
@@ -450,7 +510,7 @@ def calc_payroll(
     security_grade: str = None,            # A–E (used for minimum wage warning only)
     security_area: str = None,             # "1_2" or "3"
     normal_hours: float = None,            # actual ordinary hours worked; if set and hourly, overrides gross_monthly
-    annual_bonus: float = 0.0,             # NBCPSS annual bonus (gross×12/52) — taxable, added this period
+    annual_bonus: float = 0.0,             # NBCPSS annual bonus (nbcpss_annual_bonus()) — taxable, taxed by the SARS annual-bonus method
     # Age-based rebates + s11F carry-forward (audit fixes 2026-07-19)
     age: int = None,                       # age at tax-year end → secondary/tertiary rebates
     s11f_carry_forward_annual: float = 0.0,  # unclaimed prior-year s11F excess (rand)
@@ -474,6 +534,9 @@ def calc_payroll(
     # "public_servant"           → no UIF
     # "foreign_national"         → normal UIF (foreign nationals on SA contracts covered; incl. those who repatriate)
     employment_category: str = "permanent",
+    # Private Security Sector Provident Fund (PSSPF): compulsory for eligible NBCPSS officers (MCA clause 30).
+    # False = officer is NOT a member (excluded / ineligible) so no automatic PSSPF is taken.
+    psspf_member: bool = True,
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -502,6 +565,7 @@ def calc_payroll(
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
 
     # ── Maternity leave: zero all pay; employee claims UIF benefit directly ──────
+    _contract_gross = gross_monthly      # contracted monthly salary (basis of PSSPF even while on unpaid leave)
     if on_maternity_leave:
         gross_monthly = 0.0
 
@@ -529,8 +593,14 @@ def calc_payroll(
     # Note: treated as after-tax here (employee claims s11F relief on own tax return);
     # companies that already configure pension_fund_employee/employer_pct for PSSPF should
     # set those fields and leave this auto-contribution to avoid double-deducting.
-    nbcpss_prov_emp  = round(gross_monthly * NBCPSS_PROVIDENT_RATE, 2) if is_security else 0.0
-    nbcpss_prov_empr = round(gross_monthly * NBCPSS_PROVIDENT_RATE, 2) if is_security else 0.0
+    # Rules (MCA clause 30, PSSPF): 7.5% of the officer's ordinary monthly salary from EACH of employee and
+    # employer, compulsory for members. During approved unpaid leave (here: maternity) the employee share
+    # stops but the employer MUST keep paying its share so death/disability/funeral cover continues -
+    # 30(3)(d) (no more than 6 months for non-sickness leave: duration is not tracked here).
+    _psspf_on   = bool(is_security and psspf_member)
+    _psspf_rate = nbcpss_provident_rate()
+    nbcpss_prov_emp  = 0.0 if (not _psspf_on or on_maternity_leave) else round(_contract_gross * _psspf_rate, 2)
+    nbcpss_prov_empr = round(_contract_gross * _psspf_rate, 2) if _psspf_on else 0.0
     # NBCPSS prescribed medical aid (PSSSBC scheme) — rate depends on area
     _med_area = security_area if security_area in ("1_2", "3") else "1_2"
     nbcpss_med_emp   = NBCPSS_MEDICAL_PRESCRIBED_EMP[_med_area]  if is_security else 0.0
@@ -539,6 +609,15 @@ def calc_payroll(
     uniform_allow    = 0.0
     # Union subscription: after-tax deduction from net pay
     union_sub        = union_subscription if union_subscription else 0.0
+    # Maternity leave = no remuneration. Anything taken FROM the employee's pay (hospital cover share, BC levy
+    # share, union dues) cannot be deducted from nothing - previously this drove net pay negative
+    # (-R172.32). The cleaning allowance is for work done, so it is not paid either. Employer-side
+    # PSSPF (above) and employer hospital cover continue so the officer stays covered.
+    if is_security and on_maternity_leave:
+        cleaning_allow = 0.0
+        bc_levy_emp    = 0.0
+        nbcpss_med_emp = 0.0
+        union_sub      = 0.0
     # NBCPSS minimum wage warning (does not modify pay — just a flag)
     nbcpss_min   = nbcpss_minimum(security_grade, security_area) if is_security else 0.0
     below_min    = is_security and nbcpss_min > 0 and gross_monthly < nbcpss_min
@@ -560,6 +639,12 @@ def calc_payroll(
     taxable_gross = effective_gross + total_overtime + night_allow + special_allow + cleaning_allow + annual_bonus + mibco_med_allow + once_off_allowance_taxable
 
     # ── Pension / Provident fund: % + optional fixed ZAR top-up ──────────────
+    # PSSPF members: the compulsory PSSPF above IS their provident fund. Any generic pension/provident
+    # % or fixed amounts stored on the employee (e.g. imported via a 'provident_ee_pct' column) are ignored
+    # so the same contribution can never be deducted twice.
+    if _psspf_on:
+        pension_employee_pct = pension_employer_pct = 0.0
+        pension_employee_fixed = pension_employer_fixed = 0.0
     pension_employee_monthly = round(effective_gross * pension_employee_pct + pension_employee_fixed, 2)
     pension_employer_monthly = round(effective_gross * pension_employer_pct + pension_employer_fixed, 2)
 
@@ -573,7 +658,11 @@ def calc_payroll(
     # NBCPSS employer provident (para 12D) and employer medical (7th Sched s2(i))
     # are taxable fringe benefits — added to PAYE base alongside the general params.
     paye_base_monthly = taxable_gross + medical_aid_employer + pension_employer_monthly + nbcpss_prov_empr + nbcpss_med_empr
-    paye_base_annual  = paye_base_monthly * 12
+    # The annual bonus is a once-a-year payment: it must NOT be annualised x12 (that would tax it as if
+    # the employee earned a bonus every month and badly over-withhold). SARS annual-bonus method:
+    # regular PAYE on the annualised regular pay, plus (tax on regular + bonus) - (tax on regular).
+    paye_regular_monthly = paye_base_monthly - annual_bonus
+    paye_base_annual  = paye_regular_monthly * 12
 
     # ── Section 11F deduction (annual, applied pre-PAYE) ─────────────────────
     # s11F applies to the TOTAL contribution: employee (% + fixed) PLUS the
@@ -609,6 +698,8 @@ def calc_payroll(
     # ── PAYE on (PAYE base − s11F deduction) annualised ──────────────────────
     annual_paye  = calc_paye(paye_base_annual - s11f_annual, tax_year, age=age)
     monthly_paye = annual_paye / 12
+    if annual_bonus > 0:
+        monthly_paye += calc_paye(paye_base_annual + annual_bonus - s11f_annual, tax_year, age=age) - annual_paye
 
     # ── Section 6A MTC: only applies when employee is on medical aid ──────────
     # MTC applies whenever the employee is on any registered medical scheme,
@@ -624,7 +715,7 @@ def calc_payroll(
     # NBCPSS employer provident is part of UIF remuneration (deemed fringe benefit).
     # UIF exempt: public_servant only (national/provincial government, GEPF). Casual/temp own staff, learners and foreign nationals ARE covered.
     _uif_exempt = employment_category == "public_servant"
-    uif_base     = min(taxable_gross + nbcpss_prov_empr, yr["uif_ceil"])
+    uif_base     = min(taxable_gross + (0.0 if on_maternity_leave else nbcpss_prov_empr), yr["uif_ceil"])
     uif_employee = 0.0 if _uif_exempt else uif_base * UIF_RATE
     uif_employer = 0.0 if _uif_exempt else uif_base * UIF_RATE
 
@@ -747,6 +838,8 @@ class SecurityAllowanceEntry(BaseModel):
     employee_id:            int
     night_shift_shifts:     float = 0  # number of night shifts worked this period
     special_allowance_shifts: float = 0  # shifts qualifying for special allowance
+    unauthorised_absence_hours: float = 0  # hours lost to UNAUTHORISED absence/late coming (reduces the annual bonus)
+    pay_annual_bonus: bool | None = None   # None = automatic (anniversary month); True/False = force on/off for this run
 
 
 class OnceOffEntry(BaseModel):
@@ -762,8 +855,8 @@ class RunPayrollRequest(BaseModel):
     overtime: list[OvertimeEntry] = []
     security: list[SecurityAllowanceEntry] = []
     once_off: list[OnceOffEntry] = []             # per-employee once-off items for this run
-    area_override: str | None = None         # "1_2" (Urban) or "3" (Rural) — overrides per-employee security_area for this run
-    include_annual_bonus: bool = False        # True → add NBCPSS annual bonus (gross × 12/52) for all security employees
+    area_override: str | None = None         # NOT USED: each employee's own security_area decides the rates (the UI always sends "3", honouring it would force every guard onto Area 3)
+    include_annual_bonus: bool = False        # IGNORED (legacy run-wide toggle, paid everyone 1 week's pay). Bonus is now per employee: see SecurityAllowanceEntry.pay_annual_bonus
     pay_schedule: str | None = None          # "security" | "salaried" | None (None = run all employees)
 
 
@@ -800,7 +893,7 @@ async def calculate_all(
         is_sec    = is_security_co and bool(sec_grade)
         # NBCPSS OT rate: always use grade minimum ÷ 208h, not contracted salary ÷ 208h
         # Grade B/C/D/E → R6,726 / 208 = R32.34/hr; Grade A → R7,142 / 208 = R34.34/hr
-        _sec_min_hr = round(nbcpss_minimum(sec_grade) / NBCPSS_PRESCRIBED_HOURS, 4) if is_sec else None
+        _sec_min_hr = round(nbcpss_minimum(sec_grade, sec_area) / NBCPSS_PRESCRIBED_HOURS, 4) if is_sec else None
         _explicit_hr = getattr(emp, "hourly_rate", None) or _sec_min_hr
         mibco_role_val     = getattr(emp, "mibco_role", None)
         mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
@@ -828,6 +921,7 @@ async def calculate_all(
             garnishee_total=sum(g.amount for g in getattr(emp, "garnishee_orders", []) if g.active),
             advance_deduction=getattr(emp, "advance_monthly_deduction", 0.0) or 0.0,
             employment_category=getattr(emp, "employment_category", None) or "permanent",
+            psspf_member=not bool(getattr(emp, "psspf_exempt", False)),
         )
         c["employee_id"]           = emp.id
         c["employee_name"]         = f"{emp.first_name} {emp.last_name}"
@@ -870,7 +964,7 @@ async def calculate_all(
             "cleaning_allowance":   NBCPSS_CLEANING_ALLOWANCE,
             "bc_levy":              NBCPSS_BC_LEVY,
             "psira_fee":            NBCPSS_PSIRA_FEE,
-            "provident_rate":       NBCPSS_PROVIDENT_RATE,
+            "provident_rate":       nbcpss_provident_rate(),
             "minimums":             NBCPSS_MINIMUM_MONTHLY,
         },
         "mibco_sector5": {
@@ -925,7 +1019,7 @@ async def run_payroll(
     # Helper: pay date depends on employment type
     # salaried → last calendar day of the period month
     # hourly / fixed pay → 15th of the period month
-    def _pay_date(emp_type: str) -> date:
+    def _pay_date(emp_type: str) -> _date:   # was "-> date": that name is never imported (only _date), so run_payroll raised NameError on every call
         import calendar as _cal
         from datetime import date as _date
         yr, mo = int(period[:4]), int(period[5:7])
@@ -955,10 +1049,19 @@ async def run_payroll(
         is_sec    = is_security_co and bool(sec_grade)
         # NBCPSS OT rate: always use grade minimum ÷ 208h, not contracted salary ÷ 208h
         # Grade B/C/D/E → R6,726 / 208 = R32.34/hr; Grade A → R7,142 / 208 = R34.34/hr
-        _sec_min_hr = round(nbcpss_minimum(sec_grade) / NBCPSS_PRESCRIBED_HOURS, 4) if is_sec else None
+        _sec_min_hr = round(nbcpss_minimum(sec_grade, sec_area) / NBCPSS_PRESCRIBED_HOURS, 4) if is_sec else None
         _explicit_hr = getattr(emp, "hourly_rate", None) or _sec_min_hr
-        # Annual bonus: gross × 12 / 52 (1 week's pay) per NBCPSS Main Agreement, due in December
-        emp_bonus = round(emp.gross_salary * 12 / 52, 2) if (data.include_annual_bonus and is_sec) else 0.0
+        # Annual bonus (clause 8): paid per employee on the start-date anniversary
+        # (automatic), or forced on/off by the run screen. ((A x 12) - (B x C)) / 12.
+        emp_bonus = 0.0
+        if is_sec:
+            _due = nbcpss_bonus_due(getattr(emp, "start_date", None), period)
+            _force = sec_entry.pay_annual_bonus
+            if (_force if _force is not None else _due):
+                emp_bonus = nbcpss_annual_bonus(
+                    emp.gross_salary,
+                    _explicit_hr or bcea_hourly_rate(emp.gross_salary, None, True),
+                    sec_entry.unauthorised_absence_hours)
         # MIBCO Sector 5 fields
         mibco_role_val     = getattr(emp, "mibco_role", None)
         mibco_enrolled_val = bool(getattr(emp, "mibco_scheme_enrolled", True))
@@ -1000,6 +1103,7 @@ async def run_payroll(
             once_off_allowance_taxable=once_off_entry.once_off_allowance_taxable,
             once_off_allowance_nontaxable=once_off_entry.once_off_allowance_nontaxable,
             employment_category=getattr(emp, "employment_category", None) or "permanent",
+            psspf_member=not bool(getattr(emp, "psspf_exempt", False)),
         )
         ot = c["overtime"]
         payslip = Payslip(
@@ -1127,14 +1231,20 @@ def _payslip_html(payslip, emp, company_name: str) -> str:
     earnings_rows = f'<tr><td style="padding:5px 8px;color:#555;">Basic Salary</td><td style="padding:5px 8px;text-align:right;">{_fmt_zar(p.gross_salary)}</td></tr>'
     if has_ot:
         if p.overtime_amount: earnings_rows += row(f"Overtime ({p.overtime_hours or 0}h × 1.5×)", p.overtime_amount or 0, "#16a34a")
-        if p.sunday_amount:   earnings_rows += row(f"Sunday Time ({p.sunday_hours or 0}h × 2×)", p.sunday_amount or 0, "#16a34a")
-        if p.ph_amount:       earnings_rows += row(f"Public Holiday ({p.ph_hours or 0}h × 2×)", p.ph_amount or 0, "#16a34a")
+        # NBCPSS guards: Sunday 1.5x (ordinarily work Sundays); public holiday = 1.0x on top of
+        # salary because the normal day's pay is already in the monthly salary.
+        # cleaning_allowance is unconditional for every security employee, so it marks one.
+        _is_nbcpss_slip = (p.cleaning_allowance or 0) > 0
+        _sun_x = "1.5" if _is_nbcpss_slip else "2"
+        _ph_lbl = "Public Holiday - additional (%sh × 1.0, normal day's pay is in salary)" if _is_nbcpss_slip else "Public Holiday (%sh × 2×)"
+        if p.sunday_amount:   earnings_rows += row(f"Sunday Time ({p.sunday_hours or 0}h × {_sun_x}×)", p.sunday_amount or 0, "#16a34a")
+        if p.ph_amount:       earnings_rows += row(_ph_lbl % (p.ph_hours or 0), p.ph_amount or 0, "#16a34a")
     if has_nbcpss:
         if p.night_shift_allowance:   earnings_rows += row(f"Night Shift Allowance ({int(p.night_shift_shifts or 0)} shifts × R8.00)", p.night_shift_allowance, "#16a34a")
         if p.special_allowance_amount: earnings_rows += row(f"Special Duty Allowance ({int(p.special_allowance_shifts or 0)} shifts × R10.50)", p.special_allowance_amount, "#16a34a")
         if p.cleaning_allowance:      earnings_rows += row("Cleaning Allowance (NBCPSS)", p.cleaning_allowance, "#16a34a")
     if has_bonus:
-        earnings_rows += row("Annual Bonus (NBCPSS — 1 week's pay)", p.annual_bonus, "#16a34a")
+        earnings_rows += row("Annual Bonus (NBCPSS clause 8 — on employment anniversary)", p.annual_bonus, "#16a34a")
     if has_uniform:
         earnings_rows += row("Uniform Allowance (non-taxable — s10(1)(nA))", p.uniform_allowance or 0, "#16a34a")
     earnings_rows += row("Taxable Gross", taxable_gross, "#15803d", bold=True)
@@ -1145,7 +1255,7 @@ def _payslip_html(payslip, emp, company_name: str) -> str:
     if has_medical_aid:
         deductions_rows += row("Medical Aid (Employee)", p.medical_aid_employee_ded or 0, "#dc2626")
     if has_provident:
-        deductions_rows += row("PSSPF Provident Fund (NBCPSS — 7.5%)", p.nbcpss_provident_employee or 0, "#dc2626")
+        deductions_rows += row(f"PSSPF Provident Fund (NBCPSS — {nbcpss_provident_rate()*100:g}%)", p.nbcpss_provident_employee or 0, "#dc2626")
     if has_medical:
         deductions_rows += row("PSSSBC Medical Aid (NBCPSS Prescribed)", p.nbcpss_medical_employee or 0, "#dc2626")
     if has_union:
@@ -1163,7 +1273,7 @@ def _payslip_html(payslip, emp, company_name: str) -> str:
     employer_rows = ""
     if p.pension_employer:    employer_rows += row("Pension / Provident (Employer)", p.pension_employer or 0, "#1d4ed8")
     if p.medical_aid_employer_con: employer_rows += row("Medical Aid (Employer)", p.medical_aid_employer_con or 0, "#1d4ed8")
-    if has_provident:         employer_rows += row("PSSPF Provident Fund (Employer — 7.5%)", p.nbcpss_provident_employer or 0, "#1d4ed8")
+    if has_provident:         employer_rows += row(f"PSSPF Provident Fund (Employer — {nbcpss_provident_rate()*100:g}%)", p.nbcpss_provident_employer or 0, "#1d4ed8")
     if has_medical:           employer_rows += row("PSSSBC Medical Aid (Employer)", p.nbcpss_medical_employer or 0, "#1d4ed8")
     employer_rows += row("UIF (Employer — 1%)", p.uif_employer or 0, "#1d4ed8")
     employer_rows += row("SDL (Skills Development Levy — 1%)", p.sdl or 0, "#1d4ed8")
@@ -1223,6 +1333,88 @@ def _payslip_html(payslip, emp, company_name: str) -> str:
 </div>
 <div class="footer">This payslip was generated by ZuZan (zuzan.co.za). PAYE calculated per SARS tax tables 2026/2027. UIF: 1% employee + 1% employer. SDL: 1% if annual payroll ≥ R500,000.</div>
 </body></html>"""
+
+
+@payroll_router.get("/payslips/{period}/summary")
+def payslip_period_summary(
+    period: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Authoritative per-employee figures for a processed period (the amounts actually
+    saved by /payroll/run). The bank payment file must use these, never a client estimate."""
+    from database import Employee as EmpModel
+
+    rows = (
+        db.query(Payslip)
+        .join(EmpModel, Payslip.employee_id == EmpModel.id)
+        .filter(EmpModel.company_id == current_user.company_id, Payslip.period == period)
+        .all()
+    )
+    return {
+        "period": period,
+        "payslips": [
+            {
+                "employee_id":  p.employee_id,
+                "net_pay":      round(p.net_pay or 0, 2),
+                "paye":         round(p.paye or 0, 2),
+                "uif_employee": round(p.uif_employee or 0, 2),
+                "uif_employer": round(p.uif_employer or 0, 2),
+                "sdl":          round(p.sdl or 0, 2),
+            }
+            for p in rows
+        ],
+    }
+
+
+@payroll_router.get("/nbcpss-remittance/{period}")
+def nbcpss_remittance(
+    period: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """NBCPSS consolidated remittance for a processed period (Main Agreement cl 35A).
+    One combined schedule: Levy + PSSPF + Health insurance, due by the 7th day of the
+    FOLLOWING month (penalty interest if late). The PSIRA fee is not part of cl 35A and is
+    shown separately. Figures are the saved payslip amounts, never recalculated."""
+    from database import Employee as EmpModel
+    try:
+        y, m = [int(x) for x in period.split("-")]
+        due = _date(y + (m // 12), (m % 12) + 1, 7)
+    except Exception:
+        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    rows = (
+        db.query(Payslip, EmpModel)
+        .join(EmpModel, Payslip.employee_id == EmpModel.id)
+        .filter(EmpModel.company_id == current_user.company_id, Payslip.period == period,
+                EmpModel.security_grade.isnot(None), EmpModel.security_grade != "")
+        .all()
+    )
+    emps, t = [], {"levy": 0.0, "psspf": 0.0, "health": 0.0, "psira": 0.0}
+    for ps, e in rows:
+        # BC levy is deducted from the employee AND matched by the employer (R7 + R7).
+        levy   = round(2 * (ps.bc_levy_employer or 0), 2)
+        psspf  = round((ps.nbcpss_provident_employee or 0) + (ps.nbcpss_provident_employer or 0), 2)
+        health = round((ps.nbcpss_medical_employee or 0) + (ps.nbcpss_medical_employer or 0), 2)
+        psira  = round(ps.psira_levy_employer or 0, 2)
+        t["levy"] += levy; t["psspf"] += psspf; t["health"] += health; t["psira"] += psira
+        emps.append({
+            "employee_id": e.id, "employee_number": e.employee_number,
+            "name": f"{e.first_name} {e.last_name}", "grade": e.security_grade, "area": e.security_area,
+            "levy": levy, "psspf": psspf, "health": health, "total": round(levy + psspf + health, 2),
+        })
+    t = {k: round(v, 2) for k, v in t.items()}
+    return {
+        "period": period,
+        "due_date": due.isoformat(),
+        "days_until_due": (due - _date.today()).days,
+        "levy": t["levy"], "psspf": t["psspf"], "health_insurance": t["health"],
+        "total_clause_35a": round(t["levy"] + t["psspf"] + t["health"], 2),
+        "psira_fee_separate": t["psira"],
+        "employees": emps,
+        "note": "Pay the clause 35A total as one combined schedule by the 7th of the following month; "
+                "late payment attracts penalty interest.",
+    }
 
 
 @payroll_router.get("/payslips/{period}/download-all")
