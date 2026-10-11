@@ -28,6 +28,7 @@ from database import (
     get_db, Customer, Supplier, Invoice, Expense, InvoiceStatus,
     Account, AccountType, JournalEntry, JournalLine, Employee,
 )
+from crypto import encrypt_field
 from auth import require_role
 
 router = APIRouter()
@@ -1256,7 +1257,6 @@ async def import_employees(
     Required columns: first_name, last_name, gross_salary.
     All other columns are optional — only columns present in the file are updated.
     """
-    from database import encrypt_field
     cid = cu.company_id
     headers, rows = _read_csv(await file.read())
     m = _map_headers(headers, EMPLOYEE_ALIASES)

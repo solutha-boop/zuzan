@@ -41,7 +41,7 @@ git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=feat: employee bulk update - upsert import, Download Current Employees button, all fields [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=fix: employee import encrypt_field - import from crypto not database [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
