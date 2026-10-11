@@ -1,8 +1,8 @@
 @echo off
 cd /d C:\Zuzan
 
-echo === Ensuring git credential helper is set ===
-git config --global credential.helper wincred
+echo === Setting credential helper ===
+git config --global credential.helper manager
 
 echo === Removing lock files ===
 if exist .git\index.lock del /f .git\index.lock
@@ -14,9 +14,9 @@ copy /y App_js_fixed.js zuzan-app\src\App.js
 copy /y App_mobile_js_fixed.js zuzan-app\src\App.mobile.js
 
 echo === Patching backend files ===
-where py >nul 2>&1 && py patch_backend.py || where python >nul 2>&1 && python patch_backend.py || echo [WARN] Python not found — skipping backend patch
+python patch_backend.py 2>nul || py patch_backend.py 2>nul || echo [WARN] Python patch skipped
 
-echo === Staging all tracked changes (usage: commit_and_push.bat "your message") ===
+echo === Staging files ===
 git add -u
 git add zuzan-app/src/App.js
 git add zuzan-app/src/App.mobile.js
@@ -35,26 +35,25 @@ git add zuzan-backend/clocking.py
 git add zuzan-backend/journal_check.py
 git add clock.html
 git add netlify.toml
+git add commit_and_push.bat
+git add patch_backend.py
 git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=feat: termination reasons modal, employment category (temp labour/learnership/foreign national UIF/SDL exemption), reinstate with history [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=fix: NBCPSS grade badge, area dropdown rural/urban med-aid rates [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
 git push origin main
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] Push failed. Check the error above.
-    echo Common fixes:
-    echo   1. Run: git config --global credential.helper wincred
-    echo   2. Then: git push origin main  (and sign in when prompted)
+    echo [ERROR] Push failed. Run this in a terminal to fix:
+    echo   cd C:\Zuzan ^&^& git push origin main
     pause
     exit /b 1
 )
 
-echo === Done — commit hash: ===
+echo === Done ===
 git rev-parse HEAD
-
 pause

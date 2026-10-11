@@ -4221,7 +4221,7 @@ function Payroll({live = {}, user = {}}) {
                         <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
                       </td>
                       <td style={{padding:"10px 12px"}}>
-                        {emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid}}>—</span>}
+                        {(()=>{const g=isSecurityEmp?emp.security_grade:emp.grade;return g?<Badge label={g} color={C.blue} bg={C.blueLt}/>:<span style={{color:C.inkMid}}>—</span>;})()}
                       </td>
                       <td style={{padding:"10px 12px",color:C.inkMid}}>{fmt(hr)}/hr</td>
                       {isFuelStation && (
@@ -4690,9 +4690,12 @@ function Payroll({live = {}, user = {}}) {
 
           {/* NBCPSS Private Security Section — only shown for private_security industry */}
           {user?.industry === "private_security" && (()=>{
-            const NBCPSS_MIN = {"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
-            const minWage = NBCPSS_MIN["3"]?.[form.securityGrade] || 0;
+            const NBCPSS_MIN = {"A":7142,"B":6726,"C":6726,"D":6726,"E":6726};
+            const minWage = NBCPSS_MIN[form.securityGrade] || 0;
             const belowMin = form.salary && form.securityGrade && +form.salary < minWage;
+            const _medEmp  = form.securityArea==="1_2" ? 197 : 122;
+            const _medEmpr = form.securityArea==="1_2" ? 197 : 172.50;
+            const _areaLabel = form.securityArea==="1_2" ? "Area 1 & 2 (Urban/Metro)" : "Area 3 (Rural / All Other)";
             return (
               <div style={{marginBottom:16}}>
                 <div style={{fontSize:11,fontWeight:700,color:"#c2410c",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🔒 NBCPSS — Private Security Sector (1 Mar 2026 – 28 Feb 2027)</div>
@@ -4710,6 +4713,13 @@ function Payroll({live = {}, user = {}}) {
                       <option value="C">Grade C — Armed Guard</option>
                       <option value="D">Grade D — Unarmed/Access Control</option>
                       <option value="E">Grade E — Entry Level/Car Guard</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Area (NBCPSS)</label>
+                    <select value={form.securityArea||"3"} onChange={e=>setForm(v=>({...v,securityArea:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                      <option value="3">Area 3 — Rural / All Other Districts</option>
+                      <option value="1_2">Area 1 & 2 — Urban / Metro</option>
                     </select>
                   </div>
                   <div>
@@ -4747,8 +4757,8 @@ function Payroll({live = {}, user = {}}) {
                 </div>
                 {form.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12}}>
                   {belowMin
-                    ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+form.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {form.securityGrade} (Area 3): <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
-                    : <span style={{color:"#166534"}}>✓ Salary meets NBCPSS minimum for Grade {form.securityGrade}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Cleaning allowance (R32/mo), BC levy (R9.40/mo) and PSIRA fee (R5.00/mo) will be applied automatically. Provident fund set to 7.5% each.</span>
+                    ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+form.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {form.securityGrade} ({_areaLabel}): <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
+                    : <span style={{color:"#166534"}}>✓ Grade {form.securityGrade} · {_areaLabel} · Min R{minWage.toLocaleString("en-ZA")}/mo · Med aid R{_medEmp}/R{_medEmpr} (emp/empr) · Cleaning R32 · BC levy R7 · PSIRA R4 · Provident 7.5% each.</span>
                   }
                 </div>}
               </div>
@@ -4812,10 +4822,11 @@ function Payroll({live = {}, user = {}}) {
                     <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
                     <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
                     {user?.industry==="private_security" && emp.security_grade && (()=>{
-                      const NBCPSS_MIN={"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
-                      const minW=NBCPSS_MIN["3"]?.[emp.security_grade]||0;
+                      const NBCPSS_MIN={"A":7142,"B":6726,"C":6726,"D":6726,"E":6726};
+                      const minW=NBCPSS_MIN[emp.security_grade]||0;
                       const below=minW>0&&emp.salary<minW;
-                      return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#166534",fontWeight:600}}>{below?`⚠️ Below NBCPSS min (R${minW.toLocaleString("en-ZA")})`:`🔒 Grade ${emp.security_grade} · R${minW.toLocaleString("en-ZA")} min`}</div>;
+                      const areaLbl=emp.security_area==="1_2"?"Urban":"Rural";
+                      return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#166534",fontWeight:600}}>{below?`⚠️ Below NBCPSS min (R${minW.toLocaleString("en-ZA")})`:`🔒 Grade ${emp.security_grade} · ${areaLbl} · R${minW.toLocaleString("en-ZA")} min`}</div>;
                     })()}
                     {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="fuel_station" && emp.mibco_role && (()=>{
                       const MIBCO_HR={forecourt_attendant:45.79,cashier:45.30,char:34.64};
@@ -4826,7 +4837,7 @@ function Payroll({live = {}, user = {}}) {
                       return <div style={{fontSize:9,marginTop:2,color:below?"#b91c1c":"#92400e",fontWeight:600}}>{below?`⚠️ Below MIBCO min (R${minW.toLocaleString("en-ZA")})`:`⛽ ${roleLabel} · R${hr.toFixed(2)}/hr min`}</div>;
                     })()}
                   </td>
-                  <td style={{padding:"13px 14px"}}>{emp.grade ? <Badge label={emp.grade} color={C.blue} bg={C.blueLt}/> : <span style={{color:C.inkMid,fontSize:11}}>—</span>}</td>
+                  <td style={{padding:"13px 14px"}}>{(()=>{const g=(user?.industry==="private_security"&&emp.security_grade)?emp.security_grade:emp.grade;return g?<Badge label={g} color={C.blue} bg={C.blueLt}/>:<span style={{color:C.inkMid,fontSize:11}}>—</span>;})()}</td>
                   <td style={{padding:"13px 14px",color:C.inkMid}}>{emp.position}</td>
                   <td style={{padding:"13px 14px"}}><Badge label={emp.dept||"General"} color={C.blue} bg={C.blueLt}/></td>
                   <td style={{padding:"13px 14px",fontWeight:600}}>{fmt(p.gross)}</td>
@@ -5235,9 +5246,12 @@ function Payroll({live = {}, user = {}}) {
 
             {/* NBCPSS Private Security Section — edit employee */}
             {user?.industry === "private_security" && (()=>{
-              const NBCPSS_MIN = {"3":{"A":7142,"B":6726,"C":6726,"D":6726,"E":6726}};
-              const minWage = NBCPSS_MIN["3"]?.[editForm.securityGrade] || 0;
+              const NBCPSS_MIN = {"A":7142,"B":6726,"C":6726,"D":6726,"E":6726};
+              const minWage = NBCPSS_MIN[editForm.securityGrade] || 0;
               const belowMin = editForm.salary && editForm.securityGrade && +editForm.salary < minWage;
+              const _medEmp  = editForm.securityArea==="1_2" ? 197 : 122;
+              const _medEmpr = editForm.securityArea==="1_2" ? 197 : 172.50;
+              const _areaLabel = editForm.securityArea==="1_2" ? "Area 1 & 2 (Urban/Metro)" : "Area 3 (Rural / All Other)";
               return (
                 <div style={{marginBottom:16}}>
                   <div style={{fontSize:11,fontWeight:700,color:"#c2410c",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🔒 NBCPSS — Private Security Sector (1 Mar 2026 – 28 Feb 2027)</div>
@@ -5255,6 +5269,13 @@ function Payroll({live = {}, user = {}}) {
                         <option value="C">Grade C — Armed Guard</option>
                         <option value="D">Grade D — Unarmed/Access Control</option>
                         <option value="E">Grade E — Entry Level/Car Guard</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Area (NBCPSS)</label>
+                      <select value={editForm.securityArea||"3"} onChange={e=>setEditForm(v=>({...v,securityArea:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                        <option value="3">Area 3 — Rural / All Other Districts</option>
+                        <option value="1_2">Area 1 & 2 — Urban / Metro</option>
                       </select>
                     </div>
                     <div>
@@ -5292,8 +5313,8 @@ function Payroll({live = {}, user = {}}) {
                   </div>
                   {editForm.securityGrade && <div style={{padding:"8px 12px",background:belowMin?"#fff1f2":"#f0fdf4",border:`1px solid ${belowMin?"#fca5a5":"#86efac"}`,borderRadius:8,fontSize:12,marginBottom:8}}>
                     {belowMin
-                      ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+editForm.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {editForm.securityGrade} (Area 3): <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
-                      : <span style={{color:"#166534"}}>✓ Salary meets NBCPSS minimum for Grade {editForm.securityGrade}: <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Cleaning allowance (R32/mo), BC levy (R9.40/mo) and PSIRA fee (R5.00/mo) will be applied automatically. Provident fund set to 7.5% each.</span>
+                      ? <span style={{color:"#b91c1c",fontWeight:600}}>⚠️ Salary R{(+editForm.salary).toLocaleString("en-ZA")} is below the NBCPSS minimum for Grade {editForm.securityGrade} ({_areaLabel}): <strong>R{minWage.toLocaleString("en-ZA")}/month</strong>. Adjust before saving.</span>
+                      : <span style={{color:"#166534"}}>✓ Grade {editForm.securityGrade} · {_areaLabel} · Min R{minWage.toLocaleString("en-ZA")}/mo · Med aid R{_medEmp}/R{_medEmpr} (emp/empr) · Cleaning R32 · BC levy R7 · PSIRA R4 · Provident 7.5% each.</span>
                     }
                   </div>}
                 </div>
