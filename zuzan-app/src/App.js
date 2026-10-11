@@ -14640,7 +14640,7 @@ function DataImport() {
                   <button onClick={async () => {
                     // Fetch live employee list and export as pre-filled Excel
                     try {
-                      const r = await fetch(`${BASE_URL}/companies/employees`, {
+                      const r = await fetch(`${BASE_URL}/employees`, {
                         headers: {Authorization: "Bearer " + token}
                       });
                       if (!r.ok) throw new Error("Could not load employees");
