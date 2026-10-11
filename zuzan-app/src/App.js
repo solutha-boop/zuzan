@@ -14417,7 +14417,7 @@ function DataImport() {
     suppliers:          ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
     invoices:           ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
     expenses:           ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
-    employees:          ["First Name","Last Name","ID Number","Tax Number","Date of Birth","Job Title","Department","Grade","Employment Type","Gross Salary","Employee Number","Bank Name","Account Number","Branch Code","Account Type","Start Date","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants"],
+    employees:          ["Employee Number","First Name","Last Name","ID Number","Tax Number","Date of Birth","Appointment Date","Start Date","Address","Position","Department","Grade","Employment Type","Employment Category","Gross Salary","Hourly Rate","Bank Name","Account Number","Branch Code","Account Type","Pension Employee Pct","Pension Employer Pct","Pension Employee Fixed","Pension Employer Fixed","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Union Subscription","Advance Monthly Deduction","On Maternity Leave","Security Grade","Security Area","PSIRA Number","Shift Type","Pay Schedule"],
     payroll_adjustments:["ID Number","Employee Number","First Name","Last Name","Gross Salary","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Position","Department","Grade"],
     trial_balance:      ["Code","Account Name","Type","Debit","Credit"],
     balance_sheet:      ["Classification","Code","Account Name","Balance"],
@@ -14446,7 +14446,7 @@ function DataImport() {
     suppliers:          "Xero: Contact Name · QBO: Vendor",
     invoices:           "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
     expenses:           "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
-    employees:          "Required: First Name, Last Name, Gross Salary. Optional: ID Number, Tax Number, Date of Birth (YYYY-MM-DD), Job Title, Department, Grade, Employment Type (salaried/hourly), Employee Number, Bank Name, Account Number, Branch Code, Account Type (Cheque/Savings/Transmission), Start Date (YYYY-MM-DD), Pension %, Medical Aid. Existing employees (matched by ID or Emp No) are skipped.",
+    employees:          "Required: First Name, Last Name, Gross Salary. Existing employees are UPDATED (matched by Employee Number, then ID Number, then First+Last Name) — new rows are created. Dates as YYYY-MM-DD. Employment Type: salaried or hourly. Employment Category: permanent/fixed_term/temp_labour/learnership. Account Type: Cheque/Savings/Transmission. Security Area: 1_2 (urban) or 3 (rural). On Maternity Leave: true/false. Only columns present in your file are applied — leave columns out to keep existing values unchanged.",
     payroll_adjustments:"Match employees by ID Number, Employee Number, or First+Last Name. Only columns present in the CSV are updated — partial CSVs are fine.",
     trial_balance:      "Xero: Account Code, Account, Debit, Credit · QBO: Account, Type, Debit Balance, Credit Balance",
     balance_sheet:      "Use Classification column (Asset/Liability/Equity) + Account Name + Balance. Xero/QBO balance sheet exports work directly.",
@@ -14461,7 +14461,7 @@ function DataImport() {
   }
 
   const SAMPLE_ROWS = {
-    employees: ["Jane","Smith","8001015009087","9012345678","1980-01-01","Bookkeeper","Finance","B1","salaried","25000","EMP001","FNB","62012345678","250655","Cheque","2023-03-01","0.05","0.05","1500","1500","2"],
+    employees: ["EMP001","Jane","Smith","8001015009087","9012345678","1980-01-01","2023-03-01","2023-03-01","123 Main St","Bookkeeper","Finance","B1","salaried","permanent","25000","","FNB","62012345678","250655","Cheque","0.05","0.05","0","0","1500","1500","2","0","0","false","","","","day","salaried"],
     customers: ["ABC Trading (Pty) Ltd","accounts@abc.co.za","011 000 0000","123 Main St, JHB","4670123456","30","VIP client"],
     suppliers: ["Office World","ap@officeworld.co.za","010 000 0001","45 Park Rd, CPT","4670098765","ABSA","4098765432","632005","Cheque","30","Stationery supplier"],
     invoices:  ["INV-001","Motswedi Motors","accounts@motswedi.co.za","Consulting services","8695.65","1304.35","10000","ZAR","2026-09-01","2026-09-30","sent"],
@@ -14620,14 +14620,78 @@ function DataImport() {
                   <strong style={{color:C.ink}}>Column aliases: </strong>{HINTS[tab]}
                 </div>
               </div>
-              <button onClick={downloadTemplate} style={{
-                display:"flex",alignItems:"center",gap:6,
-                padding:"9px 18px",border:`1px solid ${C.accent}`,borderRadius:10,
-                fontSize:13,cursor:"pointer",color:C.accent,background:"transparent",
-                fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,flexShrink:0,
-              }}>
-                ⬇ Template CSV
-              </button>
+              <div style={{display:"flex",flexDirection:"column",gap:8,flexShrink:0}}>
+                {tab === "employees" && (
+                  <button onClick={async () => {
+                    // Fetch live employee list and export as pre-filled Excel
+                    try {
+                      const r = await fetch(`${BASE_URL}/companies/employees`, {
+                        headers: {Authorization: "Bearer " + token}
+                      });
+                      if (!r.ok) throw new Error("Could not load employees");
+                      const emps = await r.json();
+                      const rows = emps.map(e => ({
+                        "Employee Number":          e.employee_number || "",
+                        "First Name":               e.first_name || "",
+                        "Last Name":                e.last_name  || "",
+                        "ID Number":                e.id_number  || "",
+                        "Tax Number":               e.tax_number || "",
+                        "Date of Birth":            e.date_of_birth    || "",
+                        "Appointment Date":         e.appointment_date || "",
+                        "Start Date":               e.start_date || "",
+                        "Address":                  e.address    || "",
+                        "Position":                 e.position   || "",
+                        "Department":               e.department || "",
+                        "Grade":                    e.grade      || "",
+                        "Employment Type":          e.employment_type || "salaried",
+                        "Employment Category":      e.employment_category || "permanent",
+                        "Gross Salary":             e.gross_salary || 0,
+                        "Hourly Rate":              e.hourly_rate  || "",
+                        "Bank Name":                e.bank_name    || "",
+                        "Account Number":           e.account_number || "",
+                        "Branch Code":              e.branch_code  || "",
+                        "Account Type":             e.account_type || "",
+                        "Pension Employee Pct":     e.pension_fund_employee_pct || 0,
+                        "Pension Employer Pct":     e.pension_fund_employer_pct || 0,
+                        "Pension Employee Fixed":   e.pension_employee_fixed    || 0,
+                        "Pension Employer Fixed":   e.pension_employer_fixed    || 0,
+                        "Medical Aid Employee":     e.medical_aid_employee   || 0,
+                        "Medical Aid Employer":     e.medical_aid_employer   || 0,
+                        "Medical Aid Dependants":   e.medical_aid_dependants || 0,
+                        "Union Subscription":       e.union_subscription       || 0,
+                        "Advance Monthly Deduction":e.advance_monthly_deduction || 0,
+                        "On Maternity Leave":       e.on_maternity_leave ? "true" : "false",
+                        "Security Grade":           e.security_grade || "",
+                        "Security Area":            e.security_area  || "",
+                        "PSIRA Number":             e.psira_number   || "",
+                        "Shift Type":               e.shift_type     || "",
+                        "Pay Schedule":             e.pay_schedule   || "",
+                      }));
+                      const ws = XLSX.utils.json_to_sheet(rows);
+                      // Column widths
+                      ws["!cols"] = [{wch:16},{wch:16},{wch:16},{wch:16},{wch:14},{wch:14},{wch:16},{wch:12},{wch:24},{wch:20},{wch:16},{wch:8},{wch:14},{wch:18},{wch:14},{wch:12},{wch:14},{wch:18},{wch:12},{wch:14},{wch:18},{wch:18},{wch:18},{wch:18},{wch:18},{wch:18},{wch:16},{wch:18},{wch:20},{wch:16},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14}];
+                      const wb = XLSX.utils.book_new();
+                      XLSX.utils.book_append_sheet(wb, ws, "Employees");
+                      XLSX.writeFile(wb, `employees_${new Date().toISOString().slice(0,10)}.xlsx`);
+                    } catch(ex) { alert("Failed to export: " + ex.message); }
+                  }} style={{
+                    display:"flex",alignItems:"center",gap:6,
+                    padding:"9px 18px",border:`1px solid ${C.green}`,borderRadius:10,
+                    fontSize:13,cursor:"pointer",color:C.green,background:C.greenLt,
+                    fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,
+                  }}>
+                    ⬇ Current Employees (Excel)
+                  </button>
+                )}
+                <button onClick={downloadTemplate} style={{
+                  display:"flex",alignItems:"center",gap:6,
+                  padding:"9px 18px",border:`1px solid ${C.accent}`,borderRadius:10,
+                  fontSize:13,cursor:"pointer",color:C.accent,background:"transparent",
+                  fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,
+                }}>
+                  ⬇ {tab === "employees" ? "Blank Template" : "Template CSV"}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -14739,7 +14803,12 @@ function DataImport() {
               <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20}}>
                 {[
                   {label:"Rows in file",        value:result.total_rows, color:C.inkMid},
-                  {label:tab==="employees"?"Created":tab==="payroll_adjustments"?"Updated":"Imported", value:result.imported, color:"#28a745"},
+                  ...(tab==="employees" && result.created != null ? [
+                    {label:"Created (new)",  value:result.created,  color:"#28a745"},
+                    {label:"Updated (existing)", value:result.updated||0, color:"#0072CE"},
+                  ] : [
+                    {label:tab==="payroll_adjustments"?"Updated":"Imported", value:result.imported, color:"#28a745"},
+                  ]),
                   {label:tab==="payroll_adjustments"?"Not Found":"Skipped (duplicate)", value:result.skipped||0, color:C.inkMid},
                   {label:"Errors",               value:result.errors.filter(e=>!e.message.includes("already exists")).length, color:"#C8401A"},
                 ].map(k => (

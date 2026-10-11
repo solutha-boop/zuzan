@@ -1191,6 +1191,18 @@ EMPLOYEE_ALIASES: dict[str, list[str]] = {
     "security_grade":            ["security_grade", "psira_grade"],
     "security_area":             ["security_area", "area"],
     "shift_type":                ["shift_type", "shift"],
+    "special_allowance_type":    ["special_allowance_type", "special_allowance"],
+    "employment_category":       ["employment_category", "emp_category", "category",
+                                  "contract_category", "worker_type"],
+    "union_subscription":        ["union_subscription", "union_dues", "union_fee",
+                                  "union_deduction"],
+    "advance_monthly_deduction": ["advance_monthly_deduction", "advance_deduction",
+                                  "salary_advance", "advance_repayment"],
+    "on_maternity_leave":        ["on_maternity_leave", "maternity_leave", "maternity"],
+    "mibco_role":                ["mibco_role", "fuel_role", "station_role"],
+    "mibco_scheme_enrolled":     ["mibco_scheme_enrolled", "scheme_enrolled", "health_scheme"],
+    "pay_schedule":              ["pay_schedule", "payroll_schedule", "payment_schedule",
+                                  "payroll_group"],
 }
 
 PAYROLL_ADJ_ALIASES: dict[str, list[str]] = {
@@ -1238,11 +1250,13 @@ async def import_employees(
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
     """
-    Bulk-create employees from a CSV.  Rows with a matching id_number or
-    employee_number are skipped (use /import/payroll-adjustments to update).
-    Required columns: first_name (or name), last_name (or surname), gross_salary.
-    All other columns are optional.
+    Bulk upsert employees from a CSV or Excel file.
+    - Existing employees (matched by employee_number, id_number, or first+last name) are UPDATED.
+    - New rows (no match) are CREATED.
+    Required columns: first_name, last_name, gross_salary.
+    All other columns are optional — only columns present in the file are updated.
     """
+    from database import encrypt_field
     cid = cu.company_id
     headers, rows = _read_csv(await file.read())
     m = _map_headers(headers, EMPLOYEE_ALIASES)
@@ -1252,8 +1266,13 @@ async def import_employees(
     if "gross_salary" not in m:
         raise HTTPException(400, f"CSV must have gross_salary column. Detected: {headers}")
 
-    created = skipped = errors = 0
+    created = updated = errors = 0
     error_rows: list[dict] = []
+
+    def _bool_field(val: str) -> Optional[bool]:
+        if not val:
+            return None
+        return val.strip().lower() in ("1", "true", "yes", "y")
 
     for i, row in enumerate(rows, start=2):
         first = _get(row, m, "first_name")
@@ -1261,8 +1280,8 @@ async def import_employees(
         if not first or not last:
             continue
 
-        id_no  = _get(row, m, "id_number")       or None
-        emp_no = _get(row, m, "employee_number")  or None
+        id_no  = _get(row, m, "id_number")      or None
+        emp_no = _get(row, m, "employee_number") or None
         gross  = _parse_float_field(_get(row, m, "gross_salary"))
 
         if gross <= 0:
@@ -1270,64 +1289,113 @@ async def import_employees(
             errors += 1
             continue
 
-        # Skip if employee already exists (match by id_number or employee_number)
-        existing = None
-        if id_no:
-            existing = db.query(Employee).filter_by(company_id=cid, id_number=id_no).first()
-        if not existing and emp_no:
-            existing = db.query(Employee).filter_by(company_id=cid, employee_number=emp_no).first()
-        if existing:
-            skipped += 1
-            continue
+        # Find existing employee
+        emp = None
+        if emp_no:
+            emp = db.query(Employee).filter_by(company_id=cid, employee_number=emp_no).first()
+        if not emp and id_no:
+            emp = db.query(Employee).filter_by(company_id=cid, id_number=id_no).first()
+        if not emp:
+            emp = db.query(Employee).filter_by(company_id=cid, first_name=first, last_name=last).first()
 
-        emp = Employee(
-            company_id                = cid,
-            first_name                = first,
-            last_name                 = last,
-            id_number                 = id_no,
-            tax_number                = _get(row, m, "tax_number")       or None,
-            position                  = _get(row, m, "position")         or None,
-            department                = _get(row, m, "department")       or None,
-            grade                     = _get(row, m, "grade")            or None,
-            employment_type           = _get(row, m, "employment_type")  or "salaried",
-            gross_salary              = gross,
-            hourly_rate               = _parse_float_field(_get(row, m, "hourly_rate")) or None,
-            employee_number           = emp_no,
-            bank_name                 = _get(row, m, "bank_name")        or None,
-            bank_account              = _get(row, m, "account_number")   or None,
-            account_number            = _get(row, m, "account_number")   or None,
-            branch_code               = _get(row, m, "branch_code")      or None,
-            account_type              = _get(row, m, "account_type")     or None,
-            pension_fund_employee_pct = _parse_float_field(_get(row, m, "pension_fund_employee_pct")),
-            pension_fund_employer_pct = _parse_float_field(_get(row, m, "pension_fund_employer_pct")),
-            pension_employee_fixed    = _parse_float_field(_get(row, m, "pension_employee_fixed")),
-            pension_employer_fixed    = _parse_float_field(_get(row, m, "pension_employer_fixed")),
-            medical_aid_employee      = _parse_float_field(_get(row, m, "medical_aid_employee")),
-            medical_aid_employer      = _parse_float_field(_get(row, m, "medical_aid_employer")),
-            medical_aid_dependants    = _parse_int_field  (_get(row, m, "medical_aid_dependants")),
-            psira_number              = _get(row, m, "psira_number")     or None,
-            security_grade            = _get(row, m, "security_grade")   or None,
-            security_area             = _get(row, m, "security_area")    or "1_2",
-            shift_type                = _get(row, m, "shift_type")       or "day",
-        )
+        is_new = emp is None
+        if is_new:
+            emp = Employee(company_id=cid)
 
-        # Parse optional date fields
+        # Apply all fields (only columns present in the upload override existing values)
+        emp.first_name  = first
+        emp.last_name   = last
+        emp.gross_salary = gross
+
+        def _set(field, key, parse=None, fallback=None):
+            """Set field only if column was present in the CSV."""
+            if key not in m:
+                return
+            raw = _get(row, m, key)
+            val = parse(raw) if parse else (raw or fallback)
+            if val is not None:
+                setattr(emp, field, val)
+
+        _set("id_number",      "id_number")
+        _set("tax_number",     "tax_number")
+        _set("address",        "address")
+        _set("position",       "position")
+        _set("department",     "department")
+        _set("grade",          "grade")
+        _set("employment_type","employment_type")
+        _set("employee_number","employee_number")
+        _set("account_type",   "account_type")
+        _set("psira_number",   "psira_number")
+        _set("security_grade", "security_grade")
+        _set("security_area",  "security_area")
+        _set("shift_type",     "shift_type")
+        _set("special_allowance_type", "special_allowance_type")
+        _set("employment_category",    "employment_category")
+        _set("mibco_role",             "mibco_role")
+        _set("pay_schedule",           "pay_schedule")
+
+        # Numeric fields
+        _set("hourly_rate",               "hourly_rate",               _parse_float_field)
+        _set("pension_fund_employee_pct", "pension_fund_employee_pct", _parse_float_field)
+        _set("pension_fund_employer_pct", "pension_fund_employer_pct", _parse_float_field)
+        _set("pension_employee_fixed",    "pension_employee_fixed",    _parse_float_field)
+        _set("pension_employer_fixed",    "pension_employer_fixed",    _parse_float_field)
+        _set("medical_aid_employee",      "medical_aid_employee",      _parse_float_field)
+        _set("medical_aid_employer",      "medical_aid_employer",      _parse_float_field)
+        _set("union_subscription",        "union_subscription",        _parse_float_field)
+        _set("advance_monthly_deduction", "advance_monthly_deduction", _parse_float_field)
+        _set("medical_aid_dependants",    "medical_aid_dependants",    _parse_int_field)
+
+        # Boolean fields
+        if "on_maternity_leave" in m:
+            v = _bool_field(_get(row, m, "on_maternity_leave"))
+            if v is not None:
+                emp.on_maternity_leave = v
+        if "mibco_scheme_enrolled" in m:
+            v = _bool_field(_get(row, m, "mibco_scheme_enrolled"))
+            if v is not None:
+                emp.mibco_scheme_enrolled = v
+
+        # Encrypted bank fields
+        if "bank_name" in m:
+            raw = _get(row, m, "bank_name")
+            if raw:
+                emp.bank_name = encrypt_field(raw)
+        if "account_number" in m:
+            raw = _get(row, m, "account_number")
+            if raw:
+                emp.bank_account   = encrypt_field(raw)
+                emp.account_number = encrypt_field(raw)
+        if "branch_code" in m:
+            raw = _get(row, m, "branch_code")
+            if raw:
+                emp.branch_code = encrypt_field(raw)
+
+        # Date fields
         for field, key in [("date_of_birth", "date_of_birth"), ("start_date", "start_date"),
-                           ("appointment_date", "appointment_date")]:
+                            ("appointment_date", "appointment_date")]:
+            if key not in m:
+                continue
             raw = _get(row, m, key)
             if raw:
                 parsed = _parse_date(raw)
                 if parsed:
                     setattr(emp, field, parsed)
 
-        db.add(emp)
-        created += 1
+        if is_new:
+            db.add(emp)
+            created += 1
+        else:
+            updated += 1
 
     db.commit()
+    total = created + updated + errors
     return {
-        "total_rows": created + skipped + errors,
-        "imported":   created,
-        "skipped":    skipped,
+        "total_rows": total,
+        "imported":   created + updated,   # frontend shows "imported" as the success count
+        "created":    created,
+        "updated":    updated,
+        "skipped":    0,
         "errors":     [{"row": e["row"], "message": f"{e['name']}: {e['reason']}"} for e in error_rows],
     }
 
