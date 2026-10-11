@@ -3540,7 +3540,8 @@ function Payroll({live = {}, user = {}}) {
         if (live && live.reload) live.reload();
       }
     } catch(err) {
-      console.warn("Employee update failed:", err.message);
+      console.error("Employee update failed:", err.message);
+      alert("Save failed: " + (err.message || "unknown error") + "\nYour changes were not saved to the server.");
     }
   };
 

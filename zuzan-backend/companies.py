@@ -1484,6 +1484,7 @@ async def delete_service_item(
 employees_router = APIRouter()
 
 class EmployeeCreate(BaseModel):
+    model_config = {"extra": "ignore"}   # Pydantic v2: silently drop unknown fields
     first_name:       str
     last_name:        str
     id_number:        Optional[str] = None
@@ -1527,6 +1528,9 @@ class EmployeeCreate(BaseModel):
     employment_category:       Optional[str]   = "permanent"  # "permanent"|"fixed_term"|"temp_labour"|"learnership"|"public_servant"|"foreign_national"
 
 class EmployeeUpdate(BaseModel):
+    model_config = {"extra": "ignore"}   # Pydantic v2: silently drop unknown fields
+    first_name:                Optional[str] = None
+    last_name:                 Optional[str] = None
     position:                  Optional[str] = None
     department:                Optional[str] = None
     grade:                     Optional[str] = None
