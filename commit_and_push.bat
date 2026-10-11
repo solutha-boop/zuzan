@@ -1,6 +1,9 @@
 @echo off
 cd /d C:\Zuzan
 
+echo === Ensuring git credential helper is set ===
+git config --global credential.helper wincred
+
 echo === Removing lock files ===
 if exist .git\index.lock del /f .git\index.lock
 if exist .git\HEAD.lock del /f .git\HEAD.lock
@@ -42,6 +45,15 @@ git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%"
 
 echo === Pushing ===
 git push origin main
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Push failed. Check the error above.
+    echo Common fixes:
+    echo   1. Run: git config --global credential.helper wincred
+    echo   2. Then: git push origin main  (and sign in when prompted)
+    pause
+    exit /b 1
+)
 
 echo === Done — commit hash: ===
 git rev-parse HEAD

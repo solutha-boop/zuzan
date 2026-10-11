@@ -4561,6 +4561,7 @@ function Payroll({live = {}, user = {}}) {
                 <option value="public_servant">Public Servant — no UIF</option>
                 <option value="foreign_national">Foreign National — UIF applies</option>
               </select>
+              <div style={{marginTop:6,fontSize:11,color:"#475569",background:"#f1f5f9",borderRadius:6,padding:"6px 10px"}}>ℹ️ Directors: executive/shareholder-directors paid a salary through payroll are employees (use Permanent — UIF applies, regardless of age). Non-executive directors paid fees only are generally not employees — do not add them to payroll.</div>
             </div>
             {form.employmentType === "hourly" && (
               <div>
@@ -5092,6 +5093,7 @@ function Payroll({live = {}, user = {}}) {
                   <option value="public_servant">Public Servant — no UIF</option>
                   <option value="foreign_national">Foreign National — UIF applies</option>
                 </select>
+                <div style={{marginTop:6,fontSize:11,color:"#475569",background:"#f1f5f9",borderRadius:6,padding:"6px 10px"}}>ℹ️ Directors: executive/shareholder-directors paid a salary through payroll are employees (use Permanent — UIF applies, regardless of age). Non-executive directors paid fees only are generally not employees — do not add them to payroll.</div>
                 {editForm.employmentCategory==="public_servant" && (
                   <div style={{marginTop:6,fontSize:11,color:"#b45309",background:"#fef3c7",borderRadius:6,padding:"6px 10px"}}>
                     ⚠️ UIF will not be deducted for this employee (public servants are excluded from UIF). Independent contractors and labour-broker workers should not be captured as employees — add them under Suppliers.
