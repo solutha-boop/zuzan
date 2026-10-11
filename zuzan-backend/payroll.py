@@ -467,6 +467,13 @@ def calc_payroll(
     once_off_deduction: float = 0.0,          # once-off deduction (e.g. uniform purchase, damage recovery)
     once_off_allowance_taxable: float = 0.0,     # once-off taxable allowance (travel, special duty, etc.)
     once_off_allowance_nontaxable: float = 0.0,  # once-off non-taxable allowance (tools, PPE, subsistence)
+    # Employment category — drives UIF/SDL exemption
+    # "permanent" | "fixed_term" → normal UIF + SDL
+    # "temp_labour"              → casual/temporary OWN staff: normal UIF + SDL (labour-broker workers are the broker's employees — do not capture them here)
+    # "learnership"              → normal UIF (learners covered since 1 Mar 2018)
+    # "public_servant"           → no UIF
+    # "foreign_national"         → normal UIF (foreign nationals on SA contracts covered; incl. those who repatriate)
+    employment_category: str = "permanent",
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -615,13 +622,17 @@ def calc_payroll(
     # the notable exclusion — SARS UIF-GEN-01-G01). Previously overtime was
     # wrongly excluded, understating UIF for sub-ceiling earners.
     # NBCPSS employer provident is part of UIF remuneration (deemed fringe benefit).
+    # UIF exempt: public_servant only (national/provincial government, GEPF). Casual/temp own staff, learners and foreign nationals ARE covered.
+    _uif_exempt = employment_category == "public_servant"
     uif_base     = min(taxable_gross + nbcpss_prov_empr, yr["uif_ceil"])
-    uif_employee = uif_base * UIF_RATE
-    uif_employer = uif_base * UIF_RATE
+    uif_employee = 0.0 if _uif_exempt else uif_base * UIF_RATE
+    uif_employer = 0.0 if _uif_exempt else uif_base * UIF_RATE
 
     # ── SDL on cash remuneration (taxable_gross) ──────────────────────────────
+    # No category is SDL-exempt: casual staff of the employer attract SDL once payroll > R500k
+    _sdl_exempt = False
     SDL_THRESHOLD  = 500_000
-    sdl_applicable = annual_payroll_total is None or annual_payroll_total >= SDL_THRESHOLD
+    sdl_applicable = (annual_payroll_total is None or annual_payroll_total >= SDL_THRESHOLD) and not _sdl_exempt
     sdl = taxable_gross * SDL_RATE if sdl_applicable else 0
 
     # ── Net pay: cash the employee receives ───────────────────────────────────
@@ -816,6 +827,7 @@ async def calculate_all(
             on_maternity_leave=bool(getattr(emp, "on_maternity_leave", False)),
             garnishee_total=sum(g.amount for g in getattr(emp, "garnishee_orders", []) if g.active),
             advance_deduction=getattr(emp, "advance_monthly_deduction", 0.0) or 0.0,
+            employment_category=getattr(emp, "employment_category", None) or "permanent",
         )
         c["employee_id"]           = emp.id
         c["employee_name"]         = f"{emp.first_name} {emp.last_name}"
@@ -987,6 +999,7 @@ async def run_payroll(
             once_off_deduction=once_off_entry.once_off_deduction,
             once_off_allowance_taxable=once_off_entry.once_off_allowance_taxable,
             once_off_allowance_nontaxable=once_off_entry.once_off_allowance_nontaxable,
+            employment_category=getattr(emp, "employment_category", None) or "permanent",
         )
         ot = c["overtime"]
         payslip = Payslip(

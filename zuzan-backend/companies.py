@@ -1524,6 +1524,7 @@ class EmployeeCreate(BaseModel):
     advance_monthly_deduction: Optional[float] = 0.0   # monthly salary advance repayment deduction
     on_maternity_leave:        Optional[bool]  = False  # True → gross zeroed; employee claims UIF maternity benefit
     pay_schedule:              Optional[str]   = "salaried"  # "salaried" | "security"
+    employment_category:       Optional[str]   = "permanent"  # "permanent"|"fixed_term"|"temp_labour"|"learnership"|"public_servant"|"foreign_national"
 
 class EmployeeUpdate(BaseModel):
     position:                  Optional[str] = None
@@ -1563,6 +1564,7 @@ class EmployeeUpdate(BaseModel):
     advance_monthly_deduction: Optional[float] = None  # monthly salary advance repayment
     on_maternity_leave:        Optional[bool]  = None  # True → gross zeroed this month
     pay_schedule:              Optional[str]   = None  # "salaried" | "security"
+    employment_category:       Optional[str]   = None  # "permanent"|"fixed_term"|"temp_labour"|"learnership"|"public_servant"|"foreign_national"
 
 
 def _employee_dict(e: Employee, company_industry: str = None) -> dict:
@@ -1615,6 +1617,10 @@ def _employee_dict(e: Employee, company_industry: str = None) -> dict:
         "mibco_scheme_enrolled":  bool(getattr(e, "mibco_scheme_enrolled", True)),
         "union_subscription":     getattr(e, "union_subscription", 0.0) or 0.0,
         "pay_schedule":           _derived_schedule,
+        # Employment category + termination
+        "employment_category": getattr(e, "employment_category", None) or "permanent",
+        "termination_reason":  getattr(e, "termination_reason", None),
+        "termination_date":    e.termination_date.isoformat() if getattr(e, "termination_date", None) else None,
         # General payroll adjustments
         "advance_monthly_deduction": getattr(e, "advance_monthly_deduction", 0.0) or 0.0,
         "on_maternity_leave":        bool(getattr(e, "on_maternity_leave", False)),
@@ -1696,6 +1702,7 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
         advance_monthly_deduction=data.advance_monthly_deduction or 0.0,
         on_maternity_leave=data.on_maternity_leave or False,
         pay_schedule=data.pay_schedule or ("security" if data.security_grade else "salaried"),
+        employment_category=data.employment_category or "permanent",
     )
     db.add(emp)
     db.commit()
@@ -1722,6 +1729,68 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
     _co = db.query(Company).filter(Company.id == current_user.company_id).first()
     return _employee_dict(emp, _co.industry if _co else None)
 
+
+# ── TERMINATE / REINSTATE ────────────────────────────────────────────────────
+
+class TerminateRequest(BaseModel):
+    reason: str      # UIF-standard reason code
+    date:   Optional[str] = None  # ISO date string; defaults to today
+
+# SA UIF termination reason codes (UI-19)
+UIF_TERMINATION_REASONS = {
+    "resignation":            "Resignation",
+    "retrenchment":           "Retrenchment",
+    "dismissal_misconduct":   "Dismissal — misconduct",
+    "dismissal_performance":  "Dismissal — poor performance",
+    "dismissal_operational":  "Dismissal — operational requirements",
+    "retirement":             "Retirement",
+    "death":                  "Death",
+    "end_of_contract":        "End of fixed-term contract",
+    "mutual_agreement":       "Mutual agreement",
+    "ill_health":             "Ill health / incapacity",
+}
+
+@employees_router.post("/{employee_id}/terminate")
+async def terminate_employee(
+    employee_id: int,
+    data: TerminateRequest,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db)
+):
+    emp = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == current_user.company_id
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    emp.is_active = False
+    emp.termination_reason = data.reason
+    try:
+        emp.termination_date = datetime.fromisoformat(data.date) if data.date else datetime.utcnow()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date — use YYYY-MM-DD")
+    db.commit()
+    _co = db.query(Company).filter(Company.id == current_user.company_id).first()
+    return _employee_dict(emp, _co.industry if _co else None)
+
+@employees_router.post("/{employee_id}/reinstate")
+async def reinstate_employee(
+    employee_id: int,
+    current_user: User = Depends(require_role("owner", "admin")),
+    db: Session = Depends(get_db)
+):
+    emp = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.company_id == current_user.company_id
+    ).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    emp.is_active = True
+    emp.termination_reason = None
+    emp.termination_date = None
+    db.commit()
+    _co = db.query(Company).filter(Company.id == current_user.company_id).first()
+    return _employee_dict(emp, _co.industry if _co else None)
 
 # ── GARNISHEE ORDERS ──────────────────────────────────────────────────────────
 

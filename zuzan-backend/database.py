@@ -219,6 +219,12 @@ class Employee(Base):
     bank_name=Column(String); bank_account=Column(String)
     account_number=Column(String); branch_code=Column(String); account_type=Column(String)
     is_active=Column(Boolean,default=True)
+    # Employment category — drives UIF/SDL exemption in payroll engine
+    # Values: "permanent" | "fixed_term" | "temp_labour" | "learnership" | "public_servant" | "foreign_national"
+    employment_category=Column(String,default="permanent")
+    # Termination tracking
+    termination_reason=Column(String,nullable=True)   # UIF-standard reason codes
+    termination_date=Column(DateTime,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="employees")
     payslips=relationship("Payslip",back_populates="employee")
@@ -1683,6 +1689,10 @@ def init_db():
             # Backfill: the ADD COLUMN DEFAULT set every existing row to 'salaried',
             # including security officers.  Correct those employees now.
             "UPDATE employees SET pay_schedule = 'security' WHERE security_grade IS NOT NULL AND security_grade != '' AND pay_schedule = 'salaried'",
+            # ── Employment category + termination tracking (2026-10) ─────────────────
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_category VARCHAR DEFAULT 'permanent'",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_reason VARCHAR",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_date TIMESTAMP",
         ]:
             try:
                 conn.execute(text(sql))

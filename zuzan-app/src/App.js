@@ -3315,7 +3315,7 @@ function Payroll({live = {}, user = {}}) {
   const [secData, setSecData] = useState({}); // {employeeId: {nightShifts, specialShifts}} for NBCPSS
   const [secArea, setSecArea] = useState("3"); // NBCPSS rate area: Area 3 only
   const [includeBonus, setIncludeBonus] = useState(false); // NBCPSS annual bonus (December)
-  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",paySchedule:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true,unionSubscription:0,advanceMonthlyDeduction:0,onMaternityLeave:false});
+  const [form, setForm] = useState({name:"",position:"",salary:"",dept:"",empNo:"",grade:"",employmentType:"salaried",paySchedule:"salaried",hourlyRate:"",idNumber:"",taxNumber:"",dob:"",appointmentDate:"",address:"",bankName:"",accountNumber:"",branchCode:"",accountType:"Cheque",pensionEmployeePct:"",pensionEmployerPct:"",pensionEmployeeFixed:"",pensionEmployerFixed:"",medicalAidEmployee:"",medicalAidEmployer:"",medicalAidDependants:"",psiraNumber:"",securityGrade:"",securityArea:"3",shiftType:"day",specialAllowanceType:"none",mibcoRole:"",mibcoSchemeEnrolled:true,unionSubscription:0,advanceMonthlyDeduction:0,onMaternityLeave:false,employmentCategory:"permanent"});
   const [viewPayslip, setViewPayslip] = useState(null);
   const [showBatch,   setShowBatch]   = useState(false);
   const [editEmp,     setEditEmp]     = useState(null);
@@ -3324,6 +3324,7 @@ function Payroll({live = {}, user = {}}) {
   const [editForm,    setEditForm]    = useState({});
   const [garnishees,  setGarnishees]  = useState([]);  // active garnishee orders for editEmp
   const [showTerminated, setShowTerminated] = useState(false);
+  const [termModal, setTermModal] = useState(null); // {emp} when open
   const [newGarnRef,  setNewGarnRef]  = useState("");
   const [newGarnAmt,  setNewGarnAmt]  = useState("");
   // audit fix 2026-09-16 — same NBCPSS gap as BatchPaymentModal: these drive the
@@ -3423,6 +3424,7 @@ function Payroll({live = {}, user = {}}) {
           advance_monthly_deduction:  form.advanceMonthlyDeduction || 0,
           on_maternity_leave:         form.onMaternityLeave || false,
           pay_schedule:               form.paySchedule || (form.securityGrade ? "security" : "salaried"),
+          employment_category:        form.employmentCategory || "permanent",
         }),
       });
       if (live && live.reload) live.reload();
@@ -3532,6 +3534,7 @@ function Payroll({live = {}, user = {}}) {
             advance_monthly_deduction:  editForm.advanceMonthlyDeduction || 0,
             on_maternity_leave:         editForm.onMaternityLeave || false,
             pay_schedule:               editForm.paySchedule || (editForm.securityGrade ? "security" : "salaried"),
+            employment_category:        editForm.employmentCategory || "permanent",
           }),
         });
         if (live && live.reload) live.reload();
@@ -4548,6 +4551,17 @@ function Payroll({live = {}, user = {}}) {
                 <option value="security">🛡️ Security Officers</option>
               </select>
             </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employment Category</label>
+              <select value={form.employmentCategory||"permanent"} onChange={e=>setForm(v=>({...v,employmentCategory:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="permanent">Permanent — full UIF + SDL</option>
+                <option value="fixed_term">Fixed-Term Contract — full UIF + SDL</option>
+                <option value="temp_labour">Casual / Temporary (own staff) — full UIF + SDL</option>
+                <option value="learnership">Learnership — UIF applies</option>
+                <option value="public_servant">Public Servant — no UIF</option>
+                <option value="foreign_national">Foreign National — UIF applies</option>
+              </select>
+            </div>
             {form.employmentType === "hourly" && (
               <div>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Hourly Rate (ZAR)</label>
@@ -4822,9 +4836,9 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false,paySchedule:emp.pay_schedule||(emp.security_grade?"security":"salaried")});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false,paySchedule:emp.pay_schedule||(emp.security_grade?"security":"salaried"),employmentCategory:emp.employment_category||"permanent"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
-                      <button onClick={async()=>{if(!window.confirm(`Terminate ${emp.name}? They will be excluded from payroll. You can reinstate them later.`))return;try{await api(`/employees/${emp.id}`,{method:"PATCH",body:JSON.stringify({is_active:false})});setEmployees(employees.map(e=>e.id===emp.id?{...e,is_active:false}:e));}catch(e){alert("Could not terminate employee. Please try again.");}}} style={{background:"#fee2e2",color:"#b91c1c",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Terminate</button>
+                      <button onClick={()=>setTermModal({emp,reason:"resignation",date:new Date().toISOString().split("T")[0]})} style={{background:"#fee2e2",color:"#b91c1c",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Terminate</button>
                     </div>
                   </td>
                 </tr>
@@ -4865,29 +4879,80 @@ function Payroll({live = {}, user = {}}) {
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead>
                   <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
-                    {["Employee","Position","Dept",""].map(h=><th key={h} style={{textAlign:"left",padding:"10px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
+                    {["Employee","Position","Reason","Date",""].map(h=><th key={h} style={{textAlign:"left",padding:"10px 14px",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
-                  {employees.filter(e=>e.is_active===false).map(emp=>(
+                  {employees.filter(e=>e.is_active===false).map(emp=>{
+                    const UIF_REASONS={resignation:"Resignation",retrenchment:"Retrenchment",dismissal_misconduct:"Dismissal — misconduct",dismissal_performance:"Dismissal — poor performance",dismissal_operational:"Dismissal — operational requirements",retirement:"Retirement",death:"Death",end_of_contract:"End of fixed-term contract",mutual_agreement:"Mutual agreement",ill_health:"Ill health / incapacity"};
+                    return (
                     <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`,opacity:0.7}}>
                       <td style={{padding:"11px 14px"}}>
                         <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
                         <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
                       </td>
                       <td style={{padding:"11px 14px",color:C.inkMid}}>{emp.position||"—"}</td>
-                      <td style={{padding:"11px 14px",color:C.inkMid}}>{emp.dept||"—"}</td>
+                      <td style={{padding:"11px 14px",color:C.inkMid}}>{emp.termination_reason ? (UIF_REASONS[emp.termination_reason]||emp.termination_reason) : "—"}</td>
+                      <td style={{padding:"11px 14px",color:C.inkMid}}>{emp.termination_date ? new Date(emp.termination_date).toLocaleDateString("en-ZA") : "—"}</td>
                       <td style={{padding:"11px 14px"}}>
-                        <button onClick={async()=>{if(!window.confirm(`Reinstate ${emp.name}? They will be included in future payroll runs.`))return;try{await api(`/employees/${emp.id}`,{method:"PATCH",body:JSON.stringify({is_active:true})});setEmployees(employees.map(e=>e.id===emp.id?{...e,is_active:true}:e));}catch(err){alert("Could not reinstate employee. Please try again.");}}} style={{background:"#dcfce7",color:"#166534",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Reinstate</button>
+                        <button onClick={async()=>{if(!window.confirm(`Reinstate ${emp.name}? They will be included in future payroll runs.`))return;try{const d=await api(`/employees/${emp.id}/reinstate`,{method:"POST"});setEmployees(employees.map(e=>e.id===emp.id?{...e,...d,is_active:true,termination_reason:null,termination_date:null}:e));}catch(err){alert("Could not reinstate employee. Please try again.");}}} style={{background:"#dcfce7",color:"#166534",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Reinstate</button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </div>
       )}
+
+      {/* ── Termination Modal ─────────────────────────────────────────────────── */}
+      {termModal && (()=>{
+        const UIF_REASONS=[
+          {value:"resignation",        label:"Resignation"},
+          {value:"retrenchment",       label:"Retrenchment"},
+          {value:"dismissal_misconduct",label:"Dismissal — misconduct"},
+          {value:"dismissal_performance",label:"Dismissal — poor performance"},
+          {value:"dismissal_operational",label:"Dismissal — operational requirements"},
+          {value:"retirement",         label:"Retirement"},
+          {value:"death",              label:"Death"},
+          {value:"end_of_contract",    label:"End of fixed-term contract"},
+          {value:"mutual_agreement",   label:"Mutual agreement"},
+          {value:"ill_health",         label:"Ill health / incapacity"},
+        ];
+        return (
+          <div style={{position:"fixed",inset:0,background:"#0008",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={e=>{if(e.target===e.currentTarget)setTermModal(null);}}>
+            <div style={{background:C.surface,borderRadius:16,padding:28,width:420,maxWidth:"94vw",boxShadow:"0 20px 60px #0003"}}>
+              <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:4}}>Terminate Employee</div>
+              <div style={{fontSize:13,color:C.inkMid,marginBottom:20}}>{termModal.emp.name} — {termModal.emp.position||"No position"}</div>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",display:"block",marginBottom:6}}>Reason for Termination (UIF UI-19)</label>
+                <select value={termModal.reason} onChange={e=>setTermModal(m=>({...m,reason:e.target.value}))} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:13,color:C.ink,background:C.bg,fontFamily:"inherit",cursor:"pointer"}}>
+                  {UIF_REASONS.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:20}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",display:"block",marginBottom:6}}>Termination Date</label>
+                <input type="date" value={termModal.date} onChange={e=>setTermModal(m=>({...m,date:e.target.value}))} style={{width:"100%",padding:"10px 12px",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:13,color:C.ink,background:C.bg,fontFamily:"inherit",boxSizing:"border-box"}}/>
+              </div>
+              <div style={{fontSize:11,color:C.inkMid,background:C.bg,borderRadius:8,padding:"10px 12px",marginBottom:20,lineHeight:1.6}}>
+                ⚠️ This employee will be excluded from future payroll runs. You can reinstate them at any time from the Terminated Employees section.
+              </div>
+              <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+                <button onClick={()=>setTermModal(null)} style={{background:C.bg,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Cancel</button>
+                <button onClick={async()=>{
+                  try{
+                    const d=await api(`/employees/${termModal.emp.id}/terminate`,{method:"POST",body:JSON.stringify({reason:termModal.reason,date:termModal.date})});
+                    setEmployees(employees.map(e=>e.id===termModal.emp.id?{...e,...d,is_active:false}:e));
+                    setTermModal(null);
+                  }catch(err){alert("Could not terminate employee. Please try again.");}
+                }} style={{background:"#b91c1c",color:"#fff",border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:700}}>Confirm Termination</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {viewPayslip && (
         <PayslipModal
@@ -5015,6 +5080,23 @@ function Payroll({live = {}, user = {}}) {
                   <option value="salaried">💼 Salaried Staff</option>
                   <option value="security">🛡️ Security Officers</option>
                 </select>
+              </div>
+              {/* Employment Category (UIF/SDL exemption) */}
+              <div style={{gridColumn:"1 / -1"}}>
+                <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Employment Category</label>
+                <select value={editForm.employmentCategory||"permanent"} onChange={e=>setEditForm(v=>({...v,employmentCategory:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                  <option value="permanent">Permanent — full UIF + SDL</option>
+                  <option value="fixed_term">Fixed-Term Contract — full UIF + SDL</option>
+                  <option value="temp_labour">Casual / Temporary (own staff) — full UIF + SDL</option>
+                  <option value="learnership">Learnership — UIF applies</option>
+                  <option value="public_servant">Public Servant — no UIF</option>
+                  <option value="foreign_national">Foreign National — UIF applies</option>
+                </select>
+                {editForm.employmentCategory==="public_servant" && (
+                  <div style={{marginTop:6,fontSize:11,color:"#b45309",background:"#fef3c7",borderRadius:6,padding:"6px 10px"}}>
+                    ⚠️ UIF will not be deducted for this employee (public servants are excluded from UIF). Independent contractors and labour-broker workers should not be captured as employees — add them under Suppliers.
+                  </div>
+                )}
               </div>
               {editForm.employmentType === "hourly" && (
                 <div>
