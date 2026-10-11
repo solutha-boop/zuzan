@@ -14470,15 +14470,30 @@ function DataImport() {
   };
 
   function downloadTemplate() {
-    const cols    = TEMPLATES[tab];
-    const sample  = SAMPLE_ROWS[tab];
+    const cols   = TEMPLATES[tab];
+    const sample = SAMPLE_ROWS[tab];
+
+    // Employees: use XLSX for reliability (35 columns, typed data)
+    if (tab === "employees") {
+      const dataRow = {};
+      cols.forEach((col, i) => { dataRow[col] = sample ? (sample[i] ?? "") : ""; });
+      const ws = XLSX.utils.json_to_sheet(cols.length ? [dataRow] : [{}], {header: cols});
+      ws["!cols"] = cols.map(() => ({wch: 18}));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Employees");
+      XLSX.writeFile(wb, "zuzan_employees_import_template.xlsx");
+      return;
+    }
+
+    // All other tabs: CSV
     const rows    = [cols.join(",")];
-    if (sample) rows.push(sample.map(v => v.includes(",") ? `"${v}"` : v).join(","));
+    if (sample) rows.push(sample.map(v => String(v).includes(",") ? `"${v}"` : v).join(","));
     const content = rows.join("\n") + "\n";
     const blob    = new Blob([content], {type:"text/csv"});
     const url     = URL.createObjectURL(blob);
     const a       = document.createElement("a");
-    a.href = url; a.download = `zuzan_${tab}_import_template.csv`; a.click();
+    a.href = url; a.download = `zuzan_${tab}_import_template.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
@@ -14689,7 +14704,7 @@ function DataImport() {
                   fontSize:13,cursor:"pointer",color:C.accent,background:"transparent",
                   fontFamily:"inherit",whiteSpace:"nowrap",fontWeight:600,
                 }}>
-                  ⬇ {tab === "employees" ? "Blank Template" : "Template CSV"}
+                  ⬇ {tab === "employees" ? "Blank Template (Excel)" : "Template CSV"}
                 </button>
               </div>
             </div>
