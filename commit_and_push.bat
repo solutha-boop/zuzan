@@ -14,7 +14,7 @@ copy /y App_js_fixed.js zuzan-app\src\App.js
 copy /y App_mobile_js_fixed.js zuzan-app\src\App.mobile.js
 
 echo === Patching backend files ===
-py patch_backend.py 2>nul || python patch_backend.py 2>nul || python3 patch_backend.py 2>nul || echo [WARN] Python not found — skipping backend patch
+where py >nul 2>&1 && py patch_backend.py || where python >nul 2>&1 && python patch_backend.py || echo [WARN] Python not found — skipping backend patch
 
 echo === Staging all tracked changes (usage: commit_and_push.bat "your message") ===
 git add -u
@@ -38,8 +38,7 @@ git add netlify.toml
 git diff --cached --stat
 
 echo === Committing ===
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
-set STAMP=%dt:~0,4%-%dt:~4,2%-%dt:~6,2% %dt:~8,2%:%dt:~10,2%
+for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
 if "%~1"=="" (set MSG=feat: termination reasons modal, employment category (temp labour/learnership/foreign national UIF/SDL exemption), reinstate with history [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
