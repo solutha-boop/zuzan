@@ -605,6 +605,12 @@ def calc_payroll(
     _med_area = security_area if security_area in ("1_2", "3") else "1_2"
     nbcpss_med_emp   = NBCPSS_MEDICAL_PRESCRIBED_EMP[_med_area]  if is_security else 0.0
     nbcpss_med_empr  = NBCPSS_MEDICAL_PRESCRIBED_EMPR[_med_area] if is_security else 0.0
+    # For NBCPSS security employees the PSSSBC hospital cover IS the medical aid.
+    # Zero out the general medical_aid fields to prevent a double-deduction where
+    # the employee record was set up before NBCPSS support was added.
+    if is_security and nbcpss_med_emp > 0:
+        medical_aid_employee = 0.0
+        medical_aid_employer = 0.0
     # Uniform allowance: not included in monthly payroll (excluded per company agreement)
     uniform_allow    = 0.0
     # Union subscription: after-tax deduction from net pay
