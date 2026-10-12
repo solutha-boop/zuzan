@@ -227,6 +227,8 @@ const NBCPSS_SPECIAL_ALLOW_PER_SHIFT = 10.50;  // R/shift
 const NBCPSS_CLEANING_ALLOWANCE      = 32.00;  // R/month — unconditional for every security employee
 const NBCPSS_BC_LEVY                 = 7.00;   // R/employee/month, employer cost
 const NBCPSS_PSIRA_FEE               = 4.00;   // R/SO/month, employer cost
+const NBCPSS_MEDICAL_EMP             = 122.00; // R/month — PSSSBC prescribed hospital plan, employee share
+const NBCPSS_MEDICAL_EMPR            = 172.50; // R/month — PSSSBC prescribed hospital plan, employer share
 
 // audit fix 2026-09-16 — this always divided by the general 45h/week BCEA default
 // (195h/month) even for NBCPSS security employees, who are on a 48h/week schedule
@@ -298,6 +300,14 @@ function calcPayroll(
   const cleaningAllow = isSecurity ? NBCPSS_CLEANING_ALLOWANCE : 0;
   const bcLevyEmployer    = isSecurity ? NBCPSS_BC_LEVY : 0;
   const psiraLevyEmployer = isSecurity ? NBCPSS_PSIRA_FEE : 0;
+
+  // NBCPSS medical aid — for security employees the PSSSBC prescribed plan IS the medical aid.
+  // Zero out any general medical_aid_employee/employer that may have been set before NBCPSS
+  // support was added, to prevent a double deduction on the payslip preview.
+  const nbcpssMedicalEmployee = isSecurity ? NBCPSS_MEDICAL_EMP : 0;
+  const nbcpssMedicalEmployer = isSecurity ? NBCPSS_MEDICAL_EMPR : 0;
+  if (isSecurity) { medicalAidEmployee = 0; medicalAidEmployer = 0; }
+
   const taxableGross = salary + ot.total + nightAllow + specialAllow + cleaningAllow + annualBonus;
 
   // Pension/provident: % of gross + optional fixed top-up (both add to total contribution)
@@ -305,7 +315,9 @@ function calcPayroll(
   const pensionEmployer = salary * pensionEmployerPct + pensionEmployerFixed;
 
   // PAYE base: cash remuneration + employer medical aid fringe benefit (7th Schedule s2(i))
-  const payeBaseMonthly = taxableGross + medicalAidEmployer;
+  // For security employees the employer share is the PSSSBC plan, not the general medical aid.
+  const effectiveMedicalAidEmployer = medicalAidEmployer + nbcpssMedicalEmployer;
+  const payeBaseMonthly = taxableGross + effectiveMedicalAidEmployer;
   const payeBaseAnnual  = payeBaseMonthly * 12;
 
   // Section 11F: min(total employee contributions, 27.5% × remuneration, R430,000)
@@ -318,8 +330,8 @@ function calcPayroll(
   // PAYE before MTC
   const payeBeforeMtc = calcPAYE(payeBaseAnnual - s11fAnnual, taxYear) / 12;
 
-  // Medical Tax Credit (Section 6A) — only applies if employee is on medical aid
-  const onMedicalAid = (medicalAidEmployee > 0 || medicalAidEmployer > 0);
+  // Medical Tax Credit (Section 6A) — applies if on any medical aid (general or NBCPSS)
+  const onMedicalAid = (medicalAidEmployee > 0 || medicalAidEmployer > 0 || nbcpssMedicalEmployee > 0);
   const mtc = onMedicalAid ? calcMedicalTaxCredit(medicalAidDependants) : 0;
   const paye = Math.max(0, payeBeforeMtc - mtc);
 
@@ -330,10 +342,10 @@ function calcPayroll(
   const sdl      = taxableGross * 0.01;
 
   // Net pay: cash earnings minus employee-side deductions (fringe benefit excluded from cash)
-  const netPay = taxableGross - paye - uifEmp - pensionEmployee - medicalAidEmployee;
+  const netPay = taxableGross - paye - uifEmp - pensionEmployee - medicalAidEmployee - nbcpssMedicalEmployee;
 
   // Total employer cost
-  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer + bcLevyEmployer + psiraLevyEmployer;
+  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer + nbcpssMedicalEmployer + bcLevyEmployer + psiraLevyEmployer;
 
   return {
     gross: salary,
@@ -351,6 +363,8 @@ function calcPayroll(
     s11fExcessMonthly:  Math.round(s11fExcessMonthly), // contribution above cap (post-tax, no extra relief)
     medicalAidEmployee: Math.round(medicalAidEmployee),
     medicalAidEmployer: Math.round(medicalAidEmployer),
+    nbcpssMedicalEmployee: Math.round(nbcpssMedicalEmployee),
+    nbcpssMedicalEmployer: Math.round(nbcpssMedicalEmployer),
     medicalTaxCredit:   Math.round(mtc),
     payeBeforeMtc:  Math.round(payeBeforeMtc),
     paye:           Math.round(paye),
