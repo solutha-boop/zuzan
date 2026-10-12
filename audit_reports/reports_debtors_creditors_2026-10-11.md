@@ -1,8 +1,8 @@
 # ZuZan Audit — Reports, Debtors & Creditors
-**Date:** 11 October 2026 (scheduled run; fired late, originally due 10 Oct 22:18 UTC)
-**Prior report:** 2026-10-09
+**Date:** 11 October 2026 (second scheduled run today; supersedes the 06:19 run)
+**Prior report:** 2026-10-11 (earlier run) / 2026-10-09
 
-**Change detection:** HEAD `e31144c` (was `c17962b`). Since last run: five "dual pay schedule" commits (payroll payslip layout, PAYROLL_PER_EMP/MIN pricing via `config.py`, frontend) plus **staged, uncommitted** edits adding `employment_category` (UIF/SDL exemption logic) and employee terminate/reinstate endpoints. `py_compile` passes on payroll, financial_statements, database, journal, purchase_orders, main, companies, csv_import. No code edits made by this audit. Targeted re-check of the invariants below; full re-read not repeated because the Reports/AR/AP/journal/AFS code paths are unchanged.
+**Change detection:** HEAD `b933dbc` (previous run: `e31144c`) — 13 commits since. Changed: `payroll.py` (+267), `csv_import.py` (employee import now upsert), `companies.py` (terminate/reinstate), `database.py` (employment_category, psspf_exempt, termination fields), `journal.py` (BC-levy payable line), frontend. `py_compile` passes on payroll, journal, financial_statements, database, purchase_orders, main, companies, csv_import. Reports/AR/AP/AFS/invoice-expense import code paths unchanged. No code edits made by this audit.
 
 ## 1. Summary
 | Section | Verdict |
@@ -10,47 +10,43 @@
 | Reports | PASS |
 | Debtors (AR) | PASS |
 | Creditors (AP) | PASS — reversal-awareness intact |
-| Cross-module | PASS |
+| Cross-module | PASS (journal.py change reviewed, balanced) |
 | IFRS (AFS) | PASS — no standards change; deferred tax (5b) already implemented |
-| Tax (SARS) | PASS for rates/tables; **new payroll finding (UIF exemption categories)** |
+| Tax (SARS) | PASS — 2026/2027 tables correct; **prior UIF-exemption finding is RESOLVED** |
 
-**Overall: PASS with one new Medium finding** (staged `employment_category` UIF exemptions look non-compliant).
+**Overall: PASS. No Critical/High/Medium findings.**
 
 ## 2. Reports
-✓ No issues found. `_to_zar()` at `payroll.py:18`; report logic not modified since last audit.
+✓ No issues found. `_to_zar()` `payroll.py:18`; dashboard `total_outstanding` `payroll.py:1926`; management accounts `:3233`; `/v1/summary` uses `_to_zar` (`main.py:473, :503`).
 
 ## 3. Debtors
-✓ No issues found. `debtors_aging()` `payroll.py:3324` (line shifted +26 from payslip edits; logic unchanged).
+✓ No issues found. `GET /reports/debtors-aging` `payroll.py:3515` (logic unchanged).
 
 ## 4. Creditors
-✓ No issues found. `creditors_aging()` `payroll.py:3387`. Reversal-aware lookups present (`purchase_order` + `purchase_order_reversal`): `payroll.py:2268, :2740, :3422`, `journal.py:1158`, `purchase_orders.py:445`.
+✓ No issues found. `GET /reports/creditors-aging` `payroll.py:3578`. Reversal-aware lookups (`purchase_order` + `purchase_order_reversal`): `payroll.py:2460, :2932, :3614`, `journal.py:1166`, `purchase_orders.py:445`. Supplier bank details decrypted `payroll.py:3657-3659`, `suppliers.py:48-50`.
 
 ## 5. Cross-module
-✓ No issues found. `journal.py`, `csv_import.py`, `purchase_orders.py` unchanged since last audit.
+✓ No issues found. `journal.py` change this period: NBCPSS "BC levy payable" now credits employee deduction + employer share (`bc_levy_er + bc_levy_ee`), fixing a R7/employee journal imbalance that aborted payroll runs — consistent with `calc_payroll` deducting the levy from net pay. `csv_import.py` changes are employee-import only (upsert, encrypted bank fields via `encrypt_field`; read side decrypts at `companies.py:1601-1603`); invoice/expense import, backfill, Rule 6/7 import exclusion and unbalanced-journal rejection untouched.
 
 ## 6. IFRS compliance (AFS)
-- Framework: IFRS for SMEs (`financial_statements.py:2`). IFRS 18 and IFRS for SMEs 3rd edition remain effective for periods beginning on/after 1 Jan 2027; no change found. Transition plan stands.
-- **5b deferred tax:** already computed — `_deferred_tax_balance()` `financial_statements.py:131`, expense = closing − opening (`:266-268`), `total_tax` `:601`, `"deferred_tax"` `:606`, opening/closing balances `:609-610`. `FixedAsset.wear_and_tear_rate` `database.py:551`; migration inside the list at `database.py:1516`. Verified; no edits needed.
-- Finance costs below EBIT / tax from profit_before_tax: `financial_statements.py` unchanged.
+- Framework: IFRS for SMEs (`financial_statements.py:2, :623, :717`). IFRS 18 and IFRS for SMEs 3rd edition remain effective for periods beginning on/after 1 Jan 2027 — no change since last audit; transition plan (`audit_reports/ifrs_smes_3rd_edition_transition_plan.md`) stands.
+- **5b deferred tax:** already implemented — `_deferred_tax_balance()` `:131`, expense = closing − opening `:266-268`, `total_tax` `:601`, `deferred_tax` `:606`, opening balance `:609`. `wear_and_tear_rate` column present in `database.py` with migration inside the list. Verified; no edits needed.
+- Finance costs below EBIT / tax from profit_before_tax: unchanged ✓.
 
 ## 7. Tax updates (company + payroll)
-- Tax year: 2026/2027 (SARS "2027 tax year", 1 Mar 2026 – 28 Feb 2027). `TAX_YEARS["2026/2027"]` `payroll.py:132`: brackets, primary R17,820, secondary R9,765, tertiary R3,249 — **match SARS page fetched this run**. UIF ceiling 17,712 unchanged. Provisional `"2027/2028"` `:152`; `_current_tax_year()` `:170`.
-- `UIF_RATE=0.01`, `SDL_RATE=0.01` (`:189-190`), `VAT_RATE=0.15` (`:2098, :2492, :3579`), `CORP_TAX_RATE=0.27` (`:3223`): no announced changes found.
-- **NEW (Medium) — `payroll.py:626` (staged, uncommitted):** `_uif_exempt` treats `learnership` and `foreign_national` as UIF-exempt. Per SimplePay's note on the UIF amendments, learners (Skills Development Act s18(2)) and employees who intend to repatriate were brought *into* UIF coverage from 1 Mar 2018; a blanket "foreign_national" exemption therefore under-deducts UIF and risks EMP201/UI-19 non-compliance. Only genuine exclusions (e.g. public servants covered by GEPF, workers <24h/month, SA-employed-abroad cases) should be exempt. `public_servant` exemption is reasonable. Recommend limiting exemptions or making them per-employee override with a legal-basis note before committing.
-- **NEW (Low) — `payroll.py:633`:** `temp_labour` SDL exemption. Labour-broker workers are normally the broker's employees (broker pays SDL/UIF); if the category is used for a company's own casual staff, SDL/UIF should apply. Clarify label/help text.
-- **Info — `payroll.py:3744, :3862` / `config.py`:** payroll add-on pricing now R15.50/employee, min R99 (was R18.25 / R65); pricing is consistent between initiate_payment and subscription_status. Business decision, noted only.
-- **Info — `companies.py` terminate/reinstate:** `termination_date` uses `datetime.fromisoformat(data.date)`; invalid input would 500 — wrap in try/except returning 400. Migration lines at `database.py:1693-1695` are inside the list literal ✓.
-- Sources: [SARS rates of tax for individuals](https://www.sars.gov.za/tax-rates/income-tax/rates-of-tax-for-individuals/), [SimplePay – UIF exclusion update](https://www.simplepay.co.za/blog/2018/03/01/uif-exclusion-update-for-learners-and-employees-who-repatriate/), [Budget 2026 Tax guide](https://www.treasury.gov.za/documents/national%20budget/2026/sars/Budget%202026%20Tax%20guide.pdf).
+- Tax year: 2026/2027 (1 Mar 2026 – 28 Feb 2027). `TAX_YEARS["2026/2027"]` `payroll.py:132`: brackets (18% to R245,100 … 45% > R1,878,600), primary R17,820, secondary R9,765, tertiary R3,249, UIF ceiling R17,712 — match SARS. Provisional `"2027/2028"` `:152` flagged `provisional`. `_current_tax_year()` `:170`.
+- `UIF_RATE`/`SDL_RATE` 1% (`:189-190`), `VAT_RATE` 15%, `CORP_TAX_RATE` 27% (`:3415`): no announced changes found.
+- **RESOLVED since last run:** UIF exemption now applies to `public_servant` only; `learnership`/`foreign_national`/`temp_labour` attract normal UIF and no category is SDL-exempt (`payroll.py` ~`:710-730`). Matches the earlier recommendation.
+- NBCPSS (info): Year-4 minimums, PSSPF rate schedule (7.5%, watch item for announced temporary reduction pending FSCA approval), medical R122/R172.50, clause-8 annual bonus and anniversary logic added — domain-specific, not SARS; bonus now taxed with the SARS annual-bonus method (no ×12 annualisation) ✓. Clause-8 formula flagged in code as "confirm with the Council".
+- Sources: [SARS Guide for Employers 2027](https://www.sars.gov.za/guide-for-employers-in-respect-of-employees-tax-2027/), [KPMG SA Budget Guide 2026](https://assets.kpmg.com/content/dam/kpmgsites/za/pdf/2026/02/SA%20Budget%20Guide%202026.pdf), prior-run SARS rates page check.
 
 ## 8. Action items
-**Critical / High:** none.
-**Medium**
-1. Review/fix UIF exemption categories `payroll.py:626` (learnership, foreign_national) before committing the staged change.
+**Critical / High / Medium:** none.
 **Low**
-2. Clarify `temp_labour` SDL/UIF exemption semantics (`payroll.py:626,633`).
-3. Validate `data.date` in `terminate_employee` (`companies.py`, ~line 1765) → 400 on bad input.
-4. (carried) Confirm `reclass_expenses_2026-09-28.py` run on production; decide on `zuzan.db` history purge; delete `zuzan.db.bak-20260928-184955`.
-5. (carried) Backfill NULL `paid_date`/`expense_date` for `management_accounts()`.
-6. (carried, Info) Clean up untracked `zuzan-backend/_to_delete/`; verify split-schedule payroll runs (now live via dual pay schedule tabs) both post journals and feed dashboard payroll cost for the same period.
+1. `companies.py:1777` — `terminate_employee` uses `datetime.fromisoformat(data.date)` unguarded; invalid input → 500. Return 400 (carried).
+2. Confirm NBCPSS clause-8 bonus formula with the Council (`payroll.py` `nbcpss_annual_bonus`).
+3. (carried) Confirm `reclass_expenses_2026-09-28.py` run on production; decide `zuzan.db` history purge; delete `zuzan.db.bak-20260928-184955`.
+4. (carried) Backfill NULL `paid_date`/`expense_date` for `management_accounts()`.
+5. (carried, Info) Clean untracked `zuzan-backend/_to_delete/`; verify split-schedule payroll runs both post journals and feed dashboard payroll cost.
 
-Standing reminders: replace provisional 2027/2028 `TAX_YEARS` after Budget Feb 2027; IFRS-for-SMEs 3rd edition / IFRS 18 checklist early 2027; ConCourt VAT s7(4) ruling pending.
+Standing reminders: replace provisional 2027/2028 `TAX_YEARS` after Budget Feb 2027; IFRS-for-SMEs 3rd ed. / IFRS 18 checklist early 2027; watch PSSPF rate-reduction confirmation.

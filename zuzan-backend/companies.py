@@ -1771,12 +1771,14 @@ async def terminate_employee(
     ).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
+    # Validate the date BEFORE mutating the employee so a bad date changes nothing.
+    try:
+        term_date = datetime.fromisoformat(data.date) if data.date else datetime.utcnow()
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid date — use YYYY-MM-DD")
     emp.is_active = False
     emp.termination_reason = data.reason
-    try:
-        emp.termination_date = datetime.fromisoformat(data.date) if data.date else datetime.utcnow()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date — use YYYY-MM-DD")
+    emp.termination_date = term_date
     db.commit()
     _co = db.query(Company).filter(Company.id == current_user.company_id).first()
     return _employee_dict(emp, _co.industry if _co else None)
