@@ -1231,15 +1231,9 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
                      (p.sunday_amount or 0) + (p.ph_amount or 0) + \
                      (p.night_shift_allowance or 0) + (p.special_allowance_amount or 0) + \
                      (p.cleaning_allowance or 0) + (p.annual_bonus or 0)
-    # For NBCPSS employees on PSSSBC medical, the stored medical_aid_employee_ded was
-    # set before the double-deduction fix.  Only one of the two should appear in the total.
-    _gen_medical = (p.medical_aid_employee_ded or 0) if (p.nbcpss_medical_employee or 0) == 0 else 0
-    total_deductions = round(
-        (p.paye or 0) + (p.uif_employee or 0) +
-        (p.pension_employee or 0) + _gen_medical +
-        (p.nbcpss_provident_employee or 0) + (p.nbcpss_medical_employee or 0) +
-        (p.union_subscription_ded or 0) + (p.garnishee_total or 0) +
-        (p.advance_deduction or 0), 2)
+    # Derive total_deductions from gross - net_pay so the formula on the payslip always
+    # balances, even for historical payslips stored before the double-deduction fix.
+    total_deductions = round(taxable_gross - (p.net_pay or 0), 2)
 
     def row(label, value, color="#222", bold=False):
         fw = "font-weight:700;" if bold else ""
