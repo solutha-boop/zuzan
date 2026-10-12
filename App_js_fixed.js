@@ -4356,8 +4356,9 @@ function Payroll({live = {}, user = {}}) {
               </tbody>
             </table>
             </div>
+            )} {/* end casual/else ternary */}
 
-            {/* ── Once-off items ─────────────────────────────────────────── */}
+            {/* ── Once-off items (shown for all pay schedule tabs) ────────── */}
             <div style={{marginTop:16,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
               <div style={{fontSize:12,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Once-off Items (this pay run only)</div>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
@@ -4388,7 +4389,6 @@ function Payroll({live = {}, user = {}}) {
                 </tbody>
               </table>
             </div>
-            )} {/* end casual else */}
 
             <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
               <button onClick={()=>setShowOtModal(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
