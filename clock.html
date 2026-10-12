@@ -430,6 +430,13 @@ let splashTimer  = null;
 // ═══════════════════════════════════════════════════════════════
 // CLOCK DISPLAY
 // ═══════════════════════════════════════════════════════════════
+// Local (browser) date/time helpers - toISOString() is UTC and shifts every value by 2h in South Africa.
+function localDate(d = new Date()) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function localInputValue(d) {   // value for <input type="datetime-local">
+  return localDate(d) + 'T' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
 function fmtDatetime(d) {
   return d.toLocaleString('en-ZA', {
     weekday:'short', day:'2-digit', month:'short', year:'numeric',
@@ -568,7 +575,7 @@ async function afterLogin() {
   showApp();
   document.getElementById('manager-tab').style.display = '';
   // Pre-fill date ranges
-  const today = new Date().toISOString().slice(0,10);
+  const today = localDate();
   const monthStart = today.slice(0,8) + '01';
   ['rec-from','ph-from'].forEach(id => document.getElementById(id).value = monthStart);
   ['rec-to','ph-to'].forEach(id => document.getElementById(id).value = today);
@@ -726,7 +733,7 @@ function renderMobileStatus() {
 async function loadMobileLog(eid) {
   const list = document.getElementById('mobile-log-list');
   try {
-    const today = new Date().toISOString().slice(0,10);
+    const today = localDate();
     const data  = await api('GET', `/clocking/sessions?date_from=${today}&date_to=${today}&employee_id=${eid}`);
     if (!data.length) { list.innerHTML = '<div class="empty-state">No events today.</div>'; return; }
     list.innerHTML = data.map(s => `
@@ -919,7 +926,7 @@ function copyKioskToken() {
 function openManualModal() {
   const now = new Date();
   now.setSeconds(0, 0);
-  document.getElementById('modal-ts').value = now.toISOString().slice(0,16);
+  document.getElementById('modal-ts').value = localInputValue(now);
   document.getElementById('modal-notes').value = '';
   document.getElementById('modal-err').textContent = '';
   document.getElementById('modal-overlay').classList.add('show');
@@ -952,7 +959,7 @@ function openEditModal(id, isoTs, type) {
   document.getElementById('edit-type').value = type;
   const dt = new Date(isoTs);
   dt.setSeconds(0,0);
-  document.getElementById('edit-ts').value = dt.toISOString().slice(0,16);
+  document.getElementById('edit-ts').value = localInputValue(dt);
   document.getElementById('edit-notes').value = '';
   document.getElementById('edit-err').textContent = '';
   document.getElementById('edit-modal-overlay').style.display = 'flex';

@@ -37,6 +37,11 @@ router = APIRouter()
 LOCAL_UTC_OFFSET = timedelta(hours=float(os.getenv("CLOCK_UTC_OFFSET_HOURS", "2")))
 
 
+def _emp_name(e) -> str:
+    """Employee has first_name/last_name columns (there is no .name attribute)."""
+    return f"{getattr(e, 'first_name', '') or ''} {getattr(e, 'last_name', '') or ''}".strip()
+
+
 def _to_utc_naive(dt: Optional[datetime]) -> Optional[datetime]:
     """Normalise any incoming datetime to naive UTC (the storage convention)."""
     if dt is None:
@@ -105,6 +110,16 @@ def _is_ph(d: date) -> bool:
 
 # ── Shift maths (all inputs are LOCAL naive datetimes) ───────────────────────
 
+def _round_dt(dt: datetime, minutes: int) -> datetime:
+    """Round a punch to the nearest `minutes` (0 = exact). Stops clock jitter (e.g. out at 18:03) from
+    creating a few minutes of 'overtime' every single shift."""
+    if not minutes or minutes <= 0:
+        return dt
+    step = minutes * 60
+    secs = (dt - datetime(dt.year, dt.month, dt.day)).total_seconds()
+    return datetime(dt.year, dt.month, dt.day) + timedelta(seconds=round(secs / step) * step)
+
+
 def _segments(local_in: datetime, local_out: datetime):
     """Split a shift at local midnight -> [(seg_in, seg_out, local_date)]."""
     segs, cur = [], local_in
@@ -163,19 +178,19 @@ def _bucket_hours(dt_in: datetime, dt_out: datetime, daily_threshold: float = 8.
 NBCPSS_WEEKLY_ORDINARY_HOURS = 48.0
 
 
-def _aggregate_security(sessions: list, period_start: date, period_end: date):
+def _aggregate_security(sessions: list, period_start: date, period_end: date, all_sessions: Optional[list] = None):
     """
-    NBCPSS bucketing for a security officer. `sessions` = [(local_in, local_out)].
+    NBCPSS bucketing for a security officer. `sessions` = [(local_in, local_out)] CLOCKED IN inside the
+    period; `all_sessions` = every paired session fetched around it (used only for the weekly overtime test).
     * Ordinary hours are 48 per week (12h shifts): overtime is only time worked beyond 48h in a Mon-Sun
-      week - NOT beyond 8h in a day. For a week only partly inside the period the threshold is pro-rated
-      (48 x days_in_period / 7).
+      week - NOT beyond 8h in a day. A week's overtime is paid once, in the period that contains the
+      week's Sunday, using the whole week's hours (so month-end weeks are never pro-rated or split).
     * Sunday / public-holiday hours are paid through their own premium and are not counted again as
       overtime: overtime is taken from weekday hours only.
     * Night shift = one night-shift allowance per shift that is mostly between 18:00 and 06:00.
     """
     sun = ph = 0.0
     night = 0
-    weeks: dict = {}
     total_hours = 0.0
     for lin, lout in sessions:
         if _is_night_shift(lin, lout):
@@ -183,22 +198,24 @@ def _aggregate_security(sessions: list, period_start: date, period_end: date):
         for seg_in, seg_out, d in _segments(lin, lout):
             h = (seg_out - seg_in).total_seconds() / 3600.0
             total_hours += h
-            wk = d - timedelta(days=d.weekday())
-            w = weeks.setdefault(wk, {"total": 0.0, "weekday": 0.0})
-            w["total"] += h
             if _is_ph(d):
                 ph += h
             elif d.weekday() == 6:
                 sun += h
-            else:
+    weeks: dict = {}
+    for lin, lout in (all_sessions if all_sessions is not None else sessions):
+        for seg_in, seg_out, d in _segments(lin, lout):
+            h = (seg_out - seg_in).total_seconds() / 3600.0
+            wk = d - timedelta(days=d.weekday())
+            w = weeks.setdefault(wk, {"total": 0.0, "weekday": 0.0})
+            w["total"] += h
+            if not _is_ph(d) and d.weekday() != 6:
                 w["weekday"] += h
     ot = 0.0
     for wk, w in weeks.items():
-        first = max(wk, period_start)
-        last = min(wk + timedelta(days=6), period_end)
-        days_in = max(1, (last - first).days + 1)
-        threshold = NBCPSS_WEEKLY_ORDINARY_HOURS * days_in / 7.0
-        ot += min(max(0.0, w["total"] - threshold), w["weekday"])
+        week_sunday = wk + timedelta(days=6)
+        if period_start <= week_sunday <= period_end:
+            ot += min(max(0.0, w["total"] - NBCPSS_WEEKLY_ORDINARY_HOURS), w["weekday"])
     return {"ot_hours": ot, "sunday_hours": sun, "ph_hours": ph,
             "night_shift_shifts": night, "total_hours": total_hours}
 
@@ -279,12 +296,12 @@ async def kiosk_info(
     employees = db.query(Employee).filter(
         Employee.company_id == company.id,
         Employee.is_active.is_(True),
-    ).order_by(Employee.name).all()
+    ).order_by(Employee.first_name, Employee.last_name).all()
     return {
         "company_id": company.id,
         "company_name": company.name,
         "employees": [
-            {"id": e.id, "name": e.name, "employee_number": e.employee_number or str(e.id)}
+            {"id": e.id, "name": _emp_name(e), "employee_number": e.employee_number or str(e.id)}
             for e in employees
         ],
     }
@@ -335,7 +352,7 @@ async def clock_event_authenticated(
     db.add(ev)
     db.commit()
     db.refresh(ev)
-    return {"id": ev.id, "employee": emp.name, "event_type": ev.event_type,
+    return {"id": ev.id, "employee": _emp_name(emp), "event_type": ev.event_type,
             "timestamp": _utc_iso(ev.timestamp)}
 
 
@@ -371,7 +388,7 @@ async def clock_event_kiosk(
     db.add(ev)
     db.commit()
     db.refresh(ev)
-    return {"id": ev.id, "employee": emp.name, "event_type": ev.event_type,
+    return {"id": ev.id, "employee": _emp_name(emp), "event_type": ev.event_type,
             "timestamp": _utc_iso(ev.timestamp)}
 
 
@@ -386,7 +403,7 @@ async def today_attendance(
     cid = current_user.company_id
     employees = db.query(Employee).filter(
         Employee.company_id == cid, Employee.is_active.is_(True)
-    ).order_by(Employee.name).all()
+    ).order_by(Employee.first_name, Employee.last_name).all()
 
     today_start = datetime.utcnow() - timedelta(hours=24)   # not "since midnight": a night shift in progress must still show IN
     events = db.query(ClockEvent).filter(
@@ -404,7 +421,7 @@ async def today_attendance(
         ev = last_event.get(emp.id)
         result.append({
             "employee_id":     emp.id,
-            "name":            emp.name,
+            "name":            _emp_name(emp),
             "employee_number": emp.employee_number or str(emp.id),
             "status":          ev.event_type if ev else "out",
             "last_event":      _utc_iso(ev.timestamp) if ev else None,
@@ -424,7 +441,7 @@ async def today_attendance_kiosk(
         raise HTTPException(status_code=403, detail="Invalid kiosk token")
     employees = db.query(Employee).filter(
         Employee.company_id == company.id, Employee.is_active.is_(True)
-    ).order_by(Employee.name).all()
+    ).order_by(Employee.first_name, Employee.last_name).all()
     today_start = datetime.utcnow() - timedelta(hours=24)   # not "since midnight": a night shift in progress must still show IN
     events = db.query(ClockEvent).filter(
         ClockEvent.company_id == company.id,
@@ -438,7 +455,7 @@ async def today_attendance_kiosk(
         ev = last_event.get(emp.id)
         result.append({
             "employee_id":     emp.id,
-            "name":            emp.name,
+            "name":            _emp_name(emp),
             "employee_number": emp.employee_number or str(emp.id),
             "status":          ev.event_type if ev else "out",
             "last_event":      _utc_iso(ev.timestamp) if ev else None,
@@ -489,7 +506,7 @@ async def get_sessions(
         for ev_in, ev_out in pairs:
             sessions.append({
                 "employee_id":     eid,
-                "employee_name":   emp_map.get(eid, {}).name if hasattr(emp_map.get(eid), "name") else "?",
+                "employee_name":   _emp_name(emp_map[eid]) if eid in emp_map else "?",
                 "employee_number": getattr(emp_map.get(eid), "employee_number", None) or str(eid),
                 "clock_in_id":     ev_in.id,
                 "clock_in":        _utc_iso(ev_in.timestamp),
@@ -510,6 +527,7 @@ async def payroll_hours(
     date_from:       str   = Query(...),
     date_to:         str   = Query(...),
     daily_threshold: float = Query(8.0,  description="Non-security staff: normal hours per day before OT kicks in"),
+    round_minutes:   int   = Query(15,   description="Round each punch to the nearest N minutes (0 = exact)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -519,7 +537,8 @@ async def payroll_hours(
     * date_from / date_to are LOCAL (SAST) calendar days, inclusive. A shift belongs to the period in
       which it was CLOCKED IN, so a night shift that starts on the last day and ends after midnight is
       paid once, in the right period.
-    * Security officers (NBCPSS grade set): overtime is beyond 48h per Mon-Sun week, night shifts are
+    * Security officers (NBCPSS grade set): overtime is beyond 48h per Mon-Sun week (paid in the period
+      holding that week's Sunday), night shifts are
       judged by where the hours fall, and normal hours are NOT sent for pay (apply_normal_hours=false)
       because basic pay is the contracted monthly salary.
     * Every irregularity (missed clock-in/out, open session, very long shift) is returned in
@@ -535,7 +554,7 @@ async def payroll_hours(
         raise HTTPException(status_code=400, detail="date_to is before date_from")
 
     # Fetch one extra day either side so a shift that straddles the period edge is still paired.
-    win_from = _local_midnight_utc(d_from) - timedelta(days=1)
+    win_from = _local_midnight_utc(d_from) - timedelta(days=8)   # reach back to the Monday of the first week
     win_to   = _local_midnight_utc(d_to + timedelta(days=1)) + timedelta(days=1)
     events = db.query(ClockEvent).filter(
         ClockEvent.company_id == cid,
@@ -562,7 +581,10 @@ async def payroll_hours(
         pairs, problems = _pair_events_ex(evs)
         exceptions = [{"type": p["type"], "message": p["message"]} for p in problems if _in_period(p["at"])]
         sessions_local = []
+        all_local = []
         for ev_in, ev_out in pairs:
+            if ev_out is not None:
+                all_local.append((_round_dt(_local(ev_in.timestamp), round_minutes), _round_dt(_local(ev_out.timestamp), round_minutes)))
             if not _in_period(ev_in.timestamp):
                 continue                       # belongs to the neighbouring period
             if ev_out is None:
@@ -571,14 +593,15 @@ async def payroll_hours(
                                    "message": f"Clocked in {_local(ev_in.timestamp):%a %d %b %H:%M} and not clocked out" +
                                               (" (may still be on shift)" if still_on else " - shift not paid")})
                 continue
-            lin, lout = _local(ev_in.timestamp), _local(ev_out.timestamp)
+            lin = _round_dt(_local(ev_in.timestamp), round_minutes)
+            lout = _round_dt(_local(ev_out.timestamp), round_minutes)
             if (lout - lin) > timedelta(hours=16):
                 exceptions.append({"type": "long_shift",
                                    "message": f"Shift of {(lout - lin).total_seconds() / 3600:.1f}h starting {lin:%a %d %b %H:%M} - check for a missed punch"})
             sessions_local.append((lin, lout))
 
         if is_sec:
-            agg = _aggregate_security(sessions_local, d_from, d_to)
+            agg = _aggregate_security(sessions_local, d_from, d_to, all_local)
             totals = {"normal_hours": 0.0, "ot_hours": agg["ot_hours"], "sunday_hours": agg["sunday_hours"],
                       "ph_hours": agg["ph_hours"], "night_shift_shifts": agg["night_shift_shifts"]}
             worked = agg["total_hours"]
@@ -597,7 +620,7 @@ async def payroll_hours(
         result.append({
             "employee_id":         eid,
             "employee_number":     emp.employee_number or str(eid),
-            "name":                emp.name,
+            "name":                _emp_name(emp),
             "is_security":         is_sec,
             "apply_normal_hours":  not is_sec,
             "hours_worked":        round(worked, 2),
@@ -618,6 +641,7 @@ async def export_csv(
     date_from:       str   = Query(...),
     date_to:         str   = Query(...),
     daily_threshold: float = Query(8.0),
+    round_minutes:   int   = Query(15),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -629,7 +653,7 @@ async def export_csv(
     """
     rows = await payroll_hours(
         date_from=date_from, date_to=date_to,
-        daily_threshold=daily_threshold,
+        daily_threshold=daily_threshold, round_minutes=round_minutes,
         current_user=current_user, db=db,
     )
     output = io.StringIO()
@@ -740,6 +764,6 @@ async def add_manual_event(
     db.commit()
     db.refresh(ev)
     log_action(db, current_user.company_id, current_user.id, "clock_event_manual",
-               f"Manual clock {data.event_type} for {emp.name} at {data.timestamp}")
-    return {"id": ev.id, "employee": emp.name, "event_type": ev.event_type,
+               f"Manual clock {data.event_type} for {_emp_name(emp)} at {data.timestamp}")
+    return {"id": ev.id, "employee": _emp_name(emp), "event_type": ev.event_type,
             "timestamp": _utc_iso(ev.timestamp), "method": "manual"}

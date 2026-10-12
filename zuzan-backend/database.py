@@ -95,6 +95,8 @@ class Company(Base):
     trial_expiry_email_sent_at=Column(DateTime,nullable=True) # When "trial ended" email was sent
     overdue_reminders_enabled=Column(Boolean,default=True)  # Whether auto overdue reminders fire
     parent_company_id=Column(Integer,ForeignKey("companies.id"),nullable=True)  # Set for accountant-managed clients
+    kiosk_token=Column(String,nullable=True,index=True)   # public clocking-kiosk link token (clocking.py)
+    kiosk_token_created_at=Column(DateTime,nullable=True)
     created_at=Column(DateTime,default=datetime.utcnow)
     users=relationship("User",back_populates="company")
     invoices=relationship("Invoice",back_populates="company")

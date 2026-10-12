@@ -3748,11 +3748,29 @@ function Payroll({live = {}, user = {}}) {
                     const blob = await res.blob();
                     const url  = URL.createObjectURL(blob);
                     const a    = document.createElement("a");
-                    a.href = url; a.download = `easyfile_irp5_${annualTaxYear}_TEST.txt`; a.click();
+                    a.href = url; a.download = `easyfile_emp501_${annualTaxYear}_annual_TEST.txt`; a.click();
                     URL.revokeObjectURL(url);
                   } catch(err) { alert("Download failed. Make sure PAYE Reference is saved in Settings → Company."); }
                 }} style={{background:"#1a7f37",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                  ⬇ e@syFile Import (.txt)
+                  ⬇ Annual EMP501 (.txt)
+                </button>
+              )}
+              {irp5Emps.length>0 && (
+                <button onClick={async()=>{
+                  try {
+                    const token = localStorage.getItem("zuzan_token");
+                    const res = await fetch(`https://zuzan-backend.onrender.com/payroll/easyfile-export?tax_year=${annualTaxYear}&mode=TEST&interim=true`, {
+                      headers:{Authorization:`Bearer ${token}`}
+                    });
+                    if (!res.ok) { const e=await res.json(); alert("Interim EMP501 export failed: "+(e.detail||res.status)); return; }
+                    const blob = await res.blob();
+                    const url  = URL.createObjectURL(blob);
+                    const a    = document.createElement("a");
+                    a.href = url; a.download = `easyfile_emp501_${annualTaxYear}_interim_mar_aug_TEST.txt`; a.click();
+                    URL.revokeObjectURL(url);
+                  } catch(err) { alert("Download failed. Make sure PAYE Reference is saved in Settings → Company."); }
+                }} style={{background:"#b45309",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  ⬇ Interim EMP501 Mar–Aug (.txt)
                 </button>
               )}
               <PrintBtn onClick={()=>{const el=document.getElementById("annual-print");if(!el)return;const w=window.open("","_blank");w.document.write("<html><body>"+el.innerHTML+"</body></html>");w.document.close();w.print();}}/>
@@ -4154,12 +4172,13 @@ function Payroll({live = {}, user = {}}) {
                     const to   = prompt("Clocking period TO (yyyy-mm-dd):", today);
                     if (!to) return;
                     const token = localStorage.getItem("zuzan_token");
-                    const resp = await fetch(`https://zuzan-backend.onrender.com/clocking/payroll-hours?date_from=${from}&date_to=${to}&daily_threshold=8`, {
+                    const resp = await fetch(`${BASE_URL}/clocking/payroll-hours?date_from=${from}&date_to=${to}&daily_threshold=8&round_minutes=15`, {
                       headers: { Authorization: `Bearer ${token||""}` }
                     });
                     if (!resp.ok) throw new Error(await resp.text());
                     const rows = await resp.json();
                     let matched = 0, unmatched = [];
+                    const clockIssues = [];
                     const newOt = {...otData};
                     const newSec = {};
                     rows.forEach(row => {
@@ -4171,18 +4190,29 @@ function Payroll({live = {}, user = {}}) {
                       );
                       if (!emp) { unmatched.push(row.name || empNum || "(unknown)"); return; }
                       matched++;
+                      // Security officers are paid their contracted monthly salary: never send clocked
+                      // "normal hours" for them (payroll would rebuild basic pay as hours x rate).
                       newOt[emp.id] = {
-                        normalHours: row.normal_hours || 0,
+                        ...(newOt[emp.id] || {}),
+                        ...(row.apply_normal_hours === false ? {} : { normalHours: row.normal_hours || 0 }),
                         otHours:     row.ot_hours     || 0,
                         sunHours:    row.sunday_hours || 0,
                         phHours:     row.ph_hours     || 0,
                       };
-                      if (row.night_shift_shifts) newSec[emp.id] = { nightShifts: row.night_shift_shifts, specialShifts: 0 };
+                      // Merge, never replace: keep special-allowance shifts, unauthorised hours and the bonus tick.
+                      if (emp.security_grade) newSec[emp.id] = { nightShifts: row.night_shift_shifts || 0 };
+                      (row.exceptions || []).forEach(x => clockIssues.push(`${row.name}: ${x.message}`));
                     });
                     setOtData(newOt);
-                    if (Object.keys(newSec).length) setSecData(prev => ({...prev, ...newSec}));
-                    if (unmatched.length) alert(`Loaded ${matched} employees from clocking.\n\nCould not match ${unmatched.length}: ${unmatched.join(", ")}`);
-                    else alert(`✅ Loaded ${matched} employee${matched!==1?"s":""} from clocking system (${from} → ${to}).`);
+                    if (Object.keys(newSec).length) setSecData(prev => {
+                      const next = {...prev};
+                      Object.keys(newSec).forEach(id => { next[id] = {...(prev[id] || {}), ...newSec[id]}; });
+                      return next;
+                    });
+                    let msg = `✅ Loaded ${matched} employee${matched!==1?"s":""} from clocking (${from} → ${to}).`;
+                    if (unmatched.length) msg += `\n\nCould not match ${unmatched.length}: ${unmatched.join(", ")}`;
+                    if (clockIssues.length) msg += `\n\n⚠️ ${clockIssues.length} clocking problem(s) - fix in the clocking app BEFORE running payroll (affected shifts are not paid):\n` + clockIssues.slice(0, 15).join("\n") + (clockIssues.length > 15 ? `\n…and ${clockIssues.length - 15} more` : "");
+                    alert(msg);
                   } catch(err) {
                     alert("Could not load from clocking: " + err.message);
                   }
