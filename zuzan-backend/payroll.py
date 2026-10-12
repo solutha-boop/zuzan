@@ -748,6 +748,7 @@ def calc_payroll(
 
     return {
         "gross":                  round(gross_monthly, 2),
+        "effective_gross":        round(effective_gross, 2),
         "overtime":               ot,
         "taxable_gross":          round(taxable_gross, 2),
         "pension_employee":       round(pension_employee_monthly, 2),
@@ -1111,7 +1112,7 @@ async def run_payroll(
         payslip = Payslip(
             employee_id=emp.id,
             period=period,
-            gross_salary=c["gross"],
+            gross_salary=c["effective_gross"],  # actual hours×rate (not contracted gross); keeps journal balanced for hourly employees working fewer than prescribed hours
             paye=c["paye"],
             uif_employee=c["uif_employee"],
             uif_employer=c["uif_employer"],
