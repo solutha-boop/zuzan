@@ -3374,6 +3374,7 @@ function Payroll({live = {}, user = {}}) {
   const isSecurityCo = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_") === "private_security";
   const empSchedule = e => {
     if (e.security_grade) return "security";
+    if (e.pay_schedule === "casual") return "casual";
     if (e.pay_schedule === "salaried") return "salaried"; // explicitly overridden
     if (isSecurityCo) return "security"; // company default for private security
     return e.pay_schedule || "salaried";
@@ -3960,7 +3961,7 @@ function Payroll({live = {}, user = {}}) {
       </div>
       {/* ── Pay Schedule Tabs ──────────────────────────────────────────────── */}
       <div style={{display:"flex",gap:0,marginBottom:16,borderBottom:`1px solid ${C.border}`}}>
-        {[["security","🛡️ Security Officers"],["salaried","💼 Salaried Staff"]].map(([key,label])=>(
+        {[["security","🛡️ Security Officers"],["salaried","💼 Salaried Staff"],["casual","👷 Casual / Temp"]].map(([key,label])=>(
           <button key={key} onClick={()=>setPayScheduleTab(key)}
             style={{background:"none",border:"none",borderBottom:payScheduleTab===key?`2px solid ${C.accent}`:"2px solid transparent",
               padding:"8px 20px",fontSize:13,fontWeight:payScheduleTab===key?700:400,
@@ -3975,12 +3976,12 @@ function Payroll({live = {}, user = {}}) {
       </div>
       {scheduleEmployees.length === 0 && (
         <div style={{background:C.surface,border:`1px dashed ${C.border}`,borderRadius:12,padding:"32px 24px",textAlign:"center",marginBottom:20}}>
-          <div style={{fontSize:28,marginBottom:8}}>{payScheduleTab==="security"?"🛡️":"💼"}</div>
+          <div style={{fontSize:28,marginBottom:8}}>{payScheduleTab==="security"?"🛡️":payScheduleTab==="casual"?"👷":"💼"}</div>
           <div style={{fontWeight:700,fontSize:15,color:C.ink,marginBottom:4}}>
-            No {payScheduleTab==="security"?"security officer":"salaried"} employees found
+            No {payScheduleTab==="security"?"security officer":payScheduleTab==="casual"?"casual / temp":"salaried"} employees found
           </div>
           <div style={{fontSize:12,color:C.inkMid}}>
-            Add employees and set their pay schedule to <strong>{payScheduleTab==="security"?"Security":"Salaried"}</strong> to see them here.
+            Add employees and set their pay schedule to <strong>{payScheduleTab==="security"?"Security":payScheduleTab==="casual"?"Casual / Temp":"Salaried"}</strong> to see them here.
           </div>
         </div>
       )}
@@ -3994,7 +3995,7 @@ function Payroll({live = {}, user = {}}) {
       <div style={{background:`linear-gradient(135deg,${C.accentLt},transparent)`,border:`1px solid ${C.accent}40`,borderRadius:16,padding:"16px 24px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
           <div style={{fontWeight:700,fontSize:15,color:C.ink}}>
-            {new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})} — {payScheduleTab==="security"?"Security Officers":"Salaried Staff"} Payroll
+            {new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})} — {payScheduleTab==="security"?"Security Officers":payScheduleTab==="casual"?"Casual / Temp":"Salaried Staff"} Payroll
             {payrollRun && <span style={{marginLeft:10,background:C.greenLt,color:C.green,borderRadius:8,padding:"2px 10px",fontSize:11,fontWeight:700}}>✓ Run</span>}
           </div>
           <div style={{fontSize:12,color:C.inkMid,marginTop:3}}>
@@ -4004,12 +4005,12 @@ function Payroll({live = {}, user = {}}) {
         <button onClick={() => {
           // Initialise overtime entries for current schedule's employees only
           const init = {};
-          scheduleEmployees.forEach(e => { init[e.id] = {otHours:0, sunHours:0, phHours:0}; });
+          scheduleEmployees.forEach(e => { init[e.id] = payScheduleTab==="casual" ? {daysWorked:""} : {otHours:0, sunHours:0, phHours:0}; });
           setOtData(prev => ({...prev, ...init}));
           setSecArea("3"); // NBCPSS Area 3 rates only
           setShowOtModal(true);
         }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-          Run {payScheduleTab==="security"?"Security":"Salaried"} Payroll
+          Run {payScheduleTab==="security"?"Security":payScheduleTab==="casual"?"Casual":"Salaried"} Payroll
         </button>
       </div>
       </>}
@@ -4018,7 +4019,7 @@ function Payroll({live = {}, user = {}}) {
         <div style={{position:"fixed",inset:0,background:"#00000070",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:"100%",maxWidth:760,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 40px #00000030"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
+              <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Run Payroll — {payScheduleTab==="casual"?"Days Worked Entry":(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"?"Overtime & Security Allowances":"Overtime Entry"}</h3>
               <button onClick={()=>setShowOtModal(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkMid}}>×</button>
             </div>
             <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter hours per employee for this pay period. <strong>Weekday/Sat OT</strong> = extra hours above normal shift (×1.5). {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"
@@ -4192,6 +4193,50 @@ function Payroll({live = {}, user = {}}) {
               );
             })()}
 
+            {/* ── Casual / Temp: days-worked table ── */}
+            {payScheduleTab === "casual" ? (
+              <div style={{overflowX:"auto",overflowY:"auto",maxHeight:480,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:20}}>
+                <div style={{background:"#fffbeb",border:"1px solid #fbbf24",borderRadius:"10px 10px 0 0",padding:"10px 16px",fontSize:12,color:"#92400e"}}>
+                  <strong>Casual / Temp payroll</strong> — enter the number of days each worker worked this period. Pay = Days × Daily Rate. UIF and PAYE apply as normal.
+                </div>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead><tr style={{background:C.bg}}>
+                    {["Employee","Daily Rate","Days Worked","Gross Preview","Est. PAYE","Est. UIF","Est. Net"].map(h=>(
+                      <th key={h} style={{padding:"10px 12px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:700,textTransform:"uppercase",letterSpacing:0.4,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {scheduleEmployees.map(emp=>{
+                      const days = +otData[emp.id]?.daysWorked || 0;
+                      const dailyRate = emp.hourly_rate ? emp.hourly_rate * 8 : (emp.salary || 0) / 26;
+                      const grossPreview = days * dailyRate;
+                      // Rough PAYE/UIF preview using calc engine at actual gross
+                      const pc = grossPreview > 0 ? calcPayroll(grossPreview, taxYear, 0, 0, 0, emp.hourly_rate||null, 0, 0, 0, 0, 0, 0, 0, {isSecurity:false}) : null;
+                      const inpStyle = {width:"70px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
+                      return (
+                        <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
+                          <td style={{padding:"10px 12px"}}>
+                            <div style={{fontWeight:600,color:C.ink}}>{emp.name}</div>
+                            <div style={{fontSize:10,color:C.inkMid}}>{emp.employee_number||emp.id}</div>
+                          </td>
+                          <td style={{padding:"10px 12px",color:C.inkMid}}>{fmt(dailyRate)}/day</td>
+                          <td style={{padding:"10px 12px"}}>
+                            <input style={inpStyle} type="number" min="0" max="31" step="1"
+                              value={otData[emp.id]?.daysWorked ?? ""}
+                              placeholder="0"
+                              onChange={e=>setOtData(prev=>({...prev,[emp.id]:{...prev[emp.id],daysWorked:e.target.value}}))}/>
+                          </td>
+                          <td style={{padding:"10px 12px",fontWeight:700,color:grossPreview>0?C.green:C.inkMid}}>{grossPreview>0?fmt(grossPreview):"—"}</td>
+                          <td style={{padding:"10px 12px",color:C.red}}>{pc?fmt(pc.paye):"—"}</td>
+                          <td style={{padding:"10px 12px",color:C.gold}}>{pc?fmt(pc.uifEmployee):"—"}</td>
+                          <td style={{padding:"10px 12px",fontWeight:600,color:C.accent}}>{pc?fmt(pc.netPay):"—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
             <div style={{overflowX:"auto",overflowY:"auto",maxHeight:480,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:20,scrollbarWidth:"thin",scrollbarColor:`${C.border} transparent`}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:800}}>
               <thead style={{position:"sticky",top:0,zIndex:2}}>
@@ -4343,16 +4388,22 @@ function Payroll({live = {}, user = {}}) {
                 </tbody>
               </table>
             </div>
+            )} {/* end casual else */}
 
             <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
               <button onClick={()=>setShowOtModal(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
               <button onClick={async () => {
                 setShowOtModal(false);
                 try {
-                  const otPayload = scheduleEmployees.map(emp => {
-                    const ot = otData[emp.id] || {};
-                    return { employee_id: emp.id, normal_hours: +ot.normalHours||0, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
-                  }).filter(e => e.normal_hours > 0 || e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
+                  const otPayload = payScheduleTab === "casual"
+                    ? scheduleEmployees.map(emp => {
+                        const days = +otData[emp.id]?.daysWorked || 0;
+                        return { employee_id: emp.id, normal_hours: days * 8, overtime_hours: 0, sunday_hours: 0, ph_hours: 0 };
+                      }).filter(e => e.normal_hours > 0)
+                    : scheduleEmployees.map(emp => {
+                        const ot = otData[emp.id] || {};
+                        return { employee_id: emp.id, normal_hours: +ot.normalHours||0, overtime_hours: +ot.otHours||0, sunday_hours: +ot.sunHours||0, ph_hours: +ot.phHours||0 };
+                      }).filter(e => e.normal_hours > 0 || e.overtime_hours > 0 || e.sunday_hours > 0 || e.ph_hours > 0);
                   const _bonusYm = new Date().toISOString().slice(0,7);
                   const secPayload = scheduleEmployees.map(emp => {
                     const sec = secData[emp.id] || {};
@@ -4609,6 +4660,7 @@ function Payroll({live = {}, user = {}}) {
               <select value={form.paySchedule||"salaried"} onChange={e=>setForm(v=>({...v,paySchedule:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
                 <option value="salaried">💼 Salaried Staff</option>
                 <option value="security">🛡️ Security Officers</option>
+                <option value="casual">👷 Casual / Temp</option>
               </select>
             </div>
             <div>
@@ -5150,6 +5202,7 @@ function Payroll({live = {}, user = {}}) {
                 <select value={editForm.paySchedule||"salaried"} onChange={e=>setEditForm(v=>({...v,paySchedule:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
                   <option value="salaried">💼 Salaried Staff</option>
                   <option value="security">🛡️ Security Officers</option>
+                  <option value="casual">👷 Casual / Temp</option>
                 </select>
               </div>
               {/* Employment Category (UIF/SDL exemption) */}

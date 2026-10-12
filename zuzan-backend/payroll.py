@@ -1000,6 +1000,8 @@ async def run_payroll(
                 (Employee.pay_schedule == "security") |
                 ((Employee.pay_schedule == None) & (Employee.security_grade != None))
             )
+        elif data.pay_schedule == "casual":
+            emp_q = emp_q.filter(Employee.pay_schedule == "casual")
         else:  # "salaried"
             emp_q = emp_q.filter(
                 (Employee.pay_schedule == "salaried") |
