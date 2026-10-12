@@ -3513,6 +3513,8 @@ function Payroll({live = {}, user = {}}) {
       medical_aid_employee:       editForm.medicalAidEmployee ? +editForm.medicalAidEmployee : 0,
       medical_aid_employer:       editForm.medicalAidEmployer ? +editForm.medicalAidEmployer : 0,
       medical_aid_dependants:     editForm.medicalAidDependants ? +editForm.medicalAidDependants : 0,
+      pay_schedule:               editForm.paySchedule || (editForm.securityGrade ? "security" : "salaried"),
+      employment_category:        editForm.employmentCategory || "permanent",
     };
     setEmployees(employees.map(e => e.id === editEmp.id ? updated : e));
     setEditEmp(null);
