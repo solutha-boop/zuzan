@@ -3318,6 +3318,14 @@ function Payroll({live = {}, user = {}}) {
   };
   // ─────────────────────────────────────────────────────────────────────────
 
+  // ── Company logo — fetch direct from API so payslips always have it ──────
+  const [companyLogoUrl, setCompanyLogoUrl] = useState(user.logoUrl || "");
+  useEffect(() => {
+    if (user.logoUrl) { setCompanyLogoUrl(user.logoUrl); return; }
+    api("/companies/me").then(d => { if (d.logo_url) setCompanyLogoUrl(d.logo_url); }).catch(() => {});
+  }, [user.logoUrl]);
+  // ─────────────────────────────────────────────────────────────────────────
+
   useEffect(() => { if (liveEmployees && liveEmployees.length > 0) setEmployees(liveEmployees.map(e => ({...e, name: `${e.first_name} ${e.last_name}`, salary: e.gross_salary, dept: e.department || "General"}))); }, [liveEmployees]);
   const [showNew, setShowNew] = useState(false);
   // ── Dual pay schedule state ───────────────────────────────────────────────
@@ -5085,7 +5093,7 @@ function Payroll({live = {}, user = {}}) {
           payroll={viewPayslip.payroll}
           period={new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}
           company={user.companyName || "Your Company"}
-          logoUrl={user.logoUrl || ""}
+          logoUrl={companyLogoUrl}
           onClose={()=>setViewPayslip(null)}
         />
       )}
