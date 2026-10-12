@@ -1637,6 +1637,7 @@ async def get_emp501(
 async def get_easyfile_export(
     tax_year: int = None,
     mode: str = "TEST",
+    interim: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1644,12 +1645,19 @@ async def get_easyfile_export(
     Generate a SARS BRS v25.3.0 e@syFile Employer import file (.txt).
     Produces employer header + one IRP5 certificate per employee + trailer record.
     mode: "TEST" (safe to import and delete) or "LIVE" (for actual submission).
+    interim: True = interim EMP501 (1 Mar – 31 Aug, due end of October); False = annual.
     """
     import math
 
     cid = current_user.company_id
     ty = tax_year or _default_tax_year()
-    periods = _tax_year_periods(ty)
+
+    # Interim EMP501 covers 1 March → 31 August (first 6 months of the tax year).
+    # Annual covers the full 12 months (1 March → 28/29 February).
+    if interim:
+        periods = [f"{ty - 1}-{m:02d}" for m in range(3, 9)]   # Mar–Aug of prior year
+    else:
+        periods = _tax_year_periods(ty)
 
     company = db.query(Company).filter(Company.id == cid).first()
     if not company:
@@ -1703,7 +1711,10 @@ async def get_easyfile_export(
     lines.append(f'2028,"ZuZan"')
     lines.append(f'2029,"ZuZan Payroll"')
     lines.append(f"2030,{ty}")
-    lines.append(f"2031,{ty}02")        # Period of recon end: CCYYMM — February = 02
+    # 2031 = Period of reconciliation end (CCYYMM).
+    # Interim: August of the prior year ({ty-1}08). Annual: February of the tax year ({ty}02).
+    recon_end_ym = f"{ty - 1}08" if interim else f"{ty}02"
+    lines.append(f"2031,{recon_end_ym}")
     lines.append(f'2037,"N"')           # No diplomatic indemnity
     lines.append(f"2082,{q(sic7_code)}")
     lines.append(f"2064,{q(addr_street)}")
@@ -1718,8 +1729,10 @@ async def get_easyfile_export(
         .all()
     )
 
-    period_start = f"{ty - 1}0301"     # CCYYMMDD: 01 March prior year
-    period_end   = f"{ty}0228"         # CCYYMMDD: 28 February tax year
+    period_start = f"{ty - 1}0301"                                 # CCYYMMDD: 01 March prior year
+    period_end   = f"{ty - 1}0831" if interim else f"{ty}0228"    # Interim: 31 Aug; Annual: 28 Feb
+    cert_month   = "08" if interim else "02"                       # used in cert number + fields
+    months_total = "6.0000" if interim else "12.0000"             # field 3200
 
     cert_count       = 0
     total_all_amounts = 0.0
@@ -1735,6 +1748,7 @@ async def get_easyfile_export(
 
         gross        = sum(p.gross_salary          or 0 for p in payslips)
         paye_amt     = sum(p.paye                  or 0 for p in payslips)
+        uif_emp_amt  = sum(p.uif_employee          or 0 for p in payslips)
         sdl_amt      = sum(p.sdl                   or 0 for p in payslips)
         s11f         = sum(p.s11f_deduction        or 0 for p in payslips)
         med_empr     = sum(p.medical_aid_employer_con or 0 for p in payslips)
@@ -1751,7 +1765,7 @@ async def get_easyfile_export(
 
         # Certificate number: PAYE_REF(10) + YEAR(4) + MONTH(2) + EMP_ID(14 zero-padded)
         paye_padded = paye_ref.ljust(10)[:10]
-        cert_num    = f"{paye_padded}{ty}02{str(emp.id).zfill(14)}"
+        cert_num    = f"{paye_padded}{ty}{cert_month}{str(emp.id).zfill(14)}"
         cert_num    = cert_num[:30].ljust(30)   # must be exactly 30 chars
 
         # Nature of person: A = individual with SA ID, B = without SA ID
@@ -1786,7 +1800,7 @@ async def get_easyfile_export(
         emp_lines.append(f"3170,{period_start}")
         emp_lines.append(f"3180,{period_end}")
         emp_lines.append(f'3195,"N"')
-        emp_lines.append(f"3200,12.0000")
+        emp_lines.append(f"3200,{months_total}")
         emp_lines.append(f"3210,{len(payslips)}.0000")
         # Residential address (use same as work address; postal structure 1 = same)
         emp_lines.append(f"3214,{q(emp_street)}")
@@ -1811,6 +1825,8 @@ async def get_easyfile_export(
         # ── Tax / deduction codes ─────────────────────────────────────────────
         emp_lines.append(f"4101,0.00")          # SITE — always include with cents (0.00 post-2013)
         emp_lines.append(f"4102,{fmt_amt(paye_amt, cents=True)}")   # PAYE — cents mandatory
+        if uif_emp_amt > 0:
+            emp_lines.append(f"4142,{fmt_amt(uif_emp_amt, cents=True)}")  # UIF employee — cents
         if s11f > 0:
             emp_lines.append(f"4005,{fmt_amt(s11f)}")      # Pension/provident (s11F)
         if sdl_amt > 0:
@@ -1823,7 +1839,7 @@ async def get_easyfile_export(
         lines.extend(emp_lines)
         cert_count += 1
         total_all_amounts += (
-            code_3601 + code_3713 + code_3801 + code_3699 + paye_amt + s11f + sdl_amt + pension_empr
+            code_3601 + code_3713 + code_3801 + code_3699 + paye_amt + uif_emp_amt + s11f + sdl_amt + pension_empr
         )
 
     if cert_count == 0:
@@ -1838,7 +1854,8 @@ async def get_easyfile_export(
     lines.append("9999")
 
     content  = "\r\n".join(lines)
-    filename = f"easyfile_irp5_{ty}_{mode.upper()}.txt"
+    period_tag = "interim_mar_aug" if interim else "annual"
+    filename = f"easyfile_emp501_{ty}_{period_tag}_{mode.upper()}.txt"
 
     return Response(
         content=content,
