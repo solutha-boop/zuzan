@@ -1579,9 +1579,13 @@ def _employee_dict(e: Employee, company_industry: str = None) -> dict:
     _is_sec_co = (company_industry or "").lower().replace(" ", "_").replace("-", "_") == "private_security"
     _has_grade  = bool(getattr(e, "security_grade", None))
     _stored_sch = getattr(e, "pay_schedule", None)
-    # Derive schedule: security_grade always wins; private_security co defaults
-    # to "security" unless the employee was explicitly overridden to "salaried".
-    if _has_grade or (_is_sec_co and _stored_sch != "salaried"):
+    # Derive schedule: explicit "casual" always wins (even at a security company
+    # that might have some temp/casual workers alongside its officers).
+    # security_grade presence also wins (grade implies officer).
+    # Private-security company defaults to "security" for any non-salaried, non-casual employee.
+    if _stored_sch == "casual":
+        _derived_schedule = "casual"
+    elif _has_grade or (_is_sec_co and _stored_sch not in ("salaried", "casual")):
         _derived_schedule = "security"
     else:
         _derived_schedule = _stored_sch or "salaried"
