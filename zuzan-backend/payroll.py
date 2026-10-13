@@ -1449,10 +1449,16 @@ async def delete_payroll_period(
     import re
     if not re.match(r"^\d{4}-\d{2}$", period):
         raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    # Payslip has no company_id — scope by employee_id subquery
+    emp_ids = [
+        e.id for e in db.query(Employee).filter(
+            Employee.company_id == current_user.company_id
+        ).all()
+    ]
     deleted = (
         db.query(Payslip)
         .filter(
-            Payslip.company_id == current_user.company_id,
+            Payslip.employee_id.in_(emp_ids),
             Payslip.period == period,
         )
         .all()
