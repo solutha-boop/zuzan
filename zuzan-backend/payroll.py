@@ -1437,6 +1437,33 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
 </body></html>"""
 
 
+@payroll_router.delete("/payslips/{period}")
+async def delete_payroll_period(
+    period: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete all payslips for a period so payroll can be re-run.
+    period format: YYYY-MM  (e.g. 2026-10)
+    """
+    import re
+    if not re.match(r"^\d{4}-\d{2}$", period):
+        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    deleted = (
+        db.query(Payslip)
+        .filter(
+            Payslip.company_id == current_user.company_id,
+            Payslip.period == period,
+        )
+        .all()
+    )
+    count = len(deleted)
+    for ps in deleted:
+        db.delete(ps)
+    db.commit()
+    return {"deleted": count, "period": period}
+
+
 @payroll_router.get("/payslips/{period}/summary")
 def payslip_period_summary(
     period: str,
