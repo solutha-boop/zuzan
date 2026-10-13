@@ -1309,12 +1309,11 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
     has_uniform    = (p.uniform_allowance or 0) > 0
     has_union      = (p.union_subscription_ded or 0) > 0
     has_pension    = (p.pension_employee or 0) > 0
-    # Suppress the general medical aid row for NBCPSS employees whose PSSSBC prescribed
-    # plan IS the medical aid.  Payslips stored before the backend double-deduction fix
-    # (which zeroes medical_aid_employee for security employees on re-run) will have a
-    # non-zero medical_aid_employee_ded alongside nbcpss_medical_employee; only show the
-    # PSSSBC line in that case.
-    has_medical_aid= (p.medical_aid_employee_ded or 0) > 0 and (p.nbcpss_medical_employee or 0) == 0
+    # Show the general medical aid row whenever it was actually deducted.
+    # Historical payslips run before the NBCPSS double-deduction fix may have a non-zero
+    # medical_aid_employee_ded alongside nbcpss_medical_employee — both must be shown so the
+    # employee can see every deduction that affected their net pay.
+    has_medical_aid= (p.medical_aid_employee_ded or 0) > 0
     has_bonus      = (p.annual_bonus or 0) > 0
     has_garnishee  = (p.garnishee_total or 0) > 0
     has_advance    = (p.advance_deduction or 0) > 0
@@ -1362,6 +1361,8 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
         deductions_rows += row("PSSSBC Medical Aid (NBCPSS Prescribed)", p.nbcpss_medical_employee or 0, "#dc2626")
     if has_union:
         deductions_rows += row("Union Subscription", p.union_subscription_ded or 0, "#dc2626")
+    if p.bc_levy_employer:
+        deductions_rows += row("NBCPSS BC Levy (Bargaining Council — Employee)", p.bc_levy_employer or 0, "#dc2626")
     if has_garnishee:
         deductions_rows += row("Garnishee Order(s)", p.garnishee_total or 0, "#dc2626")
     if has_advance:

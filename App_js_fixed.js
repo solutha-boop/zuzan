@@ -229,6 +229,7 @@ const NBCPSS_BC_LEVY                 = 7.00;   // R/employee/month, employer cos
 const NBCPSS_PSIRA_FEE               = 4.00;   // R/SO/month, employer cost
 const NBCPSS_MEDICAL_EMP             = 122.00; // R/month — PSSSBC prescribed hospital plan, employee share
 const NBCPSS_MEDICAL_EMPR            = 172.50; // R/month — PSSSBC prescribed hospital plan, employer share
+const NBCPSS_PROV_RATE               = 0.075;  // 7.5% of contract gross — PSSPF provident fund (employee + employer each)
 
 // audit fix 2026-09-16 — this always divided by the general 45h/week BCEA default
 // (195h/month) even for NBCPSS security employees, who are on a 48h/week schedule
@@ -308,6 +309,12 @@ function calcPayroll(
   const nbcpssMedicalEmployer = isSecurity ? NBCPSS_MEDICAL_EMPR : 0;
   if (isSecurity) { medicalAidEmployee = 0; medicalAidEmployer = 0; }
 
+  // NBCPSS PSSPF provident fund — 7.5% of basic contract salary (not taxable gross),
+  // mirroring backend payroll.py: nbcpss_prov_emp = round(_contract_gross * _psspf_rate, 2).
+  // Both employee and employer contribute 7.5%; only the employee share reduces net pay.
+  const nbcpssProvidentEmployee = isSecurity ? salary * NBCPSS_PROV_RATE : 0;
+  const nbcpssProvidentEmployer = isSecurity ? salary * NBCPSS_PROV_RATE : 0;
+
   const taxableGross = salary + ot.total + nightAllow + specialAllow + cleaningAllow + annualBonus;
 
   // Pension/provident: % of gross + optional fixed top-up (both add to total contribution)
@@ -341,11 +348,15 @@ function calcPayroll(
   const uifEmpr  = uifBase * 0.01;
   const sdl      = taxableGross * 0.01;
 
-  // Net pay: cash earnings minus employee-side deductions (fringe benefit excluded from cash)
-  const netPay = taxableGross - paye - uifEmp - pensionEmployee - medicalAidEmployee - nbcpssMedicalEmployee;
+  // Net pay: cash earnings minus employee-side deductions (fringe benefit excluded from cash).
+  // BC levy (bcLevyEmployer) is an employee deduction despite its name — mirrors backend
+  // payroll.py net_pay formula which subtracts bc_levy_emp from net pay.
+  const netPay = taxableGross - paye - uifEmp - pensionEmployee - medicalAidEmployee
+               - nbcpssMedicalEmployee - nbcpssProvidentEmployee - bcLevyEmployer;
 
   // Total employer cost
-  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer + nbcpssMedicalEmployer + bcLevyEmployer + psiraLevyEmployer;
+  const totalCost = taxableGross + uifEmpr + sdl + pensionEmployer + medicalAidEmployer
+                  + nbcpssMedicalEmployer + nbcpssProvidentEmployer + bcLevyEmployer + psiraLevyEmployer;
 
   return {
     gross: salary,
@@ -365,6 +376,8 @@ function calcPayroll(
     medicalAidEmployer: Math.round(medicalAidEmployer),
     nbcpssMedicalEmployee: Math.round(nbcpssMedicalEmployee),
     nbcpssMedicalEmployer: Math.round(nbcpssMedicalEmployer),
+    nbcpssProvidentEmployee: Math.round(nbcpssProvidentEmployee),
+    nbcpssProvidentEmployer: Math.round(nbcpssProvidentEmployer),
     medicalTaxCredit:   Math.round(mtc),
     payeBeforeMtc:  Math.round(payeBeforeMtc),
     paye:           Math.round(paye),
@@ -2815,6 +2828,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               (p.nbcpss_provident_employee > 0 || p.nbcpssProvidentEmployee > 0) && ["🔒 PSSPF Provident Fund (NBCPSS)", p.nbcpss_provident_employee||p.nbcpssProvidentEmployee, C.red],
               (p.nbcpss_medical_employee > 0 || p.nbcpssMedicalEmployee > 0) && ["🔒 PSSSBC Medical Aid (NBCPSS Prescribed)", p.nbcpss_medical_employee||p.nbcpssMedicalEmployee, C.red],
               (p.union_subscription_ded > 0 || p.unionSubscriptionDed > 0) && ["🤝 Union Subscription", p.union_subscription_ded||p.unionSubscriptionDed, C.red],
+              (p.bcLevyEmployer||p.bc_levy_employer||0) > 0 && ["🔒 NBCPSS BC Levy (Bargaining Council — Employee)", p.bcLevyEmployer||p.bc_levy_employer, C.red],
               (p.advance_deduction > 0 || p.advanceDeduction > 0) && ["🏦 Salary Advance Repayment", p.advance_deduction||p.advanceDeduction, C.red],
               (p.garnishee_total > 0 || p.garnisheeTotal > 0) && ["⚖️ Garnishee / EAO", p.garnishee_total||p.garnisheeTotal, C.red],
               (p.once_off_deduction > 0 || p.onceOffDeduction > 0) && ["✂️ Once-off Deduction", p.once_off_deduction||p.onceOffDeduction, C.red],
@@ -2834,7 +2848,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
             ))}
             <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",fontSize:14,fontWeight:800,borderTop:`2px solid ${C.border}`,marginTop:8}}>
               <span>Total Deductions</span>
-              <span style={{color:C.red}}>({fmt(p.paye + p.uifEmployee + (p.pensionEmployee||p.pension_employee||0) + (p.medicalAidEmployee||p.medical_aid_employee_ded||0) + (p.mibco_scheme_employee||p.mibcoSchemeEmployee||0))})</span>
+              <span style={{color:C.red}}>({fmt((p.taxableGross||p.taxable_gross||0) - (p.netPay||p.net_pay||0))})</span>
             </div>
           </div>
 
@@ -2845,7 +2859,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
                 <div style={{fontSize:12,color:C.inkMid,marginBottom:4}}>NET PAY THIS PERIOD</div>
                 <div style={{fontSize:11,color:C.inkDim}}>Amount payable to employee</div>
               </div>
-              <div style={{fontFamily:"serif",fontSize:32,fontWeight:800,color:C.green}}>{fmt(p.netPay)}</div>
+              <div style={{fontFamily:"serif",fontSize:32,fontWeight:800,color:C.green}}>{fmt(p.netPay||p.net_pay)}</div>
             </div>
           </div>
 
@@ -2859,8 +2873,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
               ["SDL (Skills Development Levy)", p.sdl, C.blue],
               (p.nbcpss_provident_employer > 0 || p.nbcpssProvidentEmployer > 0) && ["🔒 PSSPF Provident Fund (Employer)", p.nbcpss_provident_employer||p.nbcpssProvidentEmployer, "#c2410c"],
               (p.nbcpss_medical_employer > 0 || p.nbcpssMedicalEmployer > 0) && ["🔒 PSSSBC Medical Aid (Employer)", p.nbcpss_medical_employer||p.nbcpssMedicalEmployer, "#c2410c"],
-              p.bc_levy_employer > 0 && ["NBCPSS BC Levy (Bargaining Council)", p.bc_levy_employer, "#c2410c"],
-              p.psira_levy_employer > 0 && ["PSIRA Registration Levy", p.psira_levy_employer, "#c2410c"],
+              (p.bcLevyEmployer||p.bc_levy_employer||0) > 0 && ["NBCPSS BC Levy (Bargaining Council)", p.bcLevyEmployer||p.bc_levy_employer, "#c2410c"],
+              (p.psiraLevyEmployer||p.psira_levy_employer||0) > 0 && ["PSIRA Registration Levy", p.psiraLevyEmployer||p.psira_levy_employer, "#c2410c"],
               (p.mibco_scheme_employer > 0 || p.mibcoSchemeEmployer > 0) && ["⛽ MIBCO Health Scheme (Employer — Affinity Health)", p.mibco_scheme_employer||p.mibcoSchemeEmployer, "#92400e"],
             ].filter(Boolean).map(([l,v,c]) => (
               <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",fontSize:13,borderBottom:`1px solid ${C.border}30`}}>
