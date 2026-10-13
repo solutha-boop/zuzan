@@ -15843,20 +15843,17 @@ export default function App() {
       setScreen("accountant-dashboard");
       return;
     }
+    // Non-accountant users always land on their home company dashboard.
+    // Company switching is available from the switcher inside the app.
     try {
       const res = await fetch(`${BASE_URL}/auth/my-companies`, {
         headers: {"Authorization": "Bearer " + userData.access_token},
       });
       if (res.ok) {
         const list = await res.json();
-        if (Array.isArray(list) && list.length > 1) {
-          setCompanies(list);
-          setUser(userData);
-          setScreen("client-picker");
-          return;
-        }
+        if (Array.isArray(list)) setCompanies(list);
       }
-    } catch (e) { /* couldn't check — fall through to normal single-company flow */ }
+    } catch (e) { /* non-critical — switcher works fine with an empty list */ }
     setUser(userData);
     setScreen("app");
   };
