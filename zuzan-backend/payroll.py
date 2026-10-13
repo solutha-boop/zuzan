@@ -214,7 +214,7 @@ BCEA_WEEKLY_HOURS    = 45       # normal maximum working hours per week (s9)
 BCEA_WEEKS_PER_MONTH = 52 / 12  # 4.3333 weeks/month — used to derive hourly rate
 BCEA_OT_RATE_WEEKDAY = 1.5      # weekday & Saturday overtime multiplier (s10)
 BCEA_OT_RATE_SUNDAY  = 2.0      # Sunday work multiplier (s16)
-BCEA_OT_RATE_PH      = 2.0      # public holiday work multiplier (s18)
+BCEA_OT_RATE_PH      = 1.0      # public holiday ADDITIONAL multiplier (s18): the normal day's pay is already in the salary, so work on a PH earns 1.0x extra = 2x for the day
 BCEA_MAX_OT_WEEKLY   = 10       # max overtime hours per week (s10)
 
 # ── NBCPSS — Private Security Sector Minimum Wages (1 March 2026 – 28 Feb 2027) ──
@@ -399,12 +399,13 @@ def calc_overtime(
     ph_hours: float = 0,
     explicit_hourly_rate: float = None,
     is_security: bool = False,
+    sunday_ordinary: bool = False,
 ) -> dict:
     """
     Calculate BCEA overtime amounts for a single employee in a pay period.
     - overtime_hours : weekday / Saturday OT (1.5x)
     - sunday_hours   : Sunday hours worked  (2x)
-    - ph_hours       : public holiday hours (2x)
+    - ph_hours       : public holiday hours worked (1.0x ADDITIONAL to normal pay = 2x for the day)
     - is_security    : NBCPSS security employee → derive implied hourly rate
                         from 208 prescribed monthly hours, not the 195 BCEA default
                         (audit fix 2026-09-16).
@@ -414,8 +415,9 @@ def calc_overtime(
     # NBCPSS security employees: Sunday treated as Saturday (1.5×); PH = additional
     # only (1.0×) because monthly salary already covers the base day's pay.
     # All other employees: BCEA statutory rates (Sunday 2×, PH 2×).
-    _sun_rate = 1.5                  if is_security else BCEA_OT_RATE_SUNDAY
-    _ph_rate  = 1.0                  if is_security else BCEA_OT_RATE_PH
+    # BCEA s16(2): where an employee ordinarily works on Sundays, Sunday work is paid at 1.5x.
+    _sun_rate = 1.5                  if (is_security or sunday_ordinary) else BCEA_OT_RATE_SUNDAY
+    _ph_rate  = BCEA_OT_RATE_PH      # 1.0x additional for everyone (normal pay is in the salary / normal hours)
     ot_amount  = round(overtime_hours * hr * BCEA_OT_RATE_WEEKDAY, 2)
     sun_amount = round(sunday_hours   * hr * _sun_rate,             2)
     ph_amount_ = round(ph_hours       * hr * _ph_rate,              2)
@@ -496,6 +498,7 @@ def calc_payroll(
     sunday_hours: float = 0,
     ph_hours: float = 0,
     explicit_hourly_rate: float = None,
+    sunday_ordinary: bool = False,
     # Pension / Provident fund
     pension_employee_pct: float = 0.0,     # e.g. 0.075 = 7.5% of gross
     pension_employer_pct: float = 0.0,
@@ -585,7 +588,7 @@ def calc_payroll(
     # is_security passed through so the implied hourly rate uses the NBCPSS
     # 208h/month prescribed hours instead of the general 195h/month BCEA default
     # (audit fix 2026-09-16).
-    ot = calc_overtime(effective_gross, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate, is_security)
+    ot = calc_overtime(effective_gross, overtime_hours, sunday_hours, ph_hours, explicit_hourly_rate, is_security, sunday_ordinary)
     total_overtime = ot["total_overtime"]
 
     # ── NBCPSS security allowances (taxable income added to gross) ───────────
@@ -863,7 +866,7 @@ class OvertimeEntry(BaseModel):
     overtime_hours: float = Field(0, ge=0, le=744)   # weekday/Saturday OT (BCEA s10 — 1.5x)
     sunday_hours:   float = Field(0, ge=0, le=744)   # Sunday hours         (BCEA s16 — 2.0x)
     normal_hours:   float = Field(0, ge=0, le=744)   # actual ordinary hours worked this period (0 = full month)
-    ph_hours:       float = Field(0, ge=0, le=744)   # public holiday hours (BCEA s18 — 2.0x)
+    ph_hours:       float = Field(0, ge=0, le=744)   # public holiday hours (BCEA s18 — 1.0x additional to normal pay)
 
 
 class SecurityAllowanceEntry(BaseModel):
@@ -933,6 +936,7 @@ async def calculate_all(
             emp.gross_salary,
             annual_payroll_total=annual_payroll_total,
             explicit_hourly_rate=_explicit_hr,
+            sunday_ordinary=bool(getattr(emp, "sunday_ordinary", False)),
             pension_employee_pct=getattr(emp, "pension_fund_employee_pct", 0.0) or 0.0,
             pension_employer_pct=getattr(emp, "pension_fund_employer_pct", 0.0) or 0.0,
             pension_employee_fixed=getattr(emp, "pension_employee_fixed", 0.0) or 0.0,
@@ -1143,6 +1147,7 @@ async def run_payroll(
             sunday_hours=ot_entry.sunday_hours,
             ph_hours=ot_entry.ph_hours,
             explicit_hourly_rate=_explicit_hr,
+            sunday_ordinary=bool(getattr(emp, "sunday_ordinary", False)),
             pension_employee_pct=getattr(emp, "pension_fund_employee_pct", 0.0) or 0.0,
             pension_employer_pct=getattr(emp, "pension_fund_employer_pct", 0.0) or 0.0,
             pension_employee_fixed=getattr(emp, "pension_employee_fixed", 0.0) or 0.0,
@@ -1332,8 +1337,8 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
         # salary because the normal day's pay is already in the monthly salary.
         # cleaning_allowance is unconditional for every security employee, so it marks one.
         _is_nbcpss_slip = (p.cleaning_allowance or 0) > 0
-        _sun_x = "1.5" if _is_nbcpss_slip else "2"
-        _ph_lbl = "Public Holiday - additional (%sh × 1.0, normal day's pay is in salary)" if _is_nbcpss_slip else "Public Holiday (%sh × 2×)"
+        _sun_x = "1.5" if (_is_nbcpss_slip or getattr(emp, "sunday_ordinary", False)) else "2"
+        _ph_lbl = "Public Holiday - additional (%sh × 1.0, normal day's pay is in salary)"
         if p.sunday_amount:   earnings_rows += row(f"Sunday Time ({p.sunday_hours or 0}h × {_sun_x}×)", p.sunday_amount or 0, "#16a34a")
         if p.ph_amount:       earnings_rows += row(_ph_lbl % (p.ph_hours or 0), p.ph_amount or 0, "#16a34a")
     if has_nbcpss:

@@ -205,6 +205,7 @@ class Employee(Base):
     # General payroll adjustments
     advance_monthly_deduction=Column(Float,default=0.0)  # monthly salary advance repayment deduction
     on_maternity_leave=Column(Boolean,default=False)     # if True, gross=0; employee claims UIF maternity benefit directly
+    sunday_ordinary=Column(Boolean,default=False)        # True = Sunday is an ordinary working day for this employee (BCEA s16(2)): Sunday work paid at 1.5x instead of 2x
     psspf_exempt=Column(Boolean,default=False)           # True = NOT a PSSPF member (excluded/ineligible): no automatic provident deduction
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
     hourly_rate=Column(Float,nullable=True)           # explicit hourly rate for hourly employees; None = derive from gross_salary / BCEA hours
@@ -273,7 +274,7 @@ class Payslip(Base):
     overtime_amount=Column(Float,default=0)
     sunday_hours=Column(Float,default=0)     # Sunday hours (2x)
     sunday_amount=Column(Float,default=0)
-    ph_hours=Column(Float,default=0)         # public holiday hours (2x)
+    ph_hours=Column(Float,default=0)         # public holiday hours worked (paid 1.0x additional to normal pay)
     ph_amount=Column(Float,default=0)
     # Pension / Provident fund
     pension_employee=Column(Float,default=0.0)       # employee monthly contribution (ZAR)
@@ -1665,6 +1666,7 @@ def init_db():
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS advance_monthly_deduction FLOAT DEFAULT 0",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS on_maternity_leave BOOLEAN DEFAULT FALSE",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS psspf_exempt BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS sunday_ordinary BOOLEAN DEFAULT FALSE",
             """CREATE TABLE IF NOT EXISTS employee_garnishees (
                 id          SERIAL PRIMARY KEY,
                 employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,

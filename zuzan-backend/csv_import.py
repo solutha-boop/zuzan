@@ -1194,6 +1194,7 @@ EMPLOYEE_ALIASES: dict[str, list[str]] = {
     "shift_type":                ["shift_type", "shift"],
     "special_allowance_type":    ["special_allowance_type", "special_allowance"],
     "psspf_exempt":              ["psspf_exempt", "psspf_not_member", "not_psspf_member"],
+    "sunday_ordinary":           ["sunday_ordinary", "works_sundays", "ordinary_sunday", "sunday_ordinary_day"],
     "employment_category":       ["employment_category", "emp_category", "category",
                                   "contract_category", "worker_type"],
     "union_subscription":        ["union_subscription", "union_dues", "union_fee",
@@ -1406,6 +1407,10 @@ async def import_employees(
             v = _bool_field(_get(row, m, "mibco_scheme_enrolled"))
             if v is not None:
                 emp.mibco_scheme_enrolled = v
+        if "sunday_ordinary" in m:
+            v = _bool_field(_get(row, m, "sunday_ordinary"))
+            if v is not None:
+                emp.sunday_ordinary = v
         if "psspf_exempt" in m:
             v = _bool_field(_get(row, m, "psspf_exempt"))
             if v is not None:

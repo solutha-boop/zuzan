@@ -189,7 +189,7 @@ const BCEA_WEEKLY_HOURS    = 45;
 const BCEA_WEEKS_PER_MONTH = 52 / 12;  // 4.3333
 const BCEA_OT_WEEKDAY      = 1.5;      // s10 weekday/Saturday
 const BCEA_OT_SUNDAY       = 2.0;      // s16
-const BCEA_OT_PH           = 2.0;      // s18 public holiday
+const BCEA_OT_PH           = 1.0;      // s18 public holiday: ADDITIONAL 1.0x (normal day's pay already in salary / normal hours)
 // NBCPSS prescribed monthly hours (48h/week × 52/12), per NBCPSS Main Agreement —
 // mirrors backend payroll.py's NBCPSS_PRESCRIBED_HOURS.
 const NBCPSS_PRESCRIBED_HOURS = 208;
@@ -240,10 +240,10 @@ function bceaHourlyRate(grossMonthly, explicitHourlyRate, isSecurity=false) {
   return grossMonthly / monthlyHours;
 }
 
-function calcOvertime(grossMonthly, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null, isSecurity=false) {
+function calcOvertime(grossMonthly, otHours=0, sunHours=0, phHours=0, explicitHourlyRate=null, isSecurity=false, sundayOrdinary=false) {
   const hr = bceaHourlyRate(grossMonthly, explicitHourlyRate, isSecurity);
   const otAmt  = Math.round(otHours  * hr * BCEA_OT_WEEKDAY * 100) / 100;
-  const sunAmt = Math.round(sunHours * hr * BCEA_OT_SUNDAY  * 100) / 100;
+  const sunAmt = Math.round(sunHours * hr * ((isSecurity || sundayOrdinary) ? 1.5 : BCEA_OT_SUNDAY) * 100) / 100;
   const phAmt  = Math.round(phHours  * hr * BCEA_OT_PH      * 100) / 100;
   return { hourlyRate:hr, otAmount:otAmt, sunAmount:sunAmt, phAmount:phAmt,
            otHours:otHours, sunHours:sunHours, phHours:phHours,
@@ -2776,8 +2776,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
                   `Sunday Work (${p.overtime.sunHours||p.overtime.sunday_hours||""}h × ${isSec?"1.5":"2.0"})`,
                   p.overtime.sunAmount||p.overtime.sunday_amount)}
                 {(p.overtime?.phAmount||p.overtime?.ph_amount||0) > 0 && row(
-                  `Public Holiday Additional (${p.overtime.phHours||p.overtime.ph_hours||""}h × ${isSec?"1.0":"2.0"})`,
-                  p.overtime.phAmount||p.overtime.ph_amount, isSec?"base pay already in salary":null)}
+                  `Public Holiday Additional (${p.overtime.phHours||p.overtime.ph_hours||""}h × 1.0)`,
+                  p.overtime.phAmount||p.overtime.ph_amount, "normal day's pay already in salary")}
                 {/* NBCPSS security allowances — calcPayroll uses camelCase; backend uses snake_case */}
                 {(p.nightShiftAllowance||p.night_shift_allowance||0) > 0 && row(
                   `Night Shift Allowance (${p.nightShiftShifts||p.night_shift_shifts||""} shifts × R8.00)`,
@@ -2882,7 +2882,7 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
             {(p.medicalTaxCredit||p.medical_tax_credit) > 0 && <>Section 6A Medical Tax Credit: R{p.medicalTaxCredit||p.medical_tax_credit}/month (direct PAYE reduction)<br/></>}
             UIF: 1% employee + 1% employer — capped at R17,712/month (on basic salary only)<br/>
             SDL: 1% of taxable gross payroll<br/>
-            {p.overtime && p.overtime.total > 0 && `${employee?.security_grade ? "NBCPSS Overtime: Weekday/Sat 1.5× · Sunday 1.5× · Public Holiday 1.0× on top of salary" : "BCEA Overtime: Weekday/Sat 1.5× · Sunday 2× · Public Holiday 2×"} · Hourly rate: ${fmt(p.overtime.hourly_rate||p.overtime.hourlyRate)}/hr`}
+            {p.overtime && p.overtime.total > 0 && `${employee?.security_grade ? "NBCPSS Overtime: Weekday/Sat 1.5× · Sunday 1.5× · Public Holiday 1.0× on top of salary" : "BCEA Overtime: Weekday/Sat 1.5× · Sunday 2× (1.5× if ordinarily works Sundays) · Public Holiday 1.0× on top of normal pay"} · Hourly rate: ${fmt(p.overtime.hourly_rate||p.overtime.hourlyRate)}/hr`}
           </div>
 
         </div>
@@ -3488,6 +3488,7 @@ function Payroll({live = {}, user = {}}) {
           mibco_role:                 form.mibcoRole || null,
           mibco_scheme_enrolled:      form.mibcoSchemeEnrolled ?? true,
           psspf_exempt:               !!form.psspfExempt,
+          sunday_ordinary:            !!form.sundayOrdinary,
           union_subscription:         form.unionSubscription || 0,
           advance_monthly_deduction:  form.advanceMonthlyDeduction || 0,
           on_maternity_leave:         form.onMaternityLeave || false,
@@ -3601,6 +3602,7 @@ function Payroll({live = {}, user = {}}) {
             mibco_role:                 editForm.mibcoRole || null,
             mibco_scheme_enrolled:      editForm.mibcoSchemeEnrolled ?? true,
             psspf_exempt:               !!editForm.psspfExempt,
+            sunday_ordinary:            !!editForm.sundayOrdinary,
             union_subscription:         editForm.unionSubscription || 0,
             advance_monthly_deduction:  editForm.advanceMonthlyDeduction || 0,
             on_maternity_leave:         editForm.onMaternityLeave || false,
@@ -4089,7 +4091,7 @@ function Payroll({live = {}, user = {}}) {
             </div>
             <p style={{fontSize:12,color:C.inkMid,marginBottom:16}}>Enter hours per employee for this pay period. <strong>Weekday/Sat OT</strong> = extra hours above normal shift (×1.5). {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security"
               ? <><strong>Sunday Hrs Worked</strong> = total hours worked on Sundays, paid at 1.5× the hourly rate (NBCPSS rate for officers who ordinarily work Sundays). Enter 12 per 12-hour Sunday shift, 24 for two Sundays, etc. <strong>Public Holiday Hrs Worked</strong> = hours actually worked on a public holiday, paid at 1.0× on top of salary (the normal day&apos;s pay is already in the monthly salary). Night shifts and special-allowance shifts are entered in the columns on the right.</>
-              : <><strong>Sunday Hrs Worked</strong> = total hours worked on Sunday (×2, all hours). Default shift = 12 h; enter 12 per Sunday, 24 for two Sundays, etc. <strong>Public Holiday Hrs Worked</strong> = hours worked on a PH (×2).</>}</p>
+              : <><strong>Sunday Hrs Worked</strong> = total hours worked on Sunday (×2, all hours). Default shift = 12 h; enter 12 per Sunday, 24 for two Sundays, etc. <strong>Public Holiday Hrs Worked</strong> = hours worked on a PH, paid at 1.0× ADDITIONAL to normal pay (the day is already in the monthly salary, so the total for the day is 2×). Hourly/casual staff: also include these hours in Normal Hours.</>}</p>
 
             {/* ── NBCPSS rate area info (Area 3 only) ── */}
             {(user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security" && (
@@ -4353,7 +4355,7 @@ function Payroll({live = {}, user = {}}) {
                   const secHrOverride = isSecurity ? (_areaMin / NBCPSS_PRESCRIBED_HOURS) : null;
                   const hrRate = emp.hourly_rate || secHrOverride || null;
                   const hr = bceaHourlyRate(effectiveSalary, hrRate, isSecurityEmp);
-                  const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, hrRate, isSecurityEmp);
+                  const preview = calcOvertime(effectiveSalary, +ot.otHours||0, +ot.sunHours||0, +ot.phHours||0, hrRate, isSecurityEmp, !!emp.sunday_ordinary);
                   const inpStyle = {width:"60px",padding:"6px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:12,fontFamily:"inherit",textAlign:"center",background:C.bg,color:C.ink,outline:"none"};
                   const setOt = (k,v) => setOtData(prev=>({...prev,[emp.id]:{...prev[emp.id],[k]:v}}));
                   return (
@@ -4952,7 +4954,7 @@ function Payroll({live = {}, user = {}}) {
                     <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Advance Repayment (R/month)</label>
                     <input type="number" min="0" step="0.01" placeholder="0.00" value={form.advanceMonthlyDeduction||""} onChange={e=>setForm(v=>({...v,advanceMonthlyDeduction:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="addPsspfEx" checked={form.psspfExempt||false} onChange={e=>setForm(v=>({...v,psspfExempt:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="addPsspfEx" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Not a PSSPF member <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(tick only if exempt - otherwise PSSPF provident is applied automatically and any pension fields above are ignored)</span></label></div>
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="addPsspfEx" checked={form.psspfExempt||false} onChange={e=>setForm(v=>({...v,psspfExempt:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="addPsspfEx" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Not a PSSPF member <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(tick only if exempt - otherwise PSSPF provident is applied automatically and any pension fields above are ignored)</span></label></div><div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="addSunOrd" checked={form.sundayOrdinary||false} onChange={e=>setForm(v=>({...v,sundayOrdinary:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="addSunOrd" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Ordinarily works Sundays <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(BCEA s16: Sunday work paid at 1.5× instead of 2×. Security officers always get 1.5×)</span></label></div>
                   <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
                     <input type="checkbox" id="addMatLeave" checked={form.onMaternityLeave||false} onChange={e=>setForm(v=>({...v,onMaternityLeave:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
                     <label htmlFor="addMatLeave" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>On Maternity Leave <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(zero gross this pay run; employee claims UIF directly)</span></label>
@@ -5050,7 +5052,7 @@ function Payroll({live = {}, user = {}}) {
                   <td style={{padding:"13px 14px",fontWeight:700,color:C.accent}}>{fmt(p.totalCost)}</td>
                   <td style={{padding:"13px 14px"}}>
                     <div style={{display:"flex",gap:6}}>
-                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,psspfExempt:!!emp.psspf_exempt,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false,paySchedule:emp.pay_schedule||(emp.security_grade?"security":"salaried"),employmentCategory:emp.employment_category||"permanent"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
+                      <button onClick={()=>{setEditEmp(emp);setEditForm({name:emp.name||"",position:emp.position||"",salary:String(emp.salary||""),dept:emp.dept||emp.department||"",grade:emp.grade||"",employmentType:emp.employment_type||"salaried",hourlyRate:String(emp.hourly_rate||""),idNumber:emp.id_number||"",taxNumber:emp.tax_number||"",dob:emp.date_of_birth||"",appointmentDate:emp.appointment_date||"",address:emp.address||"",bankName:emp.bank_name||"",accountNumber:emp.account_number||"",branchCode:emp.branch_code||"",accountType:emp.account_type||"Cheque",pensionEmployeePct:emp.pension_fund_employee_pct ? String(Math.round(emp.pension_fund_employee_pct*100)) : "",pensionEmployerPct:emp.pension_fund_employer_pct ? String(Math.round(emp.pension_fund_employer_pct*100)) : "",pensionEmployeeFixed:emp.pension_employee_fixed ? String(emp.pension_employee_fixed) : "",pensionEmployerFixed:emp.pension_employer_fixed ? String(emp.pension_employer_fixed) : "",medicalAidEmployee:emp.medical_aid_employee ? String(emp.medical_aid_employee) : "",medicalAidEmployer:emp.medical_aid_employer ? String(emp.medical_aid_employer) : "",medicalAidDependants:emp.medical_aid_dependants ? String(emp.medical_aid_dependants) : "",psiraNumber:emp.psira_number||"",securityGrade:emp.security_grade||"",securityArea:emp.security_area||"3",shiftType:emp.shift_type||"day",specialAllowanceType:emp.special_allowance_type||"none",mibcoRole:emp.mibco_role||"",mibcoSchemeEnrolled:emp.mibco_scheme_enrolled!=null?emp.mibco_scheme_enrolled:true,psspfExempt:!!emp.psspf_exempt,sundayOrdinary:!!emp.sunday_ordinary,unionSubscription:emp.union_subscription||0,advanceMonthlyDeduction:emp.advance_monthly_deduction||0,onMaternityLeave:emp.on_maternity_leave||false,paySchedule:emp.pay_schedule||(emp.security_grade?"security":"salaried"),employmentCategory:emp.employment_category||"permanent"});}} style={{background:C.accentLt,color:C.accent,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Edit</button>
                       <button onClick={()=>setViewPayslip({employee:emp,payroll:p,taxYear})} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Payslip</button>
                       <button onClick={()=>setTermModal({emp,reason:"resignation",date:new Date().toISOString().split("T")[0]})} style={{background:"#fee2e2",color:"#b91c1c",border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Terminate</button>
                     </div>
@@ -5508,7 +5510,7 @@ function Payroll({live = {}, user = {}}) {
                       <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Advance Repayment (R/month)</label>
                       <input type="number" min="0" step="0.01" placeholder="0.00" value={editForm.advanceMonthlyDeduction||""} onChange={e=>setEditForm(v=>({...v,advanceMonthlyDeduction:parseFloat(e.target.value)||0}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                     </div>
-                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="editPsspfEx" checked={editForm.psspfExempt||false} onChange={e=>setEditForm(v=>({...v,psspfExempt:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="editPsspfEx" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Not a PSSPF member <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(tick only if exempt - otherwise PSSPF provident is applied automatically and any pension fields above are ignored)</span></label></div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="editPsspfEx" checked={editForm.psspfExempt||false} onChange={e=>setEditForm(v=>({...v,psspfExempt:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="editPsspfEx" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Not a PSSPF member <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(tick only if exempt - otherwise PSSPF provident is applied automatically and any pension fields above are ignored)</span></label></div><div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}><input type="checkbox" id="editSunOrd" checked={editForm.sundayOrdinary||false} onChange={e=>setEditForm(v=>({...v,sundayOrdinary:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="editSunOrd" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Ordinarily works Sundays <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(BCEA s16: Sunday work paid at 1.5× instead of 2×. Security officers always get 1.5×)</span></label></div>
                     <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
                       <input type="checkbox" id="editMatLeave" checked={editForm.onMaternityLeave||false} onChange={e=>setEditForm(v=>({...v,onMaternityLeave:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
                       <label htmlFor="editMatLeave" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>On Maternity Leave <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(zero gross this pay run; employee claims UIF directly)</span></label>

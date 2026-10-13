@@ -614,6 +614,9 @@ async def payroll_hours(
                 for k in totals:
                     totals[k] += b[k]
                 worked += (lout - lin).total_seconds() / 3600.0
+            # Public holiday work earns the normal pay for those hours PLUS 1.0x additional (ph_hours).
+            # Hourly/casual staff are paid from normal_hours, so the PH hours must also sit in normal_hours.
+            totals["normal_hours"] += totals["ph_hours"]
 
         if not sessions_local and not exceptions:
             continue
