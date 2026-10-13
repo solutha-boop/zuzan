@@ -9239,7 +9239,7 @@ function AcceptInvite({token, onLogin, onSignIn}) {
           email: data.user.email, companyName: data.company.name,
           logoUrl: data.company.logo_url||"", headerImageUrl: data.company.invoice_header_url||"", invoiceTemplateHtml: data.company.invoice_template_html||"", plan:{name:data.company.plan,id:data.company.plan},
           access_token: data.access_token, trialEnds: data.company.trial_ends, subscriptionStatus: data.company.subscription_status||"trial",
-          role: data.user.role||"accountant", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
+          role: data.user.role||"owner", payrollEnabled: data.company.payroll_enabled||false, afsEnabled: data.company.afs_enabled||false,
           billingExempt: data.company.billing_exempt||false,
         });
       }, 1200);
@@ -15809,7 +15809,7 @@ export default function App() {
           billingExempt:  data.company.billing_exempt || false,
         });
         Sentry.setUser({ email: data.user.email, username: data.company.name });
-        if (data.company.billing_exempt || data.user.role === "accountant") {
+        if (data.user.role === "accountant") {
           setScreen("accountant-dashboard");
         } else {
           setScreen("app");
@@ -15823,7 +15823,7 @@ export default function App() {
     // Accountant/partner accounts always go to the Practice Dashboard —
     // they need it even before they've added any clients.
     // Other users get the Client Picker only if they belong to >1 company.
-    const isAccountantPractice = userData.billingExempt || userData.role === "accountant";
+    const isAccountantPractice = userData.role === "accountant";
     if (isAccountantPractice) {
       setUser(userData);
       setScreen("accountant-dashboard");
