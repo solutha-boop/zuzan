@@ -5078,7 +5078,7 @@ function Payroll({live = {}, user = {}}) {
           </tbody>
           <tfoot>
             <tr style={{background:C.bg,borderTop:`2px solid ${C.border}`}}>
-              <td colSpan={3} style={{padding:"13px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
+              <td colSpan={4} style={{padding:"13px 14px",fontWeight:800,color:C.ink}}>TOTALS</td>
               <td style={{padding:"13px 14px",fontWeight:800}}>{fmt(totalGross)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.red}}>{fmt(totalPAYE)}</td>
               <td style={{padding:"13px 14px",fontWeight:800,color:C.gold}}>{fmt(scheduleEmployees.reduce((s,e)=>s+calcForSummary(e).uifEmployee,0))}</td>
