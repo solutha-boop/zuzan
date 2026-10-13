@@ -41,7 +41,7 @@ git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=fix: payslip net pay - add NBCPSS PSSPF provident fund to calcPayroll + BC levy in employee deductions + total deductions formula fix [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=fix: NBCPSS payslip - provident fund in calcPayroll + BC levy deductions + totals row alignment + suppress duplicate medical aid row [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
