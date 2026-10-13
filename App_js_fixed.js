@@ -3407,6 +3407,22 @@ function Payroll({live = {}, user = {}}) {
   const [termModal, setTermModal] = useState(null); // {emp} when open
   const [newGarnRef,  setNewGarnRef]  = useState("");
   const [newGarnAmt,  setNewGarnAmt]  = useState("");
+  // Stored payslips for the current period — keyed by employee_id.
+  // Fetched on mount and refreshed after each payroll run so the table shows
+  // actuals (taxable_gross, net_pay, total_cost etc.) rather than the live
+  // calcForSummary() estimate which only knows about basic salary.
+  const [storedPayslips, setStoredPayslips] = useState({}); // {empId: {taxable_gross, net_pay, ...}}
+  const currentPeriod = new Date().toISOString().slice(0,7); // "YYYY-MM"
+  const fetchStoredPayslips = () => {
+    api(`/payroll/payslips/${currentPeriod}/summary`)
+      .then(d => {
+        const map = {};
+        (d.payslips || []).forEach(ps => { map[ps.employee_id] = ps; });
+        setStoredPayslips(map);
+      })
+      .catch(() => {});
+  };
+  useEffect(() => { fetchStoredPayslips(); }, []);
   // audit fix 2026-09-16 — same NBCPSS gap as BatchPaymentModal: these drive the
   // "Payroll Processed" summary cards (Net Disbursed / PAYE / UIF+SDL) shown right
   // after a real payroll run, so they should reflect this period's actual OT/night-
@@ -4519,6 +4535,7 @@ function Payroll({live = {}, user = {}}) {
                 if (runRes && runRes.status === "no_change") return;
                 setPayrollRun(true);
                 setPayrollPeriod(new Date().toISOString().slice(0,7));
+                fetchStoredPayslips(); // refresh table with actuals from the run we just completed
               }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                 Confirm &amp; Run Payroll
               </button>
@@ -5035,7 +5052,17 @@ function Payroll({live = {}, user = {}}) {
               // period's OT/night-shift/special-allowance/bonus inputs and the
               // 208h basis, matching what the Run Payroll modal and the actual
               // backend run would compute. See [[project_nbcpss_208hr_bug]].
-              const p = calcForSummary(emp);
+              // Use actuals from DB when this period's payslip exists; fall back to live estimate.
+              const _stored = storedPayslips[emp.id];
+              const p = _stored ? {
+                gross:       _stored.taxable_gross,
+                paye:        _stored.paye,
+                uifEmployee: _stored.uif_employee,
+                uifEmployer: _stored.uif_employer,
+                sdl:         _stored.sdl,
+                netPay:      _stored.net_pay,
+                totalCost:   _stored.total_cost,
+              } : calcForSummary(emp);
               return (
                 <tr key={emp.id} style={{borderBottom:`1px solid ${C.border}30`}}>
                   <td style={{padding:"13px 14px"}}>

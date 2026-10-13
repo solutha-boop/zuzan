@@ -1486,16 +1486,35 @@ def payslip_period_summary(
         .filter(EmpModel.company_id == current_user.company_id, Payslip.period == period)
         .all()
     )
+    def _taxable_gross(p):
+        # Reconstruct taxable_gross from its stored components (it is not stored as a single column).
+        # Mirrors payroll.py: taxable_gross = effective_gross + OT + allowances + once-off taxable
+        return round(
+            (p.gross_salary or 0)
+            + (p.overtime_amount or 0)
+            + (p.sunday_amount or 0)
+            + (p.ph_amount or 0)
+            + (p.night_shift_allowance or 0)
+            + (p.special_allowance_amount or 0)
+            + (p.cleaning_allowance or 0)
+            + (p.annual_bonus or 0)
+            + (p.mibco_med_allow or 0)
+            + (p.once_off_allowance_taxable or 0),
+            2,
+        )
+
     return {
         "period": period,
         "payslips": [
             {
-                "employee_id":  p.employee_id,
-                "net_pay":      round(p.net_pay or 0, 2),
-                "paye":         round(p.paye or 0, 2),
-                "uif_employee": round(p.uif_employee or 0, 2),
-                "uif_employer": round(p.uif_employer or 0, 2),
-                "sdl":          round(p.sdl or 0, 2),
+                "employee_id":   p.employee_id,
+                "taxable_gross": _taxable_gross(p),
+                "net_pay":       round(p.net_pay or 0, 2),
+                "total_cost":    round(p.total_cost or 0, 2),
+                "paye":          round(p.paye or 0, 2),
+                "uif_employee":  round(p.uif_employee or 0, 2),
+                "uif_employer":  round(p.uif_employer or 0, 2),
+                "sdl":           round(p.sdl or 0, 2),
             }
             for p in rows
         ],
