@@ -848,6 +848,28 @@ function Dashboard({live = {}}) {
     setDrillLoading(false);
   };
 
+  // Build expense pie from live expenses grouped by category, or fall back to placeholder
+  const PIE_COLORS = [C.red, C.blue, C.green, C.accent, C.gold, "#8b5cf6", "#06b6d4", "#f97316"];
+  const expensePieData = (() => {
+    const liveExps = live.expenses;
+    if (!liveExps || liveExps.length === 0) return EXPENSE_PIE;
+    const grouped = {};
+    for (const e of liveExps) {
+      const key = e.category || "Other";
+      grouped[key] = (grouped[key] || 0) + ((e.amount || 0) - (e.vat_amount || 0));
+    }
+    const entries = Object.entries(grouped).filter(([,v]) => v > 0).sort((a,b) => b[1]-a[1]);
+    if (entries.length === 0) return EXPENSE_PIE;
+    return entries.slice(0, 8).map(([name, value], i) => ({name, value, color: PIE_COLORS[i % PIE_COLORS.length]}));
+  })();
+
+  // Smart Y-axis formatter: avoids "R0.001k" for small values
+  const fmtAxis = v => {
+    if (v >= 1000000) return `R${(v/1000000).toFixed(1)}m`;
+    if (v >= 1000)    return `R${(v/1000).toFixed(0)}k`;
+    return `R${Math.round(v)}`;
+  };
+
   // Use live data if available, otherwise fall back to mock
   const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i => i.status === "paid").reduce((s,i) => s + i.amount, 0);
   const totalExpenses = d ? d.total_expenses : MOCK_EXPENSES.reduce((s,e) => s + e.amount, 0);
@@ -918,7 +940,7 @@ function Dashboard({live = {}}) {
             <BarChart data={revenueData} barGap={4}>
               <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false}/>
               <XAxis dataKey="month" tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false}/>
-              <YAxis tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false} tickFormatter={v => `R${v/1000}k`} width={45}/>
+              <YAxis tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false} tickFormatter={fmtAxis} width={45}/>
               <Tooltip content={<Tooltip2/>}/>
               <Bar dataKey="revenue" name="Revenue" fill={C.green} radius={[4,4,0,0]}/>
               <Bar dataKey="expenses" name="Expenses" fill={C.accent} radius={[4,4,0,0]}/>
@@ -929,13 +951,13 @@ function Dashboard({live = {}}) {
           <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Expense Breakdown</div>
           <ResponsiveContainer width="100%" height={160}>
             <PieChart>
-              <Pie data={EXPENSE_PIE} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={70}>
-                {EXPENSE_PIE.map((e,i) => <Cell key={i} fill={e.color}/>)}
+              <Pie data={expensePieData} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={70}>
+                {expensePieData.map((e,i) => <Cell key={i} fill={e.color}/>)}
               </Pie>
               <Tooltip formatter={v => fmt(v)}/>
             </PieChart>
           </ResponsiveContainer>
-          {EXPENSE_PIE.map((e,i) => (
+          {expensePieData.map((e,i) => (
             <div key={i} style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
                 <div style={{width:8,height:8,borderRadius:"50%",background:e.color}}/>
@@ -950,7 +972,7 @@ function Dashboard({live = {}}) {
         <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:4}}>Gross Profit Trend</div>
         <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>Revenue minus expenses (excl. payroll)</div>
         <ResponsiveContainer width="100%" height={130}>
-          <AreaChart data={REVENUE_DATA}>
+          <AreaChart data={revenueData}>
             <defs>
               <linearGradient id="pg" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={C.green} stopOpacity={0.2}/>
@@ -959,7 +981,7 @@ function Dashboard({live = {}}) {
             </defs>
             <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false}/>
             <XAxis dataKey="month" tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false}/>
-            <YAxis tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false} tickFormatter={v => `R${v/1000}k`} width={45}/>
+            <YAxis tick={{fontSize:10,fill:C.inkMid}} tickLine={false} axisLine={false} tickFormatter={fmtAxis} width={45}/>
             <Tooltip content={<Tooltip2/>}/>
             <Area type="monotone" dataKey="gross_profit" name="Gross Profit" stroke={C.green} strokeWidth={2} fill="url(#pg)" dot={false}/>
           </AreaChart>
