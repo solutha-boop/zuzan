@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from passlib.context import CryptContext
@@ -147,7 +148,7 @@ def get_current_user(
 @limiter.limit("5/minute")
 async def register(request: Request, data: RegisterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     # Check email not already registered
-    existing = db.query(User).filter(User.email == data.email).first()
+    existing = db.query(User).filter(func.lower(User.email) == (data.email or "").strip().lower()).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
@@ -324,7 +325,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
 @router.post("/login")
 @limiter.limit("10/minute")
 async def login(request: Request, data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.email).first()
+    user = db.query(User).filter(func.lower(User.email) == (data.email or "").strip().lower()).first()
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
