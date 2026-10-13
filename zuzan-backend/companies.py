@@ -959,7 +959,7 @@ async def send_invoice(invoice_id: int, current_user: User = Depends(require_rol
         )
     db.refresh(invoice)
 
-    portal_url = f"{os.environ.get('FRONTEND_URL','https://zuzan-app.onrender.com')}/portal/{invoice.portal_token}"
+    portal_url = f"{os.environ.get('FRONTEND_URL','https://zuzan.co.za')}/portal/{invoice.portal_token}"
 
     # Send email if client email is known
     company = db.query(Company).filter(Company.id == current_user.company_id).first()

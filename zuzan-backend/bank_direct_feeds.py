@@ -62,7 +62,7 @@ from crypto import encrypt_field, decrypt_field
 
 logger = logging.getLogger("zuzan.bank_direct")
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://zuzan.co.za")
 
 # ── ABSA Config ───────────────────────────────────────────────────────────────
 ABSA_CLIENT_ID     = os.environ.get("ABSA_CLIENT_ID", "")

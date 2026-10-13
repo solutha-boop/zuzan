@@ -13,7 +13,7 @@ logger = logging.getLogger("zuzan.email")
 RESEND_API_KEY  = os.environ.get("RESEND_API_KEY", "")
 FROM_EMAIL         = os.environ.get("FROM_EMAIL",         "ZuZan <Zuzan@solutha.co.za>")
 FROM_SUPPORT_EMAIL = os.environ.get("FROM_SUPPORT_EMAIL", "ZuZan <support@solutha.co.za>")
-FRONTEND_URL       = os.environ.get("FRONTEND_URL",       "https://zuzan-app.onrender.com")
+FRONTEND_URL       = os.environ.get("FRONTEND_URL",       "https://zuzan.co.za")
 BACKEND_URL        = os.environ.get("BACKEND_URL",        "https://zuzan-backend.onrender.com")
 SUPPORT_EMAIL      = os.environ.get("SUPPORT_EMAIL",      "support@solutha.co.za")
 
@@ -765,7 +765,7 @@ def send_invoice_email(
 ):
     """Send a branded invoice email with a portal link and Pay Now button."""
     import os as _os
-    base = portal_url_base or _os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
+    base = portal_url_base or _os.environ.get("FRONTEND_URL", "https://zuzan.co.za")
     portal_url = f"{base}/portal/{portal_token}"
 
     cur_sym = {"ZAR": "R", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, currency + " ")

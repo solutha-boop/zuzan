@@ -32,7 +32,7 @@ logger = logging.getLogger("zuzan.saltedge")
 SALTEDGE_APP_ID    = os.environ.get("SALTEDGE_APP_ID", "")
 SALTEDGE_SECRET    = os.environ.get("SALTEDGE_SECRET", "")
 SALTEDGE_BASE_URL  = "https://www.saltedge.com/api/v5"
-FRONTEND_URL       = os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
+FRONTEND_URL       = os.environ.get("FRONTEND_URL", "https://zuzan.co.za")
 
 saltedge_router = APIRouter()
 

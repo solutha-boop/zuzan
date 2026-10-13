@@ -50,7 +50,7 @@ STITCH_REDIRECT_URI  = os.environ.get(
     "STITCH_REDIRECT_URI",
     "https://zuzan-backend.onrender.com/banking/stitch/callback",
 )
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://zuzan.co.za")
 
 STITCH_SCOPES        = "openid offline_access transactions accounts balances"
 STITCH_AUTHORIZE_URL = "https://secure.stitch.money/connect/authorize"

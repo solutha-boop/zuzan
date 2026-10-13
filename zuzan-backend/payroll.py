@@ -4030,7 +4030,7 @@ PAYFAST_PASSPHRASE   = _os.environ.get("PAYFAST_PASSPHRASE",   "")
 PAYFAST_SANDBOX      = _os.environ.get("PAYFAST_SANDBOX", "true").lower() == "true"
 PAYFAST_URL          = "https://sandbox.payfast.co.za/eng/process" if PAYFAST_SANDBOX else "https://www.payfast.co.za/eng/process"
 BACKEND_URL          = _os.environ.get("BACKEND_URL", "https://zuzan-backend.onrender.com")
-FRONTEND_URL         = _os.environ.get("FRONTEND_URL", "https://zuzan-app.onrender.com")
+FRONTEND_URL         = _os.environ.get("FRONTEND_URL", "https://zuzan.co.za")
 
 try:
     from config import PLAN_PRICES, PAYROLL_PER_EMP, PAYROLL_MIN  # single source of truth — see config.py

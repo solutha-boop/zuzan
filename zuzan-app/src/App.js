@@ -3332,7 +3332,7 @@ function Payroll({live = {}, user = {}}) {
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
     if (!token || token.startsWith("demo_")) { setPinSet(false); return; }
-    fetch("https://zuzan-backend.onrender.com/companies/payroll-pin-status", {
+    fetch(`${BASE_URL}/companies/payroll-pin-status`, {
       headers: {"Authorization": "Bearer " + token}
     }).then(r => r.json()).then(d => setPinSet(d.pin_set)).catch(() => setPinSet(false));
   }, []);
@@ -4473,6 +4473,7 @@ function Payroll({live = {}, user = {}}) {
               <button onClick={()=>setShowOtModal(false)} style={{background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
               <button onClick={async () => {
                 setShowOtModal(false);
+                let runRes = null;
                 try {
                   const otPayload = payScheduleTab === "casual"
                     ? scheduleEmployees.map(emp => {
@@ -4496,7 +4497,7 @@ function Payroll({live = {}, user = {}}) {
                     return { employee_id: emp.id, expense_claim: +oo.expenseClaim||0, once_off_deduction: +oo.onceOffDeduction||0, once_off_allowance_taxable: +oo.onceOffTaxable||0, once_off_allowance_nontaxable: +oo.onceOffNonTaxable||0 };
                   }).filter(e => e.expense_claim > 0 || e.once_off_deduction > 0 || e.once_off_allowance_taxable > 0 || e.once_off_allowance_nontaxable > 0);
                   const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
-                  const runRes = await api("/payroll/run", {method:"POST", body: JSON.stringify({pay_schedule: payScheduleTab, overtime: otPayload, security: secPayload, once_off: onceOffPayload, ...(isSec ? {area_override: secArea} : {})})});
+                  runRes = await api("/payroll/run", {method:"POST", body: JSON.stringify({pay_schedule: payScheduleTab, overtime: otPayload, security: secPayload, once_off: onceOffPayload, ...(isSec ? {area_override: secArea} : {})})});
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); setRunError(`Payroll was NOT saved - the server rejected the run: ${err.message}. No payslips or journal entries were created for this run.`); return; }
                 setRunError("");
