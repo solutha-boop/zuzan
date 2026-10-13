@@ -5,8 +5,8 @@ ZuZan - Payroll Engine, Reports and PayFast Payment Gateway
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from pydantic import BaseModel
+from sqlalchemy import func, or_
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta, date as _date
 import calendar as _calendar
@@ -469,20 +469,22 @@ def calc_paye(annual_income: float, tax_year: str = None, age: int = None) -> fl
     rebate only). Secondary/tertiary rebates are cumulative on the primary
     (audit fix 2026-07-19)."""
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
-    bracket = None
+    # Bracket = first whose upper limit covers the income. (The old "min <= income <= max" test left a gap
+    # between e.g. 245,100 and 245,101: any income with cents in that gap was taxed R0, and incomes above
+    # the last bracket were taxed R0 too.) Tax = base + rate x (income - previous bracket's upper limit).
+    bracket = yr["brackets"][-1]
     for b in yr["brackets"]:
-        if b["min"] <= annual_income <= b["max"]:
+        if annual_income <= b["max"]:
             bracket = b
             break
-    if not bracket:
-        return 0
+    lower = bracket["min"] - 1 if bracket["min"] > 0 else 0
     rebate = yr["primary_rebate"]
     if age is not None:
         if age >= 65:
             rebate += yr.get("secondary_rebate", 0)
         if age >= 75:
             rebate += yr.get("tertiary_rebate", 0)
-    tax = bracket["base"] + (annual_income - bracket["min"]) * bracket["rate"] - rebate
+    tax = bracket["base"] + (annual_income - lower) * bracket["rate"] - rebate
     return max(0, tax)
 
 
@@ -537,6 +539,9 @@ def calc_payroll(
     # Private Security Sector Provident Fund (PSSPF): compulsory for eligible NBCPSS officers (MCA clause 30).
     # False = officer is NOT a member (excluded / ineligible) so no automatic PSSPF is taken.
     psspf_member: bool = True,
+    # Full contracted monthly salary when `gross_monthly` has been pro-rated for a part month
+    # (PSSPF counts a part month as a full month; minimum-wage checks use the contract salary).
+    contract_gross_monthly: float = None,
 ) -> dict:
     """
     Compute monthly payroll including BCEA overtime, pension/provident fund (s11F),
@@ -565,7 +570,7 @@ def calc_payroll(
     yr = TAX_YEARS.get(tax_year or CURRENT_TAX_YEAR, TAX_YEARS[CURRENT_TAX_YEAR])
 
     # ── Maternity leave: zero all pay; employee claims UIF benefit directly ──────
-    _contract_gross = gross_monthly      # contracted monthly salary (basis of PSSPF even while on unpaid leave)
+    _contract_gross = contract_gross_monthly if contract_gross_monthly else gross_monthly      # contracted monthly salary (basis of PSSPF even while on unpaid leave)
     if on_maternity_leave:
         gross_monthly = 0.0
 
@@ -626,7 +631,7 @@ def calc_payroll(
         union_sub      = 0.0
     # NBCPSS minimum wage warning (does not modify pay — just a flag)
     nbcpss_min   = nbcpss_minimum(security_grade, security_area) if is_security else 0.0
-    below_min    = is_security and nbcpss_min > 0 and gross_monthly < nbcpss_min
+    below_min    = is_security and nbcpss_min > 0 and _contract_gross < nbcpss_min
 
     # ── MIBCO Sector 5 fuel station allowances ────────────────────────────────
     # Medical Insurance Allowance: fixed R19.62/week, paid to employee, taxable (separate payslip line).
@@ -639,7 +644,7 @@ def calc_payroll(
     # Below-minimum warning
     mibco_hourly_min  = mibco_minimum_hourly(mibco_role) if is_fuel_station else 0.0
     mibco_monthly_min = round(mibco_hourly_min * MIBCO_SECTOR5_WEEKLY_HOURS * BCEA_WEEKS_PER_MONTH, 2)
-    below_mibco_min   = is_fuel_station and mibco_hourly_min > 0 and effective_gross < mibco_monthly_min
+    below_mibco_min   = is_fuel_station and mibco_hourly_min > 0 and (effective_gross if normal_hours else _contract_gross) < mibco_monthly_min
 
     # ── Cash remuneration (for net pay & SDL) ─────────────────────────────────
     taxable_gross = effective_gross + total_overtime + night_allow + special_allow + cleaning_allow + annual_bonus + mibco_med_allow + once_off_allowance_taxable
@@ -729,7 +734,7 @@ def calc_payroll(
     # No category is SDL-exempt: casual staff of the employer attract SDL once payroll > R500k
     _sdl_exempt = False
     SDL_THRESHOLD  = 500_000
-    sdl_applicable = (annual_payroll_total is None or annual_payroll_total >= SDL_THRESHOLD) and not _sdl_exempt
+    sdl_applicable = (annual_payroll_total is None or annual_payroll_total > SDL_THRESHOLD) and not _sdl_exempt   # SDL Act: exempt unless annual remuneration EXCEEDS R500,000
     sdl = taxable_gross * SDL_RATE if sdl_applicable else 0
 
     # ── Net pay: cash the employee receives ───────────────────────────────────
@@ -829,33 +834,53 @@ def s11f_carry_forward_balance(db, employee_id: int, tax_year: str = None) -> fl
     return round(max(0.0, prior_excess - used), 2)
 
 
+def _month_factor(emp, period: str):
+    """(factor, days_paid, days_in_month) - the share of the calendar month the employee was employed.
+    Driven by start_date and termination_date; factor 0 means not employed at all in the period."""
+    import calendar as _cal
+    y, m = int(period[:4]), int(period[5:7])
+    dim = _cal.monthrange(y, m)[1]
+    first, last = _date(y, m, 1), _date(y, m, dim)
+    sd = getattr(emp, "start_date", None)
+    td = getattr(emp, "termination_date", None)
+    if sd:
+        first = max(first, sd.date() if hasattr(sd, "date") else sd)
+    if td:
+        last = min(last, td.date() if hasattr(td, "date") else td)
+    if first > last:
+        return 0.0, 0, dim
+    days = (last - first).days + 1
+    return days / dim, days, dim
+
+
 # PAYROLL ROUTER
 payroll_router = APIRouter()
 
 
 class OvertimeEntry(BaseModel):
     employee_id:    int
-    overtime_hours: float = 0   # weekday/Saturday OT (BCEA s10 — 1.5x)
-    sunday_hours:   float = 0   # Sunday hours         (BCEA s16 — 2.0x)
-    normal_hours:   float = 0   # actual ordinary hours worked this period (0 = full month)
-    ph_hours:       float = 0   # public holiday hours (BCEA s18 — 2.0x)
+    # Hours can never be negative (a negative figure silently reduced pay) or exceed the hours in a month.
+    overtime_hours: float = Field(0, ge=0, le=744)   # weekday/Saturday OT (BCEA s10 — 1.5x)
+    sunday_hours:   float = Field(0, ge=0, le=744)   # Sunday hours         (BCEA s16 — 2.0x)
+    normal_hours:   float = Field(0, ge=0, le=744)   # actual ordinary hours worked this period (0 = full month)
+    ph_hours:       float = Field(0, ge=0, le=744)   # public holiday hours (BCEA s18 — 2.0x)
 
 
 class SecurityAllowanceEntry(BaseModel):
     employee_id:            int
-    night_shift_shifts:     float = 0  # number of night shifts worked this period
-    special_allowance_shifts: float = 0  # shifts qualifying for special allowance
-    unauthorised_absence_hours: float = 0  # hours lost to UNAUTHORISED absence/late coming (reduces the annual bonus)
+    night_shift_shifts:     float = Field(0, ge=0, le=62)  # number of night shifts worked this period
+    special_allowance_shifts: float = Field(0, ge=0, le=62)  # shifts qualifying for special allowance
+    unauthorised_absence_hours: float = Field(0, ge=0, le=744)  # hours lost to UNAUTHORISED absence/late coming (reduces the annual bonus)
     pay_annual_bonus: bool | None = None   # None = automatic (anniversary month); True/False = force on/off for this run
 
 
 class OnceOffEntry(BaseModel):
     """Per-employee once-off items for this payroll run only (not stored on employee record)."""
     employee_id:                    int
-    expense_claim:                  float = 0.0   # non-taxable expense reimbursement (added to net, not gross)
-    once_off_deduction:             float = 0.0   # once-off deduction (uniform damage, loan, etc.)
-    once_off_allowance_taxable:     float = 0.0   # once-off taxable allowance (travel, special duty, etc.)
-    once_off_allowance_nontaxable:  float = 0.0   # once-off non-taxable allowance (tools, PPE, subsistence)
+    expense_claim:                  float = Field(0.0, ge=0)   # non-taxable expense reimbursement (added to net, not gross)
+    once_off_deduction:             float = Field(0.0, ge=0)   # once-off deduction (uniform damage, loan, etc.)
+    once_off_allowance_taxable:     float = Field(0.0, ge=0)   # once-off taxable allowance (travel, special duty, etc.)
+    once_off_allowance_nontaxable:  float = Field(0.0, ge=0)   # once-off non-taxable allowance (tools, PPE, subsistence)
 
 
 class RunPayrollRequest(BaseModel):
@@ -997,7 +1022,12 @@ async def run_payroll(
 ):
     emp_q = db.query(Employee).filter(
         Employee.company_id == current_user.company_id,
-        Employee.is_active == True,
+        # Active staff PLUS anyone terminated this month: terminating sets is_active=False at once, which
+        # used to drop leavers from payroll so their final (part-month) pay was never processed.
+        or_(
+            Employee.is_active == True,
+            Employee.termination_date >= datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0),
+        ),
         _not_example_emp()
     )
     if data.pay_schedule:
@@ -1038,7 +1068,15 @@ async def run_payroll(
         else:                                  # hourly paid, hourly
             return _date(yr, mo, 15)
     created = []
-    annual_payroll_total = sum(e.gross_salary for e in employees) * 12
+    warnings, skipped, problems, already, pending = [], [], [], [], []
+    # SDL: the R500k threshold is the EMPLOYER's total annual payroll, not that of the pay group being run
+    # (4 salaried + 3 casual staff on R9k each = R756k, but each group alone looked like < R500k).
+    _all_active = db.query(Employee).filter(
+        Employee.company_id == current_user.company_id,
+        Employee.is_active == True,
+        _not_example_emp()
+    ).all()
+    annual_payroll_total = sum((e.gross_salary or 0) for e in _all_active) * 12
     company = db.query(__import__("database").Company).filter_by(id=current_user.company_id).first()
     industry = (getattr(company, "industry", None) or "").lower().replace(" ", "_").replace("-", "_")
     is_security_co   = industry == "private_security"
@@ -1050,6 +1088,7 @@ async def run_payroll(
             Payslip.period == period
         ).first()
         if existing:
+            already.append(emp.id)
             continue
         ot_entry  = ot_map.get(emp.id, OvertimeEntry(employee_id=emp.id))
         sec_entry = sec_map.get(emp.id, SecurityAllowanceEntry(employee_id=emp.id))
@@ -1060,6 +1099,26 @@ async def run_payroll(
         # Grade B/C/D/E → R6,726 / 208 = R32.34/hr; Grade A → R7,142 / 208 = R34.34/hr
         _sec_min_hr = round(nbcpss_minimum(sec_grade, sec_area) / NBCPSS_PRESCRIBED_HOURS, 4) if is_sec else None
         _explicit_hr = getattr(emp, "hourly_rate", None) or _sec_min_hr
+        _name = f"{emp.first_name} {emp.last_name}"
+        # Casual run: only people whose hours were entered are paid (0 hours used to mean "full month").
+        if data.pay_schedule == "casual" and not ot_entry.normal_hours:
+            skipped.append(f"{_name}: no hours entered, not paid")
+            continue
+        # Hours entered but no rate to multiply them by: payroll would ignore the hours and pay the full salary.
+        if ot_entry.normal_hours and not _explicit_hr:
+            problems.append(f"{_name}: hours were entered but no hourly rate is set on their profile")
+            continue
+        # Part-month employment (starters / leavers): calendar-day share of the month.
+        _factor, _days_paid, _dim = _month_factor(emp, period)
+        if _factor == 0:
+            skipped.append(f"{_name}: not employed during {period}, not paid")
+            continue
+        _hourly_paid = bool(ot_entry.normal_hours) or (getattr(emp, "employment_type", "") or "").lower() == "hourly"
+        _gross = emp.gross_salary if (_hourly_paid or _factor >= 1) else round(emp.gross_salary * _factor, 2)
+        if _gross != emp.gross_salary:
+            warnings.append(f"{_name}: pay prorated for {_days_paid} of {_dim} days")
+            if not _explicit_hr:
+                _explicit_hr = bcea_hourly_rate(emp.gross_salary, None, is_sec)   # overtime stays on the FULL salary
         # Annual bonus (clause 8): paid per employee on the start-date anniversary
         # (automatic), or forced on/off by the run screen. ((A x 12) - (B x C)) / 12.
         emp_bonus = 0.0
@@ -1078,7 +1137,7 @@ async def run_payroll(
         once_off_entry     = once_off_map.get(emp.id, OnceOffEntry(employee_id=emp.id))
         garnishee_total_val= sum(g.amount for g in getattr(emp, "garnishee_orders", []) if g.active)
         c = calc_payroll(
-            emp.gross_salary,
+            _gross,
             annual_payroll_total=annual_payroll_total,
             overtime_hours=ot_entry.overtime_hours,
             sunday_hours=ot_entry.sunday_hours,
@@ -1113,7 +1172,27 @@ async def run_payroll(
             once_off_allowance_nontaxable=once_off_entry.once_off_allowance_nontaxable,
             employment_category=getattr(emp, "employment_category", None) or "permanent",
             psspf_member=not bool(getattr(emp, "psspf_exempt", False)),
+            contract_gross_monthly=emp.gross_salary,
         )
+        if c["net_pay"] < 0:
+            problems.append(f"{_name}: net pay would be R{c['net_pay']:,.2f} - advances/garnishees/other deductions exceed their pay; reduce them first")
+            continue
+        if c.get("below_nbcpss_minimum"):
+            warnings.append(f"{_name}: salary is below the NBCPSS Grade {sec_grade} minimum of R{c['nbcpss_minimum']:,.2f}")
+        if c.get("below_mibco_minimum"):
+            warnings.append(f"{_name}: pay is below the MIBCO minimum of R{c['mibco_monthly_minimum']:,.2f}/month for a {mibco_role_val}")
+        if is_fuel_station_co and not mibco_role_val:
+            warnings.append(f"{_name}: no MIBCO role set, so no medical allowance, health scheme or minimum-wage check was applied")
+        if not is_sec and ot_entry.overtime_hours > BCEA_MAX_OT_WEEKLY * BCEA_WEEKS_PER_MONTH:
+            warnings.append(f"{_name}: {ot_entry.overtime_hours:g} overtime hours exceeds the BCEA limit of {BCEA_MAX_OT_WEEKLY}h a week (about {BCEA_MAX_OT_WEEKLY * BCEA_WEEKS_PER_MONTH:.0f}h a month)")
+        pending.append((emp, c))
+
+    # All-or-nothing: every check ran above with NOTHING written yet (journal setup commits as it goes, so a
+    # rollback after the first payslip would leave a half-run). Only now do we create payslips + journals.
+    if problems:
+        raise HTTPException(status_code=400, detail="Payroll was NOT run. Fix these first: " + " | ".join(problems))
+
+    for emp, c in pending:
         ot = c["overtime"]
         payslip = Payslip(
             employee_id=emp.id,
@@ -1194,11 +1273,18 @@ async def run_payroll(
     # NOTE: Fixed asset depreciation is no longer triggered by payroll.
     # Use the "Run Depreciation" button in the Fixed Assets module.
 
+    if not created and already:
+        _msg = f"Nothing new was processed: payslips for {period} already exist for these {len(already)} employee(s). A processed month cannot be run again."
+    else:
+        _msg = f"Payroll processed for {len(created)} employees."
     return {
-        "status":           "processed",
-        "period":           period,
-        "payslips_created": len(created),
-        "message":          f"Payroll processed for {len(created)} employees.",
+        "status":            "processed" if created else "no_change",
+        "period":            period,
+        "payslips_created":  len(created),
+        "already_processed": len(already),
+        "warnings":          warnings,
+        "skipped":           skipped,
+        "message":           _msg,
     }
 
 

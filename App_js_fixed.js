@@ -3367,6 +3367,7 @@ function Payroll({live = {}, user = {}}) {
   // ── Dual pay schedule state ───────────────────────────────────────────────
   const [payScheduleTab, setPayScheduleTab] = useState("salaried"); // "security" | "salaried" — default to salaried so run-payroll button is immediately visible
   const [payrollRunBySchedule,    setPayrollRunBySchedule]    = useState({security:false, salaried:false});
+  const [runNotes, setRunNotes] = useState(null); // {status,message,warnings[],skipped[]} from the last /payroll/run
   const [runError, setRunError] = useState(""); // set when /payroll/run fails, so a failed run is never shown as "Payroll Processed"
   const [payrollPeriodBySchedule, setPayrollPeriodBySchedule] = useState({security:null,  salaried:null});
   // Derived helpers for current tab
@@ -4493,10 +4494,12 @@ function Payroll({live = {}, user = {}}) {
                     return { employee_id: emp.id, expense_claim: +oo.expenseClaim||0, once_off_deduction: +oo.onceOffDeduction||0, once_off_allowance_taxable: +oo.onceOffTaxable||0, once_off_allowance_nontaxable: +oo.onceOffNonTaxable||0 };
                   }).filter(e => e.expense_claim > 0 || e.once_off_deduction > 0 || e.once_off_allowance_taxable > 0 || e.once_off_allowance_nontaxable > 0);
                   const isSec = (user?.industry||"").toLowerCase().replace(/[\s-]/g,"_")==="private_security";
-                  await api("/payroll/run", {method:"POST", body: JSON.stringify({pay_schedule: payScheduleTab, overtime: otPayload, security: secPayload, once_off: onceOffPayload, ...(isSec ? {area_override: secArea} : {})})});
+                  const runRes = await api("/payroll/run", {method:"POST", body: JSON.stringify({pay_schedule: payScheduleTab, overtime: otPayload, security: secPayload, once_off: onceOffPayload, ...(isSec ? {area_override: secArea} : {})})});
                   if (live && live.reload) live.reload();
                 } catch(err) { console.warn("Payroll run failed:", err.message); setRunError(`Payroll was NOT saved - the server rejected the run: ${err.message}. No payslips or journal entries were created for this run.`); return; }
                 setRunError("");
+                setRunNotes(runRes ? {status: runRes.status, message: runRes.message, warnings: runRes.warnings||[], skipped: runRes.skipped||[]} : null);
+                if (runRes && runRes.status === "no_change") return;
                 setPayrollRun(true);
                 setPayrollPeriod(new Date().toISOString().slice(0,7));
               }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -4543,6 +4546,18 @@ function Payroll({live = {}, user = {}}) {
           <span style={{fontSize:20}}>⚠️</span>
           <div style={{flex:1,fontSize:13,fontWeight:600,color:"#991b1b"}}>{runError}</div>
           <button onClick={()=>setRunError("")} style={{background:"transparent",border:"1px solid #dc2626",color:"#991b1b",borderRadius:8,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Dismiss</button>
+        </div>
+      )}
+
+      {runNotes && (runNotes.status === "no_change" || runNotes.warnings.length > 0 || runNotes.skipped.length > 0) && (
+        <div style={{background:"#fffbeb",border:"2px solid #d97706",borderRadius:16,padding:"14px 18px",marginBottom:20}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <span style={{fontSize:20}}>ℹ️</span>
+            <div style={{flex:1,fontSize:13,fontWeight:600,color:"#92400e"}}>{runNotes.status === "no_change" ? (runNotes.message || "Nothing new was processed - payslips for this period already exist.") : "Payroll processed - please review these notes:"}</div>
+            <button onClick={()=>setRunNotes(null)} style={{background:"transparent",border:"1px solid #d97706",color:"#92400e",borderRadius:8,padding:"5px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Dismiss</button>
+          </div>
+          {runNotes.warnings.length > 0 && <ul style={{margin:"8px 0 0 32px",padding:0,fontSize:12,color:"#92400e"}}>{runNotes.warnings.map((w,i)=><li key={"w"+i}>{typeof w==="string"?w:JSON.stringify(w)}</li>)}</ul>}
+          {runNotes.skipped.length > 0 && <div style={{margin:"8px 0 0 32px",fontSize:12,color:"#92400e"}}><b>Skipped:</b><ul style={{margin:"2px 0 0 0",padding:"0 0 0 18px"}}>{runNotes.skipped.map((w,i)=><li key={"s"+i}>{typeof w==="string"?w:JSON.stringify(w)}</li>)}</ul></div>}
         </div>
       )}
 
