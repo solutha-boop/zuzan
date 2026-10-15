@@ -27,6 +27,10 @@ except ImportError:
     }
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
+if SECRET_KEY == "zuzan-dev-key-change-in-production" and os.environ.get("RENDER"):
+    # Anyone who knows this default can forge a login token for any account. Set SECRET_KEY in Render.
+    import logging as _lg
+    _lg.getLogger("uvicorn.error").critical("SECURITY: SECRET_KEY is not set - using the public default. Set SECRET_KEY in Render env vars NOW.")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
@@ -81,8 +85,9 @@ class LoginRequest(BaseModel):
 
 def make_safe_password(password: str) -> str:
     """Truncate password to 50 chars to stay within bcrypt 72-byte limit."""
+    # An empty password must NEVER be silently turned into a real one (it used to become "Zuzan2025").
     if not password:
-        return "Zuzan2025"
+        raise ValueError("Password cannot be empty")
     return password[:50]
 
 
@@ -91,6 +96,8 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    if not plain or not hashed:
+        return False
     return pwd_context.verify(make_safe_password(plain), hashed)
 
 
@@ -147,6 +154,8 @@ def get_current_user(
 @router.post("/register")
 @limiter.limit("5/minute")
 async def register(request: Request, data: RegisterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    if len(data.password or "") < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
     # Check email not already registered
     existing = db.query(User).filter(func.lower(User.email) == (data.email or "").strip().lower()).first()
     if existing:
@@ -598,7 +607,8 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
 
 
 @router.post("/reset-password")
-async def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+async def reset_password(request: Request, data: ResetPasswordRequest, db: Session = Depends(get_db)):
     token = data.token.upper().strip()
     user = db.query(User).filter(User.reset_token == token).first()
     if not user:

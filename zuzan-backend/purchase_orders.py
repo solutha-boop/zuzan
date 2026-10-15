@@ -104,7 +104,7 @@ async def create_po(data: POCreate, current_user: User = Depends(get_current_use
     try:
         supplier_name = data.supplier_name
         if data.supplier_id and not supplier_name:
-            s = db.query(Supplier).filter(Supplier.id == data.supplier_id).first()
+            s = db.query(Supplier).filter(Supplier.id == data.supplier_id, Supplier.company_id == current_user.company_id).first()
             if s: supplier_name = s.name
         subtotal, vat, total = calc_totals(data.items, data.vat_applicable)
         delivery = datetime.strptime(data.delivery_date, "%Y-%m-%d") if data.delivery_date else None

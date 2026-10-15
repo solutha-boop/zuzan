@@ -693,7 +693,8 @@ async def scan_receipt(data: ReceiptRequest, current_user=Depends(__import__("au
 
 # ── ADMIN ─────────────────────────────────────────────────────────────────────
 def _check_admin(x_admin_secret: str = Header(None)):
-    if not ADMIN_SECRET or x_admin_secret != ADMIN_SECRET:
+    import hmac as _hmac
+    if not ADMIN_SECRET or not x_admin_secret or not _hmac.compare_digest(x_admin_secret.encode(), ADMIN_SECRET.encode()):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
