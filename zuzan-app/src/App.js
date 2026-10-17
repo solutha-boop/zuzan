@@ -8833,18 +8833,8 @@ function BankImport({live = {}, onNavigate}) {
       setResult(data);
       setStep("done");
     } catch(err) {
-      // Network error — save in demo mode
-      if (err.message.includes("fetch") || err.message.includes("network") || err.message.includes("Failed")) {
-        setResult({
-          expenses_created: selectedTxns.filter(t => t.type === "debit").length,
-          expenses_skipped: 0,
-          credits_recorded: selectedTxns.filter(t => t.type === "credit").length,
-          message: "Saved locally (backend offline)",
-        });
-        setStep("done");
-      } else {
-        setError(`Import failed: ${err.message}`);
-      }
+      // Never show a fake "Import Complete" - if the request did not reach the server, nothing was saved.
+      setError(`Import failed - nothing was saved. ${err.message}`);
     } finally {
       setImporting(false);
     }
@@ -9072,8 +9062,11 @@ function BankImport({live = {}, onNavigate}) {
           <p style={{color:C.inkMid,fontSize:14,lineHeight:1.7,marginBottom:28}}>
             {result && result.expenses_created > 0 && <span>Imported <strong style={{color:C.ink}}>{result.expenses_created} expenses</strong> ({fmt(totalDebits)}). </span>}
             {result && result.credits_recorded > 0 && <span>Recorded <strong style={{color:C.green}}>{result.credits_recorded} income entries</strong> to your P&amp;L. </span>}
-            {result && result.credits_skipped > 0 && <span style={{color:C.gold}}>⚠ {result.credits_skipped} income entries could not be recorded. </span>}
-            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0)) && <span>Nothing new was imported (all transactions already exist).</span>}
+            {result && result.credits_matched_to_invoices > 0 && <span>Matched <strong style={{color:C.green}}>{result.credits_matched_to_invoices} receipts</strong> to open invoices and marked them paid. </span>}
+            {result && result.credits_skipped > 0 && <span style={{color:C.gold}}>{result.credits_skipped} entries skipped as already imported. </span>}
+            {result && result.ignored > 0 && <span style={{color:C.gold}}>{result.ignored} line(s) ignored (zero or negative amount). </span>}
+            {result && result.possible_invoice_matches && result.possible_invoice_matches.length > 0 && <span style={{display:"block",color:C.gold,marginTop:8}}>⚠ {result.possible_invoice_matches.map(m=>`${m.description} (${fmt(m.amount)}) has the same amount as open invoice ${m.possible_invoices.join(", ")}`).join("; ")}. These were posted as NEW income - if they are invoice payments, the revenue is now counted twice: reverse the income entry and mark the invoice paid instead.</span>}
+            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0 && !(result.credits_matched_to_invoices>0))) && <span>Nothing new was imported (all transactions already exist).</span>}
           </p>
           <div style={{display:"flex",gap:10,justifyContent:"center"}}>
             <button onClick={reset} style={{padding:"11px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Upload Another</button>

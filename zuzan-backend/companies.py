@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import (
     get_db, Invoice, Expense, Employee, Company, Payslip, InvoiceStatus,
     CompanyMembership, CompanyAccount, ServiceItem,
@@ -1984,6 +1984,16 @@ class BankImportRequest(BaseModel):
     bank:         str
     transactions: list[BankTransaction]
 
+
+def _name_tokens(name):
+    import re as _re
+    return [w for w in _re.split(r"[^a-z0-9]+", (name or "").lower()) if len(w) >= 4]
+
+
+def _desc_names_client(desc, client_name):
+    d = (desc or "").lower()
+    return any(t in d for t in _name_tokens(client_name))
+
 @bank_router.post("/import")
 async def import_bank_statement(
     data: BankImportRequest,
@@ -1999,8 +2009,14 @@ async def import_bank_statement(
     expenses_skipped  = 0
     credits_recorded  = 0
     credits_skipped   = 0
+    credits_matched   = 0
+    ignored           = 0
+    possible_matches  = []
 
     for txn in data.transactions:
+        if txn.type not in ("debit", "credit") or not (txn.amount and txn.amount > 0):
+            ignored += 1          # zero/negative amounts or unknown type are never posted
+            continue
         if txn.type == "debit":
             # Check for duplicate — same vendor, amount and date.
             # Audit fix 2026-07-04: the previous filter compared txn.description against
@@ -2082,6 +2098,50 @@ async def import_bank_statement(
                 credits_skipped += 1
                 continue
 
+            # Is this the payment of an invoice already raised in ZuZan? Posting it as new income
+            # would count the revenue twice and leave the invoice unpaid in Accounts Receivable.
+            if (txn.amount or 0) > 0:
+                _amt = round(float(txn.amount), 2)
+                try:
+                    _txd = datetime.fromisoformat(txn.date)
+                except Exception:
+                    _txd = datetime.utcnow()
+                # (a) already matched on an earlier import of the same statement -> duplicate
+                _paid = db.query(Invoice).filter(
+                    Invoice.company_id == current_user.company_id,
+                    Invoice.status == InvoiceStatus.paid,
+                    Invoice.paid_amount_zar == _amt,
+                    Invoice.paid_date >= _txd.replace(hour=0, minute=0, second=0, microsecond=0),
+                    Invoice.paid_date <  _txd.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
+                ).all()
+                if any(_desc_names_client(txn.description, i.client_name) for i in _paid):
+                    credits_skipped += 1
+                    continue
+                # (b) one open ZAR invoice for exactly this total whose client is named in the narrative
+                _open = [i for i in db.query(Invoice).filter(
+                            Invoice.company_id == current_user.company_id,
+                            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
+                         if (not i.currency or i.currency == "ZAR") and abs((i.total_amount or 0) - _amt) < 0.005]
+                _named = [i for i in _open if _desc_names_client(txn.description, i.client_name)]
+                if len(_named) == 1:
+                    _inv = _named[0]
+                    _inv.status = InvoiceStatus.paid
+                    _inv.paid_date = _txd
+                    _inv.paid_amount_zar = _amt
+                    try:
+                        import journal as journal_engine
+                        journal_engine.init_accounts(current_user.company_id, db)
+                        journal_engine.post_invoice_paid(_inv, db)
+                    except Exception as je:
+                        logger.error(f"Journal post failed for bank-matched invoice payment: {je}")
+                        db.rollback()
+                        raise HTTPException(status_code=500, detail=f"Bank import stopped - a journal entry failed ({je}). Nothing from this import was saved; please retry.")
+                    credits_matched += 1
+                    continue
+                if _open:
+                    possible_matches.append({"description": txn.description, "amount": _amt, "date": txn.date,
+                                             "possible_invoices": [i.invoice_number for i in _open]})
+
             # Post a journal entry so income flows into P&L and the balance sheet
             try:
                 import journal as journal_engine
@@ -2089,8 +2149,9 @@ async def import_bank_statement(
                 journal_engine.post_bank_income(current_user.company_id, txn, db)
                 credits_recorded += 1
             except Exception as je:
-                logger.warning(f"Journal post failed for bank import income: {je}")
-                credits_skipped += 1
+                logger.error(f"Journal post failed for bank import income: {je}")
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Bank import stopped - a journal entry failed ({je}). Nothing from this import was saved; please retry.")
 
     db.commit()
 
@@ -2101,6 +2162,12 @@ async def import_bank_statement(
         "expenses_skipped": expenses_skipped,
         "credits_recorded": credits_recorded,
         "credits_skipped":  credits_skipped,
+        "credits_matched_to_invoices": credits_matched,
+        "ignored":          ignored,
+        "possible_invoice_matches": possible_matches,
         "total_processed":  len(data.transactions),
-        "message":          f"Imported {expenses_created} expenses and {credits_recorded} income entries from {len(data.transactions)} transactions.",
+        "message":          (f"Imported {expenses_created} expenses and {credits_recorded} income entries; "
+                             f"{credits_matched} receipts matched to open invoices and marked paid"
+                             + (f"; {len(possible_matches)} receipt(s) have the same amount as an open invoice but the client is not named - check they are not invoice payments recorded twice (they were posted as new income)" if possible_matches else "")
+                             + (f"; {ignored} line(s) ignored (zero/negative amount)" if ignored else "") + "."),
     }
