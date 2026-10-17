@@ -6552,6 +6552,22 @@ function Reports({live = {}, user = null}) {
               <span style={{color:C.inkMid}}>Field 1(b) Zero-rated supplies</span>
               <span style={{fontWeight:700}}>{fmt(out.field_1b_zero_rated_supplies)}</span>
             </div>
+            {(out.field_3_exempt_supplies||0)>0.005 && <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Field 3 Exempt supplies (excl. VAT)</span>
+              <span style={{fontWeight:700}}>{fmt((out.field_3_exempt_supplies||0))}</span>
+            </div>}
+            {(out.credit_notes_vat_deducted||0)>0.005 && <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Less: credit notes (VAT deducted)</span>
+              <span style={{fontWeight:700}}>{fmt((out.credit_notes_vat_deducted||0))}</span>
+            </div>}
+            {(out.bank_import_output_vat||0)>0.005 && <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Add: VAT on bank-import income</span>
+              <span style={{fontWeight:700}}>{fmt((out.bank_import_output_vat||0))}</span>
+            </div>}
+            {(out.bad_debt_recovered_vat||0)>0.005 && <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Add: VAT on bad debts recovered (s22)</span>
+              <span style={{fontWeight:700}}>{fmt((out.bad_debt_recovered_vat||0))}</span>
+            </div>}
             <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"2px solid "+C.border,fontSize:13}}>
               <span style={{color:C.inkMid}}>Total invoiced (incl. VAT)</span>
               <span style={{fontWeight:700}}>{fmt(out.total_invoiced_incl_vat)}</span>
@@ -6571,10 +6587,23 @@ function Reports({live = {}, user = null}) {
               <span style={{color:C.inkMid}}>Total expenses (excl. VAT)</span>
               <span style={{fontWeight:700}}>{fmt(inp.total_expenses_excl_vat)}</span>
             </div>
+            {(inp.input_vat_before_apportionment||0)>0.005 && <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Input VAT before apportionment</span>
+              <span style={{fontWeight:700}}>{fmt((inp.input_vat_before_apportionment||0))}</span>
+            </div>}
+            {(inp.apportionment&&inp.apportionment.non_deductible_input_vat||0)>0.005 && <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Less: non-deductible (exempt-supply apportionment)</span>
+              <span style={{fontWeight:700}}>{fmt((inp.apportionment&&inp.apportionment.non_deductible_input_vat||0))}</span>
+            </div>}
+            {(inp.bad_debt_vat_deduction||0)>0.005 && <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid "+C.border+"20",fontSize:13}}>
+              <span style={{color:C.inkMid}}>Add: VAT on bad debts written off (s22)</span>
+              <span style={{fontWeight:700}}>{fmt((inp.bad_debt_vat_deduction||0))}</span>
+            </div>}
             <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"2px solid "+C.border,fontSize:13}}>
               <span style={{color:C.inkMid}}>Estimated input VAT (15/115)</span>
               <span style={{fontWeight:700}}>{fmt(inp.field_14_input_vat)}</span>
             </div>
+            {inp.apportionment && inp.apportionment.applies && <div style={{fontSize:11,color:C.inkMid,padding:"8px 0"}}>Apportionment ratio {((inp.apportionment.ratio||0)*100).toFixed(2)}% (provisional). {inp.apportionment.note}</div>}
             <div style={{display:"flex",justifyContent:"space-between",padding:"12px 0",fontSize:14,fontWeight:800}}>
               <span style={{color:C.accent}}>Field 14 Input VAT claimed</span>
               <span style={{color:C.accent}}>{fmt(inp.field_14_input_vat)}</span>
