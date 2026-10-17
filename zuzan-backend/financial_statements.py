@@ -13,7 +13,7 @@ from database import (
     Account, JournalEntry, JournalLine, AccountType, InvoiceStatus,
 )
 from auth import require_role
-from datetime import datetime
+from datetime import datetime, timedelta
 import calendar
 
 router = APIRouter()
@@ -183,6 +183,7 @@ def annual_financial_statements(
 ):
     cid   = current_user.company_id
     start, end = fy_dates(year)
+    before_start = start - timedelta(microseconds=1)   # opening balances are strictly BEFORE the year starts (entries dated 1 March 00:00 belong to the new year)
     company = db.query(Company).filter(Company.id == cid).first()
 
     # ── INCOME STATEMENT ─────────────────────────────────────────────────────
@@ -312,6 +313,17 @@ def annual_financial_statements(
     # Deferred tax presentation (audit implementation 2026-07-14): the closing
     # balance is a computed AFS line — not a journal posting — with the matching
     # adjustment made to retained earnings so Assets = Equity + Liabilities holds.
+    # Current-year income tax is an expense on the income statement but is not journalled, so carry the
+    # estimate as a computed current liability and take it out of retained earnings - otherwise the
+    # balance sheet, equity statement and cash flow do not agree with the income statement.
+    if tax_expense > 0.005:
+        current_liabilities = current_liabilities + [
+            {"code": "2400", "name": "Income Tax Payable (estimate)", "amount": _r(tax_expense)}
+        ]
+        total_current_liabilities = _r(total_current_liabilities + tax_expense)
+        total_liabilities         = _r(total_liabilities + tax_expense)
+        retained_earnings         = _r(retained_earnings - tax_expense)
+
     if dt_closing > 0.005:
         non_current_liabilities = non_current_liabilities + [
             {"code": "2600", "name": "Deferred Tax Liability", "amount": dt_closing}
@@ -333,12 +345,12 @@ def annual_financial_statements(
 
     # ── STATEMENT OF CHANGES IN EQUITY ────────────────────────────────────────
     # Opening equity capital (equity account balances at start of period)
-    open_eq_rows         = _acct_lines(db, cid, AccountType.equity, date_to=start)
+    open_eq_rows         = _acct_lines(db, cid, AccountType.equity, date_to=before_start)
     opening_equity_cap   = _r(sum(cr - dr for _, _, dr, cr in open_eq_rows))
 
     # Opening retained earnings (all-time cumulative P&L up to start)
-    open_rev             = _acct_lines(db, cid, AccountType.revenue, date_to=start)
-    open_exp             = _acct_lines(db, cid, AccountType.expense, date_to=start)
+    open_rev             = _acct_lines(db, cid, AccountType.revenue, date_to=before_start)
+    open_exp             = _acct_lines(db, cid, AccountType.expense, date_to=before_start)
     opening_retained     = _r(
         sum(cr - dr for _, _, dr, cr in open_rev) -
         sum(dr - cr for _, _, dr, cr in open_exp)
@@ -359,7 +371,7 @@ def annual_financial_statements(
     # Changes in AR (1100) between start-1 and end
     ar_end_rows   = [r for r in asset_rows if r[0] == "1100"]
     ar_end        = _r((ar_end_rows[0][2] - ar_end_rows[0][3]) if ar_end_rows else 0)
-    ar_start_rows = _acct_lines(db, cid, AccountType.asset, date_to=datetime(start.year, start.month, start.day))
+    ar_start_rows = _acct_lines(db, cid, AccountType.asset, date_to=before_start)
     ar_start_row  = next((r for r in ar_start_rows if r[0] == "1100"), None)
     ar_start      = _r((ar_start_row[2] - ar_start_row[3]) if ar_start_row else 0)
     change_in_ar  = _r(-(ar_end - ar_start))   # increase in AR = cash NOT received
@@ -367,7 +379,7 @@ def annual_financial_statements(
     # Changes in AP (2000)
     ap_end_rows   = [r for r in liab_rows if r[0] == "2000"]
     ap_end        = _r((ap_end_rows[0][3] - ap_end_rows[0][2]) if ap_end_rows else 0)
-    ap_start_rows = _acct_lines(db, cid, AccountType.liability, date_to=datetime(start.year, start.month, start.day))
+    ap_start_rows = _acct_lines(db, cid, AccountType.liability, date_to=before_start)
     ap_start_row  = next((r for r in ap_start_rows if r[0] == "2000"), None)
     ap_start      = _r((ap_start_row[3] - ap_start_row[2]) if ap_start_row else 0)
     change_in_ap  = _r(ap_end - ap_start)       # increase in AP = cash NOT yet paid
@@ -375,12 +387,27 @@ def annual_financial_statements(
     # Changes in inventory (1200)
     inv_end_rows  = [r for r in asset_rows if r[0] == "1200"]
     inv_end       = _r((inv_end_rows[0][2] - inv_end_rows[0][3]) if inv_end_rows else 0)
-    inv_start_rows = _acct_lines(db, cid, AccountType.asset, date_to=datetime(start.year, start.month, start.day))
+    inv_start_rows = _acct_lines(db, cid, AccountType.asset, date_to=before_start)
     inv_start_row = next((r for r in inv_start_rows if r[0] == "1200"), None)
     inv_start     = _r((inv_start_row[2] - inv_start_row[3]) if inv_start_row else 0)
     change_in_inv = _r(-(inv_end - inv_start))  # increase in inventory = cash outflow
 
-    cash_from_operations = _r(net_profit + total_depreciation + change_in_ar + change_in_ap + change_in_inv)
+    # Remaining working-capital movements (VAT, PAYE/UIF/SDL payable, accruals, other receivables ...)
+    # so the statement reconciles to the bank ledger instead of silently omitting them.
+    _a_start = _acct_lines(db, cid, AccountType.asset, date_to=before_start)
+    _l_start = _acct_lines(db, cid, AccountType.liability, date_to=before_start)
+    def _sum_assets(rows, pred):  return sum(dr - cr for c, n, dr, cr in rows if pred(c))
+    def _sum_liabs(rows, pred):   return sum(cr - dr for c, n, dr, cr in rows if pred(c))
+    _oca = lambda c: c < "1500" and c not in ("1000", "1100", "1200")
+    _ocl = lambda c: c < "2500" and c != "2000"
+    change_other_assets = _r(-(_sum_assets(asset_rows, _oca) - _sum_assets(_a_start, _oca)))
+    change_other_liabs  = _r(_sum_liabs(liab_rows, _ocl) - _sum_liabs(_l_start, _ocl) + tax_expense)  # + tax accrued, unpaid
+    # Gains/losses on disposal are not operating cash - the proceeds are shown under investing
+    disposal_gl = _r(sum((fa.disposal_gain_loss or 0) for fa in db.query(FixedAsset).filter(
+        FixedAsset.company_id == cid, FixedAsset.disposal_date >= start, FixedAsset.disposal_date <= end).all()))
+
+    cash_from_operations = _r(net_profit + total_depreciation + change_in_ar + change_in_ap + change_in_inv
+                              + change_other_assets + change_other_liabs - disposal_gl)
 
     # Investing — fixed asset purchases in period
     fa_in_period = db.query(FixedAsset).filter(
@@ -399,17 +426,24 @@ def annual_financial_statements(
             FixedAsset.disposal_date <= end,
         ).all()
     ))
-    cash_from_investing = _r(-fa_purchases + fa_disposals)
+    _onca = lambda c: c >= "1500" and c not in ("1500", "1510")
+    change_other_nca = _r(-(_sum_assets(asset_rows, _onca) - _sum_assets(_a_start, _onca)))
+    cash_from_investing = _r(-fa_purchases + fa_disposals + change_other_nca)
 
-    # Financing (loans not yet tracked)
-    cash_from_financing = 0.0
+    # Financing: owner contributions / drawings and movements on long-term liabilities (loans)
+    _ncl = lambda c: c >= "2500"
+    change_nc_liabs = _r(_sum_liabs(liab_rows, _ncl) - _sum_liabs(_l_start, _ncl))
+    cash_from_financing = _r(period_contributions - period_drawings + change_nc_liabs)
     net_cash_change = _r(cash_from_operations + cash_from_investing + cash_from_financing)
 
     # Opening cash
-    cash_acct_start = _acct_lines(db, cid, AccountType.asset, date_to=datetime(start.year, start.month, start.day))
+    cash_acct_start = _acct_lines(db, cid, AccountType.asset, date_to=before_start)
     cash_start_row  = next((r for r in cash_acct_start if r[0] == "1000"), None)
     opening_cash    = _r((cash_start_row[2] - cash_start_row[3]) if cash_start_row else 0)
     closing_cash    = _r(opening_cash + net_cash_change)
+    _cash_end_row   = next((r for r in asset_rows if r[0] == "1000"), None)
+    ledger_closing_cash = _r((_cash_end_row[2] - _cash_end_row[3]) if _cash_end_row else 0)
+    cash_reconciles = abs(closing_cash - ledger_closing_cash) < 0.10
 
     # ── NOTES ────────────────────────────────────────────────────────────────
 
@@ -687,19 +721,28 @@ def annual_financial_statements(
                 "change_in_ar":         change_in_ar,
                 "change_in_ap":         change_in_ap,
                 "change_in_inventory":  change_in_inv,
+                "change_in_other_assets":      change_other_assets,
+                "change_in_other_liabilities": change_other_liabs,
+                "less_gain_on_disposal":       _r(-disposal_gl),
                 "total":                cash_from_operations,
             },
             "investing": {
                 "purchase_of_fa":       _r(-fa_purchases),
                 "disposal_proceeds":    fa_disposals,
+                "other":                change_other_nca,
                 "total":                cash_from_investing,
             },
             "financing": {
+                "owner_contributions":  period_contributions,
+                "owner_drawings":       _r(-period_drawings),
+                "change_in_long_term_liabilities": change_nc_liabs,
                 "total": cash_from_financing,
             },
             "net_change":     net_cash_change,
             "opening_cash":   opening_cash,
             "closing_cash":   closing_cash,
+            "ledger_closing_cash": ledger_closing_cash,
+            "reconciles_to_ledger": cash_reconciles,
         },
         "notes": {
             "fixed_assets":          fa_schedule,

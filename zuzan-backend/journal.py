@@ -999,6 +999,29 @@ def post_stock_adjustment(item, quantity: float, db: Session, reason: str = None
     return entry
 
 
+def post_stock_revaluation(item, delta_amount: float, db: Session, reason: str = None):
+    """Unit cost changed on stock already held: move the ledger value to match the stock sub-ledger.
+    Positive delta: DR Inventory (1200) / CR Stock Adjustments (5950); negative: the reverse."""
+    delta_amount = round(delta_amount or 0, 2)
+    if delta_amount == 0:
+        return None
+    cid = item.company_id
+    entry = _make_entry(cid, datetime.utcnow(), f"Stock revaluation — {item.name}",
+                        f"REV-{item.id}", "stock_adjustment", item.id, db)
+    inventory = get_account(cid, "1200", db)
+    adj_acct  = get_account(cid, "5950", db)
+    d = reason or "Unit cost revaluation"
+    if delta_amount > 0:
+        lines = [_line(entry.id, inventory, debit=delta_amount, description=d),
+                 _line(entry.id, adj_acct, credit=delta_amount, description=d)]
+    else:
+        lines = [_line(entry.id, adj_acct, debit=-delta_amount, description=d),
+                 _line(entry.id, inventory, credit=-delta_amount, description=d)]
+    _assert_balanced(lines)
+    for l in lines: db.add(l)
+    return entry
+
+
 # ── FIXED ASSET POSTING FUNCTIONS (IAS 16) ───────────────────────────────────
 
 def post_asset_acquisition(asset, db: Session) -> JournalEntry:
