@@ -10,6 +10,7 @@ from typing import Optional
 from datetime import datetime
 from database import get_db, Invoice, InvoiceStatus, Company, SessionLocal
 from auth import get_current_user, User
+from journal import company_vat_registered as _vatreg
 import logging
 
 logger = logging.getLogger("zuzan.creditnotes")
@@ -21,7 +22,7 @@ class CreditNoteCreate(BaseModel):
     client_name:  str
     description:  Optional[str] = None
     amount:       float                  # excl. VAT
-    vat_rate:     Optional[float] = 0.15
+    vat_rate:     Optional[float] = None   # None = follow the linked invoice (0% if it had no VAT, else 15%)
     currency:     Optional[str] = "ZAR"
     notes:        Optional[str] = None
     issue_date:   Optional[str] = None   # ISO date; defaults to today
@@ -81,7 +82,14 @@ async def create_credit_note(
             client_name = inv.client_name
 
     # Compute amounts
-    vat_rate   = body.vat_rate if body.vat_rate is not None else 0.15
+    if body.vat_rate is not None:
+        vat_rate = body.vat_rate
+    else:
+        _linked = None
+        if body.invoice_id:
+            _linked = db.query(Invoice).filter(Invoice.id == body.invoice_id, Invoice.company_id == current_user.company_id).first()
+        # a credit note for an invoice that charged no VAT must not reverse VAT that was never charged
+        vat_rate = 0.0 if (not _vatreg(db, current_user.company_id) or (_linked is not None and _linked.vat_amount is not None and (_linked.vat_amount or 0) == 0)) else 0.15
     vat_amount = round(body.amount * vat_rate, 2)
     total      = round(body.amount + vat_amount, 2)
     issue_date = datetime.fromisoformat(body.issue_date) if body.issue_date else datetime.utcnow()
@@ -116,7 +124,9 @@ async def create_credit_note(
         je_id = _post_credit_note_journal(cn, current_user.company_id, db)
         cn.journal_entry_id = je_id
     except Exception as e:
-        logger.warning(f"Credit note journal post failed: {e}")
+        logger.error(f"Credit note journal post failed: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Credit note NOT saved - the journal entry failed: {e}")
 
     db.commit()
     db.refresh(cn)
@@ -164,7 +174,7 @@ def _post_credit_note_journal(cn, company_id: int, db: Session) -> Optional[int]
     """
     Double-entry for a credit note:
       DR Revenue (4000)          — amount excl. VAT
-      DR VAT Output (2200)       — VAT amount (if any)
+      DR VAT Output (2100)       — VAT amount (if any)
       CR Accounts Receivable (1100) — total incl. VAT
 
     This reverses the original invoice's journal.
@@ -180,7 +190,7 @@ def _post_credit_note_journal(cn, company_id: int, db: Session) -> Optional[int]
 
     ar_acc  = _get_account("1100")
     rev_acc = _get_account("4000")
-    vat_acc = _get_account("2200")
+    vat_acc = _get_account("2100")   # VAT Output (2200 is PAYE Payable - credit-note VAT was being posted there)
 
     if not ar_acc or not rev_acc:
         logger.warning("Credit note journal: required accounts not found")

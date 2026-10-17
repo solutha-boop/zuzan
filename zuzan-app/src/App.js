@@ -1118,9 +1118,13 @@ function InvFormFields({data, onChange, customers=[]}) {
       {/* VAT — auto 15% for ZAR, manual amount for foreign currency */}
       {(!data.currency || data.currency === "ZAR") ? (
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-          <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
-            <input type="checkbox" checked={data.vatApplicable !== false} onChange={e=>onChange(d=>({...d,vatApplicable:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/>
-            Apply VAT @ 15%
+          <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:C.ink}}>
+            VAT treatment
+            <select value={data.supplyType || (data.vatApplicable !== false ? "standard" : "zero_rated")} onChange={e=>{const v=e.target.value; onChange(d=>({...d,supplyType:v,vatApplicable:v==="standard"}));}} style={{padding:"6px 8px",border:"1px solid "+C.border,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink}}>
+              <option value="standard">Standard rate (15%)</option>
+              <option value="zero_rated">Zero-rated (0%)</option>
+              <option value="exempt">Exempt (no VAT)</option>
+            </select>
           </label>
         </div>
       ) : (
@@ -1802,8 +1806,12 @@ function RecurringInvoicesTab() {
                 </select>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
-                <input type="checkbox" checked={form.vat_applicable} onChange={e=>setForm({...form,vat_applicable:e.target.checked})} id="vat-recur" style={{width:16,height:16,accentColor:C.accent}}/>
-                <label htmlFor="vat-recur" style={{fontSize:13,color:C.ink,cursor:"pointer"}}>Add VAT (15%)</label>
+                <label htmlFor="vat-recur" style={{fontSize:13,color:C.ink}}>VAT treatment </label>
+                <select id="vat-recur" value={form.supply_type || (form.vat_applicable ? "standard" : "zero_rated")} onChange={e=>{const v=e.target.value; setForm({...form,supply_type:v,vat_applicable:v==="standard"});}} style={{padding:"6px 8px",border:"1px solid "+C.border,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink}}>
+                  <option value="standard">Standard rate (15%)</option>
+                  <option value="zero_rated">Zero-rated (0%)</option>
+                  <option value="exempt">Exempt (no VAT)</option>
+                </select>
               </div>
             </div>
             <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
@@ -2014,7 +2022,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
     if(!form.client||!form.amount||!form.desc){alert("Client, description and amount are required.");return;}
     setSaving(true);
     try {
-      const invBody = { client_name:form.client, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, due_date:form.due||null, currency:form.currency||"ZAR", exchange_rate:+form.exchangeRate||1.0 };
+      const invBody = { client_name:form.client, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, supply_type:form.supplyType||null, due_date:form.due||null, currency:form.currency||"ZAR", exchange_rate:+form.exchangeRate||1.0 };
       if (form.currency && form.currency !== "ZAR") invBody.vat_amount_override = +form.vatAmount||0;
       if (form.items_json) invBody.items_json = form.items_json;
       if (form.passenger_name) invBody.passenger_name = form.passenger_name;
@@ -2255,7 +2263,13 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                     <div style={{display:"flex",gap:6}}>
                       <button onClick={() => setPreview(inv)} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>View</button>
                       <button onClick={() => setEditInv({...inv})} style={{background:C.goldLt,color:C.gold,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Amend</button>
-                      {inv.status !== "paid" && (
+                      {inv.status !== "paid" && inv.status !== "written_off" && inv.status !== "draft" && (
+                        <button onClick={async()=>{ const reason=window.prompt(`Write off ${inv.id} as an irrecoverable bad debt?\n\nThe VAT on it is deducted on your VAT201.\nEnter the reason (kept as evidence for SARS):`); if(!reason||!reason.trim()) return; try{ await api(`/invoices/${inv._dbId || inv.id}/write-off`,{method:"POST",body:JSON.stringify({reason:reason.trim()})}); setInvoices(p=>p.map(i=>i.id===inv.id?{...i,status:"written_off"}:i)); }catch(e){ window.alert(e.message); } }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Write off</button>
+                      )}
+                      {inv.status === "written_off" && (
+                        <button onClick={async()=>{ const amt=window.prompt(`Record money received on written-off ${inv.id}.\nAmount received (incl. VAT) - leave blank for the full invoice:`); if(amt===null) return; try{ await api(`/invoices/${inv._dbId || inv.id}/bad-debt-recovery`,{method:"POST",body:JSON.stringify(amt.trim()?{amount:+amt}:{})}); window.location.reload(); }catch(e){ window.alert(e.message); } }} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Record Recovery</button>
+                      )}
+                      {inv.status !== "paid" && inv.status !== "written_off" && (
                         <button onClick={() => openPayModal(inv)} style={{background:C.greenLt,color:C.green,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Record Payment</button>
                       )}
                       <button onClick={async()=>{ if(!window.confirm(`Delete ${inv.id}?`))return; setInvoices(p=>p.filter(i=>i.id!==inv.id)); try{await api(`/invoices/${inv._dbId || inv.id}`,{method:"DELETE"});}catch(e){} }} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>
@@ -2422,7 +2436,7 @@ function Expenses({live = {}}) {
     if(!form.vendor||!form.amount){alert("Vendor and amount are required.");return;}
     setSaving(true);
     try {
-      await api("/expenses/", { method:"POST", body: JSON.stringify({ vendor:form.vendor, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, category:form.category, expense_date:new Date().toISOString().slice(0,10), is_on_credit:form.onCredit||false }) });
+      await api("/expenses/", { method:"POST", body: JSON.stringify({ vendor:form.vendor, description:form.desc, amount:+form.amount, vat_applicable:form.vatApplicable, vat_use:form.vatUse||null, category:form.category, expense_date:new Date().toISOString().slice(0,10), is_on_credit:form.onCredit||false }) });
       if (live && live.reload) live.reload();
       setShowNew(false);
       setForm({vendor:"",amount:"",category:"",desc:"",vatApplicable:true,onCredit:false});
@@ -2513,6 +2527,15 @@ function Expenses({live = {}}) {
               <input type="checkbox" checked={form.vatApplicable} onChange={e=>setForm({...form,vatApplicable:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
               Apply VAT @ 15%
             </label>
+            {form.vatApplicable && <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:C.ink}} title="Only matters if the business also makes exempt supplies (e.g. residential rent, financial services)">
+              VAT claim
+              <select value={form.vatUse||""} onChange={e=>setForm({...form,vatUse:e.target.value})} style={{padding:"6px 8px",border:"1px solid "+C.border,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink}}>
+                <option value="">Shared (apportioned)</option>
+                <option value="taxable">Used for taxable supplies only</option>
+                <option value="exempt">Used for exempt supplies only</option>
+                <option value="denied">Not claimable (e.g. motor car purchase)</option>
+              </select>
+            </label>}
             <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,color:C.ink}}>
               <input type="checkbox" checked={form.onCredit||false} onChange={e=>setForm({...form,onCredit:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
               On Credit
@@ -5681,6 +5704,7 @@ function Reports({live = {}, user = null}) {
   const JNL_EMPTY_FORM = {date:new Date().toISOString().slice(0,10),description:"",reference:"",auto_reverse:false,reversal_date:"",lines:[{account_id:"",debit:"",credit:"",description:""},{account_id:"",debit:"",credit:"",description:""}]};
 
   const [vatPeriod,setVatPeriod]= useState(new Date().toISOString().slice(0,7));
+  const [vatMonths,setVatMonths]= useState(1);
   const [loading,  setLoading]  = useState(false);
   const [mgmtDrill, setMgmtDrill] = useState(null); // {type,title,cols,rows,total,color}
   const [mgmtDrillLoading, setMgmtDrillLoading] = useState(false);
@@ -5747,7 +5771,7 @@ function Reports({live = {}, user = null}) {
       if (tab==="pl")   setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
       if (tab==="mgmt") setMgmt(await api(`/reports/management?${dateParams}`).catch(()=>null));
       if (tab==="prov") setProvTax(await api(`/reports/provisional-tax?${dateParams}`).catch(()=>null));
-      if (tab==="vat")  setVat201(await api(`/reports/vat201?period=${vatPeriod}&${dateParams}`).catch(()=>null));
+      if (tab==="vat")  setVat201(await api(`/reports/vat201?period=${vatPeriod}&months=${vatMonths}&${dateParams}`).catch(()=>null));
     } finally { setLoading(false); }
   };
   // Reload current tab when date range changes
@@ -6494,7 +6518,8 @@ function Reports({live = {}, user = null}) {
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <span style={{fontSize:12,color:C.inkMid,fontWeight:600}}>Period:</span>
               <input type="month" value={vatPeriod} onChange={e=>{setVatPeriod(e.target.value);setVat201(null);}} style={{padding:"7px 12px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
-              <button onClick={()=>api("/reports/vat201?period="+vatPeriod).then(setVat201).catch(()=>null)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Load</button>
+              <select value={vatMonths} onChange={e=>{setVatMonths(+e.target.value);setVat201(null);}} title="Monthly, or bi-monthly (this month and the next)" style={{padding:"7px 8px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}><option value={1}>Monthly</option><option value={2}>Bi-monthly</option></select>
+              <button onClick={()=>api("/reports/vat201?period="+vatPeriod+"&months="+vatMonths).then(setVat201).catch(()=>null)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Load</button>
             </div>
             <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.blue,color:"#fff",padding:"8px 14px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none"}}>Submit on eFiling</a>
           </div>
@@ -9687,6 +9712,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     regNumber:            user?.regNumber            || "",
     industry:             user?.industry             || "",
     vatNumber:            user?.vatNumber            || "",
+    vatRegistered:        user?.vatRegistered !== false,
     bankName:             user?.bankName             || "",
     bankAccount:          user?.bankAccount          || "",
     branchCode:           user?.branchCode           || "",
@@ -9734,6 +9760,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         regNumber:            data.reg_number        || f.regNumber,
         industry:             data.industry          || f.industry,
         vatNumber:            data.vat_number        || f.vatNumber,
+        vatRegistered:        data.vat_registered !== false,
         bankName:             data.bank_name         || f.bankName,
         bankAccount:          data.bank_account      || f.bankAccount,
         branchCode:           data.bank_branch       || f.branchCode,
@@ -9831,6 +9858,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         reg_number:             form.regNumber,
         industry:               form.industry,
         vat_number:             form.vatNumber,
+        vat_registered:         form.vatRegistered !== false,
         bank_name:              form.bankName,
         bank_account:           form.bankAccount,
         branch_code:            form.branchCode,
@@ -9856,6 +9884,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
       regNumber:      form.regNumber,
       industry:       form.industry,
       vatNumber:      form.vatNumber,
+      vatRegistered:  form.vatRegistered !== false,
       bankName:       form.bankName,
       bankAccount:    form.bankAccount,
       branchCode:     form.branchCode,
@@ -10345,6 +10374,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
               <input type={f.type||"text"} value={form[f.k]||""} onChange={e=>setForm(v=>({...v,[f.k]:e.target.value}))} style={inputStyle}/>
             </div>
           ))}
+          <div style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10}}><input type="checkbox" id="coVatReg" checked={form.vatRegistered!==false} onChange={e=>setForm(v=>({...v,vatRegistered:e.target.checked}))} style={{width:16,height:16,cursor:"pointer"}}/><label htmlFor="coVatReg" style={{fontSize:13,color:C.ink,cursor:"pointer",fontWeight:600}}>Registered for VAT <span style={{fontSize:11,color:C.inkMid,fontWeight:400}}>(untick if this business is NOT a VAT vendor: no VAT is then charged on sales or claimed on purchases)</span></label></div>
           <div>
             <label style={labelStyle}>Financial Year End</label>
             <select value={form.financialYearEnd||"02-28"} onChange={e=>setForm(v=>({...v,financialYearEnd:e.target.value}))} style={inputStyle}>

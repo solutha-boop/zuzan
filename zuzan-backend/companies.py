@@ -48,6 +48,7 @@ class CompanyUpdate(BaseModel):
     name:                   Optional[str] = None
     reg_number:             Optional[str] = None
     vat_number:             Optional[str] = None
+    vat_registered:         Optional[bool] = None
     industry:               Optional[str] = None
     address:                Optional[str] = None
     phone:                  Optional[str] = None
@@ -86,7 +87,7 @@ def _company_dict(c: Company) -> dict:
     """Return company as dict with bank fields decrypted."""
     return {
         "id": c.id, "name": c.name, "reg_number": c.reg_number,
-        "vat_number": c.vat_number, "industry": c.industry,
+        "vat_number": c.vat_number, "vat_registered": c.vat_registered is not False, "industry": c.industry,
         "address": c.address, "phone": c.phone, "email": c.email,
         "bank_name":    decrypt_field(c.bank_name),
         "bank_account": decrypt_field(c.bank_account),
@@ -516,6 +517,7 @@ VAT_RATE = 0.15  # SA standard VAT rate
 
 class InvoiceCreate(BaseModel):
     client_name:     str
+    supply_type:     Optional[str] = None   # "standard" | "zero_rated" | "exempt"
     client_email:    Optional[str] = None
     description:     str
     amount:          float           # Always excl. VAT
@@ -681,6 +683,20 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         vat_amount = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
         total_amount = round(data.amount + vat_amount, 2)
 
+    from journal import company_vat_registered as _vatreg
+    if not _vatreg(db, current_user.company_id):
+        # Not a VAT vendor: no VAT may be charged
+        vat_amount = 0.0
+        total_amount = round(line_totals["amount"] if line_totals is not None else data.amount, 2)
+
+    _supply = (data.supply_type or "").strip().lower() or None
+    if _supply not in (None, "standard", "zero_rated", "exempt"):
+        raise HTTPException(status_code=400, detail="supply_type must be standard, zero_rated or exempt")
+    if _supply in ("zero_rated", "exempt"):
+        # Zero-rated and exempt supplies carry no output VAT
+        vat_amount = 0.0
+        total_amount = round(line_totals["amount"] if line_totals is not None else data.amount, 2)
+
     invoice = Invoice(
         company_id=current_user.company_id,
         invoice_number=next_invoice_number(current_user.company_id, db),
@@ -696,6 +712,7 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         currency=data.currency or "ZAR",
         exchange_rate=data.exchange_rate or 1.0,
         items_json=data.items_json,
+        supply_type=_supply,
         tour_ref=clean(data.tour_ref, 200) if data.tour_ref else None,
         quote_ref=clean(data.quote_ref, 200) if data.quote_ref else None,
         tax_ref=clean(data.tax_ref, 200) if data.tax_ref else None,
@@ -742,11 +759,76 @@ def _has_active_raised_entry(company_id: int, invoice_id: int, db: Session) -> b
     return any(i not in reversed_ids for i in ids)
 
 
+class BadDebtWriteOff(BaseModel):
+    reason: str
+    date:   Optional[str] = None      # ISO date; default today
+
+class BadDebtRecovery(BaseModel):
+    amount: Optional[float] = None    # incl VAT; default = the whole invoice total
+    date:   Optional[str] = None
+
+
+@invoices_router.post("/{invoice_id}/write-off")
+async def write_off_bad_debt(invoice_id: int, data: BadDebtWriteOff, current_user: User = Depends(require_role("owner", "admin", "accountant")), db: Session = Depends(get_db)):
+    """Write an unpaid invoice off as irrecoverable (VAT Act s22): books the bad debt and gives the VAT back on the VAT201."""
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.status not in (InvoiceStatus.sent, InvoiceStatus.overdue):
+        raise HTTPException(status_code=400, detail="Only issued, unpaid invoices can be written off.")
+    if not (data.reason or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required - SARS may ask for evidence that the debt is irrecoverable.")
+    when = datetime.fromisoformat(data.date) if data.date else datetime.utcnow()
+    try:
+        journal_engine.init_accounts(current_user.company_id, db)
+        journal_engine.post_bad_debt_writeoff(inv, db, when=when, reason=data.reason.strip())
+        inv.status = InvoiceStatus.written_off
+        inv.written_off_date = when
+        inv.written_off_reason = data.reason.strip()[:1000]
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Write-off failed and nothing was saved: {e}")
+    return {"status": "written_off", "invoice_id": inv.id,
+            "message": "Invoice written off. The VAT on it is deducted on the VAT201 for the month of the write-off. Keep your evidence of recovery steps."}
+
+
+@invoices_router.post("/{invoice_id}/bad-debt-recovery")
+async def recover_bad_debt(invoice_id: int, data: BadDebtRecovery, current_user: User = Depends(require_role("owner", "admin", "accountant")), db: Session = Depends(get_db)):
+    """Money received on a written-off invoice: books it and accounts for output VAT on the recovered part (s22(3))."""
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.status != InvoiceStatus.written_off:
+        raise HTTPException(status_code=400, detail="Only written-off invoices can have a bad-debt recovery recorded.")
+    rate = float(inv.exchange_rate or 1.0) if (inv.currency and inv.currency != "ZAR") else 1.0
+    total_zar = round((inv.total_amount or 0) * rate, 2)
+    left = round(total_zar - (inv.bad_debt_recovered_zar or 0), 2)
+    amt = round(data.amount if data.amount is not None else left, 2)
+    if amt <= 0 or amt > left + 0.005:
+        raise HTTPException(status_code=400, detail=f"Recovery must be between 0.01 and the amount still written off (R {left:,.2f}).")
+    when = datetime.fromisoformat(data.date) if data.date else datetime.utcnow()
+    try:
+        journal_engine.post_bad_debt_recovery(inv, amt, db, when=when)
+        inv.bad_debt_recovered_zar = round((inv.bad_debt_recovered_zar or 0) + amt, 2)
+        if inv.bad_debt_recovered_zar >= total_zar - 0.005:
+            inv.status = InvoiceStatus.paid
+            inv.paid_date = when
+            inv.paid_amount_zar = total_zar
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Recovery failed and nothing was saved: {e}")
+    return {"status": inv.status.value, "recovered_zar": inv.bad_debt_recovered_zar, "message": "Recovery recorded. Output VAT on it falls in this month's VAT201."}
+
+
 @invoices_router.put("/{invoice_id}")
 async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.status == InvoiceStatus.written_off:
+        raise HTTPException(status_code=400, detail="This invoice was written off as a bad debt and can no longer be edited. Use 'Record Recovery' if the debtor pays.")
     was_paid     = invoice.status == InvoiceStatus.paid
     was_draft    = invoice.status == InvoiceStatus.draft
     final_status = InvoiceStatus(data.status) if data.status else invoice.status
@@ -995,6 +1077,7 @@ expenses_router = APIRouter()
 
 class ExpenseCreate(BaseModel):
     vendor:          str
+    vat_use:         Optional[str] = None   # "taxable" | "exempt" | "denied" (e.g. motor car purchase) | None (shared, apportioned)
     description:     str
     amount:          float           # Always excl. VAT
     vat_applicable:  bool = True     # Apply 15% VAT
@@ -1029,7 +1112,8 @@ async def list_expenses(
 
 @expenses_router.post("/")
 async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    exp_vat    = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
+    from journal import company_vat_registered as _vatreg
+    exp_vat    = round(data.amount * VAT_RATE, 2) if (data.vat_applicable and _vatreg(db, current_user.company_id)) else 0
     exp_total  = round(data.amount + exp_vat, 2)
 
     expense = Expense(
@@ -1041,6 +1125,7 @@ async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_c
         category=clean(data.category, 200),
         expense_date=datetime.fromisoformat(data.expense_date) if data.expense_date else datetime.utcnow(),
         is_on_credit=data.is_on_credit,
+        vat_use=(data.vat_use if data.vat_use in ("taxable", "exempt", "denied") else None),
     )
     db.add(expense)
     db.commit()
@@ -1074,11 +1159,12 @@ async def update_expense(expense_id: int, data: ExpenseUpdate, current_user: Use
     # If amount is being updated, recalculate vat_amount to keep it consistent.
     # expense.amount is stored VAT-inclusive; data.amount is excl-VAT (matching create convention).
     if data.amount is not None:
+        from journal import company_vat_registered as _vatreg
         # Determine whether VAT applies: explicit flag > infer from existing vat_amount
         apply_vat = data.vat_applicable if data.vat_applicable is not None else (
             (expense.vat_amount or 0) > 0
         )
-        new_vat = round(data.amount * VAT_RATE, 2) if apply_vat else 0.0
+        new_vat = round(data.amount * VAT_RATE, 2) if (apply_vat and _vatreg(db, current_user.company_id)) else 0.0
         new_total = round(data.amount + new_vat, 2)
 
         # Post a correcting journal entry if the stored amount has changed
@@ -1937,7 +2023,8 @@ async def import_bank_statement(
             # overstating P&L expenses and understating input VAT. Mirror the
             # credit branch (journal.post_bank_income): honor either flag, prefer
             # the provided vat_amount, and fall back to 15/115 back-calculation.
-            if txn.has_vat or txn.vat_applicable:
+            from journal import company_vat_registered as _vatreg
+            if (txn.has_vat or txn.vat_applicable) and _vatreg(db, current_user.company_id):
                 imp_vat   = round(float(txn.vat_amount or 0), 2)
                 if imp_vat <= 0:
                     imp_vat = round(txn.amount * 0.15 / 1.15, 2)  # back-calculate from incl-VAT
@@ -1962,7 +2049,9 @@ async def import_bank_statement(
                 journal_engine.init_accounts(current_user.company_id, db)
                 journal_engine.post_expense(expense, db)
             except Exception as je:
-                logger.warning(f"Journal post failed for bank import expense: {je}")
+                logger.error(f"Journal post failed for bank import expense: {je}")
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Bank import stopped - a journal entry failed ({je}). Nothing from this import was saved; please retry.")
             expenses_created += 1
 
         elif txn.type == "credit":

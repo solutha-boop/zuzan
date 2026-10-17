@@ -41,6 +41,7 @@ class InvoiceStatus(str, enum.Enum):
     sent="sent"       # aka "pending" in AR/audit terminology — invoice issued and awaiting payment
     paid="paid"
     overdue="overdue"
+    written_off="written_off"   # bad debt written off as irrecoverable (VAT Act s22)
 
 class SubscriptionStatus(str, enum.Enum):
     trial="trial" 
@@ -53,6 +54,7 @@ class Company(Base):
     id=Column(Integer,primary_key=True,index=True)
     name=Column(String,nullable=False)
     reg_number=Column(String); vat_number=Column(String); industry=Column(String)
+    vat_registered=Column(Boolean,default=True)   # False = not a VAT vendor: no VAT charged on sales, none claimed on purchases
     address=Column(Text); phone=Column(String); email=Column(String)
     bank_name=Column(String); bank_account=Column(String); bank_branch=Column(String)
     logo_url=Column(Text,nullable=True)
@@ -140,6 +142,10 @@ class User(Base):
 class Invoice(Base):
     __tablename__ = "invoices"
     id=Column(Integer,primary_key=True,index=True)
+    supply_type=Column(String,nullable=True)   # "standard" | "zero_rated" | "exempt" (None = legacy: vat 0 treated as zero-rated)
+    written_off_date=Column(DateTime,nullable=True)
+    written_off_reason=Column(Text,nullable=True)
+    bad_debt_recovered_zar=Column(Float,default=0)   # amount (incl VAT, ZAR) recovered after write-off
     company_id=Column(Integer,ForeignKey("companies.id"))
     invoice_number=Column(String,nullable=False); client_name=Column(String,nullable=False)
     client_email=Column(String); description=Column(Text)
@@ -167,6 +173,7 @@ class Invoice(Base):
 class Expense(Base):
     __tablename__ = "expenses"
     id=Column(Integer,primary_key=True,index=True)
+    vat_use=Column(String,nullable=True)       # input-tax attribution: "taxable" | "exempt" | None = shared (apportioned)
     company_id=Column(Integer,ForeignKey("companies.id"))
     vendor=Column(String,nullable=False); description=Column(Text)
     amount=Column(Float,nullable=False); vat_amount=Column(Float,default=0); category=Column(String)
@@ -1018,6 +1025,7 @@ class RecurringInvoice(Base):
     """Template for invoices that are generated automatically on a schedule."""
     __tablename__ = "recurring_invoices"
     id                  = Column(Integer, primary_key=True, index=True)
+    supply_type         = Column(String, nullable=True)
     company_id          = Column(Integer, ForeignKey("companies.id"), nullable=False)
     client_name         = Column(String, nullable=False)
     client_email        = Column(String, nullable=True)
@@ -1640,6 +1648,14 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_service_items_company_code ON service_items (company_id, code)",
             # ── Clocking system (2026-09) ─────────────────────────────────────────
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS kiosk_token VARCHAR",
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_registered BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR",
+            "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'written_off'",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_date TIMESTAMP",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_reason TEXT",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS bad_debt_recovered_zar FLOAT DEFAULT 0",
+            "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS vat_use VARCHAR",
+            "ALTER TABLE recurring_invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR",
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS kiosk_token_created_at TIMESTAMP",
             """CREATE TABLE IF NOT EXISTS clock_events (
                 id          SERIAL PRIMARY KEY,

@@ -90,6 +90,8 @@ async def initiate_portal_payment(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="This invoice has already been paid.")
     if inv.status == InvoiceStatus.draft:
         raise HTTPException(status_code=400, detail="This invoice is still a draft.")
+    if inv.status == InvoiceStatus.written_off:
+        raise HTTPException(status_code=400, detail="This invoice can no longer be paid online. Please contact us.")
 
     company = db.query(Company).filter(Company.id == inv.company_id).first()
 

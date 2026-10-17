@@ -7,6 +7,7 @@ from database import get_db, PurchaseOrder, PurchaseOrderItem, Supplier, Expense
 from auth import get_current_user, User
 import logging
 import journal as journal_engine
+from journal import company_vat_registered as _vatreg
 import email_service
 logger = logging.getLogger("zuzan.po")
 
@@ -106,7 +107,7 @@ async def create_po(data: POCreate, current_user: User = Depends(get_current_use
         if data.supplier_id and not supplier_name:
             s = db.query(Supplier).filter(Supplier.id == data.supplier_id, Supplier.company_id == current_user.company_id).first()
             if s: supplier_name = s.name
-        subtotal, vat, total = calc_totals(data.items, data.vat_applicable)
+        subtotal, vat, total = calc_totals(data.items, data.vat_applicable and _vatreg(db, current_user.company_id))
         delivery = datetime.strptime(data.delivery_date, "%Y-%m-%d") if data.delivery_date else None
         po = PurchaseOrder(
             company_id=current_user.company_id,
@@ -133,7 +134,10 @@ async def create_po(data: POCreate, current_user: User = Depends(get_current_use
 async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id, PurchaseOrder.company_id == current_user.company_id).first()
     if not po: raise HTTPException(404, "Purchase order not found")
-    if data.supplier_id is not None: po.supplier_id = data.supplier_id
+    if data.supplier_id is not None:
+        if not db.query(Supplier).filter(Supplier.id == data.supplier_id, Supplier.company_id == current_user.company_id).first():
+            raise HTTPException(404, "Supplier not found")
+        po.supplier_id = data.supplier_id
     if data.supplier_name is not None: po.supplier_name = data.supplier_name
     if data.status is not None and data.status != po.status:
         # Whitelist status transitions (audit fix 2026-07-03): financial statuses
@@ -164,7 +168,7 @@ async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get
         for old in po.items: db.delete(old)
         db.flush()
         vat_applicable = data.vat_applicable if data.vat_applicable is not None else (po.vat_amount > 0)
-        subtotal, vat, total = calc_totals(data.items, vat_applicable)
+        subtotal, vat, total = calc_totals(data.items, vat_applicable and _vatreg(db, current_user.company_id))
         po.subtotal = subtotal; po.vat_amount = vat; po.total_amount = total
         for item in data.items:
             db.add(PurchaseOrderItem(

@@ -368,6 +368,66 @@ def post_invoice_raised(invoice, db: Session) -> JournalEntry:
     return entry
 
 
+def _zar_parts(invoice):
+    is_foreign = bool(invoice.currency and invoice.currency != "ZAR")
+    rate = float(invoice.exchange_rate or 1.0) if is_foreign else 1.0
+    total = round((invoice.total_amount or 0) * rate, 2)
+    vat = round((invoice.vat_amount or 0) * rate, 2)
+    return total, vat
+
+
+def post_bad_debt_writeoff(invoice, db: Session, when=None, reason=None) -> JournalEntry:
+    """
+    Invoice written off as irrecoverable (VAT Act s22(1)): the vendor may deduct the VAT that was accounted
+    for on the invoice.
+      DR Bad Debts Written Off (7300)  net (excl VAT)
+      DR VAT Output (2100)             VAT portion   <- this is the s22 adjustment on the VAT201
+      CR Accounts Receivable (1100)    total
+    """
+    cid = invoice.company_id
+    total, vat_amt = _zar_parts(invoice)
+    net = round(total - vat_amt, 2)
+    entry = _make_entry(cid, when or datetime.utcnow(),
+        f"Bad debt written off — {invoice.client_name}: {reason or ''}",
+        invoice.invoice_number, "bad_debt_writeoff", invoice.id, db)
+    ar = get_account(cid, "1100", db)
+    bd = expense_account(cid, "7300 - Bad Debts Written Off", db)
+    lines = [_line(entry.id, bd, debit=net, description="Bad debt written off")]
+    if vat_amt > 0:
+        lines.append(_line(entry.id, get_account(cid, "2100", db), debit=vat_amt, description="VAT on bad debt (s22)"))
+    lines.append(_line(entry.id, ar, credit=total, description=invoice.invoice_number))
+    _assert_balanced(lines)
+    for l in lines: db.add(l)
+    return entry
+
+
+def post_bad_debt_recovery(invoice, amount_zar: float, db: Session, when=None) -> JournalEntry:
+    """
+    Money received on a debt previously written off. Output VAT on the recovered part must be
+    accounted for in the period of recovery (VAT Act s22(3)).
+      DR Bank (1000)                   amount received (incl VAT)
+      CR Bad Debts Written Off (7300)  net portion
+      CR VAT Output (2100)             VAT portion
+    """
+    cid = invoice.company_id
+    total, vat_total = _zar_parts(invoice)
+    portion = (amount_zar / total) if total else 0
+    vat_part = round(vat_total * portion, 2)
+    net = round(amount_zar - vat_part, 2)
+    entry = _make_entry(cid, when or datetime.utcnow(),
+        f"Bad debt recovered — {invoice.client_name}",
+        invoice.invoice_number, "bad_debt_recovery", invoice.id, db)
+    bank = get_account(cid, "1000", db)
+    bd = expense_account(cid, "7300 - Bad Debts Written Off", db)
+    lines = [_line(entry.id, bank, debit=round(amount_zar, 2), description="Bad debt recovered"),
+             _line(entry.id, bd, credit=net, description="Bad debt recovered")]
+    if vat_part > 0:
+        lines.append(_line(entry.id, get_account(cid, "2100", db), credit=vat_part, description="Output VAT on recovery (s22(3))"))
+    _assert_balanced(lines)
+    for l in lines: db.add(l)
+    return entry
+
+
 def post_invoice_paid(invoice, db: Session) -> JournalEntry:
     """
     Invoice paid by client:
@@ -427,6 +487,22 @@ def post_invoice_cogs(invoice, cogs_amount: float, db: Session) -> JournalEntry:
     return entry
 
 
+def company_vat_registered(db, company_id) -> bool:
+    """True unless the company has explicitly been marked as NOT VAT-registered (default: registered)."""
+    try:
+        from database import Company
+        co = db.query(Company).filter(Company.id == company_id).first()
+        return not (co is not None and getattr(co, "vat_registered", None) is False)
+    except Exception:
+        return True
+
+
+def vat_not_claimable(category, vat_use=None) -> bool:
+    """Input VAT that SARS does not allow (VAT Act s17(2)): entertainment, and anything the user tagged
+    "denied" (e.g. the purchase of a motor car, s17(2)(c)). The VAT is part of the cost."""
+    return vat_use == "denied" or "entertainment" in (category or "").lower()
+
+
 def post_expense(expense, db: Session) -> JournalEntry:
     """
     Expense incurred:
@@ -440,6 +516,8 @@ def post_expense(expense, db: Session) -> JournalEntry:
     total = round((expense.amount or 0), 2)
     vat   = round((expense.vat_amount or 0), 2)
     net   = round(total - vat, 2)
+    if vat_not_claimable(expense.category, getattr(expense, "vat_use", None)):
+        vat, net = 0.0, total   # not claimable: full amount is expense, nothing to VAT Input
 
     on_credit = getattr(expense, "is_on_credit", False) or False
 
@@ -474,7 +552,7 @@ def post_bank_income(company_id: int, txn, db: Session) -> JournalEntry:
     """
     from datetime import date as _date
     total = round(float(txn.amount or 0), 2)
-    has_v = getattr(txn, "has_vat", False) or getattr(txn, "vat_applicable", False)
+    has_v = (getattr(txn, "has_vat", False) or getattr(txn, "vat_applicable", False)) and company_vat_registered(db, company_id)
     vat   = round(float(getattr(txn, "vat_amount", 0) or 0), 2) if has_v else 0.0
     net   = round(total - vat, 2) if vat > 0 else total
 

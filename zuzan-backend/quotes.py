@@ -5,6 +5,7 @@ from typing import Optional
 from datetime import datetime
 from database import get_db, Quote
 from auth import get_current_user, User
+from journal import company_vat_registered as _vatreg
 
 def clean(value, max_len=500):
     if value is None: return value
@@ -93,7 +94,7 @@ async def create_quote(data: QuoteCreate, current_user: User = Depends(get_curre
     if data.currency != "ZAR" and data.vat_amount_override is not None:
         vat = round(data.vat_amount_override, 2)   # User-specified VAT for foreign currency
     else:
-        vat = round(data.amount * VAT_RATE, 2) if data.vat_applicable else 0
+        vat = round(data.amount * VAT_RATE, 2) if (data.vat_applicable and _vatreg(db, current_user.company_id)) else 0
     total = round(data.amount + vat, 2)
     valid = datetime.strptime(data.valid_until, "%Y-%m-%d") if data.valid_until else None
     q = Quote(
@@ -137,7 +138,7 @@ async def update_quote(qid: int, data: QuoteUpdate, current_user: User = Depends
             # Non-ZAR quotes: use the caller-supplied VAT amount
             q.vat_amount = round(data.vat_amount_override, 2)
         else:
-            q.vat_amount = round(amt * VAT_RATE, 2) if vat_on else 0
+            q.vat_amount = round(amt * VAT_RATE, 2) if (vat_on and _vatreg(db, q.company_id)) else 0
         q.total_amount = round(amt + q.vat_amount, 2)
     db.commit(); db.refresh(q)
     return to_dict(q)

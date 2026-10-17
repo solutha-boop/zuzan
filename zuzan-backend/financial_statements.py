@@ -468,7 +468,7 @@ def annual_financial_statements(
     # the revenue account (4000) this note breaks down.
     issued_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
         Invoice.issue_date >= start,
         Invoice.issue_date <= end,
     ).all()

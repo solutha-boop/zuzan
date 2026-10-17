@@ -12,6 +12,7 @@ from database import (
     get_db, Company, Invoice, InvoiceStatus, SessionLocal
 )
 from auth import get_current_user, User
+from journal import company_vat_registered as _vatreg
 import logging, uuid
 
 logger = logging.getLogger("zuzan.recurring")
@@ -24,6 +25,7 @@ class RecurringInvoiceCreate(BaseModel):
     description:    Optional[str] = None
     amount:         float
     vat_applicable: Optional[bool] = True
+    supply_type:    Optional[str]  = None   # "standard" | "zero_rated" | "exempt"
     currency:       Optional[str] = "ZAR"
     frequency:      str   # weekly | monthly | quarterly | annually
     start_date:     str   # ISO date YYYY-MM-DD
@@ -35,6 +37,7 @@ class RecurringInvoiceUpdate(BaseModel):
     description:    Optional[str]  = None
     amount:         Optional[float]= None
     vat_applicable: Optional[bool] = None
+    supply_type:    Optional[str]  = None
     currency:       Optional[str]  = None
     frequency:      Optional[str]  = None
     is_active:      Optional[bool] = None
@@ -67,6 +70,7 @@ def _ri_dict(ri) -> dict:
         "description":        ri.description,
         "amount":             ri.amount,
         "vat_applicable":     ri.vat_applicable,
+        "supply_type":        getattr(ri, "supply_type", None),
         "currency":           ri.currency or "ZAR",
         "frequency":          ri.frequency,
         "start_date":         ri.start_date.isoformat()    if ri.start_date    else None,
@@ -110,6 +114,7 @@ async def create_recurring(
         description=body.description,
         amount=body.amount,
         vat_applicable=body.vat_applicable if body.vat_applicable is not None else True,
+        supply_type=(body.supply_type if body.supply_type in ("standard", "zero_rated", "exempt") else None),
         currency=body.currency or "ZAR",
         frequency=body.frequency,
         start_date=start,
@@ -227,7 +232,8 @@ def _generate_invoice_from_template(ri, db: Session) -> Invoice:
         last_num = 0
     inv_number = f"INV-{last_num + 1:04d}"
 
-    vat_rate = 0.15 if ri.vat_applicable else 0.0
+    _st = getattr(ri, "supply_type", None)
+    vat_rate = 0.15 if (ri.vat_applicable and _st not in ("zero_rated", "exempt") and _vatreg(db, ri.company_id)) else 0.0
     vat_amount = round(ri.amount * vat_rate, 2)
     total_amount = round(ri.amount + vat_amount, 2)
 
@@ -242,6 +248,7 @@ def _generate_invoice_from_template(ri, db: Session) -> Invoice:
         total_amount=total_amount,
         currency=ri.currency or "ZAR",
         exchange_rate=1.0,
+        supply_type=_st,
         status=InvoiceStatus.sent,
         issue_date=now,
         due_date=now + timedelta(days=30),

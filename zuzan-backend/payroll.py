@@ -2146,7 +2146,7 @@ async def dashboard(
     # Exclude draft invoices: VAT liability only arises on issued (sent/overdue/paid) invoices.
     all_invoices_vat = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
     ).all()
     output_vat = round(sum(i.vat_amount or 0 for i in all_invoices_vat), 2)
     # Input VAT = expense VAT + PO input VAT (audit fix 2026-07-07): PO receipts post
@@ -2500,7 +2500,7 @@ async def reconciliation(
     # Exclude draft invoices from output VAT — consistent with /reports/dashboard fix.
     all_invoices = db.query(Invoice).filter(
         Invoice.company_id==cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
     ).all()
     all_expenses = db.query(Expense).filter(Expense.company_id==cid).all()
     vat_output   = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
@@ -2861,7 +2861,7 @@ def _vat_net_for_month(db: Session, cid: int, year: int, month: int) -> float:
 
     invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
         Invoice.issue_date >= start,
         Invoice.issue_date < end,
     ).all()
@@ -3925,14 +3925,29 @@ async def creditors_aging(
     }
 
 
+def _vat_due_date(y: int, m: int) -> str:
+    """VAT201 submitted online is due on the 25th of the month AFTER the tax period (y/m = that month).
+    If the 25th is a weekend or public holiday, the last business day before it applies."""
+    try:
+        from clocking import _sa_holidays
+        hol = set(_sa_holidays(y))
+    except Exception:
+        hol = set()
+    d = _date(y, m, 25)
+    while d.weekday() >= 5 or d in hol:
+        d -= timedelta(days=1)
+    return d.strftime("%d %B %Y")
+
+
 @reports_router.get("/vat201")
 async def vat201(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     period: Optional[str] = None,
+    months: int = 1,
 ):
     """
-    VAT201 return calculation.
+    VAT201 return calculation. months=1 (monthly) or 2 (bi-monthly: the period and the month after it).
     SA VAT rate: 15%. Filed monthly or bi-monthly.
     Output VAT: from invoice vat_amount fields.
     Input VAT: estimated at 15/115 of expenses (VAT-inclusive assumption).
@@ -3952,12 +3967,18 @@ async def vat201(
         year, month = now.year, now.month
 
     start = datetime(year, month, 1)
-    end_month = month + 1 if month < 12 else 1
-    end_year  = year if month < 12 else year + 1
+    _months = 2 if int(months or 1) == 2 else 1
+    _idx = year * 12 + (month - 1) + _months
+    end_year, _em0 = divmod(_idx, 12)
+    end_month = _em0 + 1
     end = datetime(end_year, end_month, 1)
 
-    period_label = start.strftime("%B %Y")
-    due_date = datetime(end_year, end_month + 1 if end_month < 12 else 1, 25).strftime("%d %B %Y") if end_month < 12 else datetime(end_year + 1, 2, 25).strftime("%d %B %Y")
+    if _months == 2:
+        _last = end - timedelta(days=1)
+        period_label = f"{start.strftime('%B')} - {_last.strftime('%B %Y')}"
+    else:
+        period_label = start.strftime("%B %Y")
+    due_date = _vat_due_date(end_year, end_month)
 
     # ── OUTPUT TAX ─────────────────────────────────────────────────────────────
     # All ISSUED invoices in the period (tax point = invoice issue_date, not created_at).
@@ -3967,7 +3988,7 @@ async def vat201(
     # liability — consistent with /reports/dashboard and post_invoice_raised.
     all_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
         Invoice.issue_date >= start,
         Invoice.issue_date < end,
     ).all()
@@ -3982,6 +4003,7 @@ async def vat201(
     # estimate applies only to legacy/imported rows where vat_amount is NULL.
     # The old aggregate fallback estimated VAT for fully zero-rated periods.
     zero_rated_supplies    = 0.0  # field 1b — zero-rated supplies (VAT = 0, so incl == excl)
+    exempt_supplies        = 0.0  # exempt supplies (VAT Act s12): no output VAT, shown separately, drive input-tax apportionment
     standard_supplies_incl = 0.0
     output_vat             = 0.0
     output_vat_exact       = 0.0  # VAT actually recorded on invoices (reporting only)
@@ -3992,7 +4014,10 @@ async def vat201(
             standard_supplies_incl += total_zar
             output_vat += round(total_zar * VAT_RATE / (1 + VAT_RATE), 2)
         elif (i.vat_amount or 0) == 0:
-            zero_rated_supplies += total_zar
+            if getattr(i, "supply_type", None) == "exempt":
+                exempt_supplies += total_zar
+            else:
+                zero_rated_supplies += total_zar
         else:
             vat_zar = round(i.vat_amount * _r, 2)
             standard_supplies_incl += total_zar
@@ -4002,6 +4027,63 @@ async def vat201(
     standard_supplies_incl = round(standard_supplies_incl, 2)
     output_vat             = round(output_vat, 2)
     output_vat_exact       = round(output_vat_exact, 2)
+    # ── Output adjustments (added so the VAT201 agrees with the ledger) ──────────
+    # 1) Credit notes issued in the period REDUCE output tax.
+    # 2) Bank-import income that carried VAT posts to VAT Output in the ledger but has no invoice row.
+    from database import CreditNote as _CN
+    cn_vat_total = 0.0
+    for _cn in db.query(_CN).filter(_CN.company_id == cid, _CN.issue_date >= start, _CN.issue_date < end).all():
+        _ct = round(_cn.total_amount or 0, 2)
+        _cv = round(_cn.vat_amount or 0, 2)
+        if _cv > 0:
+            standard_supplies_incl -= _ct
+            output_vat -= _cv
+            cn_vat_total += _cv
+        else:
+            if getattr(getattr(_cn, "invoice", None), "supply_type", None) == "exempt":
+                exempt_supplies -= _ct
+            else:
+                zero_rated_supplies -= _ct
+    # 3) Bad debts (VAT Act s22): VAT on debts written off is DEDUCTED in the period of write-off;
+    #    VAT on amounts later recovered is ADDED to output tax in the period of recovery.
+    bd_vat_total = 0.0
+    rec_vat_total = 0.0
+    for _ln, _je in (db.query(JournalLine, JournalEntry)
+                       .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+                       .join(Account, JournalLine.account_id == Account.id)
+                       .filter(JournalEntry.company_id == cid, Account.code == "2100",
+                               JournalEntry.source.in_(["bad_debt_writeoff", "bad_debt_recovery"]),
+                               JournalEntry.date >= start, JournalEntry.date < end).all()):
+        if _je.source == "bad_debt_writeoff":
+            bd_vat_total += (_ln.debit or 0) - (_ln.credit or 0)
+        else:
+            rec_vat_total += (_ln.credit or 0) - (_ln.debit or 0)
+    output_vat += rec_vat_total
+    bd_vat_total = round(bd_vat_total, 2)
+    rec_vat_total = round(rec_vat_total, 2)
+    bi_vat_total = 0.0
+    _bi = {}
+    for _ln, _ac in (db.query(JournalLine, Account)
+                       .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+                       .join(Account, JournalLine.account_id == Account.id)
+                       .filter(JournalEntry.company_id == cid, JournalEntry.source == "bank_import_income",
+                               JournalEntry.date >= start, JournalEntry.date < end).all()):
+        _d = _bi.setdefault(_ln.entry_id, {"vat": 0.0, "net": 0.0})
+        if _ac.code == "2100":
+            _d["vat"] += (_ln.credit or 0) - (_ln.debit or 0)
+        elif _ac.type == AccountType.revenue:
+            _d["net"] += (_ln.credit or 0) - (_ln.debit or 0)
+    for _d in _bi.values():
+        if _d["vat"] > 0:
+            standard_supplies_incl += _d["net"] + _d["vat"]
+            output_vat += _d["vat"]
+            bi_vat_total += _d["vat"]
+    standard_supplies_incl = round(standard_supplies_incl, 2)
+    zero_rated_supplies    = round(zero_rated_supplies, 2)
+    exempt_supplies        = round(exempt_supplies, 2)
+    output_vat             = round(output_vat, 2)
+    cn_vat_total           = round(cn_vat_total, 2)
+    bi_vat_total           = round(bi_vat_total, 2)
     standard_supplies_excl = round(standard_supplies_incl - output_vat, 2)
 
     # ── INPUT TAX ──────────────────────────────────────────────────────────────
@@ -4012,10 +4094,28 @@ async def vat201(
     ).all()
 
     total_expenses_incl = round(sum(e.amount for e in expenses), 2)
-    # Use stored vat_amount if available, else estimate at 15/115
-    stored_input_vat = round(sum(getattr(e, "vat_amount", 0) or 0 for e in expenses), 2)
-    input_vat_estimated = stored_input_vat if stored_input_vat > 0 else round(total_expenses_incl * VAT_RATE / (1 + VAT_RATE), 2)
-    vat_is_exact = stored_input_vat > 0
+    # Input VAT is taken PER EXPENSE. A stored vat_amount of 0 means "no VAT" (nothing is claimed);
+    # the 15/115 estimate is used ONLY for legacy rows with no stored VAT (NULL). Previously, if no
+    # expense in the period had VAT recorded, 15/115 of ALL expenses was claimed - an invented claim.
+    # Entertainment is not claimable (VAT Act s17(2)) and is excluded here and in the ledger.
+    from journal import vat_not_claimable as _vnc
+    _exact_in = 0.0
+    _legacy_in = 0.0
+    _pool = {"taxable": 0.0, "exempt": 0.0, "shared": 0.0}   # direct attribution (s17): taxable / exempt / shared
+    for e in expenses:
+        if _vnc(e.category, getattr(e, "vat_use", None)):
+            continue
+        _v = getattr(e, "vat_amount", None)
+        if _v is None:
+            _amt = round((e.amount or 0) * VAT_RATE / (1 + VAT_RATE), 2)
+            _legacy_in += _amt
+        else:
+            _amt = _v or 0
+            _exact_in += _amt
+        _use = getattr(e, "vat_use", None)
+        _pool[_use if _use in ("taxable", "exempt") else "shared"] += _amt
+    input_vat_estimated = round(_exact_in + _legacy_in, 2)
+    vat_is_exact = _legacy_in == 0
     total_expenses_excl = round(total_expenses_incl - input_vat_estimated, 2)
 
     # PO input VAT for the period (audit fix 2026-07-07) — PO receipts post input VAT
@@ -4028,7 +4128,37 @@ async def vat201(
         PurchaseOrder.received_date < end,
     ).all()
     po_input_vat = round(sum(_po_delivered_total(po) - _po_delivered_net(po) for po in period_pos), 2)
-    total_input_vat = round(input_vat_estimated + po_input_vat, 2)
+    # ── Input-tax apportionment (VAT Act s17; SARS BGR 16 standard turnover-based method) ──
+    # Only needed when the vendor makes exempt supplies. Input tax directly attributable to taxable
+    # supplies is claimed in full, to exempt supplies not at all; the rest ("shared", incl. PO VAT) is
+    # apportioned by Y = taxable / (taxable + exempt) to 2 decimals, with the 95% / 5% de minimis
+    # thresholds. This is a PERIOD (provisional) ratio: the annual wash-up adjustment is not automatic.
+    _taxable_sup = round(standard_supplies_excl + zero_rated_supplies, 2)
+    _shared = round(_pool["shared"] + po_input_vat, 2)
+    _full_input = round(input_vat_estimated + po_input_vat, 2)
+    _ratio = 1.0
+    if exempt_supplies > 0 and (_taxable_sup + exempt_supplies) > 0:
+        _ratio = round(_taxable_sup / (_taxable_sup + exempt_supplies), 2)
+        if _ratio >= 0.95:
+            _ratio = 1.0
+        elif _ratio <= 0.05:
+            _ratio = 0.0
+    total_input_vat = round(_pool["taxable"] + _shared * _ratio + bd_vat_total, 2)   # bad-debt VAT (s22) is not apportioned
+    _non_deductible = round(_full_input - (total_input_vat - bd_vat_total), 2)
+    apportionment = {
+        "applies":                         exempt_supplies > 0 or _pool["exempt"] > 0,
+        "taxable_supplies_excl_vat":       _taxable_sup,
+        "exempt_supplies":                 exempt_supplies,
+        "ratio":                           _ratio,
+        "input_vat_before_apportionment":  _full_input,
+        "input_vat_taxable_only":          round(_pool["taxable"], 2),
+        "input_vat_exempt_only":           round(_pool["exempt"], 2),
+        "input_vat_shared":                _shared,
+        "non_deductible_input_vat":        _non_deductible,
+        "note": ("Provisional period ratio (SARS BGR 16 standard turnover-based method). Input tax tagged 'taxable only' is claimed in full, "
+                 "'exempt only' not at all, the rest at the ratio. The annual adjustment is not automatic. The ledger VAT Input account still "
+                 "holds the non-deductible amount - journal it to expense if required.") if (exempt_supplies > 0 or _pool["exempt"] > 0) else "",
+    }
 
     # Expense breakdown by category for audit trail
     cat_breakdown: dict = {}
@@ -4044,6 +4174,8 @@ async def vat201(
     return {
         "period":          period_label,
         "period_code":     start.strftime("%Y-%m"),
+        "months":          _months,
+        "vat_registered":  not (getattr(db.query(Company).filter(Company.id == cid).first(), "vat_registered", True) is False),
         "due_date":        due_date,
         "vat_rate_pct":    15,
         "output": {
@@ -4052,10 +4184,17 @@ async def vat201(
             "field_4a_output_vat":                  output_vat,
             "invoice_count":                         len(all_invoices),
             "total_invoiced_incl_vat":               round(standard_supplies_incl + zero_rated_supplies, 2),
+            "field_3_exempt_supplies":               exempt_supplies,
+            "bad_debt_recovered_vat":                rec_vat_total,
             "vat_recorded_on_invoices":              output_vat_exact,
+            "credit_notes_vat_deducted":             cn_vat_total,
+            "bank_import_output_vat":                bi_vat_total,
         },
         "input": {
             "field_14_input_vat":                    total_input_vat,
+            "input_vat_before_apportionment":        _full_input,
+            "bad_debt_vat_deduction":                bd_vat_total,
+            "apportionment":                         apportionment,
             "expense_input_vat":                     input_vat_estimated,
             "po_input_vat":                          po_input_vat,
             "total_expenses_incl_vat":               total_expenses_incl,
