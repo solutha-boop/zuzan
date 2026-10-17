@@ -556,6 +556,7 @@ class FixedAsset(Base):
     disposal_date           = Column(DateTime, nullable=True)
     disposal_proceeds       = Column(Float, nullable=True)
     disposal_gain_loss      = Column(Float, nullable=True)        # positive = gain, negative = loss
+    disposal_vat            = Column(Float, nullable=True)        # output VAT charged on the sale (VAT Act s7); proceeds are VAT-inclusive
     disposal_notes          = Column(Text, nullable=True)
     # SARS tax depreciation (s11(e) / IN47 — for deferred tax)
     sars_category           = Column(String, nullable=True)    # SARS IN47 category name
@@ -1652,6 +1653,7 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR",
             "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'written_off'",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_date TIMESTAMP",
+            "ALTER TABLE fixed_assets ADD COLUMN IF NOT EXISTS disposal_vat FLOAT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_reason TEXT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS bad_debt_recovered_zar FLOAT DEFAULT 0",
             "ALTER TABLE expenses ADD COLUMN IF NOT EXISTS vat_use VARCHAR",

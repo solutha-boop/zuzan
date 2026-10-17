@@ -4078,6 +4078,18 @@ async def vat201(
             standard_supplies_incl += _d["net"] + _d["vat"]
             output_vat += _d["vat"]
             bi_vat_total += _d["vat"]
+    # 4) Output VAT on sales of business assets (VAT Act s7) - posted by the asset disposal journal
+    for _ln, _je in (db.query(JournalLine, JournalEntry)
+                       .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+                       .join(Account, JournalLine.account_id == Account.id)
+                       .filter(JournalEntry.company_id == cid, Account.code == "2100",
+                               JournalEntry.source == "asset_disposal",
+                               JournalEntry.date >= start, JournalEntry.date < end).all()):
+        _v = (_ln.credit or 0) - (_ln.debit or 0)
+        if _v > 0:
+            standard_supplies_incl += _v * 115 / 15
+            output_vat += _v
+            bi_vat_total += _v
     standard_supplies_incl = round(standard_supplies_incl, 2)
     zero_rated_supplies    = round(zero_rated_supplies, 2)
     exempt_supplies        = round(exempt_supplies, 2)

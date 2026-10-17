@@ -453,10 +453,21 @@ def post_invoice_paid(invoice, db: Session) -> JournalEntry:
         zar_received = round((invoice.total_amount or 0) * float(invoice.exchange_rate or 1.0), 2)
     else:
         zar_received = invoice.total_amount or 0
-    lines = [
-        _line(entry.id, bank, debit=zar_received,  description="Cash received"),
-        _line(entry.id, ar,   credit=zar_received, description=invoice.invoice_number),
-    ]
+    # AR was debited at the invoice-date rate. For foreign invoices clear AR at that carried
+    # amount and take the difference to realised FX gain/loss, otherwise 1100 keeps a residual
+    # balance on a fully paid invoice.
+    lines = [_line(entry.id, bank, debit=zar_received, description="Cash received")]
+    ar_carried = zar_received
+    if invoice.currency and invoice.currency != "ZAR":
+        ar_carried = round((invoice.total_amount or 0) * float(invoice.exchange_rate or 1.0), 2)
+    lines.append(_line(entry.id, ar, credit=ar_carried, description=invoice.invoice_number))
+    fx = round(zar_received - ar_carried, 2)
+    if abs(fx) >= 0.01:
+        fxa = expense_account(cid, "5960 - Realised Foreign Exchange (Gain)/Loss", db)
+        if fx > 0:
+            lines.append(_line(entry.id, fxa, credit=fx, description="Realised FX gain"))
+        else:
+            lines.append(_line(entry.id, fxa, debit=-fx, description="Realised FX loss"))
     _assert_balanced(lines)
     for l in lines: db.add(l)
     return entry
@@ -1016,7 +1027,7 @@ def post_asset_acquisition(asset, db: Session) -> JournalEntry:
     return entry
 
 
-def post_depreciation(asset, amount: float, period: str, db: Session) -> JournalEntry:
+def post_depreciation(asset, amount: float, period: str, db: Session, when=None) -> JournalEntry:
     """
     Monthly depreciation charge (IAS 16.48):
       DR Depreciation Expense   (5800)   amount
@@ -1026,7 +1037,7 @@ def post_depreciation(asset, amount: float, period: str, db: Session) -> Journal
     init_accounts(cid, db)
     amount = round(amount, 2)
     entry = _make_entry(
-        cid, datetime.utcnow(),
+        cid, when or datetime.utcnow(),
         f"Depreciation — {asset.asset_name} [{period}]",
         f"DEP-{asset.id}-{period}", "depreciation", asset.id, db,
     )
@@ -1043,7 +1054,7 @@ def post_depreciation(asset, amount: float, period: str, db: Session) -> Journal
     return entry
 
 
-def post_asset_disposal(asset, proceeds: float, db: Session) -> JournalEntry:
+def post_asset_disposal(asset, proceeds: float, db: Session, vat_amount: float = 0.0) -> JournalEntry:
     """
     Derecognise a fixed asset on disposal or write-off (IAS 16.67-72):
       DR Accumulated Depreciation  (1510)  accumulated_depreciation
@@ -1057,11 +1068,12 @@ def post_asset_disposal(asset, proceeds: float, db: Session) -> JournalEntry:
     cost           = round(asset.cost, 2)
     accum_depr     = round(asset.accumulated_depreciation, 2)
     carrying_value = round(max(0, cost - accum_depr), 2)
-    proceeds       = round(proceeds or 0, 2)
-    gain_loss      = round(proceeds - carrying_value, 2)  # positive = gain, negative = loss
+    proceeds       = round(proceeds or 0, 2)            # cash received, VAT-inclusive
+    vat_amount     = round(min(max(vat_amount or 0, 0), proceeds), 2)   # output VAT inside the proceeds
+    gain_loss      = round((proceeds - vat_amount) - carrying_value, 2)  # on the net selling price
 
     entry = _make_entry(
-        cid, datetime.utcnow(),
+        cid, getattr(asset, "disposal_date", None) or datetime.utcnow(),
         f"Asset disposal — {asset.asset_name}",
         asset.asset_number or f"FA-{asset.id}", "asset_disposal", asset.id, db,
     )
@@ -1079,6 +1091,9 @@ def post_asset_disposal(asset, proceeds: float, db: Session) -> JournalEntry:
 
     if proceeds > 0:
         lines.append(_line(entry.id, bank_acct, debit=proceeds, description="Disposal proceeds"))
+
+    if vat_amount > 0:
+        lines.append(_line(entry.id, get_account(cid, "2100", db), credit=vat_amount, description="Output VAT on asset sale"))
 
     if gain_loss > 0:
         gain_acc = get_account(cid, "4900", db)
@@ -1287,7 +1302,7 @@ def backfill_company(company_id: int, db: Session) -> dict:
         # Asset disposals
         if asset.status in ("disposed", "written_off") and ("asset_disposal", asset.id) not in existing:
             try:
-                post_asset_disposal(asset, asset.disposal_proceeds or 0, db)
+                post_asset_disposal(asset, asset.disposal_proceeds or 0, db, vat_amount=getattr(asset, "disposal_vat", 0) or 0)
                 posted["fixed_assets"] += 1
             except Exception as e:
                 posted["errors"].append(f"Asset {asset.asset_number or asset.id} disposal: {e}")

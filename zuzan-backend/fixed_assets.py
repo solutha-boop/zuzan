@@ -213,6 +213,7 @@ class DisposalData(BaseModel):
     disposal_proceeds:    float           = 0.0
     disposal_notes:       Optional[str]   = None
     is_write_off:         bool            = False  # True = write-off with no proceeds
+    proceeds_include_vat: bool            = False  # True = proceeds are VAT-inclusive (VAT vendor selling a business asset: 15% output VAT, s7)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -413,23 +414,30 @@ async def dispose_asset(
 
     proceeds       = 0.0 if data.is_write_off else data.disposal_proceeds
     carrying_value = max(0.0, asset.cost - asset.accumulated_depreciation)
-    gain_loss      = round(proceeds - carrying_value, 2)
+    vat_amt = 0.0
+    if proceeds > 0 and data.proceeds_include_vat:
+        from journal import company_vat_registered
+        if company_vat_registered(db, current_user.company_id):
+            vat_amt = round(proceeds * 15 / 115, 2)
+    gain_loss      = round((proceeds - vat_amt) - carrying_value, 2)
 
+    asset.disposal_vat = vat_amt
     asset.status          = "written_off" if data.is_write_off else "disposed"
     asset.disposal_date   = datetime.strptime(data.disposal_date, "%Y-%m-%d")
     asset.disposal_proceeds = proceeds
     asset.disposal_gain_loss = gain_loss
     asset.disposal_notes  = data.disposal_notes
 
-    # Post disposal journal entry
+    # Post disposal journal entry - if it fails the disposal must not be saved half-done
     try:
         import journal as journal_engine
         journal_engine.init_accounts(current_user.company_id, db)
-        journal_engine.post_asset_disposal(asset, proceeds, db)
+        journal_engine.post_asset_disposal(asset, proceeds, db, vat_amount=vat_amt)
+        db.commit()
     except Exception as je:
-        logger.warning(f"Asset disposal journal failed: {je}")
-
-    db.commit()
+        db.rollback()
+        logger.error(f"Asset disposal journal failed: {je}")
+        raise HTTPException(500, f"Disposal failed and nothing was saved: {je}")
     db.refresh(asset)
     return {
         **_asset_to_dict(asset),
@@ -593,6 +601,7 @@ def _run_depreciation_internal(company_id: int, db: Session):
     Idempotent — skips assets already depreciated in the current calendar month.
     Returns (assets_depreciated, total_amount).
     """
+    import calendar
     now    = datetime.utcnow()
     period = now.strftime("%Y-%m")
 
@@ -602,14 +611,10 @@ def _run_depreciation_internal(company_id: int, db: Session):
         .all()
     )
 
-    # Collect already-posted periods for this company this month
-    already_posted = {
-        e.asset_id
-        for e in db.query(DepreciationEntry).filter(
-            DepreciationEntry.company_id == company_id,
-            DepreciationEntry.period     == period,
-        ).all()
-    }
+    # Periods already charged, per asset (so months missed earlier are caught up, never doubled)
+    posted_periods = {}
+    for e in db.query(DepreciationEntry).filter(DepreciationEntry.company_id == company_id).all():
+        posted_periods.setdefault(e.asset_id, set()).add(e.period)
 
     import journal as journal_engine
     journal_engine.init_accounts(company_id, db)
@@ -617,41 +622,43 @@ def _run_depreciation_internal(company_id: int, db: Session):
     charged_count = 0
     total_amount  = 0.0
 
-    for asset in assets:
-        if asset.id in already_posted:
-            continue  # idempotent — already done this month
+    # All months from the purchase month up to the current one that have no charge yet
+    def _periods(start):
+        y, m = start.year, start.month
+        out = []
+        while f"{y}-{m:02d}" <= period:
+            out.append(f"{y}-{m:02d}")
+            m += 1
+            if m > 12: y, m = y + 1, 1
+        return out
 
-        # Don't depreciate assets purchased after the current period
-        if asset.purchase_date.strftime("%Y-%m") > period:
-            continue
+    try:
+        for asset in assets:
+            done = posted_periods.get(asset.id, set())
+            for per in _periods(asset.purchase_date):
+                if per in done:
+                    continue  # idempotent
 
-        amount = _calc_monthly_depreciation(asset)
-        if amount <= 0:
-            continue  # fully depreciated
+                amount = _calc_monthly_depreciation(asset)
+                if amount <= 0:
+                    break  # fully depreciated
 
-        # Update accumulated depreciation
-        asset.accumulated_depreciation = round(asset.accumulated_depreciation + amount, 2)
-        asset.last_depreciation_date   = now
+                py, pm = int(per[:4]), int(per[5:7])
+                when = now if per == period else datetime(py, pm, calendar.monthrange(py, pm)[1], 12, 0)
 
-        # Record depreciation entry
-        entry_rec = DepreciationEntry(
-            company_id = company_id,
-            asset_id   = asset.id,
-            period     = period,
-            amount     = amount,
-        )
-        db.add(entry_rec)
-        db.flush()
+                asset.accumulated_depreciation = round(asset.accumulated_depreciation + amount, 2)
+                asset.last_depreciation_date   = when
+                db.add(DepreciationEntry(company_id=company_id, asset_id=asset.id, period=per, amount=amount))
+                db.flush()
+                # journal failure aborts the whole run (nothing half-posted)
+                journal_engine.post_depreciation(asset, amount, per, db, when=when)
 
-        # Post to double-entry journal
-        try:
-            journal_engine.post_depreciation(asset, amount, period, db)
-        except Exception as je:
-            logger.warning(f"Depreciation journal failed for asset {asset.id}: {je}")
-
-        charged_count += 1
-        total_amount  += amount
-
-    db.commit()
+                charged_count += 1
+                total_amount  += amount
+        db.commit()
+    except Exception as je:
+        db.rollback()
+        logger.error(f"Depreciation run failed for company {company_id}: {je}")
+        raise HTTPException(500, f"Depreciation run failed and nothing was saved: {je}")
     logger.info(f"Depreciation run [{period}]: {charged_count} assets, R{total_amount:.2f} total for company {company_id}")
     return charged_count, total_amount

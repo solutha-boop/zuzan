@@ -11775,25 +11775,32 @@ function Quotes({live={},user={},onNavigate,docTemplate}) {
   };
 
   const convertToInvoice = async (q) => {
+    if (q.status === "accepted") { alert("This quote has already been converted to an invoice."); return; }
     setSaving(true);
+    let invoiceCreated = false;
     try {
+      // Payment due date = 30 days from today. The quote's valid-until date is how long the
+      // offer stands, not when the client must pay (it could already be in the past).
+      const _due = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
       const ciBody = {
         client_name:   q.client,
         description:   q.desc || "Converted from quote",
         amount:        q.amount,
         vat_applicable: q.vatApplicable,
-        due_date:      q.validUntil || null,
+        quote_ref:     q.id,
+        due_date:      _due,
         notes:         q.notes || `Converted from ${q.id}`,
         currency:      q.currency || "ZAR",
         exchange_rate: q.rate ? +q.rate : 1.0,
       };
       if (q.currency && q.currency !== "ZAR") ciBody.vat_amount_override = q.vatAmount || 0;
       await api("/invoices/",{method:"POST",body:JSON.stringify(ciBody)});
+      invoiceCreated = true;
       await updateStatus(q._id, "accepted");
       setPreview(null);
       if(live && live.reload) await live.reload();
       if(onNavigate) onNavigate("invoicing");
-    } catch(e){alert("Failed to convert quote: "+(e.message||"Unknown error"));}
+    } catch(e){alert(invoiceCreated ? "The invoice WAS created, but the quote could not be marked accepted ("+(e.message||"error")+"). Mark it accepted manually so it is not converted twice." : "Failed to convert quote: "+(e.message||"Unknown error"));}
     finally{setSaving(false);}
   };
 
@@ -12869,6 +12876,7 @@ function FixedAssets() {
         disposal_proceeds: dispForm.is_write_off ? 0 : +dispForm.disposal_proceeds,
         disposal_notes:    dispForm.disposal_notes || null,
         is_write_off:      dispForm.is_write_off,
+        proceeds_include_vat: !!dispForm.proceeds_include_vat,
       })});
       const gl = res.gain_loss;
       alert(`${res.message}`);
@@ -13017,6 +13025,7 @@ function FixedAssets() {
               <div>
                 <label style={LBL}>Proceeds Received (ZAR)</label>
                 <input type="number" value={dispForm.disposal_proceeds} onChange={e=>setDispForm(v=>({...v,disposal_proceeds:e.target.value}))} style={INP}/>
+                <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,marginTop:8,color:C.inkMid}}><input type="checkbox" checked={!!dispForm.proceeds_include_vat} onChange={e=>setDispForm(v=>({...v,proceeds_include_vat:e.target.checked}))}/> Proceeds include 15% VAT (VAT-registered sale - output VAT goes on your VAT201)</label>
               </div>
             )}
           </div>
@@ -13028,7 +13037,7 @@ function FixedAssets() {
           {/* Preview gain/loss */}
           {(() => {
             const proceeds = dispForm.is_write_off ? 0 : (+dispForm.disposal_proceeds||0);
-            const gl = proceeds - disposing.carrying_value;
+            const gl = (dispForm.proceeds_include_vat ? proceeds*100/115 : proceeds) - disposing.carrying_value;
             return (
               <div style={{background: gl >= 0 ? C.greenLt : C.redLt, border:`1px solid ${gl>=0?C.green:C.red}40`, borderRadius:10, padding:"12px 16px", marginBottom:16, fontSize:13}}>
                 <strong>{gl >= 0 ? "Gain on disposal" : "Loss on disposal"}:</strong> {fmt(Math.abs(gl))}

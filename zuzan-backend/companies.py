@@ -831,6 +831,8 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         raise HTTPException(status_code=400, detail="This invoice was written off as a bad debt and can no longer be edited. Use 'Record Recovery' if the debtor pays.")
     was_paid     = invoice.status == InvoiceStatus.paid
     was_draft    = invoice.status == InvoiceStatus.draft
+    if data.status == "written_off":
+        raise HTTPException(status_code=400, detail="Use the 'Write off' action to write an invoice off as a bad debt.")
     final_status = InvoiceStatus(data.status) if data.status else invoice.status
     amount_changed = (
         data.amount is not None
