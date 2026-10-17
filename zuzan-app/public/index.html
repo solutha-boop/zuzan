@@ -2,6 +2,13 @@
 <html lang="en-ZA">
   <head>
     <meta charset="utf-8" />
+    <script>
+      // The Render address is only a fallback: send everyone to the real domain, keeping the path (client portal
+      // links, password-reset links), query string and hash. Exact host match, so app.zuzan.co.za never loops.
+      if (location.hostname === "zuzan-app.onrender.com") {
+        location.replace("https://app.zuzan.co.za" + location.pathname + location.search + location.hash);
+      }
+    </script>
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
     <meta name="theme-color" content="#C8401A" />
