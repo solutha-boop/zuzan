@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-from database import get_db, PurchaseOrder, PurchaseOrderItem, Supplier, Expense
+from database import get_db, PurchaseOrder, PurchaseOrderItem, Supplier, Expense, InventoryItem
 from auth import get_current_user, User
 import logging
 import journal as journal_engine
@@ -309,6 +309,25 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
     )
     received_total = round(received_total, 2)
 
+    # Lines whose description equals an inventory item's SKU or name are stock purchases:
+    # they go to Inventory (1200) and raise the stock on hand - the cost reaches Cost of Sales
+    # only when the goods are sold on an invoice.
+    _stock_moves = []   # (inventory item, qty, unit price)
+    _stock_net = 0.0
+    _inv_items = db.query(InventoryItem).filter(InventoryItem.company_id == current_user.company_id, InventoryItem.is_active == True).all()
+    _by_key = {}
+    for _ii in _inv_items:
+        for _k in ((_ii.sku or "").strip().lower(), (_ii.name or "").strip().lower()):
+            if _k: _by_key.setdefault(_k, _ii)
+    for item in po.items:
+        _q = received_map.get(item.id, 0)
+        if _q > 0:
+            _ii = _by_key.get((item.description or "").strip().lower())
+            if _ii:
+                _stock_moves.append((_ii, _q, item.unit_price or 0))
+                _stock_net += round(_q * (item.unit_price or 0), 2)
+    _stock_net = round(_stock_net, 2)
+
     # Reject zero-value deliveries (audit fix 2026-07-09): an all-zero receive
     # would flip the PO to "partial" with NO journal entry, so creditors-aging
     # and Rule 7 would fall back to po.total_amount against a zero journal AP
@@ -360,7 +379,14 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
             po, db,
             received_net=received_total,
             received_vat=received_vat,
+            stock_net=_stock_net,
         )
+        for _ii, _q, _p in _stock_moves:
+            _old_q = max(_ii.quantity_on_hand or 0, 0)
+            _new_q = _old_q + _q
+            if _new_q > 0:   # weighted-average cost
+                _ii.unit_cost = round(((_old_q * (_ii.unit_cost or 0)) + (_q * _p)) / _new_q, 4)
+            _ii.quantity_on_hand = round((_ii.quantity_on_hand or 0) + _q, 4)
         db.commit()
     except Exception as e:
         logger.error(f"Journal post failed for PO {po.po_number}: {e}")

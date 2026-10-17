@@ -885,8 +885,12 @@ def post_po_received(
     db: Session,
     received_net: float = None,
     received_vat: float = None,
+    stock_net: float = 0.0,
 ) -> JournalEntry:
     """
+    stock_net: part of the net amount that is for tracked inventory items - goes to Inventory (1200)
+    instead of Cost of Sales (it becomes cost of sales when the goods are sold on an invoice).
+
     Purchase order received (goods/services delivered, not yet paid):
       DR Cost of Sales (5000)      (amount excl VAT)
       DR VAT Input Recoverable     (vat_amount)
@@ -922,7 +926,12 @@ def post_po_received(
     vat_in = get_account(cid, "1300", db)
     ap     = get_account(cid, "2000", db)
 
-    lines = [_line(entry.id, cogs, debit=net,      description="Goods/services received")]
+    stock_net = round(min(max(stock_net or 0, 0), net), 2)
+    lines = []
+    if round(net - stock_net, 2) > 0:
+        lines.append(_line(entry.id, cogs, debit=round(net - stock_net, 2), description="Goods/services received"))
+    if stock_net > 0:
+        lines.append(_line(entry.id, get_account(cid, "1200", db), debit=stock_net, description="Stock received"))
     if vat > 0:
         lines.append(_line(entry.id, vat_in, debit=vat, description="VAT input"))
     lines.append(_line(entry.id, ap, credit=total, description=po.po_number))

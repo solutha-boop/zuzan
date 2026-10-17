@@ -730,6 +730,9 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         # Optional COGS entry: DR Cost of Sales (5000) / CR Inventory at Cost (1200)
         if data.cogs_amount and data.cogs_amount > 0:
             journal_engine.post_invoice_cogs(invoice, round(data.cogs_amount, 2), db)
+            invoice.stock_cogs_json = "[]"   # manual cost entered - no automatic stock movement
+        else:
+            _apply_invoice_stock(invoice, db, force=True)
         db.commit()
     except Exception as e:
         logger.error(f"Journal post failed for invoice {invoice.invoice_number}: {e}")
@@ -739,6 +742,60 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
             detail=f"Invoice created but journal entry failed: {e}. Invoice has been rolled back — please retry.",
         )
     return invoice
+
+
+def _apply_invoice_stock(invoice, db: Session, force: bool = False):
+    """Invoice lines whose Code equals an inventory SKU sell stock: reduce quantity on hand and post
+    DR Cost of Sales (5000) / CR Inventory (1200) at the item's cost. Idempotent per invoice."""
+    import json as _json
+    if not force and invoice.stock_cogs_json != "":
+        return   # already applied, or a legacy invoice that must never touch stock
+    moves, cogs = [], 0.0
+    try:
+        lines = _json.loads(invoice.items_json) if invoice.items_json else []
+    except Exception:
+        lines = []
+    for ln in (lines if isinstance(lines, list) else []):
+        code = (str(ln.get("code") or "")).strip().lower()
+        if not code:
+            continue
+        item = next((i for i in db.query(InventoryItem).filter(
+                        InventoryItem.company_id == invoice.company_id,
+                        InventoryItem.is_active == True).all()
+                     if (i.sku or "").strip().lower() == code), None)
+        if not item:
+            continue
+        try:
+            qty = float(ln.get("quantity") or 0)
+        except Exception:
+            qty = 0
+        if qty <= 0:
+            continue
+        cost = round(qty * (item.unit_cost or 0), 2)
+        item.quantity_on_hand = round((item.quantity_on_hand or 0) - qty, 4)
+        cogs += cost
+        moves.append({"item_id": item.id, "qty": qty, "cost": cost})
+    invoice.stock_cogs_json = _json.dumps(moves)
+    if cogs > 0:
+        journal_engine.post_invoice_cogs(invoice, round(cogs, 2), db)
+
+
+def _reverse_invoice_stock(invoice, db: Session):
+    """Undo _apply_invoice_stock: put the quantities back and reverse the cost-of-sales entry."""
+    import json as _json
+    if not invoice.stock_cogs_json:
+        return
+    try:
+        moves = _json.loads(invoice.stock_cogs_json)
+    except Exception:
+        moves = []
+    for m in moves:
+        item = db.query(InventoryItem).filter(InventoryItem.id == m.get("item_id"), InventoryItem.company_id == invoice.company_id).first()
+        if item:
+            item.quantity_on_hand = round((item.quantity_on_hand or 0) + (m.get("qty") or 0), 4)
+    journal_engine.reverse_journal_entries(invoice.company_id, "invoice_cogs", invoice.id, db,
+                                           reason=f"Stock sale reversed - {invoice.invoice_number}")
+    invoice.stock_cogs_json = ""
 
 
 def _has_active_raised_entry(company_id: int, invoice_id: int, db: Session) -> bool:
@@ -831,6 +888,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         raise HTTPException(status_code=400, detail="This invoice was written off as a bad debt and can no longer be edited. Use 'Record Recovery' if the debtor pays.")
     was_paid     = invoice.status == InvoiceStatus.paid
     was_draft    = invoice.status == InvoiceStatus.draft
+    _items_replaced = data.items_json is not None and data.items_json != invoice.items_json
     if data.status == "written_off":
         raise HTTPException(status_code=400, detail="Use the 'Write off' action to write an invoice off as a bad debt.")
     final_status = InvoiceStatus(data.status) if data.status else invoice.status
@@ -959,6 +1017,10 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
             # raised entry is posted when the invoice is issued/backfilled.
             if invoice.status != InvoiceStatus.draft:
                 journal_engine.post_invoice_raised(invoice, db)
+        if amount_changed or _items_replaced or became_draft:
+            _reverse_invoice_stock(invoice, db)
+        if (amount_changed or _items_replaced or left_draft) and invoice.status != InvoiceStatus.draft:
+            _apply_invoice_stock(invoice, db)
         if newly_paid:
             journal_engine.post_invoice_paid(invoice, db)
         db.commit()
@@ -985,6 +1047,7 @@ async def delete_invoice(invoice_id: int, current_user: User = Depends(require_r
     try:
         journal_engine.init_accounts(current_user.company_id, db)
         reason = f"Invoice deleted — {invoice.invoice_number} ({invoice.client_name})"
+        _reverse_invoice_stock(invoice, db)   # restock + reverse the cost of sales
         for src in ("invoice", "invoice_payment", "invoice_cogs"):
             journal_engine.reverse_journal_entries(
                 current_user.company_id, src, invoice.id, db, reason=reason
@@ -1033,6 +1096,8 @@ async def send_invoice(invoice_id: int, current_user: User = Depends(require_rol
         if was_draft and not _has_active_raised_entry(current_user.company_id, invoice.id, db):
             journal_engine.init_accounts(current_user.company_id, db)
             journal_engine.post_invoice_raised(invoice, db)
+        if was_draft:
+            _apply_invoice_stock(invoice, db)
         db.commit()
     except Exception as e:
         logger.error(f"Journal post failed for invoice send {invoice.invoice_number}: {e}")

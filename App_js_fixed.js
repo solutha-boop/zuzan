@@ -1225,6 +1225,7 @@ function InvFormFields({data, onChange, customers=[]}) {
                 Subtotal: <strong>{lineItems.reduce((s,l)=>(s+(+l.quantity||0)*(+l.unit_price||0)),0).toFixed(2)}</strong>
               </div>
             </div>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:6}}>Stock: type an inventory item's SKU as the line Code and the invoice reduces that item's stock and posts its cost of sales automatically.</div>
           </div>
         )}
       </div>
@@ -14214,23 +14215,30 @@ function FinancialStatements() {
           <Row label="  (Increase)/Decrease in trade receivables" value={cf.operating.change_in_ar}      indent sub/>
           <Row label="  Increase/(Decrease) in trade payables"    value={cf.operating.change_in_ap}      indent sub/>
           <Row label="  (Increase)/Decrease in inventory"         value={cf.operating.change_in_inventory} indent sub/>
+          {(cf.operating.change_in_other_assets||0)!==0 && <Row label="  (Increase)/Decrease in other current assets" value={cf.operating.change_in_other_assets} indent sub/>}
+          {(cf.operating.change_in_other_liabilities||0)!==0 && <Row label="  Increase/(Decrease) in VAT, PAYE, tax and other liabilities" value={cf.operating.change_in_other_liabilities} indent sub/>}
+          {(cf.operating.less_gain_on_disposal||0)!==0 && <Row label="  Less: (gain)/loss on disposal of assets" value={cf.operating.less_gain_on_disposal} indent sub/>}
           <Row label="Net Cash from Operating Activities"         value={cf.operating.total}     bold hr/>
 
           <tr><td colSpan={2} style={{height:8}}/></tr>
           <Row label="INVESTING ACTIVITIES" bold/>
           <Row label="Purchase of property, plant & equipment" value={cf.investing.purchase_of_fa} indent/>
           {cf.investing.disposal_proceeds!==0 && <Row label="Proceeds from disposal of assets" value={cf.investing.disposal_proceeds} indent/>}
+          {(cf.investing.other||0)!==0 && <Row label="Other non-current assets" value={cf.investing.other} indent/>}
           <Row label="Net Cash from Investing Activities" value={cf.investing.total} bold hr/>
 
           <tr><td colSpan={2} style={{height:8}}/></tr>
           <Row label="FINANCING ACTIVITIES" bold/>
-          <Row label="Proceeds from / repayment of loans" value={0} indent sub/>
-          <Row label="Net Cash from Financing Activities" value={0} bold hr/>
+          {(cf.financing.owner_contributions||0)!==0 && <Row label="Owner contributions / capital introduced" value={cf.financing.owner_contributions} indent/>}
+          {(cf.financing.owner_drawings||0)!==0 && <Row label="Owner drawings / dividends" value={cf.financing.owner_drawings} indent/>}
+          <Row label="Proceeds from / (repayment of) long-term loans" value={cf.financing.change_in_long_term_liabilities||0} indent sub/>
+          <Row label="Net Cash from Financing Activities" value={cf.financing.total||0} bold hr/>
 
           <tr><td colSpan={2} style={{height:8}}/></tr>
           <Row label="Net Increase / (Decrease) in Cash" value={cf.net_change} bold hr/>
           <Row label="Cash at beginning of period"       value={cf.opening_cash} indent/>
           <Row label="Cash at end of period"             value={cf.closing_cash} bold/>
+          {cf.reconciles_to_ledger===false && <tr><td colSpan={2} style={{padding:"8px 0",fontSize:12,color:C.red}}>⚠ This does not agree to the bank account in your ledger ({fmt(cf.ledger_closing_cash)}). Check for transactions posted directly to the journal or to accounts outside the normal groups.</td></tr>}
         </tbody>
       </table>
     );

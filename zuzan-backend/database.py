@@ -160,6 +160,8 @@ class Invoice(Base):
     portal_token_created_at=Column(DateTime,nullable=True)
     # Multi-line items (JSON array: [{code,description,quantity,unit_price,vat_amount,total}])
     items_json=Column(Text,nullable=True)
+    # Stock sold on this invoice: JSON [{item_id, qty, cost}] once applied; "" = pending (re-apply on re-issue); NULL = legacy invoice, never touches stock
+    stock_cogs_json=Column(Text,nullable=True)
     # Travel / reference fields
     tour_ref=Column(String,nullable=True)
     quote_ref=Column(String,nullable=True)
@@ -1653,6 +1655,7 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR",
             "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'written_off'",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_date TIMESTAMP",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS stock_cogs_json TEXT",
             "ALTER TABLE fixed_assets ADD COLUMN IF NOT EXISTS disposal_vat FLOAT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_reason TEXT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS bad_debt_recovered_zar FLOAT DEFAULT 0",

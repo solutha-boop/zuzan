@@ -61,6 +61,16 @@ async def list_items(current_user: User = Depends(get_current_user), db: Session
     items = db.query(InventoryItem).filter(InventoryItem.company_id == current_user.company_id, InventoryItem.is_active == True).all()
     return [item_to_dict(i) for i in items]
 
+def _sku_taken(db, company_id, sku, exclude_id=None):
+    if not (sku or "").strip():
+        return False
+    q = db.query(InventoryItem).filter(InventoryItem.company_id == company_id, InventoryItem.is_active == True)
+    for i in q.all():
+        if i.id != exclude_id and (i.sku or "").strip().lower() == sku.strip().lower():
+            return True
+    return False
+
+
 def _check_non_negative(d):
     for k in ("unit_cost", "unit_price", "quantity_on_hand", "reorder_level"):
         if d.get(k) is not None and d[k] < 0:
@@ -70,6 +80,8 @@ def _check_non_negative(d):
 @router.post("/")
 async def create_item(data: ItemCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     _check_non_negative(data.dict())
+    if _sku_taken(db, current_user.company_id, data.sku):
+        raise HTTPException(status_code=400, detail="Another item already uses this SKU. SKUs must be unique because invoice line Codes match on them.")
     item = InventoryItem(company_id=current_user.company_id, **data.dict())
     db.add(item); db.flush()
     try:
@@ -91,6 +103,8 @@ async def update_item(item_id: int, data: ItemUpdate, current_user: User = Depen
     if not item: raise HTTPException(status_code=404, detail="Item not found")
     upd = data.dict(exclude_none=True)
     _check_non_negative(upd)
+    if "sku" in upd and _sku_taken(db, current_user.company_id, upd["sku"], exclude_id=item.id):
+        raise HTTPException(status_code=400, detail="Another item already uses this SKU. SKUs must be unique because invoice line Codes match on them.")
     old_qty, old_cost = (item.quantity_on_hand or 0), (item.unit_cost or 0)
     for k, v in upd.items():
         setattr(item, k, v)
