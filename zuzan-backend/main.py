@@ -201,7 +201,13 @@ async def lifespan(app: FastAPI):
     _maintenance_task.cancel()
 
 
-app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan)
+import os as _os_cfg
+# Interactive API docs list every endpoint publicly - hidden on Render unless ENABLE_API_DOCS=1 is set.
+_docs_on = _os_cfg.environ.get("ENABLE_API_DOCS") == "1" or not _os_cfg.environ.get("RENDER")
+app = FastAPI(title="ZuZan API", version="1.0.0", lifespan=lifespan,
+              docs_url="/docs" if _docs_on else None,
+              redoc_url="/redoc" if _docs_on else None,
+              openapi_url="/openapi.json" if _docs_on else None)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -216,6 +222,24 @@ _CORS_HEADERS = {
     "access-control-max-age": "86400",
 }
 
+# CORS origins. If CORS_ORIGINS is NOT set the API keeps answering every origin ("*") exactly as before.
+# Set CORS_ORIGINS on Render to a comma-separated list, e.g.
+#   https://zuzan.co.za,https://app.zuzan.co.za,https://zuzan-app.onrender.com
+# and browsers will only be allowed from those sites - except requests that send an X-API-Key
+# (third-party integrations), which stay open. Everything is bearer-token based, so this is
+# hygiene rather than a hole; set it once you know every site that legitimately calls the API
+# (the app, the clock kiosk page, the client portal).
+_CORS_ALLOWED = {o.strip().rstrip("/") for o in _os_cfg.environ.get("CORS_ORIGINS", "").split(",") if o.strip()}
+
+def _cors_origin_for(origin, wants_api_key):
+    if not _CORS_ALLOWED:
+        return "*"
+    if origin and origin.rstrip("/") in _CORS_ALLOWED:
+        return origin
+    if wants_api_key:
+        return "*"
+    return None
+
 class _CORSMiddleware:
     """Raw ASGI CORS middleware — avoids BaseHTTPMiddleware header-stripping bug."""
     def __init__(self, app: ASGIApp) -> None:
@@ -225,14 +249,30 @@ class _CORSMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        req = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        origin = req.get("origin")
         if scope.get("method") == "OPTIONS":
-            response = _Resp(content=b"", status_code=200, headers=_CORS_HEADERS)
+            wants_key = "x-api-key" in req.get("access-control-request-headers", "").lower()
+            allow = _cors_origin_for(origin, wants_key)
+            hdrs = dict(_CORS_HEADERS)
+            if allow is None:
+                hdrs.pop("access-control-allow-origin", None)
+                hdrs.pop("access-control-allow-methods", None)
+                hdrs.pop("access-control-allow-headers", None)
+            else:
+                hdrs["access-control-allow-origin"] = allow
+                if allow != "*":
+                    hdrs["vary"] = "Origin"
+            response = _Resp(content=b"", status_code=200, headers=hdrs)
             await response(scope, receive, send)
             return
+        allow = _cors_origin_for(origin, "x-api-key" in req)
         async def _send_with_cors(message):
-            if message["type"] == "http.response.start":
+            if message["type"] == "http.response.start" and allow is not None:
                 headers = MutableHeaders(scope=message)
-                headers.append("access-control-allow-origin", "*")
+                headers.append("access-control-allow-origin", allow)
+                if allow != "*":
+                    headers.append("vary", "Origin")
             await send(message)
         await self.app(scope, receive, _send_with_cors)
 

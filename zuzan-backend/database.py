@@ -214,6 +214,9 @@ class Employee(Base):
     # General payroll adjustments
     advance_monthly_deduction=Column(Float,default=0.0)  # monthly salary advance repayment deduction
     on_maternity_leave=Column(Boolean,default=False)     # if True, gross=0; employee claims UIF maternity benefit directly
+    clock_pin_hash=Column(String,nullable=True)          # kiosk clocking PIN (bcrypt). NULL = no PIN required for this employee
+    clock_pin_failed=Column(Integer,default=0)           # consecutive wrong PINs at the kiosk
+    clock_pin_locked_until=Column(DateTime,nullable=True)
     sunday_ordinary=Column(Boolean,default=False)        # True = Sunday is an ordinary working day for this employee (BCEA s16(2)): Sunday work paid at 1.5x instead of 2x
     psspf_exempt=Column(Boolean,default=False)           # True = NOT a PSSPF member (excluded/ineligible): no automatic provident deduction
     employment_type=Column(String,default="salaried") # "salaried" | "hourly"
@@ -1688,6 +1691,9 @@ def init_db():
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS on_maternity_leave BOOLEAN DEFAULT FALSE",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS psspf_exempt BOOLEAN DEFAULT FALSE",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS sunday_ordinary BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS clock_pin_hash VARCHAR",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS clock_pin_failed INTEGER DEFAULT 0",
+            "ALTER TABLE employees ADD COLUMN IF NOT EXISTS clock_pin_locked_until TIMESTAMP",
             """CREATE TABLE IF NOT EXISTS employee_garnishees (
                 id          SERIAL PRIMARY KEY,
                 employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,

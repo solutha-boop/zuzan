@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db, Company, Employee, ClockEvent, User
-from auth import get_current_user, log_action
+from auth import get_current_user, log_action, require_role, hash_password, verify_password
 
 router = APIRouter()
 
@@ -275,7 +275,7 @@ async def generate_kiosk_token(
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     token = _generate_kiosk_token(company, db)
-    log_action(db, company.id, current_user.id, "kiosk_token_generated", "Kiosk token regenerated")
+    log_action(db, company.id, current_user, "kiosk_token_generated", detail="Kiosk token regenerated")
     return {"kiosk_token": token, "kiosk_url": f"https://zuzan.co.za/clock?token={token}"}
 
 
@@ -301,7 +301,8 @@ async def kiosk_info(
         "company_id": company.id,
         "company_name": company.name,
         "employees": [
-            {"id": e.id, "name": _emp_name(e), "employee_number": e.employee_number or str(e.id)}
+            {"id": e.id, "name": _emp_name(e), "employee_number": e.employee_number or str(e.id),
+             "pin_required": bool(e.clock_pin_hash)}
             for e in employees
         ],
     }
@@ -318,6 +319,7 @@ class ClockIn(BaseModel):
 
 class KioskClock(BaseModel):
     kiosk_token: str
+    pin: Optional[str] = None     # required when the employee has a clock PIN set
     employee_id: int
     event_type: str          # "in" or "out"
     method: Optional[str] = "kiosk"
@@ -377,6 +379,19 @@ async def clock_event_kiosk(
         raise HTTPException(status_code=404, detail="Employee not found")
     if data.event_type not in ("in", "out"):
         raise HTTPException(status_code=400, detail="event_type must be 'in' or 'out'")
+    if emp.clock_pin_hash:
+        now_ = datetime.utcnow()
+        if emp.clock_pin_locked_until and emp.clock_pin_locked_until > now_:
+            raise HTTPException(status_code=429, detail="Too many wrong PINs. Try again in a few minutes or ask your manager.")
+        if not data.pin or not verify_password(data.pin, emp.clock_pin_hash):
+            emp.clock_pin_failed = (emp.clock_pin_failed or 0) + 1
+            if emp.clock_pin_failed >= 5:
+                emp.clock_pin_locked_until = now_ + timedelta(minutes=5)
+                emp.clock_pin_failed = 0
+            db.commit()
+            raise HTTPException(status_code=403, detail="Wrong PIN")
+        emp.clock_pin_failed = 0
+        emp.clock_pin_locked_until = None
     ev = ClockEvent(
         company_id=company.id,
         employee_id=data.employee_id,
@@ -390,6 +405,70 @@ async def clock_event_kiosk(
     db.refresh(ev)
     return {"id": ev.id, "employee": _emp_name(emp), "event_type": ev.event_type,
             "timestamp": _utc_iso(ev.timestamp)}
+
+
+# ── Kiosk clock PINs (managers) ───────────────────────────────────────────────
+
+class PinSet(BaseModel):
+    pin: str
+
+
+def _valid_pin(pin: str) -> str:
+    pin = (pin or "").strip()
+    if not (pin.isdigit() and 4 <= len(pin) <= 8):
+        raise HTTPException(status_code=400, detail="PIN must be 4 to 8 digits.")
+    return pin
+
+
+@router.put("/employees/{employee_id}/pin")
+async def set_clock_pin(employee_id: int, data: PinSet,
+                        current_user: User = Depends(require_role("owner", "admin")),
+                        db: Session = Depends(get_db)):
+    emp = db.query(Employee).filter(Employee.id == employee_id, Employee.company_id == current_user.company_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    emp.clock_pin_hash = hash_password(_valid_pin(data.pin))
+    emp.clock_pin_failed = 0
+    emp.clock_pin_locked_until = None
+    db.commit()
+    log_action(db, current_user.company_id, current_user, "clock_pin_set", "employee", emp.id)
+    return {"employee_id": emp.id, "pin_required": True}
+
+
+@router.delete("/employees/{employee_id}/pin")
+async def clear_clock_pin(employee_id: int,
+                          current_user: User = Depends(require_role("owner", "admin")),
+                          db: Session = Depends(get_db)):
+    emp = db.query(Employee).filter(Employee.id == employee_id, Employee.company_id == current_user.company_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    emp.clock_pin_hash = None
+    emp.clock_pin_failed = 0
+    emp.clock_pin_locked_until = None
+    db.commit()
+    log_action(db, current_user.company_id, current_user, "clock_pin_cleared", "employee", emp.id)
+    return {"employee_id": emp.id, "pin_required": False}
+
+
+@router.post("/pins/generate")
+async def generate_clock_pins(reset_all: bool = False,
+                              current_user: User = Depends(require_role("owner", "admin")),
+                              db: Session = Depends(get_db)):
+    """Give every active employee without a PIN a random 4-digit PIN (or everyone, with reset_all=true).
+    The PINs are returned ONCE here - only a hash is stored - so hand them out straight away."""
+    emps = db.query(Employee).filter(Employee.company_id == current_user.company_id, Employee.is_active.is_(True)).all()
+    out = []
+    for e in emps:
+        if e.clock_pin_hash and not reset_all:
+            continue
+        pin = f"{secrets.randbelow(10000):04d}"
+        e.clock_pin_hash = hash_password(pin)
+        e.clock_pin_failed = 0
+        e.clock_pin_locked_until = None
+        out.append({"employee_id": e.id, "name": _emp_name(e), "employee_number": e.employee_number or str(e.id), "pin": pin})
+    db.commit()
+    log_action(db, current_user.company_id, current_user, "clock_pins_generated", detail=f"{len(out)} clock PINs generated")
+    return {"generated": len(out), "pins": out}
 
 
 # ── GET /clocking/today — who is currently clocked in ────────────────────────

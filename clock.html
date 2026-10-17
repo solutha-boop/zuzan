@@ -328,6 +328,20 @@
     <div id="ph-empty" class="empty-state" style="display:none">Run aggregation above.</div>
   </div>
 
+  <!-- Kiosk PINs -->
+  <div class="section-card">
+    <h3>Kiosk PINs</h3>
+    <p style="font-size:.85rem;color:var(--muted);margin-bottom:12px">
+      With a PIN set, an employee must enter it on the kiosk before clocking in or out - so nobody can clock a colleague.
+      Employees without a PIN can still clock without one. PINs are shown once here, so hand them out straight away.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="genPins(false)">Generate PINs for staff without one</button>
+      <button class="btn btn-danger" onclick="if(confirm('Replace EVERY employee PIN with a new one?')) genPins(true)">Reset all PINs</button>
+    </div>
+    <div id="pin-results" style="margin-top:12px;font-size:.9rem"></div>
+  </div>
+
   <!-- Kiosk token management -->
   <div class="section-card">
     <h3>Kiosk Token</h3>
@@ -350,6 +364,19 @@
 </div>
 
 <!-- ─── KIOSK CONFIRMATION SPLASH ─────────────────────────── -->
+<div id="pin-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:60;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:16px;padding:24px;width:min(320px,90vw);text-align:center">
+    <h3 id="pin-name" style="margin-bottom:4px"></h3>
+    <p style="font-size:.85rem;color:var(--muted);margin-bottom:12px">Enter your PIN</p>
+    <input id="pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="8"
+           style="width:100%;font-size:1.6rem;letter-spacing:.4em;text-align:center;border:1px solid var(--border);border-radius:10px;padding:10px">
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-ghost" style="flex:1" onclick="pinDone(null)">Cancel</button>
+      <button class="btn btn-primary" style="flex:1" onclick="pinDone(document.getElementById('pin-input').value)">OK</button>
+    </div>
+  </div>
+</div>
+
 <div id="splash">
   <div class="splash-card">
     <div class="splash-icon" id="splash-icon"></div>
@@ -659,8 +686,8 @@ function renderKiosk() {
     const card = document.createElement('div');
     card.className = 'emp-card' + (isIn ? ' clocked-in' : '');
     card.innerHTML = `
-      <div class="avatar">${initials(emp.name)}</div>
-      <div class="emp-name">${emp.name}</div>
+      <div class="avatar">${esc(initials(emp.name))}</div>
+      <div class="emp-name">${esc(emp.name)}</div>
       <div class="emp-status">
         ${isIn ? '<span class="badge-in"></span>In since ' + fmtTime(st.last_event) : 'Out'}
       </div>`;
@@ -674,15 +701,38 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString('en-ZA', { hour:'2-digit', minute:'2-digit' });
 }
 
+let _pinResolve = null;
+function askPin(name) {
+  return new Promise(resolve => {
+    _pinResolve = resolve;
+    document.getElementById('pin-name').textContent = name;
+    const inp = document.getElementById('pin-input');
+    inp.value = '';
+    document.getElementById('pin-overlay').style.display = 'flex';
+    setTimeout(() => inp.focus(), 50);
+    inp.onkeydown = ev => { if (ev.key === 'Enter') pinDone(inp.value); };
+  });
+}
+function pinDone(v) {
+  document.getElementById('pin-overlay').style.display = 'none';
+  const r = _pinResolve; _pinResolve = null;
+  if (r) r(v && v.trim() ? v.trim() : null);
+}
+
 async function kioskTap(emp) {
   const st = todayStatus[emp.id];
   const isIn = st && st.status === 'in';
   const eventType = isIn ? 'out' : 'in';
   try {
     if (kioskToken) {
+      let pin = null;
+      if (emp.pin_required) {
+        pin = await askPin(emp.name);
+        if (!pin) return;   // cancelled
+      }
       await kioskApi('POST', '/clocking/clock-kiosk', {
         kiosk_token: kioskToken, employee_id: emp.id,
-        event_type: eventType, method: 'kiosk'
+        event_type: eventType, method: 'kiosk', pin: pin
       });
     } else {
       await api('POST', '/clocking/clock', {
@@ -695,6 +745,18 @@ async function kioskTap(emp) {
     toast('Error: ' + e.message);
   }
 }
+
+async function genPins(resetAll) {
+  const box = document.getElementById('pin-results');
+  try {
+    const r = await api('POST', '/clocking/pins/generate?reset_all=' + (resetAll ? 'true' : 'false'));
+    if (!r.pins.length) { box.textContent = 'Every active employee already has a PIN.'; return; }
+    box.innerHTML = '<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">No.</th><th align="left">Employee</th><th align="left">PIN</th></tr></thead><tbody>' +
+      r.pins.map(p => `<tr><td>${esc(p.employee_number)}</td><td>${esc(p.name)}</td><td style="font-family:monospace;font-weight:700">${esc(p.pin)}</td></tr>`).join('') +
+      '</tbody></table><div style="margin-top:8px;color:var(--muted)">Shown once. Print or write these down now.</div>';
+  } catch (e) { toast('Error: ' + e.message); }
+}
+function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function showSplash(name, type) {
   document.getElementById('splash-icon').textContent = type === 'in' ? '✅' : '👋';
