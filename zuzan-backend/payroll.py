@@ -1464,10 +1464,24 @@ async def delete_payroll_period(
         .all()
     )
     count = len(deleted)
-    for ps in deleted:
-        db.delete(ps)
-    db.commit()
-    return {"deleted": count, "period": period}
+    # Reverse the payroll journal entries for each payslip being deleted so the
+    # ledger does not keep orphaned payroll expense/liabilities and a re-run
+    # does not duplicate them (audit fix 2026-10-19). Reversal entries use
+    # source "payroll_reversal" and net the originals to zero.
+    from journal import reverse_journal_entries
+    reversed_entries = 0
+    try:
+        for ps in deleted:
+            reversed_entries += reverse_journal_entries(
+                current_user.company_id, "payroll", ps.id, db,
+                reason=f"Reversal — payroll period {period} deleted for re-run",
+            )
+            db.delete(ps)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Could not reverse payroll journal entries: {e}")
+    return {"deleted": count, "period": period, "journal_entries_reversed": reversed_entries}
 
 
 @payroll_router.get("/payslips/{period}/summary")
@@ -1972,11 +1986,11 @@ async def get_easyfile_export(
         emp_lines.append(f"4101,0.00")          # SITE — always include with cents (0.00 post-2013)
         emp_lines.append(f"4102,{fmt_amt(paye_amt, cents=True)}")   # PAYE — cents mandatory
         if uif_emp_amt > 0:
-            emp_lines.append(f"4142,{fmt_amt(uif_emp_amt, cents=True)}")  # UIF employee — cents
+            emp_lines.append(f"4141,{fmt_amt(uif_emp_amt, cents=True)}")  # UIF employee (SARS code 4141) — cents
         if s11f > 0:
             emp_lines.append(f"4005,{fmt_amt(s11f)}")      # Pension/provident (s11F)
         if sdl_amt > 0:
-            emp_lines.append(f"4474,{fmt_amt(sdl_amt)}")   # SDL (employer, informational)
+            emp_lines.append(f"4142,{fmt_amt(sdl_amt)}")   # SDL contribution (SARS code 4142)
         if pension_empr > 0:
             emp_lines.append(f"7002,{fmt_amt(pension_empr, cents=True)}")  # Pension employer — cents
 
