@@ -381,6 +381,7 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
             received_vat=received_vat,
             stock_net=_stock_net,
         )
+        po.stock_received_net = round((po.stock_received_net or 0) + _stock_net, 2)
         for _ii, _q, _p in _stock_moves:
             _old_q = max(_ii.quantity_on_hand or 0, 0)
             _new_q = _old_q + _q

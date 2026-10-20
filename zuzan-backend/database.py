@@ -390,6 +390,7 @@ class PurchaseOrder(Base):
     delivery_date=Column(DateTime,nullable=True)
     subtotal=Column(Float,default=0); vat_amount=Column(Float,default=0); total_amount=Column(Float,default=0)
     notes=Column(Text); received_date=Column(DateTime,nullable=True)
+    stock_received_net=Column(Float,default=0)   # net value received for tracked inventory items (asset, not expense)
     created_at=Column(DateTime,default=datetime.utcnow)
     company=relationship("Company",back_populates="purchase_orders")
     supplier=relationship("Supplier",back_populates="purchase_orders")
@@ -1199,6 +1200,7 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN paid_amount_zar FLOAT",
             "ALTER TABLE companies ADD COLUMN logo_url TEXT",
             "ALTER TABLE purchase_orders ADD COLUMN received_date TIMESTAMP",
+            "ALTER TABLE purchase_orders ADD COLUMN stock_received_net FLOAT DEFAULT 0",
             "ALTER TABLE companies ADD COLUMN payroll_pin_hash VARCHAR",
             "ALTER TABLE companies ADD COLUMN cipc_registration_date TIMESTAMP",
             """CREATE TABLE IF NOT EXISTS leave_requests (
@@ -1658,6 +1660,10 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR",
             "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'written_off'",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_date TIMESTAMP",
+            # One-off, idempotent: credit-note VAT used to be posted to 2200 (PAYE Payable) instead of 2100 (VAT Output).
+            # Backfill: POs received before stock lines were tracked - take the stock portion from the ledger (idempotent).
+            "UPDATE purchase_orders SET stock_received_net = COALESCE((SELECT SUM(jl.debit - jl.credit) FROM journal_lines jl JOIN journal_entries je ON je.id = jl.entry_id JOIN accounts a ON a.id = jl.account_id WHERE je.source = 'purchase_order' AND je.source_id = purchase_orders.id AND je.company_id = purchase_orders.company_id AND a.code = '1200'), 0) WHERE COALESCE(stock_received_net, 0) = 0",
+            "UPDATE journal_lines SET account_id = (SELECT a2.id FROM accounts a2 WHERE a2.code = '2100' AND a2.company_id = (SELECT je.company_id FROM journal_entries je WHERE je.id = journal_lines.entry_id)) WHERE entry_id IN (SELECT id FROM journal_entries WHERE source IN ('credit_note', 'credit_note_reversal')) AND account_id IN (SELECT id FROM accounts WHERE code = '2200') AND EXISTS (SELECT 1 FROM accounts a3 WHERE a3.code = '2100' AND a3.company_id = (SELECT je2.company_id FROM journal_entries je2 WHERE je2.id = journal_lines.entry_id))",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS stock_cogs_json TEXT",
             "ALTER TABLE fixed_assets ADD COLUMN IF NOT EXISTS disposal_vat FLOAT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_reason TEXT",

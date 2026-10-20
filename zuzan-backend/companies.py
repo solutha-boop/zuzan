@@ -557,6 +557,28 @@ class InvoiceUpdate(BaseModel):
     passenger_name:  Optional[str] = None
 
 
+def _strip_line_vat(items_json: Optional[str]) -> Optional[str]:
+    """Zero the VAT on every line (not VAT-registered, or zero-rated / exempt supply) so the stored lines,
+    the printed invoice and the invoice totals all agree."""
+    if not items_json:
+        return items_json
+    try:
+        items = json.loads(items_json)
+    except (ValueError, TypeError):
+        return items_json
+    if not isinstance(items, list):
+        return items_json
+    for ln in items:
+        if isinstance(ln, dict):
+            ln["vat_applicable"] = False
+            ln["vat_amount"] = 0
+            try:
+                ln["total"] = round(float(ln.get("quantity") or 0) * float(ln.get("unit_price") or 0), 2)
+            except Exception:
+                pass
+    return json.dumps(items)
+
+
 def _vat_from_line_items(items_json: Optional[str]) -> Optional[dict]:
     """Sum per-line VAT/totals from a multi-line-item invoice instead of applying
     a single flat VAT flag to the whole subtotal (audit fix 2026-09-06 — High:
@@ -672,6 +694,10 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
 
     # Multi-line invoices: sum each line's own VAT instead of applying one flat
     # vat_applicable flag to the whole subtotal (audit fix 2026-09-06 — High).
+    from journal import company_vat_registered as _vatreg_early
+    _early_supply = (data.supply_type or "").strip().lower()
+    if data.items_json and (not _vatreg_early(db, current_user.company_id) or _early_supply in ("zero_rated", "exempt")):
+        data.items_json = _strip_line_vat(data.items_json)
     line_totals = _vat_from_line_items(data.items_json)
     if line_totals is not None:
         vat_amount = line_totals["vat_amount"]
@@ -900,6 +926,10 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     # a single flat rate across the whole subtotal (audit fix 2026-09-06 — High).
     # This also catches an edit that only toggles a line's vat_applicable flag
     # without changing the subtotal, which data.amount alone wouldn't detect.
+    if data.items_json is not None:
+        from journal import company_vat_registered as _vatreg_u
+        if (not _vatreg_u(db, current_user.company_id)) or (invoice.supply_type in ("zero_rated", "exempt")):
+            data.items_json = _strip_line_vat(data.items_json)
     line_totals = _vat_from_line_items(data.items_json) if data.items_json is not None else None
     if line_totals is not None:
         items_changed = (

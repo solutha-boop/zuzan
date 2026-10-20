@@ -337,6 +337,9 @@ async def login(request: Request, data: LoginRequest, db: Session = Depends(get_
     user = db.query(User).filter(func.lower(User.email) == (data.email or "").strip().lower()).first()
     if not user or not verify_password(data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    # The old shared default password must never open an account: the owner has to choose their own.
+    if (data.password or "") == "Zuzan2025":
+        raise HTTPException(status_code=403, detail="This account still uses the old default password, which is no longer accepted. Use 'Forgot password' on the login page to set a new one.")
 
     company = db.query(Company).filter(Company.id == user.company_id).first()
     token = create_token({"user_id": user.id, "company_id": company.id})

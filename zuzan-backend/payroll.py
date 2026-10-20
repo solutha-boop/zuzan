@@ -47,6 +47,32 @@ def _po_delivered_net(po) -> float:
     return round(net_full, 2)  # legacy PO — no tracking data
 
 
+def _po_cost_net(po) -> float:
+    """Part of a PO's delivered net value that is an expense (cost of sales) at receipt.
+    Lines bought for tracked inventory items go to Inventory (asset, 1200) and only reach the P&L
+    when sold or written off - see _stock_pl_cost - so they are excluded here (matches the ledger)."""
+    return round(max(_po_delivered_net(po) - (getattr(po, "stock_received_net", 0) or 0), 0), 2)
+
+
+def _stock_pl_cost(db, company_id: int, date_from=None, date_to=None) -> float:
+    """Net P&L charge from inventory movements, read from the ledger so the dashboard agrees with it:
+    cost of sales on invoices that sold tracked stock (invoice_cogs, incl. reversals) plus the
+    Stock Adjustments account (5950: write-offs, count differences, revaluations)."""
+    q = (db.query(func.coalesce(func.sum(JournalLine.debit - JournalLine.credit), 0.0))
+         .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+         .join(Account, JournalLine.account_id == Account.id)
+         .filter(JournalEntry.company_id == company_id, Account.company_id == company_id))
+    q = q.filter(or_(
+        Account.code == "5950",
+        (Account.code == "5000") & JournalEntry.source.in_(["invoice_cogs", "invoice_cogs_reversal"]),
+    ))
+    if date_from is not None:
+        q = q.filter(JournalEntry.date >= date_from)
+    if date_to is not None:
+        q = q.filter(JournalEntry.date < date_to)
+    return round(q.scalar() or 0.0, 2)
+
+
 def _po_delivered_total(po) -> float:
     """VAT-inclusive value of goods actually delivered (net + proportional VAT)."""
     net = _po_delivered_net(po)
@@ -2124,7 +2150,7 @@ async def dashboard(
         PurchaseOrder.company_id == cid,
         PurchaseOrder.status.in_(["received", "partial", "paid"]),
     ).all()
-    po_cogs = sum(_po_delivered_net(po) for po in received_pos)
+    po_cogs = sum(_po_cost_net(po) for po in received_pos) + _stock_pl_cost(db, cid)
     total_expenses = total_expenses + po_cogs
 
     # Include all-time depreciation from fixed assets (IAS 16 — posted to journal acct 5800)
@@ -2282,14 +2308,14 @@ async def monthly_trend(
         # Add PO COGS for POs received/partial/paid in this month — ex-VAT,
         # delivered value only for partial POs (audit fix 2026-07-02)
         po_cogs = sum(
-            _po_delivered_net(po)
+            _po_cost_net(po)
             for po in db.query(PurchaseOrder).filter(
                 PurchaseOrder.company_id == cid,
                 PurchaseOrder.status.in_(["received", "partial", "paid"]),
                 PurchaseOrder.received_date >= start,
                 PurchaseOrder.received_date < end,
             ).all()
-        )
+        ) + _stock_pl_cost(db, cid, start, end)
         expenses = expenses + po_cogs
 
         # Add depreciation charged in this period (DepreciationEntry.period = "YYYY-MM")
@@ -2948,7 +2974,7 @@ def _annual_tax_estimate(db: Session, cid: int, as_of: _date) -> float:
         PurchaseOrder.received_date >= hist_start,
         PurchaseOrder.received_date < hist_end,
     ).all()
-    total_expenses = round(total_expenses + sum(_po_delivered_net(po) for po in po_items), 2)
+    total_expenses = round(total_expenses + sum(_po_cost_net(po) for po in po_items) + _stock_pl_cost(db, cid, hist_start, hist_end), 2)
 
     from_period = hist_start.strftime("%Y-%m")
     to_period   = hist_end.strftime("%Y-%m")
@@ -3250,16 +3276,33 @@ async def cash_flow_13week(
 @reports_router.get("/emp201")
 async def emp201(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    period: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ):
+    """EMP201 for one payroll month. period=YYYY-MM (or date_from=YYYY-MM-DD, as the screen sends it);
+    defaults to the current month. Due on the 7th of the following month - the last business day
+    before it when the 7th is a weekend or public holiday."""
     cid = current_user.company_id
     now = datetime.utcnow()
-    period = now.strftime("%Y-%m")
-
-    if now.month < 12:
-        due_date = datetime(now.year, now.month + 1, 7).strftime("%d %B %Y")
-    else:
-        due_date = datetime(now.year + 1, 1, 7).strftime("%d %B %Y")
+    _p = (period or (date_from or "")[:7] or now.strftime("%Y-%m")).strip()
+    try:
+        _py, _pm = int(_p[:4]), int(_p[5:7])
+        assert 1 <= _pm <= 12
+    except Exception:
+        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    period = f"{_py}-{_pm:02d}"
+    _dy, _dm = (_py, _pm + 1) if _pm < 12 else (_py + 1, 1)
+    try:
+        from clocking import _sa_holidays
+        _hol = set(_sa_holidays(_dy))
+    except Exception:
+        _hol = set()
+    _d = _date(_dy, _dm, 7)
+    while _d.weekday() >= 5 or _d in _hol:
+        _d -= timedelta(days=1)
+    due_date = _d.strftime("%d %B %Y")
 
     payslips = db.query(Payslip).join(Employee).filter(
         Employee.company_id == cid,
@@ -3288,7 +3331,8 @@ async def emp201(
     total_due_sars     = round(total_paye + total_uif + total_sdl, 2)
 
     return {
-        "period":            now.strftime("%B %Y"),
+        "period":            _date(_py, _pm, 1).strftime("%B %Y"),
+        "period_key":        period,
         "due_date":          due_date,
         "employee_count":    len(payslips),
         "employees":         employees_detail,
@@ -3365,7 +3409,7 @@ async def management_accounts(
         PurchaseOrder.received_date < period_end,
     ).all()
     # Delivered value only for partial POs (audit fix 2026-07-02)
-    po_cogs = round(sum(_po_delivered_net(po) for po in po_cogs_items), 2)
+    po_cogs = round(sum(_po_cost_net(po) for po in po_cogs_items) + _stock_pl_cost(db, cid, period_start, period_end), 2)
     if po_cogs:
         total_expenses = round(total_expenses + po_cogs, 2)
         expense_by_cat["Cost of Sales (POs)"] = round(
@@ -3442,7 +3486,7 @@ async def management_accounts(
             Expense.company_id == cid,
             Expense.expense_date >= start, Expense.expense_date < end).all()
         exp = round(sum(ex.amount - (ex.vat_amount or 0) for ex in exp_rows), 2)
-        po_c = round(sum(_po_delivered_net(po) for po in db.query(PurchaseOrder).filter(
+        po_c = round(_stock_pl_cost(db, cid, start, end) + sum(_po_cost_net(po) for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
             PurchaseOrder.received_date >= start,
@@ -3623,8 +3667,8 @@ async def provisional_tax(
     # (audit fix 2026-07-10): full (total − VAT) overstated YTD expenses for
     # partially delivered POs, understating taxable income and both IRP6
     # installments. _po_delivered_net matches dashboard//v1/summary/management.
-    po_cogs_ytd = sum(
-        _po_delivered_net(po)
+    po_cogs_ytd = _stock_pl_cost(db, cid, year_start) + sum(
+        _po_cost_net(po)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),

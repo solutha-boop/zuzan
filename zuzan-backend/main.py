@@ -506,7 +506,7 @@ async def api_list_employees(auth=Depends(require_api_key)):
 @app.get("/v1/summary", tags=["Public API"])
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
-    from payroll import _to_zar, _po_delivered_net, _bank_import_income
+    from payroll import _to_zar, _po_cost_net, _stock_pl_cost, _bank_import_income
     from database import InvoiceStatus, PurchaseOrder, Payslip, DepreciationEntry
     paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.paid).all()
     out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
@@ -519,12 +519,12 @@ async def api_summary(auth=Depends(require_api_key)):
     # Delivered value only for partial POs (audit fix 2026-07-02) — consistent
     # with /reports/dashboard and the incremental journal postings.
     po_cogs = sum(
-        _po_delivered_net(po)
+        _po_cost_net(po)
         for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id==company.id,
             PurchaseOrder.status.in_(["received", "partial", "paid"]),
         ).all()
-    )
+    ) + _stock_pl_cost(db, company.id)
     total_expenses = total_expenses + po_cogs
     # Add depreciation — consistent with /reports/dashboard
     total_depreciation = db.query(_func.sum(DepreciationEntry.amount)).filter(
