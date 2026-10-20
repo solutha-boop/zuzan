@@ -1324,8 +1324,9 @@ async def run_payroll(
 def _fmt_zar(v: float) -> str:
     return f"R {v:,.2f}".replace(",", " ")  # narrow no-break space as thousands sep
 
-def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
-    """Generate a print-ready HTML payslip for one employee/period."""
+def _payslip_lines(payslip, emp):
+    """Shared payslip content: (earnings, deductions, employer) rows as (label, amount, colour, bold), plus totals.
+    Both the HTML and the PDF payslip are rendered from this so they can never disagree."""
     p = payslip
     ot_hours   = (p.overtime_hours or 0) + (p.sunday_hours or 0) + (p.ph_hours or 0)
     has_ot     = ot_hours > 0
@@ -1350,11 +1351,15 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
     # balances, even for historical payslips stored before the double-deduction fix.
     total_deductions = round(taxable_gross - (p.net_pay or 0), 2)
 
-    def row(label, value, color="#222", bold=False):
-        fw = "font-weight:700;" if bold else ""
-        return f'<tr><td style="padding:5px 8px;color:#555;">{label}</td><td style="padding:5px 8px;text-align:right;{fw}color:{color};">{_fmt_zar(value)}</td></tr>'
+    sections = {"earnings": [], "deductions": [], "employer": []}
+    _cur = ["earnings"]
 
-    earnings_rows = f'<tr><td style="padding:5px 8px;color:#555;">Basic Salary</td><td style="padding:5px 8px;text-align:right;">{_fmt_zar(p.gross_salary)}</td></tr>'
+    def row(label, value, color="#222", bold=False):
+        sections[_cur[0]].append((label, value, color, bold))
+        return ""
+
+    earnings_rows = ""
+    row("Basic Salary", p.gross_salary)
     if has_ot:
         if p.overtime_amount: earnings_rows += row(f"Overtime ({p.overtime_hours or 0}h × 1.5×)", p.overtime_amount or 0, "#16a34a")
         # NBCPSS guards: Sunday 1.5x (ordinarily work Sundays); public holiday = 1.0x on top of
@@ -1375,6 +1380,7 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
         earnings_rows += row("Uniform Allowance (non-taxable — s10(1)(nA))", p.uniform_allowance or 0, "#16a34a")
     earnings_rows += row("Taxable Gross", taxable_gross, "#15803d", bold=True)
 
+    _cur[0] = "deductions"
     deductions_rows = ""
     if has_pension:
         deductions_rows += row(f"Pension / Provident Fund (s11F)", p.pension_employee or 0, "#dc2626")
@@ -1396,8 +1402,8 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
     if p.medical_tax_credit:
         deductions_rows += row("  ↳ Medical Tax Credit (s6A)", -(p.medical_tax_credit or 0), "#16a34a")
     deductions_rows += row("UIF (Employee — 1%)", p.uif_employee or 0, "#b45309")
-    deductions_rows += f'<tr class="total-row"><td style="padding:6px 8px;color:#991b1b;font-weight:700;">Total Deductions</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:#991b1b;">{_fmt_zar(total_deductions)}</td></tr>'
 
+    _cur[0] = "employer"
     employer_rows = ""
     if p.pension_employer:    employer_rows += row("Pension / Provident (Employer)", p.pension_employer or 0, "#1d4ed8")
     if p.medical_aid_employer_con: employer_rows += row("Medical Aid (Employer)", p.medical_aid_employer_con or 0, "#1d4ed8")
@@ -1407,6 +1413,29 @@ def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
     employer_rows += row("SDL (Skills Development Levy — 1%)", p.sdl or 0, "#1d4ed8")
     if p.bc_levy_employer:    employer_rows += row("NBCPSS BC Levy", p.bc_levy_employer or 0, "#c2410c")
     if p.psira_levy_employer: employer_rows += row("PSIRA Registration Levy", p.psira_levy_employer or 0, "#c2410c")
+
+    return {
+        "earnings": sections["earnings"], "deductions": sections["deductions"], "employer": sections["employer"],
+        "taxable_gross": taxable_gross, "total_deductions": total_deductions,
+    }
+
+
+def _payslip_html(payslip, emp, company_name: str, logo_url: str = "") -> str:
+    """Generate a print-ready HTML payslip for one employee/period."""
+    p = payslip
+    _L = _payslip_lines(p, emp)
+    taxable_gross, total_deductions = _L["taxable_gross"], _L["total_deductions"]
+
+    def _rows(items):
+        out = ""
+        for label, value, color, bold in items:
+            fw = "font-weight:700;" if bold else ""
+            out += f'<tr><td style="padding:5px 8px;color:#555;">{label}</td><td style="padding:5px 8px;text-align:right;{fw}color:{color};">{_fmt_zar(value)}</td></tr>'
+        return out
+
+    earnings_rows = _rows(_L["earnings"])
+    deductions_rows = _rows(_L["deductions"]) + f'<tr class="total-row"><td style="padding:6px 8px;color:#991b1b;font-weight:700;">Total Deductions</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:#991b1b;">{_fmt_zar(total_deductions)}</td></tr>'
+    employer_rows = _rows(_L["employer"])
 
     emp_name = f"{emp.first_name} {emp.last_name}" if emp else "Unknown"
     emp_num  = getattr(emp, "employee_number", "") or ""
@@ -1611,13 +1640,132 @@ def nbcpss_remittance(
     }
 
 
-@payroll_router.get("/payslips/{period}/download-all")
-def download_all_payslips(
+def _pdf_text(s) -> str:
+    """Make text safe for the built-in PDF fonts (Latin-1/cp1252 only)."""
+    s = str(s or "").replace("\u21b3", ">").replace("\u2212", "-").replace("\u2192", "->").replace("\u00a0", " ").replace("\u202f", " ")
+    return s.encode("cp1252", "replace").decode("cp1252")
+
+
+def _pdf_zar(v) -> str:
+    return "R " + f"{(v or 0):,.2f}".replace(",", " ")
+
+
+def _payslip_pdf(payslip, emp, company_name: str, logo_url: str = "") -> bytes:
+    """One employee's payslip as an A4 PDF (same content as the HTML payslip)."""
+    import io, base64
+    from xml.sax.saxutils import escape
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+
+    p = payslip
+    L = _payslip_lines(p, emp)
+    navy = colors.HexColor("#1e3a5f")
+    emp_name = f"{emp.first_name} {emp.last_name}" if emp else "Unknown"
+    esc = lambda s: escape(_pdf_text(s))
+    small = ParagraphStyle("s", fontName="Helvetica", fontSize=9, leading=11, textColor=colors.HexColor("#222222"))
+    lab = ParagraphStyle("l", parent=small, textColor=colors.HexColor("#555555"))
+    hdr_w = ParagraphStyle("hw", fontName="Helvetica-Bold", fontSize=15, leading=18, textColor=colors.white)
+    hdr_s = ParagraphStyle("hs", fontName="Helvetica", fontSize=9, leading=11, textColor=colors.white)
+    hdr_r = ParagraphStyle("hr", parent=hdr_s, alignment=2)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm,
+                            title=_pdf_text(f"Payslip - {emp_name} - {p.period}"), author="ZuZan Payroll")
+    W = A4[0] - 30*mm
+    story = []
+
+    left = [Paragraph(esc(company_name), hdr_w), Paragraph(f"Payslip for period: <b>{esc(p.period)}</b>", hdr_s)]
+    if logo_url.startswith("data:image") and "," in logo_url:      # embedded logos only - never fetch remote URLs
+        try:
+            from reportlab.lib.utils import ImageReader
+            from reportlab.platypus import Image
+            raw = base64.b64decode(logo_url.split(",", 1)[1])
+            ir = ImageReader(io.BytesIO(raw)); iw, ih = ir.getSize()
+            h = min(14*mm, 40*mm * ih / iw); left = [Image(io.BytesIO(raw), width=h * iw / ih, height=h)] + left[1:]
+        except Exception:
+            pass
+    head = Table([[left, [Paragraph("Generated by ZuZan Payroll", hdr_r), Paragraph("CONFIDENTIAL", hdr_r)]]], colWidths=[W*0.65, W*0.35])
+    head.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,-1), navy), ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                              ("LEFTPADDING", (0,0), (-1,-1), 8), ("RIGHTPADDING", (0,0), (-1,-1), 8),
+                              ("TOPPADDING", (0,0), (-1,-1), 8), ("BOTTOMPADDING", (0,0), (-1,-1), 8)]))
+    story += [head]
+
+    info = [
+        ("Employee", emp_name), ("Emp. No.", getattr(emp, "employee_number", "") or ""),
+        ("Position", getattr(emp, "position", "") or ""), ("Department", getattr(emp, "department", "") or ""),
+        ("ID Number", getattr(emp, "id_number", "") or ""), ("Payment Date", str(p.payment_date or p.period)),
+    ]
+    cell = lambda k, v: Paragraph(f'<font color="#555555">{esc(k)}: </font><b>{esc(v)}</b>', small)
+    it = Table([[cell(*info[i]), cell(*info[i+1])] for i in range(0, len(info), 2)], colWidths=[W/2, W/2])
+    it.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#f8fafc")), ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#e5e7eb")),
+                            ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3), ("LEFTPADDING", (0,0), (-1,-1), 8)]))
+    story += [it, Spacer(1, 3*mm)]
+
+    def section(title, items, total=None):
+        data = [[Paragraph(f"<b>{esc(title.upper())}</b>", ParagraphStyle("sh", parent=small, fontSize=8, textColor=colors.HexColor("#475569"))), ""]]
+        styles = [("BACKGROUND", (0,0), (-1,0), colors.HexColor("#f1f5f9")), ("SPAN", (0,0), (1,0)),
+                  ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3), ("LEFTPADDING", (0,0), (-1,-1), 8), ("RIGHTPADDING", (0,0), (-1,-1), 8),
+                  ("LINEBELOW", (0,1), (-1,-1), 0.25, colors.HexColor("#eef2f6"))]
+        for label, value, color, bold in items:
+            col = {"#dc2626": "#dc2626", "#16a34a": "#16a34a", "#15803d": "#15803d", "#b45309": "#b45309", "#1d4ed8": "#1d4ed8", "#c2410c": "#c2410c"}.get(color, "#222222")
+            amt = ParagraphStyle("a", parent=small, alignment=2, textColor=colors.HexColor(col), fontName="Helvetica-Bold" if bold else "Helvetica")
+            lb = ParagraphStyle("lb", parent=lab, fontName="Helvetica-Bold" if bold else "Helvetica")
+            data.append([Paragraph(esc(label), lb), Paragraph(esc(_pdf_zar(value)), amt)])
+        if total:
+            tl = ParagraphStyle("tl", parent=small, fontName="Helvetica-Bold"); ta = ParagraphStyle("ta", parent=tl, alignment=2)
+            data.append([Paragraph(esc(total[0]), tl), Paragraph(esc(_pdf_zar(total[1])), ta)])
+            styles.append(("LINEABOVE", (0, len(data)-1), (-1, len(data)-1), 0.75, colors.HexColor("#cbd5e1")))
+        t = Table(data, colWidths=[W*0.72, W*0.28]); t.setStyle(TableStyle(styles)); return t
+
+    story += [section("Gross income received", L["earnings"]),
+              section("Employee deductions", L["deductions"], ("Total Deductions", L["total_deductions"]))]
+
+    net = Table([[Paragraph(f'<font size="8" color="#555555">NET PAY THIS PERIOD</font><br/><font size="8" color="#555555">Gross income {esc(_pdf_zar(L["taxable_gross"]))} - Deductions {esc(_pdf_zar(L["total_deductions"]))}</font>', small),
+                  Paragraph(f'<b>{esc(_pdf_zar(p.net_pay or 0))}</b>', ParagraphStyle("n", fontName="Helvetica-Bold", fontSize=20, leading=24, alignment=2, textColor=colors.HexColor("#15803d")))]],
+                colWidths=[W*0.6, W*0.4])
+    net.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#ecfdf5")), ("LINEABOVE", (0,0), (-1,0), 1.5, colors.HexColor("#16a34a")),
+                             ("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6), ("LEFTPADDING", (0,0), (-1,-1), 8), ("RIGHTPADDING", (0,0), (-1,-1), 8)]))
+    story += [net, section("Employer contributions (not deducted from employee)", L["employer"], ("Total Cost to Employer", p.total_cost or 0)), Spacer(1, 4*mm),
+              Paragraph(esc("This payslip was generated by ZuZan (zuzan.co.za). PAYE calculated per SARS tax tables 2026/2027. UIF: 1% employee + 1% employer. SDL: 1% if annual payroll >= R500,000."),
+                        ParagraphStyle("f", parent=small, fontSize=7, textColor=colors.HexColor("#94a3b8"), alignment=1))]
+    doc.build(story)
+    return buf.getvalue()
+
+
+@payroll_router.get("/payslips/{period}/employee/{employee_id}/pdf")
+def download_employee_payslip_pdf(
     period: str,
+    employee_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Return a ZIP archive of HTML payslips for every employee in the given period."""
+    """One employee's payslip for a period as a PDF."""
+    from database import Employee as EmpModel, Company as CompanyModel
+    emp = db.query(EmpModel).filter(EmpModel.id == employee_id, EmpModel.company_id == current_user.company_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    slip = (db.query(Payslip).filter(Payslip.employee_id == employee_id, Payslip.period == period)
+            .order_by(Payslip.id.desc()).first())
+    if not slip:
+        raise HTTPException(status_code=404, detail=f"No payslip found for {emp.first_name} {emp.last_name} in {period}")
+    company = db.query(CompanyModel).filter_by(id=current_user.company_id).first()
+    pdf = _payslip_pdf(slip, emp, getattr(company, "name", "Company") or "Company", logo_url=getattr(company, "logo_url", None) or "")
+    from fastapi.responses import Response as _Resp
+    fname = f"payslip_{emp.first_name}_{emp.last_name}_{period}.pdf".replace(" ", "_")
+    return _Resp(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@payroll_router.get("/payslips/{period}/download-all")
+def download_all_payslips(
+    period: str,
+    format: str = "pdf",
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return a ZIP archive of payslips (PDF by default; ?format=html for the old HTML files) for every employee in the period."""
     import io, zipfile
     from database import Employee as EmpModel, Company as CompanyModel
 
@@ -1644,8 +1792,11 @@ def download_all_payslips(
         for p in payslips:
             emp = emp_map.get(p.employee_id)
             emp_name = f"{emp.first_name}_{emp.last_name}" if emp else f"emp_{p.employee_id}"
-            html = _payslip_html(p, emp, company_name, logo_url=company_logo)
-            zf.writestr(f"payslip_{emp_name}_{period}.html", html.encode("utf-8"))
+            if format == "html":
+                html = _payslip_html(p, emp, company_name, logo_url=company_logo)
+                zf.writestr(f"payslip_{emp_name}_{period}.html", html.encode("utf-8"))
+            else:
+                zf.writestr(f"payslip_{emp_name}_{period}.pdf", _payslip_pdf(p, emp, company_name, logo_url=company_logo))
 
     buf.seek(0)
     from fastapi.responses import StreamingResponse

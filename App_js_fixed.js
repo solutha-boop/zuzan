@@ -2704,6 +2704,25 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
     : new Date(_now.getFullYear(), _now.getMonth() + 1, 0); // last day
   const paymentDate = _payD.toLocaleDateString("en-ZA", {day:"2-digit", month:"long", year:"numeric"});
 
+  const handleDownloadPdf = async () => {
+    const periodKey = new Date().toISOString().slice(0,7);   // payslips are generated for the current month
+    try{
+      const resp = await fetch(`${BASE_URL}/payroll/payslips/${periodKey}/employee/${employee.id}/pdf`,{headers:{Authorization:`Bearer ${localStorage.getItem("zuzan_token")}`}});
+      if(!resp.ok){
+        const msg = await resp.text().catch(()=>"");
+        let detail = msg; try{ detail = JSON.parse(msg).detail || msg; }catch(e){}
+        alert(`Payslip PDF failed (${resp.status}): ${detail || "payslip not found for this month — run payroll first."}`);
+        return;
+      }
+      const blob = await resp.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `payslip_${(employee.name||"employee").replace(/\s+/g,"_")}_${periodKey}.pdf`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    }catch(err){ alert(`Payslip PDF error: ${err.message}`); }
+  };
+
   const handlePrint = () => {
     const printContent = document.getElementById("payslip-content").innerHTML;
     const win = window.open("", "_blank");
@@ -2745,7 +2764,8 @@ function PayslipModal({employee, payroll, period, company, logoUrl, onClose}) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 24px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#fff",zIndex:10}}>
           <span style={{fontSize:14,fontWeight:700,color:C.ink}}>Payslip — {employee.name}</span>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={handlePrint} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>🖨️ Print / PDF</button>
+            <button onClick={handleDownloadPdf} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>⬇ Download PDF</button>
+            <button onClick={handlePrint} style={{background:C.accentLt,color:C.accent,border:`1px solid ${C.accent}30`,borderRadius:8,padding:"8px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>🖨️ Print</button>
             <button onClick={onClose} style={{background:C.bg,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Close</button>
           </div>
         </div>
@@ -4594,7 +4614,7 @@ function Payroll({live = {}, user = {}}) {
                 setTimeout(()=>URL.revokeObjectURL(a.href),1000);
               }catch(err){alert(`Download error: ${err.message}`);}
             }} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"7px 18px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Download ZIP</button>
-            <span style={{fontSize:11,color:C.inkMid}}>HTML payslips — open in browser to print / save as PDF</span>
+            <span style={{fontSize:11,color:C.inkMid}}>One PDF payslip per employee, in a ZIP</span>
           </div>
         );
       })()}
