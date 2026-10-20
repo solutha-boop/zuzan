@@ -1,0 +1,9 @@
+# Medium items check — 2026-10-20 (read-only, no code edited)
+Source: reports_debtors_creditors_2026-10-19.md, section 8.
+
+1. EMP201-submitted guard on DELETE /payslips/{period} (payroll.py:1440) — STILL OPEN, cannot be a one-line fix: there is no EMP201 submission status anywhere (no model/column; /reports/emp201 at payroll.py:3250 is a calculation only). Needs a new "submitted" flag/table first.
+2. IRP5 codes (payroll.py:1989-1995) — DEFECT FOUND. 4141/4142 now correct. But 4005 is SARS "Medical aid contributions", not pension/provident (s11F) — pension is 4001, provident 4003, RA 4006. 7002 is not a code I can confirm exists; employer pension/provident contributions are 4472/4473 (fringe benefit codes 3817/3825). Fix before the 31 Oct EMP501. Source: simplepay.co.za/help/filing-and-processes/sars-codes (verify against the SARS BRS).
+3. Bank import commit (companies.py:2062-2221) — no per-row commit (single db.commit at end) ✓. Caveat: the db.rollback() calls inside the loop on a journal-post failure also discard earlier uncommitted rows from the same import. Consider SAVEPOINTs (db.begin_nested()) per transaction.
+4. Historic credit-note VAT on 2200 — OPEN: fix_credit_note_vat_account.py (dry-run by default, --apply to move lines) is still untracked; no evidence it has been run on production.
+5. Income Tax Payable (estimate) (financial_statements.py:319-325) — latent: no provisional-tax payment is journalled anywhere (no "provisional" in financial_statements.py/journal.py), so nothing to net yet. Becomes a defect once a provisional payment is recorded.
+6. NULL paid_date/expense_date — PARTLY OPEN: management_accounts main period uses COALESCE (payroll.py:3332-3346) ✓, but the revenue trend loop (payroll.py ~:2260-2280 area, month loop in management_accounts) filters on raw paid_date/expense_date, so NULL-dated legacy rows drop out of the trend while counted in the period total. Apply the same COALESCE or backfill dates.

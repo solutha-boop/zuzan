@@ -2036,7 +2036,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
       if (live && live.reload) live.reload();
       setShowNew(false);
       setForm({client:"",amount:"",desc:"",due:"",vatApplicable:true});
-    } catch(err) { alert("Failed to create invoice. Please try again."); }
+    } catch(err) { alert(err.message || "Failed to create invoice. Please try again."); }
     finally { setSaving(false); }
   };
 
