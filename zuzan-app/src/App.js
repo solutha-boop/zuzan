@@ -395,11 +395,12 @@ const Badge = ({label,color,bg}) => (
 
 const StatusBadge = ({status}) => {
   const m={
-    paid:   [C.green,  C.greenLt,  "Paid"],
-    sent:   [C.gold,   C.goldLt,   "Pending"],
-    pending:[C.gold,   C.goldLt,   "Pending"],
-    draft:  [C.inkMid, C.border,   "Draft"],
-    overdue:[C.red,    C.redLt,    "Overdue"],
+    paid:    [C.green,  C.greenLt,  "Paid"],
+    sent:    [C.gold,   C.goldLt,   "Pending"],
+    pending: [C.gold,   C.goldLt,   "Pending"],
+    draft:   [C.inkMid, C.border,   "Draft"],
+    overdue: [C.red,    C.redLt,    "Overdue"],
+    partial: ["#b45309","#fef3c7",  "Partial"],
   };
   const [c,bg,l]=m[status]||m.pending;
   return <Badge label={l} color={c} bg={bg}/>;
@@ -1998,21 +1999,27 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
   const toggleFilter = (status) => setFilterStatus(prev => prev === status ? null : status);
 
   const openPayModal = (inv) => {
-    const zarAmt = inv.currency && inv.currency !== "ZAR"
-      ? ((inv.amount||0) * (inv.exchange_rate||inv.rate||18.5)).toFixed(2)
-      : (inv.amount||"");
-    setPayModal({inv, zarAmt, payDate: new Date().toISOString().slice(0,10), ref:""});
+    // For partial invoices, pre-fill with the outstanding balance; otherwise the full invoice amount
+    const totalZar = inv.currency && inv.currency !== "ZAR"
+      ? (inv.amount||0) * (inv.exchange_rate||inv.rate||18.5)
+      : (inv.amount||0);
+    const alreadyPaid = inv.status === "partial" ? (inv.paid_amount_zar||0) : 0;
+    const outstanding = Math.max(0, totalZar - alreadyPaid);
+    const zarAmt = outstanding > 0 ? outstanding.toFixed(2) : totalZar.toFixed(2);
+    setPayModal({inv, zarAmt, payDate: new Date().toISOString().slice(0,10), ref:"", alreadyPaid});
   };
 
   const handleRecordPayment = async () => {
-    const {inv, zarAmt, payDate, ref} = payModal;
+    const {inv, zarAmt, payDate, ref, alreadyPaid} = payModal;
+    // Send the cumulative total so the backend can detect partial vs full payment
+    const cumulative = Math.round(((alreadyPaid||0) + (+zarAmt||0)) * 100) / 100;
     setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid"} : i));
     setPayModal(null);
     try {
       await api(`/invoices/${inv._dbId || inv.id}`, { method:"PUT", body: JSON.stringify({
         status: "paid",
         paid_date: payDate || new Date().toISOString().slice(0,10),
-        paid_amount_zar: +zarAmt || null,
+        paid_amount_zar: cumulative || null,
         notes: ref || null,
       })});
       if (live && live.reload) live.reload();
@@ -2116,8 +2123,8 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
           </div>
           {/* Sticky action bar */}
           <div style={{flexShrink:0,background:C.surface,borderTop:`1px solid ${C.border}`,padding:"12px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            {preview.status !== "paid" && (
-              <button onClick={()=>{setPreview(null);openPayModal(preview);}} style={{gridColumn:"1/-1",background:C.green,color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ Record Payment</button>
+            {preview.status !== "paid" && preview.status !== "written_off" && (
+              <button onClick={()=>{setPreview(null);openPayModal(preview);}} style={{gridColumn:"1/-1",background:C.green,color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ {preview.status==="partial"?"Top Up Payment":"Record Payment"}</button>
             )}
             <button onClick={()=>{setPreview(null);setEditInv({...preview});}} style={{background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}30`,borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
             <button onClick={printInvoice} style={{background:C.accent,color:"#fff",border:"none",borderRadius:12,padding:"13px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
@@ -2135,7 +2142,10 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             <InvoiceDocument type="invoice" doc={preview} user={user} tmpl={docTemplate}/>
             </div>
             <SendInvoicePanel preview={preview} onSent={(token)=>{ setInvoices(p=>p.map(i=>i.id===preview.id?{...i,status:"sent",portalToken:token}:i)); }} isMobile={false} hasPayfast={!!user?.payfastMerchantId}/>
-            <div style={{display:"flex",gap:8,marginTop:16}}>
+            <div style={{display:"flex",gap:8,marginTop:16,flexWrap:"wrap"}}>
+              {preview.status !== "paid" && preview.status !== "written_off" && (
+                <button onClick={() => { setPreview(null); openPayModal(preview); }} style={{flex:1,minWidth:140,background:C.green,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ Record Payment</button>
+              )}
               <button onClick={() => { setPreview(null); setEditInv({...preview}); }} style={{flex:1,background:C.goldLt,color:C.gold,border:`1px solid ${C.gold}40`,borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Amend</button>
               <button onClick={printInvoice} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Print / PDF</button>
               <button onClick={() => setPreview(null)} style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>Close</button>
@@ -2172,7 +2182,13 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setPayModal(null)}>
           <div style={{background:C.surface,borderRadius:20,padding:32,width:460}} onClick={e=>e.stopPropagation()}>
             <h3 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:"0 0 4px"}}>Record Payment</h3>
-            <p style={{fontSize:13,color:C.inkMid,marginBottom:24}}>{payModal.inv.id} — {payModal.inv.client}</p>
+            <p style={{fontSize:13,color:C.inkMid,marginBottom:payModal.alreadyPaid>0?12:24}}>{payModal.inv.id} — {payModal.inv.client}</p>
+            {payModal.alreadyPaid > 0 && (
+              <div style={{background:"#fef3c7",border:"1px solid #f59e0b",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#92400e"}}>
+                <strong>Already received:</strong> {fmt(payModal.alreadyPaid)}<br/>
+                <strong>Outstanding balance:</strong> {fmt(Math.max(0,(payModal.inv.total_amount||payModal.inv.amount||0)-payModal.alreadyPaid))}
+              </div>
+            )}
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
               <div>
                 <label style={{fontSize:11,fontWeight:600,color:C.inkMid,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>ZAR Amount Received</label>
@@ -2257,6 +2273,8 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                       ? <span style={{display:"inline-flex",alignItems:"center",gap:4,background:C.greenLt,color:C.green,border:`1.5px solid ${C.green}`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:800,letterSpacing:0.5,textTransform:"uppercase",boxShadow:`0 0 0 2px ${C.green}22`}}>✓ Paid</span>
                       : inv.status === "paid"
                       ? <span style={{display:"inline-flex",alignItems:"center",gap:4,background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:600,letterSpacing:0.3}}>📦 Archived</span>
+                      : inv.status === "partial"
+                      ? <div><StatusBadge status="partial"/><div style={{fontSize:10,color:"#b45309",marginTop:2}}>{fmt(inv.paid_amount_zar||0)} of {fmt(inv.total_amount||inv.amount||0)}</div></div>
                       : <StatusBadge status={isOverdue(inv)?"overdue":inv.status}/>
                     }
                   </td>

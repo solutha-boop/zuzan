@@ -43,6 +43,15 @@ class RecurringInvoiceUpdate(BaseModel):
     is_active:      Optional[bool] = None
 
 
+_FREQUENCIES = ("weekly", "monthly", "quarterly", "annually")
+
+
+def _check_frequency(freq):
+    if (freq or "").strip().lower() not in _FREQUENCIES:
+        raise HTTPException(status_code=400, detail="frequency must be weekly, monthly, quarterly or annually")
+    return freq.strip().lower()
+
+
 def _next_run(frequency: str, from_date: datetime) -> datetime:
     """Calculate next run date based on frequency."""
     freq = frequency.lower()
@@ -106,7 +115,15 @@ async def create_recurring(
     db: Session = Depends(get_db),
 ):
     from database import RecurringInvoice
-    start = datetime.fromisoformat(body.start_date)
+    freq = _check_frequency(body.frequency)
+    if not body.amount or body.amount <= 0:
+        raise HTTPException(status_code=400, detail="The amount must be greater than zero.")
+    if not (body.client_name or "").strip():
+        raise HTTPException(status_code=400, detail="client_name is required.")
+    try:
+        start = datetime.fromisoformat(body.start_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="start_date must be an ISO date, e.g. 2026-11-01.")
     ri = RecurringInvoice(
         company_id=current_user.company_id,
         client_name=body.client_name,
@@ -116,7 +133,7 @@ async def create_recurring(
         vat_applicable=body.vat_applicable if body.vat_applicable is not None else True,
         supply_type=(body.supply_type if body.supply_type in ("standard", "zero_rated", "exempt") else None),
         currency=body.currency or "ZAR",
-        frequency=body.frequency,
+        frequency=freq,
         start_date=start,
         next_run_date=start,
         is_active=body.is_active if body.is_active is not None else True,
@@ -143,7 +160,12 @@ async def update_recurring(
     ).first()
     if not ri:
         raise HTTPException(status_code=404, detail="Recurring invoice not found")
-    for field, value in body.dict(exclude_unset=True).items():
+    changes = body.dict(exclude_unset=True)
+    if "frequency" in changes:
+        changes["frequency"] = _check_frequency(changes["frequency"])
+    if "amount" in changes and (changes["amount"] is None or changes["amount"] <= 0):
+        raise HTTPException(status_code=400, detail="The amount must be greater than zero.")
+    for field, value in changes.items():
         setattr(ri, field, value)
     db.commit()
     db.refresh(ri)
@@ -183,7 +205,7 @@ async def run_recurring(
     ).first()
     if not ri:
         raise HTTPException(status_code=404, detail="Recurring invoice not found")
-    inv = _generate_invoice_from_template(ri, db)
+    inv = _generate_invoice_from_template(ri, db, advance=False)   # a manual run must not move the schedule
     return {"ok": True, "invoice_id": inv.id, "invoice_number": inv.invoice_number}
 
 
@@ -215,22 +237,13 @@ def generate_due_recurring_invoices():
         db.close()
 
 
-def _generate_invoice_from_template(ri, db: Session) -> Invoice:
-    """Create an Invoice from a RecurringInvoice template and advance next_run_date."""
+def _generate_invoice_from_template(ri, db: Session, advance: bool = True) -> Invoice:
+    """Create an Invoice from a RecurringInvoice template and (by default) advance next_run_date."""
     now = datetime.utcnow()
 
     # Compute next invoice number for this company
-    last = (
-        db.query(Invoice)
-        .filter(Invoice.company_id == ri.company_id)
-        .order_by(Invoice.id.desc())
-        .first()
-    )
-    try:
-        last_num = int(last.invoice_number.split("-")[-1]) if last else 0
-    except Exception:
-        last_num = 0
-    inv_number = f"INV-{last_num + 1:04d}"
+    from companies import next_invoice_number
+    inv_number = next_invoice_number(ri.company_id, db)
 
     _st = getattr(ri, "supply_type", None)
     vat_rate = 0.15 if (ri.vat_applicable and _st not in ("zero_rated", "exempt") and _vatreg(db, ri.company_id)) else 0.0
@@ -261,15 +274,57 @@ def _generate_invoice_from_template(ri, db: Session) -> Invoice:
     try:
         import journal as je
         db.flush()  # get inv.id
-        je.post_invoice(inv.id, db)
+        je.post_invoice_raised(inv, db)
     except Exception as e:
-        logger.warning(f"Journal post failed for recurring inv: {e}")
+        # Loud on purpose: repair_unposted_invoices() posts it on the next start-up, but someone should see this.
+        logger.error(f"Journal post failed for recurring invoice {inv.invoice_number}: {e}")
 
-    # Advance next run date
     ri.last_run_date = now
-    ri.next_run_date = _next_run(ri.frequency, now)
     ri.invoices_generated = (ri.invoices_generated or 0) + 1
+    if advance:
+        # Step from the SCHEDULED date (not from "now") so a 31st/1st/etc. cycle does not drift; if the job was
+        # down for several periods, skip the missed ones rather than flooding the client with back-to-back invoices.
+        nxt = _next_run(ri.frequency, ri.next_run_date or now)
+        while nxt <= now:
+            nxt = _next_run(ri.frequency, nxt)
+        ri.next_run_date = nxt
 
     db.commit()
     db.refresh(inv)
     return inv
+
+
+def repair_unposted_invoices() -> int:
+    """One-off safety net run at start-up: issued invoices (sent / overdue / paid) that have no active raised
+    ledger entry get one. Before 2026-10 recurring invoices called a journal function that did not exist, so they
+    never reached the ledger. Idempotent - invoices that already have their entries are never touched."""
+    from database import JournalEntry
+    db = SessionLocal()
+    fixed = 0
+    try:
+        import journal as je
+        reversed_ids = {r[0] for r in db.query(JournalEntry.is_reversal_of).filter(JournalEntry.is_reversal_of.isnot(None)).all()}
+        raised = {(e.company_id, e.source_id) for e in db.query(JournalEntry.id, JournalEntry.company_id, JournalEntry.source_id)
+                  .filter(JournalEntry.source == "invoice").all() if e.id not in reversed_ids}
+        paid_posted = {(e.company_id, e.source_id) for e in db.query(JournalEntry.company_id, JournalEntry.source_id)
+                       .filter(JournalEntry.source == "invoice_payment").all()}
+        for inv in db.query(Invoice).filter(Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid])).all():
+            try:
+                changed = False
+                if (inv.company_id, inv.id) not in raised:
+                    je.init_accounts(inv.company_id, db)
+                    je.post_invoice_raised(inv, db); changed = True
+                if inv.status == InvoiceStatus.paid and (inv.company_id, inv.id) not in paid_posted:
+                    je.post_invoice_paid(inv, db); changed = True
+                if changed:
+                    db.commit(); fixed += 1
+            except Exception as e:
+                db.rollback()
+                logger.warning(f"Could not repair postings for invoice {inv.id}: {e}")
+        if fixed:
+            logger.warning(f"Repaired missing ledger postings for {fixed} invoice(s)")
+    except Exception as e:
+        logger.error(f"Invoice posting repair failed: {e}")
+    finally:
+        db.close()
+    return fixed

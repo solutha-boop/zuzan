@@ -170,8 +170,9 @@ def _parse_date(s: str) -> Optional[datetime]:
         return None
     s = s.strip()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y",
-                "%d %b %Y", "%d %B %Y", "%Y/%m/%d", "%d %b %Y",
-                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+                "%d %b %Y", "%d %B %Y", "%Y/%m/%d",
+                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                "%d.%m.%Y", "%d-%b-%Y", "%d/%m/%y", "%d-%m-%y", "%d %b %y", "%b %d, %Y", "%B %d, %Y", "%Y%m%d"):
         try:
             return datetime.strptime(s, fmt)
         except ValueError:
@@ -180,20 +181,41 @@ def _parse_date(s: str) -> Optional[datetime]:
 
 
 def _parse_float(s: str) -> float:
-    if not s or not s.strip():
+    """Parse an amount from a South African / international export.
+    Handles: 1234.56, 1,234.56, 1 234,56 (decimal comma), R 1 234.56, (500.00) and 500.00- as negatives,
+    non-breaking spaces. A decimal comma used to be stripped as a thousands separator, turning 1234,56 into
+    R123 456; a bracketed negative silently became 0."""
+    if s is None or not str(s).strip():
         return 0.0
-    cleaned = (
-        s.strip()
-        .replace(",", "")
-        .replace("R", "").replace("r", "")
-        .replace("$", "").replace("£", "").replace("€", "")
-        .replace(" ", "")
-        .strip()
-    )
+    t = str(s).strip()
+    neg = False
+    if t.startswith("(") and t.endswith(")"):
+        neg, t = True, t[1:-1]
+    for junk in ("ZAR", "zar", "\xa0", "\u202f", "\u2009", " ", "R", "r", "$", "\u00a3", "\u20ac"):
+        t = t.replace(junk, "")
+    if t.endswith("-"):
+        neg, t = True, t[:-1]
+    if t.startswith("-"):
+        neg, t = True, t[1:]
+    if t.startswith("+"):
+        t = t[1:]
+    if "," in t and "." in t:
+        # whichever separator comes last is the decimal point
+        if t.rfind(",") > t.rfind("."):
+            t = t.replace(".", "").replace(",", ".")
+        else:
+            t = t.replace(",", "")
+    elif "," in t:
+        head, _, tail = t.rpartition(",")
+        if t.count(",") == 1 and 1 <= len(tail) <= 2 and head.replace(".", "").isdigit():
+            t = head + "." + tail          # 1234,56  /  12,5  -> decimal comma
+        else:
+            t = t.replace(",", "")         # 1,234  /  1,234,567 -> thousands
     try:
-        return round(float(cleaned), 2)
+        v = round(float(t), 2)
     except ValueError:
         return 0.0
+    return -v if neg else v
 
 
 def _parse_status(s: str) -> InvoiceStatus:
@@ -202,10 +224,10 @@ def _parse_status(s: str) -> InvoiceStatus:
         return InvoiceStatus.paid
     if v in ("overdue", "past due", "late"):
         return InvoiceStatus.overdue
-    if v in ("draft", "open", "voided", "void", "deleted"):
-        return InvoiceStatus.draft
+    if v in ("draft", "voided", "void", "deleted", "cancelled", "canceled", "rejected"):
+        return InvoiceStatus.draft         # not an issued, collectable invoice
     # Xero uses "AUTHORISED" for sent-but-unpaid
-    if v in ("authorised", "authorized", "approved", "sent",
+    if v in ("open", "authorised", "authorized", "approved", "sent",   # "open" = issued and still unpaid in most packages
              "submitted", "pending", "outstanding", "awaiting_payment",
              "awaiting payment"):
         return InvoiceStatus.sent
@@ -265,7 +287,10 @@ def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
     except UnicodeDecodeError:
         text = file_bytes.decode("latin-1")
 
-    dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    except csv.Error:                       # single column / unusual content: plain comma CSV
+        dialect = csv.excel
     reader  = csv.reader(io.StringIO(text), dialect)
     rows    = [r for r in reader if any(c.strip() for c in r)]
 
@@ -434,6 +459,8 @@ async def import_invoices(
     last_num = db.query(func.max(Invoice.id)).filter(Invoice.company_id == cid).scalar() or 0
 
     imported, errors = 0, []
+    # Invoice numbers already in the books (importing the same file twice must not double the revenue)
+    known_numbers = {r[0] for r in db.query(Invoice.invoice_number).filter(Invoice.company_id == cid).all()}
 
     for i, row in enumerate(rows, start=2):
         try:
@@ -445,13 +472,24 @@ async def import_invoices(
             vat_amount = _parse_float(_get(row, m, "vat_amount"))
             total_raw  = _parse_float(_get(row, m, "total_amount"))
             total      = total_raw if total_raw else round(amount + vat_amount, 2)
+            if not amount and total:
+                amount = round(total - vat_amount, 2)      # export had only a total column
 
             inv_no = _get(row, m, "invoice_number")
             if not inv_no:
                 last_num += 1
                 inv_no = f"IMP-{last_num:04d}"
+            if inv_no in known_numbers:
+                errors.append({"row": i, "message": f"Invoice {inv_no} already exists - skipped (not imported twice)."})
+                continue
 
-            issue_date = _parse_date(_get(row, m, "issue_date")) or datetime.utcnow()
+            _raw_issue = _get(row, m, "issue_date")
+            issue_date = _parse_date(_raw_issue)
+            if _raw_issue and issue_date is None:
+                errors.append({"row": i, "message": f"Invoice {inv_no}: the date '{_raw_issue}' is not a recognised format - row skipped "
+                                                    "(it would otherwise be booked on today's date and land in the wrong period)."})
+                continue
+            issue_date = issue_date or datetime.utcnow()
             due_date   = _parse_date(_get(row, m, "due_date"))
             currency   = (_get(row, m, "currency", "ZAR") or "ZAR").strip().upper()
             status     = _parse_status(_get(row, m, "status"))
@@ -492,6 +530,7 @@ async def import_invoices(
                 paid_date       = issue_date if status == InvoiceStatus.paid else None,
                 paid_amount_zar = round(total * rate, 2) if status == InvoiceStatus.paid else None,
             ))
+            known_numbers.add(inv_no)
             imported += 1
         except Exception as e:
             errors.append({"row": i, "message": str(e)})
@@ -532,6 +571,12 @@ async def import_expenses(
         )
 
     imported, errors = 0, []
+    # Rows already in the books are not imported again: count identical existing expenses and skip that many
+    # identical rows from the file (genuine repeat purchases beyond that still import).
+    from collections import Counter
+    _key = lambda v, a, va, d: (str(v or "").strip().lower(), round(float(a or 0), 2), round(float(va or 0), 2), d.date() if d else None)
+    existing = Counter(_key(e.vendor, e.amount, e.vat_amount, e.expense_date) for e in db.query(Expense).filter(Expense.company_id == cid).all())
+    seen_in_file = Counter()
 
     for i, row in enumerate(rows, start=2):
         try:
@@ -545,14 +590,28 @@ async def import_expenses(
                 errors.append({"row": i, "message": "Skipped — amount is zero or missing"})
                 continue
 
+            _raw_date = _get(row, m, "expense_date")
+            _date = _parse_date(_raw_date)
+            if _raw_date and _date is None:
+                errors.append({"row": i, "message": f"Skipped - the date '{_raw_date}' is not a recognised format "
+                                                    "(it would otherwise be booked on today's date and land in the wrong period)."})
+                continue
+            _date = _date or datetime.utcnow()
+            _vat = _parse_float(_get(row, m, "vat_amount"))
+            k = _key(vendor, amount, _vat, _date)
+            seen_in_file[k] += 1
+            if seen_in_file[k] <= existing[k]:
+                errors.append({"row": i, "message": f"Skipped - an identical expense ({vendor}, {amount:.2f}) is already in the books."})
+                continue
+
             db.add(Expense(
                 company_id   = cid,
                 vendor       = vendor,
                 description  = _get(row, m, "description"),
                 amount       = amount,
-                vat_amount   = _parse_float(_get(row, m, "vat_amount")),
+                vat_amount   = _vat,
                 category     = _get(row, m, "category") or "Imported",
-                expense_date = _parse_date(_get(row, m, "expense_date")) or datetime.utcnow(),
+                expense_date = _date,
             ))
             imported += 1
         except Exception as e:

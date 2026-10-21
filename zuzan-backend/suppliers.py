@@ -62,6 +62,10 @@ _SUPPLIER_BANK_FIELDS = {"bank_name", "account_number", "branch_code"}
 @router.post("/")
 async def create_supplier(data: SupplierCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = data.dict()
+    if not (d.get("name") or "").strip():
+        raise HTTPException(400, "Name is required")
+    if not (0 <= (d.get("payment_terms") if d.get("payment_terms") is not None else 30) <= 365):
+        raise HTTPException(400, "payment_terms must be between 0 and 365 days")
     for field in ["name","contact_person","email","phone","address","vat_number","bank_name","account_number","branch_code","account_type","notes"]:
         if d.get(field): d[field] = clean(d[field], 500)
     for field in _SUPPLIER_BANK_FIELDS:
@@ -74,8 +78,15 @@ async def create_supplier(data: SupplierCreate, current_user: User = Depends(get
 async def update_supplier(sid: int, data: SupplierUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = db.query(Supplier).filter(Supplier.id == sid, Supplier.company_id == current_user.company_id).first()
     if not s: raise HTTPException(404, "Supplier not found")
-    for k, v in data.dict(exclude_none=True).items():
-        setattr(s, k, encrypt_field(v) if k in _SUPPLIER_BANK_FIELDS else v)
+    changes = data.dict(exclude_none=True)
+    if "name" in changes and not changes["name"].strip():
+        raise HTTPException(400, "Name cannot be empty")
+    if "payment_terms" in changes and not (0 <= changes["payment_terms"] <= 365):
+        raise HTTPException(400, "payment_terms must be between 0 and 365 days")
+    for k, v in changes.items():
+        if isinstance(v, str):
+            v = clean(v, 500)
+        setattr(s, k, encrypt_field(v) if (k in _SUPPLIER_BANK_FIELDS and v) else v)
     db.commit(); db.refresh(s)
     return to_dict(s)
 

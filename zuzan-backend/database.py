@@ -39,6 +39,7 @@ class BillingCycle(str, enum.Enum):
 class InvoiceStatus(str, enum.Enum):
     draft="draft"
     sent="sent"       # aka "pending" in AR/audit terminology — invoice issued and awaiting payment
+    partial="partial" # part payment received; AR still has an outstanding balance
     paid="paid"
     overdue="overdue"
     written_off="written_off"   # bad debt written off as irrecoverable (VAT Act s22)
@@ -1658,6 +1659,7 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS kiosk_token VARCHAR",
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS vat_registered BOOLEAN DEFAULT TRUE",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR",
+            "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'partial'",
             "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'written_off'",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_date TIMESTAMP",
             # One-off, idempotent: credit-note VAT used to be posted to 2200 (PAYE Payable) instead of 2100 (VAT Output).

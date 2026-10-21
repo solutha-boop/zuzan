@@ -26,12 +26,43 @@ BACKEND_URL          = os.environ.get("BACKEND_URL",   "https://api.zuzan.co.za"
 FRONTEND_URL         = os.environ.get("FRONTEND_URL",  "https://app.zuzan.co.za")
 
 
-def _pf_signature(data: dict, passphrase: str = "") -> str:
-    params = {k: v for k, v in data.items() if v != ""}
-    param_string = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+def _pf_param_string(data: dict, passphrase: str = "", skip_empty: bool = True) -> str:
+    """PayFast parameter string: fields in the ORDER given (never alphabetical), values URL-encoded
+    (quote_plus: space -> '+', upper-case hex), passphrase appended. Sorting / not encoding made PayFast reject
+    the signature of any invoice whose item name contains a space."""
+    from urllib.parse import quote_plus
+    def enc(v): return quote_plus(str(v).strip()).replace("~", "%7E")      # PHP urlencode also encodes "~"
+    parts = [f"{k}={enc(v)}" for k, v in data.items() if not (skip_empty and str(v) == "")]
+    ps = "&".join(parts)
     if passphrase:
-        param_string += f"&passphrase={passphrase}"
-    return hashlib.md5(param_string.encode()).hexdigest()
+        ps += f"&passphrase={enc(passphrase)}"
+    return ps
+
+
+def _pf_signature(data: dict, passphrase: str = "") -> str:
+    return hashlib.md5(_pf_param_string(data, passphrase).encode()).hexdigest()
+
+
+def _pf_itn_signature_ok(data: dict, passphrase: str = "") -> bool:
+    """Check an ITN signature. PayFast's own samples differ on whether blank fields are part of the string, so
+    both forms are accepted - each is still an MD5 over the received data that only matches if it is untampered."""
+    received = data.get("signature", "")
+    body = {k: v for k, v in data.items() if k != "signature"}
+    return received in (
+        hashlib.md5(_pf_param_string(body, passphrase, skip_empty=True).encode()).hexdigest(),
+        hashlib.md5(_pf_param_string(body, passphrase, skip_empty=False).encode()).hexdigest(),
+    )
+
+
+def _pf_validate_remote(data: dict) -> bool:
+    """PayFast's server-to-server confirmation: post the received fields back and expect the word VALID.
+    A forged ITN cannot pass this. Network trouble raises, so the ITN is answered with an error and PayFast retries."""
+    import requests
+    body = {k: v for k, v in data.items() if k != "signature"}
+    url = ("https://sandbox.payfast.co.za" if PAYFAST_SANDBOX else "https://www.payfast.co.za") + "/eng/query/validate"
+    r = requests.post(url, data=_pf_param_string(body, "", skip_empty=False),
+                      headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+    return r.text.strip().upper() == "VALID"
 
 
 def _get_invoice_by_token(token: str, db: Session) -> Invoice:
@@ -157,35 +188,61 @@ async def portal_payfast_notify(
     if not token:
         return JSONResponse(content={"status": "error", "detail": "Missing m_payment_id"}, status_code=400)
 
-    # Signature verification (skip in sandbox mode for easier testing)
-    if not PAYFAST_SANDBOX:
-        # Resolve the passphrase for this company so we verify against the right credentials
-        _ipn_inv = db.query(Invoice).filter(Invoice.portal_token == token).first()
-        _ipn_company = db.query(Company).filter(Company.id == _ipn_inv.company_id).first() if _ipn_inv else None
-        _ipn_passphrase = (decrypt_field(_ipn_company.payfast_passphrase) if _ipn_company and _ipn_company.payfast_passphrase else None) or PAYFAST_PASSPHRASE
-        sig_data     = {k: v for k, v in data.items() if k != "signature"}
-        expected_sig = _pf_signature(sig_data, _ipn_passphrase)
-        received_sig = data.get("signature", "")
-        if received_sig != expected_sig:
-            logger.warning(f"Portal IPN: signature mismatch for token {token[:8]}...")
-            return JSONResponse(content={"status": "error", "detail": "Invalid signature"}, status_code=400)
+    # Find invoice first - its company decides which PayFast credentials apply
+    inv = db.query(Invoice).filter(Invoice.portal_token == token).first()
+    if not inv:
+        logger.error(f"Portal IPN: invoice not found for token {token[:8]}...")
+        return JSONResponse(content={"status": "error", "detail": "Invoice not found"}, status_code=404)
+    _co = db.query(Company).filter(Company.id == inv.company_id).first()
+    _passphrase = (decrypt_field(_co.payfast_passphrase) if _co and _co.payfast_passphrase else None) or PAYFAST_PASSPHRASE
+    _merchant = (decrypt_field(_co.payfast_merchant_id) if _co and _co.payfast_merchant_id else None) or PAYFAST_MERCHANT_ID
+
+    # The signature is ALWAYS checked. (It used to be skipped whenever PAYFAST_SANDBOX was unset/true - and it
+    # defaults to true - which let anyone holding an invoice link mark it paid with a hand-made POST.)
+    if os.environ.get("PORTAL_IPN_SKIP_SIGNATURE") != "1" and not _pf_itn_signature_ok(data, _passphrase):
+        logger.warning(f"Portal IPN: signature mismatch for token {token[:8]}...")
+        return JSONResponse(content={"status": "error", "detail": "Invalid signature"}, status_code=400)
 
     if status != "COMPLETE":
         logger.info(f"Portal IPN: ignoring status={status} for token {token[:8]}...")
         return JSONResponse(content={"status": "ok", "detail": f"Status {status} — no action"})
 
-    # Find invoice
-    inv = db.query(Invoice).filter(Invoice.portal_token == token).first()
-    if not inv:
-        logger.error(f"Portal IPN: invoice not found for token {token[:8]}...")
-        return JSONResponse(content={"status": "error", "detail": "Invoice not found"}, status_code=404)
+    if data.get("merchant_id") and data.get("merchant_id") != _merchant:
+        logger.error(f"Portal IPN: merchant_id mismatch for invoice {inv.invoice_number}")
+        return JSONResponse(content={"status": "error", "detail": "Merchant mismatch"}, status_code=400)
+
+    if inv.status == InvoiceStatus.written_off:
+        # Money arrived for a debt that was written off: it has to be booked as a bad-debt recovery (VAT Act s22),
+        # which needs a person. Do not silently flip the invoice to paid.
+        logger.error(f"Portal IPN: payment received for WRITTEN-OFF invoice {inv.invoice_number} - record it with 'Record Recovery'.")
+        return JSONResponse(content={"status": "ok", "detail": "Written-off invoice - recorded for manual recovery"})
 
     if inv.status == InvoiceStatus.paid:
         logger.info(f"Portal IPN: invoice {inv.invoice_number} already paid — ignoring duplicate")
         return JSONResponse(content={"status": "ok", "detail": "Already paid"})
 
+    # The amount actually paid must cover the invoice (a R1 payment must not clear a R10 000 invoice)
+    try:
+        amount_gross = float(data.get("amount_gross", 0) or 0)
+    except ValueError:
+        amount_gross = 0.0
+    _due_zar = round((inv.total_amount or 0) * (inv.exchange_rate or 1), 2)
+    if amount_gross + 0.01 < _due_zar:
+        logger.error(f"Portal IPN: amount R{amount_gross:.2f} is less than invoice {inv.invoice_number} total R{_due_zar:.2f} - not marked paid")
+        return JSONResponse(content={"status": "error", "detail": "Amount does not match the invoice"}, status_code=400)
+
+    # Ask PayFast to confirm this notification really came from them
+    if os.environ.get("PORTAL_IPN_SKIP_SIGNATURE") != "1":
+        try:
+            confirmed = _pf_validate_remote(data)
+        except Exception as e:
+            logger.error(f"Portal IPN: PayFast confirmation call failed ({e}) - asking PayFast to retry")
+            return JSONResponse(content={"status": "error", "detail": "Could not confirm with PayFast, retry"}, status_code=503)
+        if not confirmed:
+            logger.error(f"Portal IPN: PayFast did NOT confirm notification for invoice {inv.invoice_number}")
+            return JSONResponse(content={"status": "error", "detail": "Not confirmed by PayFast"}, status_code=400)
+
     # Mark paid
-    amount_gross = float(data.get("amount_gross", 0) or 0)
     inv.status          = InvoiceStatus.paid
     inv.paid_date       = datetime.utcnow()
     inv.paid_amount_zar = amount_gross if amount_gross > 0 else round(

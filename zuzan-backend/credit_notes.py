@@ -71,15 +71,44 @@ async def create_credit_note(
 ):
     from database import CreditNote
 
+    # --- validation (a credit note must be a positive amount against a real, own invoice) ---
+    if not body.amount or body.amount <= 0 or body.amount != body.amount:
+        raise HTTPException(status_code=400, detail="The credit note amount must be greater than zero.")
+    if body.vat_rate is not None and not (0 <= body.vat_rate <= 1):
+        raise HTTPException(status_code=400, detail="vat_rate must be between 0 and 1 (e.g. 0.15).")
+    if body.issue_date:
+        try:
+            datetime.fromisoformat(body.issue_date)
+        except Exception:
+            raise HTTPException(status_code=400, detail="issue_date must be an ISO date, e.g. 2026-10-31.")
+    linked_inv = None
+    if body.invoice_id:
+        linked_inv = db.query(Invoice).filter(Invoice.id == body.invoice_id, Invoice.company_id == current_user.company_id).first()
+        if not linked_inv:
+            raise HTTPException(status_code=404, detail="The invoice this credit note is linked to was not found.")
+
+    # The ledger and the VAT201 are in rand. A foreign-currency credit note is converted at the linked invoice's rate.
+    cn_currency = (body.currency or "ZAR").upper()
+    fx_note = ""
+    if cn_currency != "ZAR":
+        rate = (linked_inv.exchange_rate if linked_inv is not None and (linked_inv.currency or "ZAR").upper() == cn_currency else None)
+        if not rate:
+            raise HTTPException(status_code=400, detail=f"A {cn_currency} credit note must be linked to the {cn_currency} invoice it credits, so the exchange rate is known.")
+        fx_note = f" [{cn_currency} {body.amount:,.2f} at {rate}]"
+        body = body.copy(update={"amount": round(body.amount * rate, 2), "currency": "ZAR"})
+
+    # Never credit more than was invoiced (all credit notes on the invoice together, ex VAT, in rand)
+    if linked_inv is not None:
+        from database import CreditNote as _CNm
+        inv_zar = (linked_inv.amount or 0) * ((linked_inv.exchange_rate or 1.0) if (linked_inv.currency or "ZAR") != "ZAR" else 1.0)
+        already = sum((c.amount or 0) for c in db.query(_CNm).filter(_CNm.company_id == current_user.company_id, _CNm.invoice_id == linked_inv.id).all())
+        if already + body.amount > inv_zar + 0.01:
+            raise HTTPException(status_code=400, detail=f"This would credit more than the invoice: invoice {inv_zar:,.2f} ex VAT, already credited {already:,.2f}.")
+
     # Determine client name from linked invoice if not provided
     client_name = body.client_name
-    if body.invoice_id and not client_name:
-        inv = db.query(Invoice).filter(
-            Invoice.id == body.invoice_id,
-            Invoice.company_id == current_user.company_id,
-        ).first()
-        if inv:
-            client_name = inv.client_name
+    if linked_inv is not None and not client_name:
+        client_name = linked_inv.client_name
 
     # Compute amounts
     if body.vat_rate is not None:
@@ -108,7 +137,7 @@ async def create_credit_note(
         invoice_id=body.invoice_id,
         credit_note_number=cn_number,
         client_name=client_name,
-        description=body.description,
+        description=((body.description or "") + fx_note).strip() or None,
         amount=body.amount,
         vat_amount=vat_amount,
         total_amount=total,
@@ -164,6 +193,14 @@ async def delete_credit_note(
     ).first()
     if not cn:
         raise HTTPException(status_code=404, detail="Credit note not found")
+    # The ledger entry must go with the document, otherwise revenue/AR stay permanently reduced with nothing to show for it.
+    try:
+        import journal as _j
+        _j.reverse_journal_entries(current_user.company_id, "credit_note", cn.id, db, reason=f"Credit note {cn.credit_note_number} deleted")
+    except Exception as e:
+        logger.error(f"Credit note reversal failed: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Credit note NOT deleted - its journal reversal failed: {e}")
     db.delete(cn)
     db.commit()
     return {"ok": True}

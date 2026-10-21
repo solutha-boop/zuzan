@@ -48,6 +48,10 @@ async def list_customers(current_user: User = Depends(get_current_user), db: Ses
 @router.post("/")
 async def create_customer(data: CustomerCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     d = data.dict()
+    if not (d.get("name") or "").strip():
+        raise HTTPException(400, "Name is required")
+    if not (0 <= (d.get("payment_terms") if d.get("payment_terms") is not None else 30) <= 365):
+        raise HTTPException(400, "payment_terms must be between 0 and 365 days")
     for field in ["name","contact_person","email","phone","address","vat_number","notes"]:
         if d.get(field): d[field] = clean(d[field], 500)
     c = Customer(company_id=current_user.company_id, **d)
@@ -58,7 +62,13 @@ async def create_customer(data: CustomerCreate, current_user: User = Depends(get
 async def update_customer(cid: int, data: CustomerUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     c = db.query(Customer).filter(Customer.id == cid, Customer.company_id == current_user.company_id).first()
     if not c: raise HTTPException(404, "Customer not found")
-    for k, v in data.dict(exclude_none=True).items(): setattr(c, k, v)
+    changes = data.dict(exclude_none=True)
+    if "name" in changes and not changes["name"].strip():
+        raise HTTPException(400, "Name cannot be empty")
+    if "payment_terms" in changes and not (0 <= changes["payment_terms"] <= 365):
+        raise HTTPException(400, "payment_terms must be between 0 and 365 days")
+    for k, v in changes.items():
+        setattr(c, k, clean(v, 500) if isinstance(v, str) else v)
     db.commit(); db.refresh(c)
     return to_dict(c)
 

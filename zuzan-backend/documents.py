@@ -69,9 +69,11 @@ async def upload_document(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("owner", "admin", "accountant")),
 ):
-    content = await file.read()
+    content = await file.read(MAX_BYTES + 1)      # never pull a huge upload fully into memory
     if len(content) > MAX_BYTES:
         raise HTTPException(400, f"File too large — maximum size is 10 MB")
+    if not content:
+        raise HTTPException(400, "The file is empty")
 
     if not name.strip():
         name = file.filename or "Untitled"
@@ -116,12 +118,18 @@ def download_document(
         raise HTTPException(404, "Document not found")
 
     data = base64.b64decode(doc.file_data)
-    # Encode filename for Content-Disposition
-    safe_name = doc.file_name.replace('"', '_')
+    # Content-Disposition must be latin-1 safe and free of control characters, otherwise a name such as
+    # "Financi\u00eble verslag \u2014 2026.pdf" made the download fail with a 500.
+    from urllib.parse import quote
+    raw = "".join(ch for ch in (doc.file_name or "file") if ch >= " " and ch != "\x7f")
+    ascii_name = raw.encode("ascii", "ignore").decode("ascii").replace('"', "_").replace("\\", "_").strip() or "file"
     return Response(
         content=data,
-        media_type=doc.file_type,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        media_type=doc.file_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(raw, safe='')}",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

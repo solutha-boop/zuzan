@@ -342,25 +342,14 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
     data = dict(form)
 
-    # ── Verify PayFast ITN signature ──────────────────────────────────────────
-    # Skip signature check only in sandbox mode (for testing without real creds)
-    if not PAYFAST_SANDBOX:
-        if not _pf_verify_itn(data, PAYFAST_PASSPHRASE):
-            logger.warning(
-                f"PayFast ITN: signature mismatch — possible spoofed request. "
-                f"m_payment_id={data.get('m_payment_id')}"
-            )
-            return {"ok": True}   # Return 200 so PayFast stops retrying; don't process
-
     # Extract key fields
     m_payment_id = data.get("m_payment_id", "")  # "sub-{company_id}-{ts}"
     pf_payment_id = data.get("pf_payment_id", "")
-    amount_gross = float(data.get("amount_gross", 0))
+    try:
+        amount_gross = float(data.get("amount_gross", 0) or 0)
+    except ValueError:
+        amount_gross = 0.0
     payment_status = data.get("payment_status", "")
-
-    if payment_status != "COMPLETE":
-        logger.info(f"PayFast notify status={payment_status}, ignoring")
-        return {"ok": True}
 
     # Extract company_id from m_payment_id
     try:
@@ -368,6 +357,39 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
         company_id = int(parts[1]) if len(parts) >= 2 else None
     except Exception:
         company_id = None
+
+    # ── Verify the notification really comes from PayFast ─────────────────────
+    # (This used to be skipped whenever PAYFAST_SANDBOX was unset/true - and it defaults to true - so a hand-made
+    #  POST could activate any company's subscription for free, replace its PayFast token and delete its example data.)
+    import os as _os
+    if _os.environ.get("PORTAL_IPN_SKIP_SIGNATURE") != "1":
+        from portal import _pf_itn_signature_ok, _pf_validate_remote
+        _co = db.query(Company).filter(Company.id == company_id).first() if company_id else None
+        _pp = (decrypt_field(_co.payfast_passphrase) if _co and _co.payfast_passphrase else None) or PAYFAST_PASSPHRASE
+        _mid = (decrypt_field(_co.payfast_merchant_id) if _co and _co.payfast_merchant_id else None) or PAYFAST_MERCHANT_ID
+        if not _pf_itn_signature_ok(data, _pp):
+            logger.warning(f"PayFast ITN: signature mismatch - possible spoofed request. m_payment_id={m_payment_id}")
+            return {"ok": True}   # 200 so PayFast stops retrying; nothing is processed
+        if data.get("merchant_id") and data.get("merchant_id") != _mid:
+            logger.warning(f"PayFast ITN: merchant_id mismatch for {m_payment_id}")
+            return {"ok": True}
+        if payment_status == "COMPLETE":
+            try:
+                if not _pf_validate_remote(data):
+                    logger.warning(f"PayFast ITN: PayFast did not confirm {m_payment_id}")
+                    return {"ok": True}
+            except Exception as e:
+                logger.error(f"PayFast ITN: confirmation call failed ({e}) - asking PayFast to retry")
+                from fastapi.responses import JSONResponse
+                return JSONResponse(content={"ok": False}, status_code=503)
+
+    if payment_status != "COMPLETE":
+        logger.info(f"PayFast notify status={payment_status}, ignoring")
+        return {"ok": True}
+
+    if amount_gross <= 0:
+        logger.warning(f"PayFast ITN: zero amount for {m_payment_id} - ignored")
+        return {"ok": True}
 
     if not company_id:
         logger.warning(f"PayFast ITN: could not parse company_id from {m_payment_id}")

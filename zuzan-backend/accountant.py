@@ -158,20 +158,24 @@ async def onboard_client(
     db.refresh(new_company)
 
     # Send invite email to the client
-    invite_url = f"https://zuzan.co.za/accept-invite?token={token}"
+    # Same link format the app understands (/accept-invite/<token> on the app domain) - the old
+    # "zuzan.co.za/accept-invite?token=" form never opened the invite screen.
+    from email_service import FRONTEND_URL as _FE
+    invite_url = f"{_FE.rstrip('/')}/accept-invite/{token}"
     accountant_name = f"{current_user.first_name} {current_user.last_name}".strip() or "Your accountant"
+    from html import escape as _e   # names are typed by users and go into an email sent from our domain
     try:
-        send_email(
+        email_sent = bool(send_email(
             to=data.contact_email.strip(),
-            subject=f"You've been invited to Zuzan by {accountant_name}",
+            subject=f"You've been invited to Zuzan by {accountant_name}"[:150].replace("\n", " "),
             html=f"""
 <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222">
   <div style="background:#1a3a5c;padding:24px 32px;border-radius:12px 12px 0 0">
     <h1 style="color:#fff;margin:0;font-size:22px">Welcome to Zuzan</h1>
   </div>
   <div style="background:#fff;padding:28px 32px;border:1px solid #e0e8f0;border-top:none;border-radius:0 0 12px 12px">
-    <p>Hi {data.contact_name},</p>
-    <p><strong>{accountant_name}</strong> has set up a <strong>Zuzan</strong> account for <strong>{data.company_name}</strong> and invited you to manage your business finances online.</p>
+    <p>Hi {_e(data.contact_name)},</p>
+    <p><strong>{_e(accountant_name)}</strong> has set up a <strong>Zuzan</strong> account for <strong>{_e(data.company_name)}</strong> and invited you to manage your business finances online.</p>
     <p>Zuzan handles your invoicing, expenses, payroll and more — all in one place.</p>
     <div style="text-align:center;margin:28px 0">
       <a href="{invite_url}" style="background:#1a3a5c;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px">Set Up My Account →</a>
@@ -179,8 +183,7 @@ async def onboard_client(
     <p style="font-size:12px;color:#888">This invitation expires in 14 days. If you weren't expecting this, please ignore it.</p>
   </div>
 </div>""",
-        )
-        email_sent = True
+        ))
     except Exception as e:
         logger.warning(f"Onboard invite email failed for {data.contact_email}: {e}")
         email_sent = False

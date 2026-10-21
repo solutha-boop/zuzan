@@ -105,6 +105,12 @@ async def lifespan(app: FastAPI):
         logger.info("Recurring invoice generation complete")
     except Exception as e:
         logger.warning(f"Recurring invoice generation failed (non-fatal): {e}")
+    # Safety net: issued invoices that never reached the ledger (older recurring invoices) get their entries
+    try:
+        from recurring_invoices import repair_unposted_invoices
+        repair_unposted_invoices()
+    except Exception as e:
+        logger.warning(f"Invoice posting repair failed (non-fatal): {e}")
     # Encrypt any existing plain-text bank fields
     try:
         from crypto import encrypt_field, _is_fernet_token, encryption_enabled

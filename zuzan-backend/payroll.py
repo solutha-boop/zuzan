@@ -2090,6 +2090,12 @@ async def get_easyfile_export(
         s11f         = sum(p.s11f_deduction        or 0 for p in payslips)
         med_empr     = sum(p.medical_aid_employer_con or 0 for p in payslips)
         pension_empr = sum(p.pension_employer      or 0 for p in payslips)
+        # Actual retirement-fund contributions for the IRP5 (NOT the capped s11F deduction, which is
+        # a PAYE calculation figure). Generic employee pension/provident setup -> pension (4001/4472);
+        # NBCPSS PSSPF -> provident (4003/4473). Fixed 2026-10-21: 4005 is medical aid, 7002 is not a SARS code.
+        pension_ee_paid  = sum(p.pension_employee             or 0 for p in payslips)
+        provident_ee_paid = sum(p.nbcpss_provident_employee   or 0 for p in payslips)
+        provident_empr   = sum(p.nbcpss_provident_employer    or 0 for p in payslips)
         overtime     = sum(
             (p.overtime_amount or 0) + (p.sunday_amount or 0) + (p.ph_amount or 0)
             for p in payslips
@@ -2164,19 +2170,23 @@ async def get_easyfile_export(
         emp_lines.append(f"4102,{fmt_amt(paye_amt, cents=True)}")   # PAYE — cents mandatory
         if uif_emp_amt > 0:
             emp_lines.append(f"4141,{fmt_amt(uif_emp_amt, cents=True)}")  # UIF employee (SARS code 4141) — cents
-        if s11f > 0:
-            emp_lines.append(f"4005,{fmt_amt(s11f)}")      # Pension/provident (s11F)
+        if pension_ee_paid > 0:
+            emp_lines.append(f"4001,{fmt_amt(pension_ee_paid)}")    # Pension fund contributions (employee)
+        if provident_ee_paid > 0:
+            emp_lines.append(f"4003,{fmt_amt(provident_ee_paid)}")   # Provident fund contributions (employee)
         if sdl_amt > 0:
             emp_lines.append(f"4142,{fmt_amt(sdl_amt)}")   # SDL contribution (SARS code 4142)
         if pension_empr > 0:
-            emp_lines.append(f"7002,{fmt_amt(pension_empr, cents=True)}")  # Pension employer — cents
+            emp_lines.append(f"4472,{fmt_amt(pension_empr)}")      # Employer's pension fund contributions
+        if provident_empr > 0:
+            emp_lines.append(f"4473,{fmt_amt(provident_empr)}")    # Employer's provident fund contributions
 
         emp_lines.append("9999")
 
         lines.extend(emp_lines)
         cert_count += 1
         total_all_amounts += (
-            code_3601 + code_3713 + code_3801 + code_3699 + paye_amt + uif_emp_amt + s11f + sdl_amt + pension_empr
+            code_3601 + code_3713 + code_3801 + code_3699 + paye_amt + uif_emp_amt + pension_ee_paid + provident_ee_paid + sdl_amt + pension_empr + provident_empr
         )
 
     if cert_count == 0:

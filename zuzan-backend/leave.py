@@ -27,15 +27,31 @@ LEAVE_TYPES              = {"annual", "sick", "family", "maternity", "unpaid"}
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def count_working_days(start: date_type, end: date_type) -> float:
-    """Count Monday–Friday days between start and end (inclusive)."""
+    """Count Monday–Friday days between start and end (inclusive), excluding South African public holidays
+    (a public holiday is not a leave day)."""
     if end < start:
         return 0.0
+    try:
+        from clocking import _is_ph
+    except Exception:       # never let the holiday table stop leave from working
+        _is_ph = lambda d: False
     days, current = 0, start
     while current <= end:
-        if current.weekday() < 5:   # 0=Mon … 4=Fri
+        if current.weekday() < 5 and not _is_ph(current):   # 0=Mon … 4=Fri
             days += 1
         current += timedelta(days=1)
     return float(days)
+
+
+def _available(bal: LeaveBalance, leave_type: str) -> float:
+    return {"annual": bal.annual_balance, "sick": bal.sick_balance, "family": bal.family_balance}[leave_type]
+
+
+def _pending_days(db: Session, employee_id: int, leave_type: str, exclude_id=None) -> float:
+    """Days already requested but not yet decided - they are spoken for, so they reduce what can be requested."""
+    q = db.query(LeaveRequest).filter(LeaveRequest.employee_id == employee_id,
+                                      LeaveRequest.leave_type == leave_type, LeaveRequest.status == "pending")
+    return sum((r.days_requested or 0) for r in q.all() if r.id != exclude_id)
 
 
 def get_or_create_balance(employee_id: int, company_id: int, db: Session) -> LeaveBalance:
@@ -80,16 +96,20 @@ def _auto_approve_stale(db: Session, company_id: int):
         LeaveRequest.status     == "pending",
         LeaveRequest.submitted_at <= cutoff,
     ).all()
+    n = 0
     for req in stale:
+        bal = get_or_create_balance(req.employee_id, req.company_id, db)
+        if req.leave_type in ("annual", "sick", "family") and (req.days_requested or 0) > _available(bal, req.leave_type) + 1e-9:
+            continue   # balance no longer covers it: leave it pending for a manager to decide
         req.status       = "approved"
         req.auto_approved = True
         req.reviewed_at  = datetime.utcnow()
         req.reviewed_by  = "auto (48h)"
-        bal = get_or_create_balance(req.employee_id, req.company_id, db)
         _deduct(bal, req.leave_type, req.days_requested)
-    if stale:
+        n += 1
+    if n:
         db.commit()
-        logger.info(f"Auto-approved {len(stale)} leave request(s) for company {company_id}")
+        logger.info(f"Auto-approved {n} leave request(s) for company {company_id}")
 
 
 def _to_dict(r: LeaveRequest, emp_name: str) -> dict:
@@ -163,21 +183,29 @@ async def submit_request(
     if data.leave_type not in LEAVE_TYPES:
         raise HTTPException(400, f"Invalid leave type. Valid: {', '.join(sorted(LEAVE_TYPES))}")
 
-    start = datetime.strptime(data.start_date, "%Y-%m-%d").date()
-    end   = datetime.strptime(data.end_date,   "%Y-%m-%d").date()
+    try:
+        start = datetime.strptime(data.start_date, "%Y-%m-%d").date()
+        end   = datetime.strptime(data.end_date,   "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(400, "Dates must be in the format YYYY-MM-DD")
+    if end < start:
+        raise HTTPException(400, "The end date is before the start date")
     days  = count_working_days(start, end)
     if days <= 0:
         raise HTTPException(400, "No working days in the selected date range")
 
+    # No overlapping leave for the same employee (pending or approved)
+    for other in db.query(LeaveRequest).filter(LeaveRequest.employee_id == data.employee_id,
+                                               LeaveRequest.status.in_(["pending", "approved"])).all():
+        if other.start_date.date() <= end and other.end_date.date() >= start:
+            raise HTTPException(400, f"Overlaps an existing {other.status} {other.leave_type} request "
+                                     f"({other.start_date:%Y-%m-%d} to {other.end_date:%Y-%m-%d}).")
+
     # Balance check for leave types that draw from a pool
     if data.leave_type in ("annual", "sick", "family"):
         bal = get_or_create_balance(data.employee_id, cid, db)
-        available = {
-            "annual": bal.annual_balance,
-            "sick":   bal.sick_balance,
-            "family": bal.family_balance,
-        }[data.leave_type]
-        if days > available:
+        available = _available(bal, data.leave_type) - _pending_days(db, data.employee_id, data.leave_type)
+        if days > available + 1e-9:
             raise HTTPException(
                 400,
                 f"Insufficient {data.leave_type} leave. "
@@ -218,10 +246,19 @@ async def review_request(
     ).first()
     if not req:
         raise HTTPException(404, "Leave request not found")
-    if req.status != "pending":
-        raise HTTPException(400, f"Request is already '{req.status}' and cannot be changed")
     if data.status not in ("approved", "rejected", "cancelled"):
         raise HTTPException(400, "status must be 'approved', 'rejected', or 'cancelled'")
+    # Approved leave can still be cancelled (the days go back on the balance); nothing else can change once decided.
+    if req.status == "approved" and data.status == "cancelled":
+        bal = get_or_create_balance(req.employee_id, req.company_id, db)
+        _restore(bal, req.leave_type, req.days_requested)
+        req.status      = "cancelled"
+        req.reviewed_at = datetime.utcnow()
+        req.reviewed_by = f"{current_user.first_name} {current_user.last_name}"
+        db.commit()
+        return {"id": req.id, "status": req.status}
+    if req.status != "pending":
+        raise HTTPException(400, f"Request is already '{req.status}' and cannot be changed")
 
     req.status      = data.status
     req.reviewed_at = datetime.utcnow()
@@ -229,6 +266,10 @@ async def review_request(
 
     if data.status == "approved":
         bal = get_or_create_balance(req.employee_id, req.company_id, db)
+        if req.leave_type in ("annual", "sick", "family") and (req.days_requested or 0) > _available(bal, req.leave_type) + 1e-9:
+            db.rollback()
+            raise HTTPException(400, f"Cannot approve: only {_available(bal, req.leave_type):.1f} {req.leave_type} day(s) left, "
+                                     f"{req.days_requested:.0f} requested.")
         _deduct(bal, req.leave_type, req.days_requested)
 
     db.commit()

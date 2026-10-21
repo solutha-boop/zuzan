@@ -72,6 +72,13 @@ def upsert_rule(
     cid = current_user.company_id
     keyword = body.keyword.lower().strip()[:100]
     txn_type = body.txn_type or "any"
+    # An empty/one-letter keyword matches (almost) every bank line and would mis-categorise the whole import.
+    if len(keyword) < 2:
+        raise HTTPException(status_code=400, detail="The keyword must be at least 2 characters.")
+    if txn_type not in ("credit", "debit", "any"):
+        raise HTTPException(status_code=400, detail="txn_type must be credit, debit or any.")
+    if not (body.category or "").strip():
+        raise HTTPException(status_code=400, detail="category is required.")
 
     existing = (
         db.query(CategoryRule)

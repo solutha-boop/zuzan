@@ -25,6 +25,14 @@ def generate_api_key() -> tuple[str, str, str]:
 def hash_key(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
+def _count_today(k) -> int:
+    """requests_today is a per-DAY counter, but nothing ever reset it: a key stopped working for good after 1000
+    lifetime requests. The counter now counts only if the key was last used today (UTC)."""
+    if k.last_used is None or k.last_used.date() < datetime.utcnow().date():
+        return 0
+    return k.requests_today or 0
+
+
 def get_company_from_api_key(api_key_raw: str, db: Session) -> Optional[tuple]:
     """Validate an API key and return (company, api_key_record) or None"""
     hashed = hash_key(api_key_raw)
@@ -35,12 +43,13 @@ def get_company_from_api_key(api_key_raw: str, db: Session) -> Optional[tuple]:
     if not key_record:
         return None, None
     # Rate limiting
-    if key_record.requests_today >= RATE_LIMIT_PER_DAY:
+    if _count_today(key_record) >= RATE_LIMIT_PER_DAY:
         return None, None
     company = db.query(Company).filter(Company.id == key_record.company_id).first()
     # Update last_used and request count
+    new_count = _count_today(key_record) + 1      # read BEFORE last_used is stamped with today's date
     key_record.last_used = datetime.utcnow()
-    key_record.requests_today = (key_record.requests_today or 0) + 1
+    key_record.requests_today = new_count
     db.commit()
     return company, key_record
 
@@ -73,7 +82,7 @@ async def list_keys(current_user: User = Depends(get_current_user), db: Session 
         "scopes":        k.scopes,
         "is_active":     k.is_active,
         "last_used":     k.last_used.isoformat() if k.last_used else None,
-        "requests_today":k.requests_today or 0,
+        "requests_today":_count_today(k),
         "created_at":    k.created_at.isoformat(),
     } for k in keys]
 
@@ -85,6 +94,8 @@ async def create_key(data: CreateKeyRequest, current_user: User = Depends(get_cu
     if existing >= 10:
         raise HTTPException(status_code=400, detail="Maximum 10 active API keys allowed.")
 
+    if not (data.name or "").strip():
+        raise HTTPException(status_code=400, detail="Give the key a name.")
     valid_scopes = [s for s in data.scopes if s in SCOPES]
     if not valid_scopes:
         valid_scopes = ["read"]
@@ -93,7 +104,7 @@ async def create_key(data: CreateKeyRequest, current_user: User = Depends(get_cu
 
     key = APIKey(
         company_id=current_user.company_id,
-        name=data.name,
+        name=data.name.strip()[:100],
         key_hash=hashed,
         key_prefix=prefix,
         scopes=",".join(valid_scopes),
@@ -129,7 +140,7 @@ async def revoke_key(key_id: int, current_user: User = Depends(get_current_user)
 @router.get("/usage")
 async def get_usage(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     keys = db.query(APIKey).filter(APIKey.company_id == current_user.company_id).all()
-    total_today = sum(k.requests_today or 0 for k in keys if k.is_active)
+    total_today = sum(_count_today(k) for k in keys if k.is_active)
     return {
         "total_requests_today": total_today,
         "rate_limit_per_key":   RATE_LIMIT_PER_DAY,

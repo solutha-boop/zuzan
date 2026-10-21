@@ -14,6 +14,21 @@ def clean(value, max_len=500):
 router = APIRouter()
 
 VAT_RATE = 0.15
+QUOTE_STATUSES = {"draft", "sent", "accepted", "declined", "rejected", "expired", "converted", "invoiced"}
+
+
+def _parse_date(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise HTTPException(400, "valid_until must be a date in the format YYYY-MM-DD")
+
+
+def _check_numbers(amount=None, rate=None):
+    if amount is not None and (amount != amount or amount <= 0):
+        raise HTTPException(400, "The amount must be greater than zero.")
+    if rate is not None and (rate != rate or rate <= 0):
+        raise HTTPException(400, "The exchange rate must be greater than zero.")
 
 class QuoteCreate(BaseModel):
     client_name:         str
@@ -91,12 +106,15 @@ async def list_quotes(
 
 @router.post("/")
 async def create_quote(data: QuoteCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _check_numbers(data.amount, data.exchange_rate)
+    if not (data.client_name or "").strip():
+        raise HTTPException(400, "client_name is required.")
     if data.currency != "ZAR" and data.vat_amount_override is not None:
         vat = round(data.vat_amount_override, 2)   # User-specified VAT for foreign currency
     else:
         vat = round(data.amount * VAT_RATE, 2) if (data.vat_applicable and _vatreg(db, current_user.company_id)) else 0
     total = round(data.amount + vat, 2)
-    valid = datetime.strptime(data.valid_until, "%Y-%m-%d") if data.valid_until else None
+    valid = _parse_date(data.valid_until) if data.valid_until else None
     q = Quote(
         company_id=current_user.company_id,
         quote_number=next_quote_number(db, current_user.company_id),
@@ -120,6 +138,11 @@ async def create_quote(data: QuoteCreate, current_user: User = Depends(get_curre
 async def update_quote(qid: int, data: QuoteUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     q = db.query(Quote).filter(Quote.id == qid, Quote.company_id == current_user.company_id).first()
     if not q: raise HTTPException(404, "Quote not found")
+    _check_numbers(data.amount, data.exchange_rate)
+    if data.status is not None and data.status not in QUOTE_STATUSES:
+        raise HTTPException(400, f"status must be one of: {', '.join(sorted(QUOTE_STATUSES))}")
+    if data.client_name is not None and not data.client_name.strip():
+        raise HTTPException(400, "client_name cannot be empty.")
     if data.client_name  is not None: q.client_name  = data.client_name
     if data.client_email is not None: q.client_email = data.client_email
     if data.description  is not None: q.description  = data.description
@@ -128,7 +151,7 @@ async def update_quote(qid: int, data: QuoteUpdate, current_user: User = Depends
     if data.exchange_rate is not None: q.exchange_rate = data.exchange_rate
     if data.notes        is not None: q.notes         = data.notes
     if data.valid_until  is not None:
-        q.valid_until = datetime.strptime(data.valid_until, "%Y-%m-%d")
+        q.valid_until = _parse_date(data.valid_until)
     if data.amount is not None or data.vat_applicable is not None or data.vat_amount_override is not None:
         amt = data.amount if data.amount is not None else q.amount
         vat_on = data.vat_applicable if data.vat_applicable is not None else q.vat_applicable

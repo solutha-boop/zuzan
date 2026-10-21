@@ -913,6 +913,9 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     if invoice.status == InvoiceStatus.written_off:
         raise HTTPException(status_code=400, detail="This invoice was written off as a bad debt and can no longer be edited. Use 'Record Recovery' if the debtor pays.")
     was_paid     = invoice.status == InvoiceStatus.paid
+    was_partial  = invoice.status == InvoiceStatus.partial
+    was_settled  = was_paid or was_partial   # some money has been received
+    old_paid_amount = invoice.paid_amount_zar or 0.0
     was_draft    = invoice.status == InvoiceStatus.draft
     _items_replaced = data.items_json is not None and data.items_json != invoice.items_json
     if data.status == "written_off":
@@ -940,7 +943,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     # Block amount edits on invoices that remain paid: the payment journal entry
     # carries the old amount and cannot be silently re-stated. Revert the invoice
     # to unpaid first (which reverses the payment entry), then edit the amount.
-    if amount_changed and was_paid and final_status == InvoiceStatus.paid:
+    if amount_changed and was_settled and final_status in (InvoiceStatus.paid, InvoiceStatus.partial):
         raise HTTPException(
             status_code=400,
             detail="Cannot change the amount of a paid invoice. Mark it as unpaid first, then edit the amount.",
@@ -974,8 +977,16 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         invoice.status = final_status
     if data.paid_date:
         invoice.paid_date = datetime.fromisoformat(data.paid_date)
-    # If being marked paid with no paid_date, default to now so date-filtered reports include it
-    if not was_paid and invoice.status == InvoiceStatus.paid and not invoice.paid_date:
+    # Auto-downgrade "paid" to "partial" when the amount received is less than the invoice total.
+    # The frontend always sends status="paid" when recording any payment; the backend adjusts.
+    if data.status == "paid" and data.paid_amount_zar is not None:
+        total_due   = round(invoice.total_amount or 0, 2)
+        paid_so_far = round(invoice.paid_amount_zar, 2)
+        if paid_so_far < total_due:
+            invoice.status = InvoiceStatus.partial
+            final_status   = InvoiceStatus.partial
+    # If being marked paid/partial with no paid_date, default to now so date-filtered reports include it
+    if not was_settled and invoice.status in (InvoiceStatus.paid, InvoiceStatus.partial) and not invoice.paid_date:
         invoice.paid_date = datetime.utcnow()
     if data.notes:
         invoice.notes = data.notes
@@ -997,8 +1008,10 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     if data.passenger_name is not None:
         invoice.passenger_name = clean(data.passenger_name, 200) if data.passenger_name else None
 
-    reverted_to_unpaid = was_paid and invoice.status != InvoiceStatus.paid
+    reverted_to_unpaid = was_settled and invoice.status not in (InvoiceStatus.paid, InvoiceStatus.partial)
     newly_paid         = not was_paid and invoice.status == InvoiceStatus.paid
+    newly_partial      = not was_settled and invoice.status == InvoiceStatus.partial
+    top_up_to_paid     = was_partial and invoice.status == InvoiceStatus.paid
     # Draft transitions (audit fix 2026-07-08): moving an issued invoice to draft
     # must reverse its raised entry (a draft carries no AR/VAT liability), and
     # issuing a draft must re-post it — previously neither happened, desyncing
@@ -1009,7 +1022,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     # Journal postings — commit once only AFTER both the field updates and the
     # journal entries succeed, so a journal failure rolls back the edit too.
     try:
-        if amount_changed or reverted_to_unpaid or newly_paid or became_draft or left_draft:
+        if amount_changed or reverted_to_unpaid or newly_paid or newly_partial or top_up_to_paid or became_draft or left_draft:
             journal_engine.init_accounts(current_user.company_id, db)
         if reverted_to_unpaid:
             # Reverse the payment entry (audit fix 2026-07-07): leaving it in place
@@ -1051,8 +1064,15 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
             _reverse_invoice_stock(invoice, db)
         if (amount_changed or _items_replaced or left_draft) and invoice.status != InvoiceStatus.draft:
             _apply_invoice_stock(invoice, db)
-        if newly_paid:
-            journal_engine.post_invoice_paid(invoice, db)
+        if newly_paid or newly_partial or top_up_to_paid:
+            # Post only the INCREMENTAL amount received this transaction so the
+            # journal doesn't double-count earlier partial payments.
+            payment_delta = round((invoice.paid_amount_zar or 0) - old_paid_amount, 2)
+            if payment_delta > 0:
+                _saved_paid = invoice.paid_amount_zar
+                invoice.paid_amount_zar = payment_delta
+                journal_engine.post_invoice_paid(invoice, db)
+                invoice.paid_amount_zar = _saved_paid
         db.commit()
     except HTTPException:
         raise

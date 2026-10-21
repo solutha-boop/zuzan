@@ -30,8 +30,22 @@ class BudgetBulkUpsert(BaseModel):
     entries: List[BudgetUpsert]
 
 
+def _validate(entry: BudgetUpsert):
+    if entry.type not in ("expense", "income"):
+        raise HTTPException(400, "type must be 'expense' or 'income'")
+    if not (1 <= entry.month <= 12):
+        raise HTTPException(400, f"month must be 1-12 (got {entry.month})")
+    if not (2000 <= entry.year <= 2100):
+        raise HTTPException(400, f"year looks wrong ({entry.year})")
+    if entry.amount is None or entry.amount != entry.amount or entry.amount < 0:
+        raise HTTPException(400, "amount cannot be negative")
+    if not (entry.category or "").strip():
+        raise HTTPException(400, "category is required")
+
+
 def _upsert(db: Session, company_id: int, entry: BudgetUpsert) -> Budget:
     """Insert or update a single budget entry."""
+    _validate(entry)
     b = db.query(Budget).filter(
         Budget.company_id == company_id,
         Budget.year       == entry.year,
@@ -98,6 +112,8 @@ async def bulk_upsert(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    for entry in data.entries:          # validate everything first: all or nothing
+        _validate(entry)
     for entry in data.entries:
         _upsert(db, current_user.company_id, entry)
     db.commit()
@@ -127,7 +143,7 @@ async def get_actuals(
         db.query(
             Expense.category,
             extract("month", Expense.expense_date).label("month"),
-            func.sum(Expense.amount).label("total"),
+            func.sum(Expense.amount - func.coalesce(Expense.vat_amount, 0)).label("total"),   # ex VAT, like the P&L
         )
         .filter(
             Expense.company_id == cid,
@@ -138,21 +154,15 @@ async def get_actuals(
     ):
         add("expense", row.category or "Other", row.month, row.total)
 
-    # 2. Revenue from paid invoices
-    for row in (
-        db.query(
-            extract("month", Invoice.paid_date).label("month"),
-            func.sum(Invoice.amount).label("total"),
-        )
-        .filter(
-            Invoice.company_id == cid,
-            Invoice.status == "paid",
-            extract("year", Invoice.paid_date) == year,
-        )
-        .group_by(extract("month", Invoice.paid_date))
-        .all()
-    ):
-        add("income", "Revenue", row.month, row.total)
+    # 2. Revenue from paid invoices (ex VAT, converted to rand like the dashboard)
+    from payroll import _to_zar
+    for inv in db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == "paid",
+                                        Invoice.paid_date.isnot(None),
+                                        extract("year", Invoice.paid_date) == year).all():
+        total = _to_zar(inv)
+        gross = inv.total_amount or 0
+        ex_vat = total * ((inv.amount or 0) / gross) if gross else 0.0
+        add("income", "Revenue", inv.paid_date.month, ex_vat)
 
     # 3. Revenue from bank CSV imports (journal entries with source="bank_import_income")
     for row in (
@@ -173,22 +183,32 @@ async def get_actuals(
         if row.total:
             add("income", "Revenue", row.month, row.total)
 
-    # 4. Cost of Sales from received purchase orders
-    for row in (
-        db.query(
-            extract("month", PurchaseOrder.received_date).label("month"),
-            func.sum(PurchaseOrder.subtotal).label("total"),
-        )
-        .filter(
+    # 4. Cost of Sales from received purchase orders: delivered value only, and stock bought for resale is an
+    #    asset until it is sold (its cost arrives through the ledger's cost-of-sales entries below).
+    from payroll import _po_cost_net, _stock_pl_cost
+    from datetime import datetime as _dt
+    for po in db.query(PurchaseOrder).filter(
             PurchaseOrder.company_id == cid,
-            PurchaseOrder.status.in_(["received", "partial"]),
+            PurchaseOrder.status.in_(["received", "partial", "paid"]),
             PurchaseOrder.received_date.isnot(None),
-            extract("year", PurchaseOrder.received_date) == year,
-        )
-        .group_by(extract("month", PurchaseOrder.received_date))
-        .all()
-    ):
-        add("expense", "Cost of Sales", row.month, row.total)
+            extract("year", PurchaseOrder.received_date) == year).all():
+        add("expense", "Cost of Sales", po.received_date.month, _po_cost_net(po))
+    for m in range(1, 13):
+        stock_cost = _stock_pl_cost(db, cid, _dt(year, m, 1), _dt(year + (m == 12), (m % 12) + 1, 1))
+        if stock_cost:
+            add("expense", "Cost of Sales", m, stock_cost)
+
+    # 5. Payroll cost and depreciation (both are in the dashboard's expenses, so they belong in the budget view too)
+    from database import Payslip, Employee, DepreciationEntry
+    for ps in (db.query(Payslip).join(Employee, Payslip.employee_id == Employee.id)
+               .filter(Employee.company_id == cid, extract("year", Payslip.generated_at) == year).all()):
+        add("expense", "Salaries", ps.generated_at.month, ps.total_cost or 0)
+    for d in db.query(DepreciationEntry).filter(DepreciationEntry.company_id == cid,
+                                                DepreciationEntry.period.like(f"{year}-%")).all():
+        try:
+            add("expense", "Depreciation", int(str(d.period)[5:7]), d.amount or 0)
+        except ValueError:
+            pass
 
     return [
         {"type": k[0], "category": k[1], "month": k[2], "actual": round(v, 2)}
