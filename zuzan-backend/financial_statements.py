@@ -67,6 +67,14 @@ def _inv_total_zar(inv) -> float:
     return round((inv.total_amount or 0) * _inv_rate(inv), 2)
 
 
+def _inv_balance_zar(inv) -> float:
+    """Amount still owed (ZAR): the total less any part payment received."""
+    bal = _inv_total_zar(inv)
+    if getattr(inv, 'status', None) is not None and str(inv.status).endswith('partial'):
+        bal -= (inv.paid_amount_zar or 0)
+    return round(max(0.0, bal), 2)
+
+
 # ── Deferred tax (IAS 12 / IFRS for SMEs Section 29) ─────────────────────────
 # Fixed-asset temporary differences: accounting carrying value vs SARS tax base
 # (s11(e) wear-and-tear, Interpretation Note 47). Both sides are computed
@@ -467,7 +475,7 @@ def annual_financial_statements(
     # Note 3 — Trade receivables aging (as at period end)
     open_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
         Invoice.issue_date <= end,
     ).all()
     # Break into aging buckets (0-30, 31-60, 61-90, 90+) based on days past due_date
@@ -478,18 +486,18 @@ def annual_financial_statements(
     # ZAR at the raised-basis rate (audit fix 2026-07-11 M4) — previously raw
     # foreign-currency totals were summed, so this note could not reconcile
     # with the ZAR-denominated trade receivables line (1100) on the balance sheet.
-    ar_current = _r(sum(_inv_total_zar(i) for i in open_invoices if _days_overdue(i) == 0))
-    ar_0_30    = _r(sum(_inv_total_zar(i) for i in open_invoices if 1  <= _days_overdue(i) <= 30))
-    ar_31_60   = _r(sum(_inv_total_zar(i) for i in open_invoices if 31 <= _days_overdue(i) <= 60))
-    ar_61_90   = _r(sum(_inv_total_zar(i) for i in open_invoices if 61 <= _days_overdue(i) <= 90))
-    ar_90plus  = _r(sum(_inv_total_zar(i) for i in open_invoices if _days_overdue(i) > 90))
+    ar_current = _r(sum(_inv_balance_zar(i) for i in open_invoices if _days_overdue(i) == 0))
+    ar_0_30    = _r(sum(_inv_balance_zar(i) for i in open_invoices if 1  <= _days_overdue(i) <= 30))
+    ar_31_60   = _r(sum(_inv_balance_zar(i) for i in open_invoices if 31 <= _days_overdue(i) <= 60))
+    ar_61_90   = _r(sum(_inv_balance_zar(i) for i in open_invoices if 61 <= _days_overdue(i) <= 90))
+    ar_90plus  = _r(sum(_inv_balance_zar(i) for i in open_invoices if _days_overdue(i) > 90))
     receivables_aging = {
         "current":   ar_current,
         "days_1_30": ar_0_30,
         "days_31_60": ar_31_60,
         "days_61_90": ar_61_90,
         "days_90plus": ar_90plus,
-        "total":     _r(sum(_inv_total_zar(i) for i in open_invoices)),
+        "total":     _r(sum(_inv_balance_zar(i) for i in open_invoices)),
         "count":     len(open_invoices),
     }
 
@@ -502,7 +510,7 @@ def annual_financial_statements(
     # the revenue account (4000) this note breaks down.
     issued_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial, InvoiceStatus.paid, InvoiceStatus.written_off]),
         Invoice.issue_date >= start,
         Invoice.issue_date <= end,
     ).all()

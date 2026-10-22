@@ -857,6 +857,8 @@ async def write_off_bad_debt(invoice_id: int, data: BadDebtWriteOff, current_use
     inv = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.status == InvoiceStatus.partial:
+        raise HTTPException(status_code=400, detail="This invoice has a part payment on it. Mark it unpaid first (which reverses the payment) or collect the balance; part-paid invoices can't be written off yet.")
     if inv.status not in (InvoiceStatus.sent, InvoiceStatus.overdue):
         raise HTTPException(status_code=400, detail="Only issued, unpaid invoices can be written off.")
     if not (data.reason or "").strip():
@@ -921,6 +923,26 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     if data.status == "written_off":
         raise HTTPException(status_code=400, detail="Use the 'Write off' action to write an invoice off as a bad debt.")
     final_status = InvoiceStatus(data.status) if data.status else invoice.status
+    # Part payments (ZAR invoices). The frontend sends status="paid" with the CUMULATIVE
+    # amount received; the backend decides paid vs partial from that amount. The check
+    # uses the amount in THIS request (not the stale stored value) and never touches None.
+    # Foreign-currency invoices are settled in one go (FX is booked on the full carried AR).
+    _is_foreign = bool(invoice.currency and invoice.currency != "ZAR")
+    _total_due  = round(invoice.total_amount or 0, 2)
+    if data.status in ("paid", "partial") and not _is_foreign:
+        if data.paid_amount_zar is None:
+            if data.status == "partial":
+                raise HTTPException(status_code=400, detail="Enter the amount received for a part payment.")
+            data.paid_amount_zar = _total_due          # plain 'mark as paid' = settle the balance
+        cum = round(float(data.paid_amount_zar), 2)
+        if cum <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than zero.")
+        if cum > _total_due + 0.01:
+            raise HTTPException(status_code=400, detail=f"Amount received (R{cum:,.2f}) is more than the invoice total (R{_total_due:,.2f}).")
+        if was_settled and cum + 0.005 < round(old_paid_amount, 2):
+            raise HTTPException(status_code=400, detail=f"R{old_paid_amount:,.2f} has already been recorded. Enter the new cumulative total, or mark the invoice unpaid first to correct it.")
+        data.paid_amount_zar = min(cum, _total_due)
+        final_status = (InvoiceStatus.partial if data.paid_amount_zar + 0.005 < _total_due else InvoiceStatus.paid)
     amount_changed = (
         data.amount is not None
         and round(data.amount, 2) != round(invoice.amount or 0, 2)
@@ -977,14 +999,6 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         invoice.status = final_status
     if data.paid_date:
         invoice.paid_date = datetime.fromisoformat(data.paid_date)
-    # Auto-downgrade "paid" to "partial" when the amount received is less than the invoice total.
-    # The frontend always sends status="paid" when recording any payment; the backend adjusts.
-    if data.status == "paid" and data.paid_amount_zar is not None:
-        total_due   = round(invoice.total_amount or 0, 2)
-        paid_so_far = round(invoice.paid_amount_zar, 2)
-        if paid_so_far < total_due:
-            invoice.status = InvoiceStatus.partial
-            final_status   = InvoiceStatus.partial
     # If being marked paid/partial with no paid_date, default to now so date-filtered reports include it
     if not was_settled and invoice.status in (InvoiceStatus.paid, InvoiceStatus.partial) and not invoice.paid_date:
         invoice.paid_date = datetime.utcnow()
@@ -1011,7 +1025,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     reverted_to_unpaid = was_settled and invoice.status not in (InvoiceStatus.paid, InvoiceStatus.partial)
     newly_paid         = not was_paid and invoice.status == InvoiceStatus.paid
     newly_partial      = not was_settled and invoice.status == InvoiceStatus.partial
-    top_up_to_paid     = was_partial and invoice.status == InvoiceStatus.paid
+    top_up_to_paid     = was_partial and invoice.status in (InvoiceStatus.paid, InvoiceStatus.partial) and round((invoice.paid_amount_zar or 0) - old_paid_amount, 2) > 0
     # Draft transitions (audit fix 2026-07-08): moving an issued invoice to draft
     # must reverse its raised entry (a draft carries no AR/VAT liability), and
     # issuing a draft must re-post it — previously neither happened, desyncing
@@ -1067,12 +1081,15 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         if newly_paid or newly_partial or top_up_to_paid:
             # Post only the INCREMENTAL amount received this transaction so the
             # journal doesn't double-count earlier partial payments.
-            payment_delta = round((invoice.paid_amount_zar or 0) - old_paid_amount, 2)
-            if payment_delta > 0:
-                _saved_paid = invoice.paid_amount_zar
-                invoice.paid_amount_zar = payment_delta
+            if _is_foreign:
                 journal_engine.post_invoice_paid(invoice, db)
-                invoice.paid_amount_zar = _saved_paid
+            else:
+                payment_delta = round((invoice.paid_amount_zar or 0) - old_paid_amount, 2)
+                if payment_delta > 0:
+                    _saved_paid = invoice.paid_amount_zar
+                    invoice.paid_amount_zar = payment_delta
+                    journal_engine.post_invoice_paid(invoice, db)
+                    invoice.paid_amount_zar = _saved_paid
         db.commit()
     except HTTPException:
         raise

@@ -94,7 +94,7 @@ def _auto_match(company_id: int, db: Session):
 
     open_invoices = db.query(Invoice).filter(
         Invoice.company_id == company_id,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
     ).all()
 
     open_expenses = db.query(Expense).filter_by(company_id=company_id).all()

@@ -25,6 +25,13 @@ def _to_zar(inv) -> float:
     return inv.total_amount or 0
 
 
+def _balance_zar(inv) -> float:
+    """ZAR still owed on an invoice: the full amount, less any part payment received."""
+    if inv.status == InvoiceStatus.partial:
+        return max(0.0, round((inv.total_amount or 0) - (inv.paid_amount_zar or 0), 2))
+    return _to_zar(inv)
+
+
 def _po_delivered_net(po) -> float:
     """Ex-VAT value of goods actually delivered on a purchase order.
 
@@ -2289,14 +2296,16 @@ async def dashboard(
         Invoice.status == InvoiceStatus.paid,
     ).all()
     total_revenue = sum(_to_zar(i) for i in paid_invoices)
+    # Part-paid invoices: the cash actually received so far counts as revenue received
+    total_revenue += sum((i.paid_amount_zar or 0) for i in db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == InvoiceStatus.partial).all())
     # Add bank-import income (posted as journal entries, not invoices)
     total_revenue += _bank_import_income(db, cid)
 
     outstanding_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])
     ).all()
-    total_outstanding = sum(_to_zar(i) for i in outstanding_invoices)
+    total_outstanding = sum(_balance_zar(i) for i in outstanding_invoices)
 
     # All-time expenses ex-VAT — P&L should show the net expense, not the VAT-inclusive amount
     expenses = db.query(Expense).filter(
@@ -2347,7 +2356,7 @@ async def dashboard(
     # Exclude draft invoices: VAT liability only arises on issued (sent/overdue/paid) invoices.
     all_invoices_vat = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial, InvoiceStatus.paid, InvoiceStatus.written_off]),
     ).all()
     output_vat = round(sum(i.vat_amount or 0 for i in all_invoices_vat), 2)
     # Input VAT = expense VAT + PO input VAT (audit fix 2026-07-07): PO receipts post
@@ -2679,10 +2688,10 @@ async def reconciliation(
     cutoff_90 = now - timedelta(days=90)
     overdue_90 = db.query(Invoice).filter(
         Invoice.company_id==cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
         Invoice.due_date <= cutoff_90
     ).all()
-    amount_90 = round(sum(_to_zar(i) for i in overdue_90), 2)
+    amount_90 = round(sum(_balance_zar(i) for i in overdue_90), 2)
     if not overdue_90:
         checks.append({"rule": "Debtors Ageing (>90 days)", "status": "pass",
             "detail": "No invoices outstanding beyond 90 days.", "amount": None,
@@ -2701,7 +2710,7 @@ async def reconciliation(
     # Exclude draft invoices from output VAT — consistent with /reports/dashboard fix.
     all_invoices = db.query(Invoice).filter(
         Invoice.company_id==cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial, InvoiceStatus.paid, InvoiceStatus.written_off]),
     ).all()
     all_expenses = db.query(Expense).filter(Expense.company_id==cid).all()
     vat_output   = round(sum(i.vat_amount or 0 for i in all_invoices), 2)
@@ -2775,9 +2784,9 @@ async def reconciliation(
         ar_journal_bal = journal_engine.account_balance(ar_acct, db)
         outstanding_invs = db.query(Invoice).filter(
             Invoice.company_id == cid,
-            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])
         ).all()
-        ar_raw_total = round(sum(_to_zar(i) for i in outstanding_invs), 2)
+        ar_raw_total = round(sum(_balance_zar(i) for i in outstanding_invs), 2)
         # Imported opening balances (audit fix 2026-07-11): statement imports can
         # post directly to 1100 (source "import") with no matching Invoice rows.
         # Those lines false-failed this rule and the advice ("run /journal/backfill")
@@ -3062,7 +3071,7 @@ def _vat_net_for_month(db: Session, cid: int, year: int, month: int) -> float:
 
     invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial, InvoiceStatus.paid, InvoiceStatus.written_off]),
         Invoice.issue_date >= start,
         Invoice.issue_date < end,
     ).all()
@@ -3372,11 +3381,11 @@ async def cash_flow_13week(
         # Outstanding invoices with due_date in this week
         invoices_due = db.query(Invoice).filter(
             Invoice.company_id == cid,
-            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
             Invoice.due_date >= w_start_dt,
             Invoice.due_date <= w_end_dt,
         ).all()
-        invoice_receipts = round(sum(_to_zar(inv) for inv in invoices_due), 2)
+        invoice_receipts = round(sum(_balance_zar(inv) for inv in invoices_due), 2)
 
         # Recurring income: next_run_date falls in this week
         recurring_income = 0.0
@@ -3619,10 +3628,10 @@ async def management_accounts(
 
     outstanding = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])
     ).all()
-    total_outstanding = round(sum(_to_zar(i) for i in outstanding), 2)
-    overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue)
+    total_outstanding = round(sum(_balance_zar(i) for i in outstanding), 2)
+    overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue or (i.status == InvoiceStatus.partial and i.due_date and i.due_date < now))
 
     # Anchor the 6-month window to period_end so that when the user filters to a
     # historical range (e.g. FY2026), the trend bars cover that actual period
@@ -3914,7 +3923,7 @@ async def debtors_aging(
 
     outstanding = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])
     ).all()
 
     buckets = {"current": [], "31_60": [], "61_90": [], "over_90": [], "not_due": []}
@@ -3926,7 +3935,7 @@ async def debtors_aging(
         entry = {
             "id":             inv.invoice_number,
             "client":         inv.client_name,
-            "amount":         round(_to_zar(inv), 2),
+            "amount":         round(_balance_zar(inv), 2),
             "due_date":       due.strftime("%Y-%m-%d") if due else None,
             "days_overdue":   0,
             "status":         str(inv.status).split(".")[-1],
@@ -4207,7 +4216,7 @@ async def vat201(
     # liability — consistent with /reports/dashboard and post_invoice_raised.
     all_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid, InvoiceStatus.written_off]),
+        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial, InvoiceStatus.paid, InvoiceStatus.written_off]),
         Invoice.issue_date >= start,
         Invoice.issue_date < end,
     ).all()

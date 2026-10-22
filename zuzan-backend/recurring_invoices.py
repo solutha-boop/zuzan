@@ -308,13 +308,13 @@ def repair_unposted_invoices() -> int:
                   .filter(JournalEntry.source == "invoice").all() if e.id not in reversed_ids}
         paid_posted = {(e.company_id, e.source_id) for e in db.query(JournalEntry.company_id, JournalEntry.source_id)
                        .filter(JournalEntry.source == "invoice_payment").all()}
-        for inv in db.query(Invoice).filter(Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.paid])).all():
+        for inv in db.query(Invoice).filter(Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial, InvoiceStatus.paid])).all():
             try:
                 changed = False
                 if (inv.company_id, inv.id) not in raised:
                     je.init_accounts(inv.company_id, db)
                     je.post_invoice_raised(inv, db); changed = True
-                if inv.status == InvoiceStatus.paid and (inv.company_id, inv.id) not in paid_posted:
+                if inv.status in (InvoiceStatus.paid, InvoiceStatus.partial) and (inv.company_id, inv.id) not in paid_posted:
                     je.post_invoice_paid(inv, db); changed = True
                 if changed:
                     db.commit(); fixed += 1

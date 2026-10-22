@@ -155,11 +155,11 @@ async def get_actuals(
         add("expense", row.category or "Other", row.month, row.total)
 
     # 2. Revenue from paid invoices (ex VAT, converted to rand like the dashboard)
-    from payroll import _to_zar
-    for inv in db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == "paid",
+    from payroll import _received_zar
+    for inv in db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status.in_(["paid", "partial"]),
                                         Invoice.paid_date.isnot(None),
                                         extract("year", Invoice.paid_date) == year).all():
-        total = _to_zar(inv)
+        total = _received_zar(inv)
         gross = inv.total_amount or 0
         ex_vat = total * ((inv.amount or 0) / gross) if gross else 0.0
         add("income", "Revenue", inv.paid_date.month, ex_vat)

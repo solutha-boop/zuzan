@@ -28,12 +28,12 @@ def _invoice_summary(company_id: int, db: Session) -> dict:
         now = datetime.utcnow()
         unpaid = db.query(Invoice).filter(
             Invoice.company_id == company_id,
-            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.draft]),
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.partial, InvoiceStatus.draft]),
         ).all()
-        overdue = [i for i in unpaid if i.due_date and i.due_date < now and i.status == InvoiceStatus.sent]
-        unpaid_total = sum(float(i.total_amount or 0) for i in unpaid if i.status == InvoiceStatus.sent)
+        overdue = [i for i in unpaid if i.due_date and i.due_date < now and i.status in (InvoiceStatus.sent, InvoiceStatus.partial)]
+        unpaid_total = sum(float(i.total_amount or 0) - (float(i.paid_amount_zar or 0) if i.status == InvoiceStatus.partial else 0.0) for i in unpaid if i.status in (InvoiceStatus.sent, InvoiceStatus.partial))
         return {
-            "unpaid_count": len([i for i in unpaid if i.status == InvoiceStatus.sent]),
+            "unpaid_count": len([i for i in unpaid if i.status in (InvoiceStatus.sent, InvoiceStatus.partial)]),
             "unpaid_total": round(unpaid_total, 2),
             "overdue_count": len(overdue),
             "draft_count":  len([i for i in unpaid if i.status == InvoiceStatus.draft]),

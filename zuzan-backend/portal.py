@@ -85,6 +85,9 @@ async def get_portal_invoice(token: str, db: Session = Depends(get_db)):
         else (inv.total_amount or 0) * (inv.exchange_rate or 1),
         2
     )
+    # Part-paid invoice: the client is asked to pay only what is still owed
+    already_paid = round(inv.paid_amount_zar or 0, 2) if inv.status == InvoiceStatus.partial else 0.0
+    balance_due  = round(max(0.0, zar_total - already_paid), 2) if inv.status != InvoiceStatus.paid else 0.0
 
     return {
         "token":          token,
@@ -95,7 +98,9 @@ async def get_portal_invoice(token: str, db: Session = Depends(get_db)):
         "amount":         inv.amount,          # excl. VAT
         "vat_amount":     inv.vat_amount or 0,
         "total_amount":   inv.total_amount,    # incl. VAT, original currency
-        "zar_total":      zar_total,           # always ZAR — used for PayFast
+        "zar_total":      zar_total,           # always ZAR — full invoice value
+        "paid_so_far":    already_paid,
+        "balance_due":    balance_due,         # ZAR still owed — what PayFast charges
         "exchange_rate":  inv.exchange_rate or 1,
         "issue_date":     inv.issue_date.isoformat() if inv.issue_date else None,
         "due_date":       inv.due_date.isoformat()   if inv.due_date   else None,
@@ -130,6 +135,8 @@ async def initiate_portal_payment(token: str, db: Session = Depends(get_db)):
     zar_total = round(
         (inv.total_amount or 0) * (inv.exchange_rate or 1), 2
     )
+    if inv.status == InvoiceStatus.partial:
+        zar_total = round(zar_total - (inv.paid_amount_zar or 0), 2)   # charge the balance only
     if zar_total <= 0:
         raise HTTPException(status_code=400, detail="Invoice amount must be greater than zero.")
 
@@ -226,7 +233,8 @@ async def portal_payfast_notify(
         amount_gross = float(data.get("amount_gross", 0) or 0)
     except ValueError:
         amount_gross = 0.0
-    _due_zar = round((inv.total_amount or 0) * (inv.exchange_rate or 1), 2)
+    _paid_before = round(inv.paid_amount_zar or 0, 2) if inv.status == InvoiceStatus.partial else 0.0
+    _due_zar = round((inv.total_amount or 0) * (inv.exchange_rate or 1) - _paid_before, 2)
     if amount_gross + 0.01 < _due_zar:
         logger.error(f"Portal IPN: amount R{amount_gross:.2f} is less than invoice {inv.invoice_number} total R{_due_zar:.2f} - not marked paid")
         return JSONResponse(content={"status": "error", "detail": "Amount does not match the invoice"}, status_code=400)
@@ -245,9 +253,7 @@ async def portal_payfast_notify(
     # Mark paid
     inv.status          = InvoiceStatus.paid
     inv.paid_date       = datetime.utcnow()
-    inv.paid_amount_zar = amount_gross if amount_gross > 0 else round(
-        (inv.total_amount or 0) * (inv.exchange_rate or 1), 2
-    )
+    inv.paid_amount_zar = _paid_before + (amount_gross if amount_gross > 0 else _due_zar)
     db.commit()
 
     # Post journal entry for payment received: DR Bank / CR Accounts Receivable.
@@ -261,7 +267,14 @@ async def portal_payfast_notify(
     try:
         import journal as journal_engine
         journal_engine.init_accounts(inv.company_id, db)
-        journal_engine.post_invoice_paid(inv, db)
+        if _paid_before > 0:
+            # earlier part payments are already in the ledger - post only what this payment added
+            _full = inv.paid_amount_zar
+            inv.paid_amount_zar = round(_full - _paid_before, 2)
+            journal_engine.post_invoice_paid(inv, db)
+            inv.paid_amount_zar = _full
+        else:
+            journal_engine.post_invoice_paid(inv, db)
         db.commit()
     except Exception as e:
         db.rollback()

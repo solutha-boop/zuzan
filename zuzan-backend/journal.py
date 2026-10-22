@@ -1189,7 +1189,7 @@ def backfill_company(company_id: int, db: Session) -> dict:
                 posted["errors"].append(f"Invoice {inv.invoice_number}: {e}")
 
     # Invoice payments
-    for inv in db.query(Invoice).filter(Invoice.company_id == company_id, Invoice.status == InvoiceStatus.paid).all():
+    for inv in db.query(Invoice).filter(Invoice.company_id == company_id, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all():
         if ("invoice_payment", inv.id) not in existing:
             try:
                 post_invoice_paid(inv, db)

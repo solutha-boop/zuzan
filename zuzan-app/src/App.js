@@ -785,16 +785,16 @@ function Dashboard({live = {}}) {
           rows: allRows.map(r=>r.cols)});
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
-        const rows = invs.filter(i => ["sent","overdue"].includes(i.status))
+        const rows = invs.filter(i => ["sent","overdue","partial"].includes(i.status))
           .sort((a,b) => new Date(a.due_date||0)-new Date(b.due_date||0));
         const today = new Date();
         setDrill({type, title:"Outstanding — Pending & Overdue", color:C.gold,
-          total: rows.reduce((s,i)=>s+toZarD(i),0),
+          total: rows.reduce((s,i)=>s+toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0),0),
           cols:["Invoice","Client","Amount (ZAR)","Due Date","Days Overdue"],
           rows: rows.map(i=>{
             const due = i.due_date ? new Date(i.due_date) : null;
             const overdue = due ? Math.max(0, Math.floor((today-due)/(1000*60*60*24))) : 0;
-            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)),
+            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0)),
               due ? due.toLocaleDateString("en-ZA") : "—",
               overdue > 0 ? `${overdue}d` : "Current"];
           })});
@@ -1978,17 +1978,19 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
 
   const toZar = i => (i.currency && i.currency !== "ZAR") ? (i.amount||0) * (i.exchange_rate||1) : (i.amount||0);
   const today = new Date(); today.setHours(0,0,0,0);
-  const isOverdue = i => i.status === "sent" && i.due && new Date(i.due) < today;
+  const isOverdue = i => (i.status === "sent" || i.status === "partial") && i.due && new Date(i.due) < today;
+  // Amount still owed on an unpaid / part-paid invoice (ZAR)
+  const owedZar = i => i.status === "partial" ? Math.max(0, toZar(i) - (i.paid_amount_zar||0)) : toZar(i);
   // Paid invoices from the current calendar month are still "active" — only prior-month paid invoices are archived
   const isCurrentMonth = i => { const d = new Date(i.paid_date || i.date || 0); return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth(); };
   const totalPaid          = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
   const totalPaidThisMonth = invoices.filter(i => i.status === "paid" && isCurrentMonth(i)).reduce((s,i) => s + toZar(i), 0);
-  const totalOverdue = invoices.filter(isOverdue).reduce((s,i) => s + toZar(i), 0);
-  const totalPending = invoices.filter(i => i.status === "sent" && !isOverdue(i)).reduce((s,i) => s + toZar(i), 0);
+  const totalOverdue = invoices.filter(isOverdue).reduce((s,i) => s + owedZar(i), 0);
+  const totalPending = invoices.filter(i => (i.status === "sent" || i.status === "partial") && !isOverdue(i)).reduce((s,i) => s + owedZar(i), 0);
   const displayedInvoices = filterStatus === "overdue"
     ? invoices.filter(isOverdue)
     : filterStatus === "sent"
-    ? invoices.filter(i => i.status === "sent" && !isOverdue(i))
+    ? invoices.filter(i => (i.status === "sent" || i.status === "partial") && !isOverdue(i))
     : filterStatus === "paid"
     ? invoices.filter(i => i.status === "paid") // archive view: all paid
     : filterStatus === "paid_this_month"
@@ -2013,17 +2015,25 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
     const {inv, zarAmt, payDate, ref, alreadyPaid} = payModal;
     // Send the cumulative total so the backend can detect partial vs full payment
     const cumulative = Math.round(((alreadyPaid||0) + (+zarAmt||0)) * 100) / 100;
-    setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:"paid"} : i));
+    const _isForeign = inv.currency && inv.currency !== "ZAR";
+    const _fullZar = (inv.amount||0) * (_isForeign ? (inv.exchange_rate||inv.rate||1) : 1);
+    const _isPart  = _isForeign ? payModal.settles === false : cumulative + 0.005 < _fullZar;
+    setInvoices(prev => prev.map(i => i.id === inv.id ? {...i, status:_isPart?"partial":"paid", paid_amount_zar:cumulative} : i));
     setPayModal(null);
     try {
       await api(`/invoices/${inv._dbId || inv.id}`, { method:"PUT", body: JSON.stringify({
         status: "paid",
         paid_date: payDate || new Date().toISOString().slice(0,10),
         paid_amount_zar: cumulative || null,
+        ...((inv.currency && inv.currency !== "ZAR") ? {final_payment: payModal.settles !== false} : {}),
         notes: ref || null,
       })});
       if (live && live.reload) live.reload();
-    } catch(e) { console.warn("Record payment failed:", e.message); }
+    } catch(e) {
+      console.warn("Record payment failed:", e.message);
+      alert("The payment was NOT saved: " + e.message);
+      if (live && live.reload) live.reload();
+    }
   };
 
   const handleCreate = async () => {
@@ -2186,7 +2196,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
             {payModal.alreadyPaid > 0 && (
               <div style={{background:"#fef3c7",border:"1px solid #f59e0b",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#92400e"}}>
                 <strong>Already received:</strong> {fmt(payModal.alreadyPaid)}<br/>
-                <strong>Outstanding balance:</strong> {fmt(Math.max(0,(payModal.inv.total_amount||payModal.inv.amount||0)-payModal.alreadyPaid))}
+                <strong>Outstanding balance:</strong> {fmt(Math.max(0,toZar(payModal.inv)-payModal.alreadyPaid))}
               </div>
             )}
             <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -2197,6 +2207,12 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                   style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:15,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
                 {payModal.inv.currency&&payModal.inv.currency!=="ZAR" && (
                   <div style={{fontSize:11,color:C.blue,marginTop:4}}>Invoice is {payModal.inv.currency} — enter the ZAR actually received into your bank account</div>
+                )}
+                {payModal.inv.currency&&payModal.inv.currency!=="ZAR" && (
+                  <label style={{display:"flex",alignItems:"center",gap:8,marginTop:10,fontSize:12,color:C.ink,cursor:"pointer"}}>
+                    <input type="checkbox" checked={payModal.settles!==false} onChange={e=>setPayModal(p=>({...p,settles:e.target.checked}))}/>
+                    This payment settles the invoice (any difference is booked as exchange gain/loss)
+                  </label>
                 )}
               </div>
               <div>
@@ -2274,7 +2290,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                       : inv.status === "paid"
                       ? <span style={{display:"inline-flex",alignItems:"center",gap:4,background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:600,letterSpacing:0.3}}>📦 Archived</span>
                       : inv.status === "partial"
-                      ? <div><StatusBadge status="partial"/><div style={{fontSize:10,color:"#b45309",marginTop:2}}>{fmt(inv.paid_amount_zar||0)} of {fmt(inv.total_amount||inv.amount||0)}</div></div>
+                      ? <div><StatusBadge status="partial"/><div style={{fontSize:10,color:"#b45309",marginTop:2}}>{fmt(inv.paid_amount_zar||0)} of {fmt(toZar(inv))} paid · <strong>{fmt(Math.max(0,toZar(inv)-(inv.paid_amount_zar||0)))} due</strong></div></div>
                       : <StatusBadge status={isOverdue(inv)?"overdue":inv.status}/>
                     }
                   </td>
@@ -6325,15 +6341,15 @@ function Reports({live = {}, user = null}) {
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
         const today = new Date();
-        const rows = invs.filter(i=>["sent","overdue"].includes(i.status))
+        const rows = invs.filter(i=>["sent","overdue","partial"].includes(i.status))
           .sort((a,b)=>new Date(a.due_date||0)-new Date(b.due_date||0));
         setMgmtDrill({type, title:"Outstanding — Pending & Overdue Invoices", color:C.gold,
-          total: rows.reduce((s,i)=>s+toZarD(i),0),
+          total: rows.reduce((s,i)=>s+toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0),0),
           cols:["Invoice","Client","Amount (ZAR)","Due Date","Status"],
           rows: rows.map(i=>{
             const due = i.due_date ? new Date(i.due_date) : null;
             const overdue = due ? Math.max(0,Math.floor((today-due)/(1000*60*60*24))) : 0;
-            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)),
+            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0)),
               due ? due.toLocaleDateString("en-ZA") : "—",
               overdue > 0 ? `${overdue}d overdue` : i.status];
           })});
@@ -9227,9 +9243,12 @@ function InvoicePortal({token}) {
           </div>
 
           <div style={{background:C2.bg,borderRadius:12,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span style={{fontSize:13,color:C2.inkMid,fontWeight:600}}>Total Due</span>
-            <span style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:isPaid?C2.green:C2.ink}}>{curSym}{(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+            <span style={{fontSize:13,color:C2.inkMid,fontWeight:600}}>{inv.status==="partial"?"Balance Due":"Total Due"}</span>
+            <span style={{fontFamily:"serif",fontSize:28,fontWeight:800,color:isPaid?C2.green:C2.ink}}>{inv.status==="partial"&&!isPaid?"R"+(inv.balance_due||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2}):curSym+(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
           </div>
+          {inv.status==="partial"&&!isPaid&&(
+            <div style={{textAlign:"right",fontSize:11,color:C2.inkMid,marginTop:6}}>Invoice total {curSym}{(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} · already paid R{(inv.paid_so_far||0).toLocaleString("en-ZA",{minimumFractionDigits:2})}</div>
+          )}
           {inv.currency !== "ZAR" && (
             <div style={{textAlign:"right",fontSize:11,color:C2.inkMid,marginTop:6}}>≈ R{(inv.zar_total||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} ZAR (charged via PayFast)</div>
           )}
@@ -9247,7 +9266,7 @@ function InvoicePortal({token}) {
             {err && <div style={{color:C2.accent,marginBottom:12,fontSize:13}}>{err}</div>}
             <button onClick={handlePay} disabled={busy}
               style={{width:"100%",background:C2.accent,color:"#fff",border:"none",borderRadius:12,padding:"16px",fontSize:16,fontWeight:700,cursor:busy?"not-allowed":"pointer",fontFamily:"inherit",opacity:busy?0.7:1}}>
-              {busy ? "Redirecting to PayFast..." : `Pay ${curSym}${(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} Securely`}
+              {busy ? "Redirecting to PayFast..." : (inv.status==="partial" ? `Pay R${(inv.balance_due||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} Balance Securely` : `Pay ${curSym}${(inv.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2})} Securely`)}
             </button>
             <div style={{textAlign:"center",marginTop:10,fontSize:11,color:C2.inkMid}}>🔒 Secured by PayFast — South Africa's trusted payment gateway</div>
           </div>

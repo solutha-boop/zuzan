@@ -519,7 +519,7 @@ def _auto_match(txn: StitchTransaction, company_id: int, db: Session):
         # Credit: try to match an outstanding invoice by amount ±1%
         open_invoices = db.query(Invoice).filter(
             Invoice.company_id == company_id,
-            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
         ).all()
         best_conf, best_inv = 0.0, None
         for inv in open_invoices:

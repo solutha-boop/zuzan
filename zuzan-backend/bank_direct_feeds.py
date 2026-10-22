@@ -117,7 +117,7 @@ def _auto_match(txn_amount: float, txn_desc: str, company_id: int, db: Session):
     if txn_amount > 0:   # credit — likely a payment received against an invoice
         invoices = db.query(Invoice).filter(
             Invoice.company_id == company_id,
-            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue]),
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
         ).all()
         best, best_conf = None, 0.0
         for inv in invoices:
