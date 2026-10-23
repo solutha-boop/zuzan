@@ -49,12 +49,27 @@ results["invoices_missing_invoice_entry"] = [
 # 2. Paid invoices missing "invoice_payment" entry
 pay_je_ids = journal_source_ids("invoice_payment")
 rows = db.execute(text(
-    "SELECT id, company_id, invoice_number, total_amount, paid_date FROM invoices WHERE status = 'paid'"
+    "SELECT id, company_id, invoice_number, total_amount, paid_date FROM invoices WHERE status IN ('paid','partial')"
 )).all()
 results["paid_invoices_missing_payment_entry"] = [
     {"id": r[0], "company_id": r[1], "invoice_number": r[2], "total_amount": r[3], "paid_date": str(r[4]) if r[4] else None}
     for r in rows if r[0] not in pay_je_ids
 ]
+
+# 2b. Part-paid ZAR invoices whose net Bank (1000) payment postings fall short of paid_amount_zar
+results["partial_invoices_payment_shortfall"] = []
+for r in db.execute(text(
+    "SELECT i.id, i.company_id, i.invoice_number, i.paid_amount_zar, "
+    "COALESCE((SELECT SUM(jl.debit - jl.credit) FROM journal_lines jl "
+    "JOIN journal_entries je ON je.id = jl.entry_id "
+    "JOIN accounts a ON a.id = jl.account_id "
+    "WHERE je.source = 'invoice_payment' AND je.source_id = i.id AND je.company_id = i.company_id "
+    "AND a.code = '1000'), 0) "
+    "FROM invoices i WHERE i.status = 'partial' AND (i.currency IS NULL OR i.currency = 'ZAR')"
+)).all():
+    if round((r[3] or 0) - (r[4] or 0), 2) > 0.01:
+        results["partial_invoices_payment_shortfall"].append(
+            {"id": r[0], "company_id": r[1], "invoice_number": r[2], "paid_amount_zar": r[3], "posted_bank_net": r[4]})
 
 # 3. Expenses missing "expense" entry
 exp_je_ids = journal_source_ids("expense")

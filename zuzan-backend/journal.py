@@ -1190,12 +1190,38 @@ def backfill_company(company_id: int, db: Session) -> dict:
 
     # Invoice payments
     for inv in db.query(Invoice).filter(Invoice.company_id == company_id, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all():
+        is_foreign = bool(inv.currency and inv.currency != "ZAR")
         if ("invoice_payment", inv.id) not in existing:
             try:
                 post_invoice_paid(inv, db)
                 posted["invoice_payments"] += 1
             except Exception as e:
                 posted["errors"].append(f"Invoice payment {inv.invoice_number}: {e}")
+        elif not is_foreign and inv.paid_amount_zar:
+            # Top-up repair (audit fix 2026-10-23): ZAR invoices can be part-paid in several
+            # instalments, each posting its own entry. If an instalment's entry is missing,
+            # net Bank (1000) debits on this invoice's payment entries (reversals net out)
+            # fall short of paid_amount_zar — post the shortfall.
+            try:
+                bank = get_account(company_id, "1000", db)
+                rows = (db.query(JournalLine.debit, JournalLine.credit)
+                          .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
+                          .filter(JournalEntry.company_id == company_id,
+                                  JournalEntry.source == "invoice_payment",
+                                  JournalEntry.source_id == inv.id,
+                                  JournalLine.account_id == bank.id).all())
+                posted_net = round(sum((d or 0) - (c or 0) for d, c in rows), 2)
+                shortfall = round((inv.paid_amount_zar or 0) - posted_net, 2)
+                if shortfall > 0.01:
+                    saved = inv.paid_amount_zar
+                    inv.paid_amount_zar = shortfall
+                    try:
+                        post_invoice_paid(inv, db)
+                    finally:
+                        inv.paid_amount_zar = saved
+                    posted["invoice_payments"] += 1
+            except Exception as e:
+                posted["errors"].append(f"Invoice payment top-up {inv.invoice_number}: {e}")
 
     # Expenses
     for exp in db.query(Expense).filter(Expense.company_id == company_id).all():

@@ -32,6 +32,21 @@ def _balance_zar(inv) -> float:
     return _to_zar(inv)
 
 
+def _partial_received(db, cid, start=None, end=None) -> float:
+    """Cash received so far on part-paid invoices (ZAR), optionally within [start, end).
+
+    Part-paid invoices are not 'paid', so the paid-only revenue queries miss the
+    cash already received. Dated by COALESCE(paid_date, issue_date, created_at),
+    matching the management-accounts fallback. (Audit fix 2026-10-23.)"""
+    q = db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == InvoiceStatus.partial)
+    eff = func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at)
+    if start is not None:
+        q = q.filter(eff >= start)
+    if end is not None:
+        q = q.filter(eff < end)
+    return round(sum((i.paid_amount_zar or 0) for i in q.all()), 2)
+
+
 def _po_delivered_net(po) -> float:
     """Ex-VAT value of goods actually delivered on a purchase order.
 
@@ -2465,6 +2480,8 @@ async def monthly_trend(
                 Invoice.paid_date < end
             ).all()
         )
+        # Cash received on part-paid invoices this month
+        revenue += _partial_received(db, cid, start, end)
         # Add bank-import income for this month
         revenue += _bank_import_income(db, cid, start, end)
         # Expenses ex-VAT for P&L
@@ -2916,6 +2933,7 @@ async def reconciliation(
     # ── RULE 8: Unmatched revenue — paid invoices with no expense offset ───────
     # Simple check: gross margin — warn if expenses are >90% of revenue
     total_rev = round(sum(_to_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()), 2)
+    total_rev = round(total_rev + _partial_received(db, cid), 2)
     total_exp = round(sum(e.amount - (e.vat_amount or 0) for e in all_expenses), 2)
     if total_rev > 0:
         expense_ratio = total_exp / total_rev
@@ -2979,6 +2997,7 @@ async def cash_flow(
         inv_q = inv_q.filter(Invoice.paid_date < period_end)
     paid_in_period = inv_q.all()
     cash_receipts  = round(sum(_to_zar(i) for i in paid_in_period), 2)
+    cash_receipts  = round(cash_receipts + _partial_received(db, cid, period_start, period_end), 2)
     # Add bank-import income (posted as journal entries, not invoices)
     cash_receipts  = round(cash_receipts + _bank_import_income(db, cid, period_start, period_end), 2)
 
@@ -3129,6 +3148,7 @@ def _annual_tax_estimate(db: Session, cid: int, as_of: _date) -> float:
         Invoice.paid_date < hist_end,
     ).all()
     revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
+    revenue = round(revenue + _partial_received(db, cid, hist_start, hist_end), 2)
     revenue = round(revenue + _bank_import_income(db, cid, hist_start, hist_end), 2)
 
     expenses = db.query(Expense).filter(
@@ -3544,8 +3564,8 @@ async def management_accounts(
     )
 
     # Use COALESCE so invoices with NULL paid_date (legacy records) fall back to
-    # invoice_date then created_at — keeps management report consistent with dashboard.
-    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.invoice_date, Invoice.created_at)
+    # issue_date then created_at — keeps management report consistent with dashboard.
+    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at)
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status == InvoiceStatus.paid,
@@ -3553,6 +3573,7 @@ async def management_accounts(
         _eff_paid < period_end,
     ).all()
     revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
+    revenue = round(revenue + _partial_received(db, cid, period_start, period_end), 2)
     # Add bank-import income in the same date range
     revenue = round(revenue + _bank_import_income(db, cid, period_start, period_end), 2)
 
@@ -3823,6 +3844,7 @@ async def provisional_tax(
         Invoice.paid_date >= year_start
     ).all()
     ytd_revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
+    ytd_revenue = round(ytd_revenue + _partial_received(db, cid, year_start), 2)
     # Add bank-import income (journal entries, not invoices) — avoids double-counting
     ytd_revenue = round(ytd_revenue + _bank_import_income(db, cid, year_start), 2)
 
