@@ -546,7 +546,8 @@ class InvoiceUpdate(BaseModel):
     status:          Optional[str]   = None
     paid_date:       Optional[str]   = None
     notes:           Optional[str]   = None
-    paid_amount_zar: Optional[float] = None  # ZAR actually received on payment
+    paid_amount_zar: Optional[float] = None  # ZAR actually received on payment (cumulative)
+    final_payment:   Optional[bool]  = None  # foreign-currency invoices: send false when this is only a part payment
     # Multi-line items + reference fields
     items_json:      Optional[str] = None
     tour_ref:        Optional[str] = None
@@ -638,6 +639,28 @@ def next_invoice_number(company_id: int, db: Session) -> str:
         n += 1
         candidate = f"INV-{str(n).zfill(4)}"
     return candidate
+
+
+@invoices_router.get("/payments-this-month")
+async def invoice_payments_this_month(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Cash received on invoices in the current calendar month, per invoice, from the payment
+    journal entries (so a part payment counts in the month it was received, not in the month of
+    the invoice's latest payment). Reversed payments net off."""
+    from database import JournalEntry, JournalLine, Account
+    now = datetime.utcnow()
+    start = datetime(now.year, now.month, 1)
+    end = datetime(now.year + (now.month == 12), (now.month % 12) + 1, 1)
+    rows = (db.query(JournalEntry.source_id, JournalEntry.source, JournalLine.debit, JournalLine.credit)
+              .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+              .join(Account, JournalLine.account_id == Account.id)
+              .filter(JournalEntry.company_id == current_user.company_id, Account.code == "1000",
+                      JournalEntry.source.in_(["invoice_payment", "invoice_payment_reversal"]),
+                      JournalEntry.date >= start, JournalEntry.date < end).all())
+    per = {}
+    for sid, _src, d, c in rows:
+        per[sid] = round(per.get(sid, 0.0) + (d or 0) - (c or 0), 2)
+    per = {k: v for k, v in per.items() if abs(v) >= 0.005}
+    return {"by_invoice": per, "total": round(sum(per.values()), 2)}
 
 
 @invoices_router.get("/")
@@ -857,10 +880,8 @@ async def write_off_bad_debt(invoice_id: int, data: BadDebtWriteOff, current_use
     inv = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    if inv.status == InvoiceStatus.partial:
-        raise HTTPException(status_code=400, detail="This invoice has a part payment on it. Mark it unpaid first (which reverses the payment) or collect the balance; part-paid invoices can't be written off yet.")
-    if inv.status not in (InvoiceStatus.sent, InvoiceStatus.overdue):
-        raise HTTPException(status_code=400, detail="Only issued, unpaid invoices can be written off.")
+    if inv.status not in (InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial):
+        raise HTTPException(status_code=400, detail="Only issued invoices with a balance owing can be written off.")
     if not (data.reason or "").strip():
         raise HTTPException(status_code=400, detail="A reason is required - SARS may ask for evidence that the debt is irrecoverable.")
     when = datetime.fromisoformat(data.date) if data.date else datetime.utcnow()
@@ -887,7 +908,8 @@ async def recover_bad_debt(invoice_id: int, data: BadDebtRecovery, current_user:
     if inv.status != InvoiceStatus.written_off:
         raise HTTPException(status_code=400, detail="Only written-off invoices can have a bad-debt recovery recorded.")
     rate = float(inv.exchange_rate or 1.0) if (inv.currency and inv.currency != "ZAR") else 1.0
-    total_zar = round((inv.total_amount or 0) * rate, 2)
+    full_zar  = round((inv.total_amount or 0) * rate, 2)
+    total_zar = journal_engine._open_zar_parts(inv)[0]      # the balance that was written off (after any part payment)
     left = round(total_zar - (inv.bad_debt_recovered_zar or 0), 2)
     amt = round(data.amount if data.amount is not None else left, 2)
     if amt <= 0 or amt > left + 0.005:
@@ -899,7 +921,7 @@ async def recover_bad_debt(invoice_id: int, data: BadDebtRecovery, current_user:
         if inv.bad_debt_recovered_zar >= total_zar - 0.005:
             inv.status = InvoiceStatus.paid
             inv.paid_date = when
-            inv.paid_amount_zar = total_zar
+            inv.paid_amount_zar = full_zar
         db.commit()
     except Exception as e:
         db.rollback()
@@ -923,26 +945,34 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
     if data.status == "written_off":
         raise HTTPException(status_code=400, detail="Use the 'Write off' action to write an invoice off as a bad debt.")
     final_status = InvoiceStatus(data.status) if data.status else invoice.status
-    # Part payments (ZAR invoices). The frontend sends status="paid" with the CUMULATIVE
-    # amount received; the backend decides paid vs partial from that amount. The check
-    # uses the amount in THIS request (not the stale stored value) and never touches None.
-    # Foreign-currency invoices are settled in one go (FX is booked on the full carried AR).
+    # Part payments. The frontend sends status="paid" with the CUMULATIVE amount received (ZAR);
+    # the backend decides paid vs partial from that amount (the request's amount, never the stale
+    # stored one). Foreign-currency invoices cannot be told apart from an FX shortfall by amount
+    # alone, so a foreign payment settles the invoice unless the caller sends final_payment=false.
     _is_foreign = bool(invoice.currency and invoice.currency != "ZAR")
-    _total_due  = round(invoice.total_amount or 0, 2)
-    if data.status in ("paid", "partial") and not _is_foreign:
+    _rate       = float(invoice.exchange_rate or 1.0) if _is_foreign else 1.0
+    _total_due  = round((invoice.total_amount or 0) * _rate, 2)      # ZAR carried in debtors
+    if data.status in ("paid", "partial"):
         if data.paid_amount_zar is None:
             if data.status == "partial":
                 raise HTTPException(status_code=400, detail="Enter the amount received for a part payment.")
-            data.paid_amount_zar = _total_due          # plain 'mark as paid' = settle the balance
-        cum = round(float(data.paid_amount_zar), 2)
-        if cum <= 0:
-            raise HTTPException(status_code=400, detail="Payment amount must be greater than zero.")
-        if cum > _total_due + 0.01:
-            raise HTTPException(status_code=400, detail=f"Amount received (R{cum:,.2f}) is more than the invoice total (R{_total_due:,.2f}).")
-        if was_settled and cum + 0.005 < round(old_paid_amount, 2):
-            raise HTTPException(status_code=400, detail=f"R{old_paid_amount:,.2f} has already been recorded. Enter the new cumulative total, or mark the invoice unpaid first to correct it.")
-        data.paid_amount_zar = min(cum, _total_due)
-        final_status = (InvoiceStatus.partial if data.paid_amount_zar + 0.005 < _total_due else InvoiceStatus.paid)
+            if was_partial or not _is_foreign:
+                data.paid_amount_zar = _total_due      # plain 'mark as paid' = settle the balance
+        if data.paid_amount_zar is not None:
+            cum = round(float(data.paid_amount_zar), 2)
+            if cum <= 0:
+                raise HTTPException(status_code=400, detail="Payment amount must be greater than zero.")
+            if not _is_foreign and cum > _total_due + 0.01:
+                raise HTTPException(status_code=400, detail=f"Amount received (R{cum:,.2f}) is more than the invoice total (R{_total_due:,.2f}).")
+            if was_settled and cum + 0.005 < round(old_paid_amount, 2):
+                raise HTTPException(status_code=400, detail=f"R{old_paid_amount:,.2f} has already been recorded. Enter the new cumulative total, or mark the invoice unpaid first to correct it.")
+            if _is_foreign:
+                _final = data.final_payment is not False or cum + 0.005 >= _total_due   # foreign: settles unless the caller says it is only a part payment
+                data.paid_amount_zar = cum
+            else:
+                _final = cum + 0.005 >= _total_due
+                data.paid_amount_zar = min(cum, _total_due)
+            final_status = InvoiceStatus.paid if _final else InvoiceStatus.partial
     amount_changed = (
         data.amount is not None
         and round(data.amount, 2) != round(invoice.amount or 0, 2)
@@ -1081,14 +1111,19 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         if newly_paid or newly_partial or top_up_to_paid:
             # Post only the INCREMENTAL amount received this transaction so the
             # journal doesn't double-count earlier partial payments.
-            if _is_foreign:
-                journal_engine.post_invoice_paid(invoice, db)
+            if _is_foreign and data.paid_amount_zar is None:
+                journal_engine.post_invoice_paid(invoice, db)        # legacy single payment (estimated ZAR)
             else:
                 payment_delta = round((invoice.paid_amount_zar or 0) - old_paid_amount, 2)
                 if payment_delta > 0:
                     _saved_paid = invoice.paid_amount_zar
+                    _ar = None
+                    if _is_foreign:
+                        # settling: clear whatever carried AR is left (the difference is realised FX);
+                        # part payment: clear AR by the ZAR received, FX is taken when it is settled
+                        _ar = round(_total_due - old_paid_amount, 2) if invoice.status == InvoiceStatus.paid else payment_delta
                     invoice.paid_amount_zar = payment_delta
-                    journal_engine.post_invoice_paid(invoice, db)
+                    journal_engine.post_invoice_paid(invoice, db, ar_zar=_ar)
                     invoice.paid_amount_zar = _saved_paid
         db.commit()
     except HTTPException:
@@ -2252,18 +2287,23 @@ async def import_bank_statement(
                 # (b) one open ZAR invoice for exactly this total whose client is named in the narrative
                 _open = [i for i in db.query(Invoice).filter(
                             Invoice.company_id == current_user.company_id,
-                            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue])).all()
-                         if (not i.currency or i.currency == "ZAR") and abs((i.total_amount or 0) - _amt) < 0.005]
+                            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
+                         if (not i.currency or i.currency == "ZAR")
+                         and abs((i.total_amount or 0) - (i.paid_amount_zar or 0 if i.status == InvoiceStatus.partial else 0) - _amt) < 0.005]
                 _named = [i for i in _open if _desc_names_client(txn.description, i.client_name)]
                 if len(_named) == 1:
                     _inv = _named[0]
+                    _before = round(_inv.paid_amount_zar or 0, 2) if _inv.status == InvoiceStatus.partial else 0.0
                     _inv.status = InvoiceStatus.paid
                     _inv.paid_date = _txd
-                    _inv.paid_amount_zar = _amt
+                    _inv.paid_amount_zar = round(_before + _amt, 2)
                     try:
                         import journal as journal_engine
                         journal_engine.init_accounts(current_user.company_id, db)
+                        _full = _inv.paid_amount_zar
+                        _inv.paid_amount_zar = _amt            # post only what this deposit paid
                         journal_engine.post_invoice_paid(_inv, db)
+                        _inv.paid_amount_zar = _full
                     except Exception as je:
                         logger.error(f"Journal post failed for bank-matched invoice payment: {je}")
                         db.rollback()

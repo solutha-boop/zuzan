@@ -1975,6 +1975,9 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
   const [invTab, setInvTab] = useState("invoices");
   const [customers, setCustomers] = useState([]);
   useEffect(()=>{ api("/customers/").then(setCustomers).catch(()=>{}); },[]);
+  // Cash actually received this calendar month, per invoice (so part payments count in the month they were received)
+  const [payMonth, setPayMonth] = useState({});
+  useEffect(()=>{ api("/invoices/payments-this-month").then(r=>setPayMonth((r&&r.by_invoice)||{})).catch(()=>{}); },[liveInvoices]);
 
   const toZar = i => (i.currency && i.currency !== "ZAR") ? (i.amount||0) * (i.exchange_rate||1) : (i.amount||0);
   const today = new Date(); today.setHours(0,0,0,0);
@@ -1984,7 +1987,12 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
   // Paid invoices from the current calendar month are still "active" — only prior-month paid invoices are archived
   const isCurrentMonth = i => { const d = new Date(i.paid_date || i.date || 0); return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth(); };
   const totalPaid          = invoices.filter(i => i.status === "paid").reduce((s,i) => s + toZar(i), 0);
-  const totalPaidThisMonth = invoices.filter(i => i.status === "paid" && isCurrentMonth(i)).reduce((s,i) => s + toZar(i), 0);
+  const cashThisMonth = i => {
+    const v = payMonth[i._dbId || i.id];
+    if (v !== undefined) return v;
+    return (i.status === "paid" && isCurrentMonth(i)) ? toZar(i) : 0;   // older invoices with no payment entry
+  };
+  const totalPaidThisMonth = invoices.reduce((s,i) => s + Math.max(0, cashThisMonth(i)), 0);
   const totalOverdue = invoices.filter(isOverdue).reduce((s,i) => s + owedZar(i), 0);
   const totalPending = invoices.filter(i => (i.status === "sent" || i.status === "partial") && !isOverdue(i)).reduce((s,i) => s + owedZar(i), 0);
   const displayedInvoices = filterStatus === "overdue"
@@ -1994,7 +2002,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
     : filterStatus === "paid"
     ? invoices.filter(i => i.status === "paid") // archive view: all paid
     : filterStatus === "paid_this_month"
-    ? invoices.filter(i => i.status === "paid" && isCurrentMonth(i)) // current month paid only
+    ? invoices.filter(i => cashThisMonth(i) > 0) // received this month (incl. part payments)
     : filterStatus
     ? invoices.filter(i => i.status === filterStatus)
     : invoices.filter(i => i.status !== "paid" || isCurrentMonth(i)); // default: show active + current-month paid; archive prior-month paid
