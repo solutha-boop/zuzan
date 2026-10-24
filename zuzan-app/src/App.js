@@ -2260,7 +2260,11 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
               <div style={{fontSize:12,color:C.inkMid,marginBottom:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.desc}</div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
                 <div style={{fontWeight:800,fontSize:16,color:C.ink}}>
-                  {inv.currency && inv.currency!=="ZAR" ? fmt((inv.amount||0)*(inv.exchange_rate||1)) : fmt(inv.amount||0)}
+                  {inv.status === "partial"
+                    ? fmt(owedZar(inv))
+                    : inv.status === "paid" && inv.paid_amount_zar
+                    ? fmt(inv.paid_amount_zar)
+                    : inv.currency && inv.currency!=="ZAR" ? fmt((inv.amount||0)*(inv.exchange_rate||1)) : fmt(inv.amount||0)}
                 </div>
                 <div style={{fontSize:11,color:isOverdue(inv)?C.red:C.inkMid}}>Due {fmtDate(inv.due)}</div>
               </div>
@@ -2286,7 +2290,11 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                   <td style={{padding:"13px 16px",fontWeight:500}}>{inv.client}</td>
                   <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{inv.desc}</td>
                   <td style={{padding:"13px 16px",fontWeight:700}}>
-                    {inv.currency && inv.currency!=="ZAR"
+                    {inv.status === "partial"
+                      ? <div>{fmt(owedZar(inv))}<div style={{fontSize:10,color:"#b45309",fontWeight:400,marginTop:2}}>outstanding</div></div>
+                      : inv.status === "paid" && inv.paid_amount_zar
+                      ? fmt(inv.paid_amount_zar)
+                      : inv.currency && inv.currency!=="ZAR"
                       ? <>{fmt((inv.amount||0)*(inv.exchange_rate||1))}<div style={{fontSize:10,color:C.blue,fontWeight:400,marginTop:2}}>{fmtCurrency(inv.amount,inv.currency)}</div></>
                       : fmt(inv.amount||0)}
                   </td>
@@ -2297,8 +2305,6 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                       ? <span style={{display:"inline-flex",alignItems:"center",gap:4,background:C.greenLt,color:C.green,border:`1.5px solid ${C.green}`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:800,letterSpacing:0.5,textTransform:"uppercase",boxShadow:`0 0 0 2px ${C.green}22`}}>✓ Paid</span>
                       : inv.status === "paid"
                       ? <span style={{display:"inline-flex",alignItems:"center",gap:4,background:C.surface,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:600,letterSpacing:0.3}}>📦 Archived</span>
-                      : inv.status === "partial"
-                      ? <div><StatusBadge status="partial"/><div style={{fontSize:10,color:"#b45309",marginTop:2}}>{fmt(inv.paid_amount_zar||0)} of {fmt(toZar(inv))} paid · <strong>{fmt(Math.max(0,toZar(inv)-(inv.paid_amount_zar||0)))} due</strong></div></div>
                       : <StatusBadge status={isOverdue(inv)?"overdue":inv.status}/>
                     }
                   </td>
