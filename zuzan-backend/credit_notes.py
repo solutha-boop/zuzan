@@ -12,12 +12,19 @@ from database import get_db, Invoice, InvoiceStatus, Company, SessionLocal
 from auth import get_current_user, User
 from journal import company_vat_registered as _vatreg
 import logging
+import json as _json
 
 logger = logging.getLogger("zuzan.creditnotes")
 credit_notes_router = APIRouter()
 
 
+class StockReturn(BaseModel):
+    code: str                 # inventory SKU (or name) of an item sold on the linked invoice
+    quantity: float           # units coming back
+
+
 class CreditNoteCreate(BaseModel):
+    restock:      Optional[list[StockReturn]] = None   # goods physically returned: put back on the shelf at their original cost
     invoice_id:   Optional[int] = None   # link to original invoice (optional)
     client_name:  str
     description:  Optional[str] = None
@@ -44,6 +51,44 @@ def _cn_dict(cn) -> dict:
         "journal_entry_id": cn.journal_entry_id,
         "created_at":       cn.created_at.isoformat() if cn.created_at else None,
     }
+
+
+def _plan_stock_return(db, company_id: int, invoice, restock):
+    """Check each returned line against what the invoice sold less what earlier credit notes already took back.
+    Returns ([{item_id, qty, cost}], total_cost). Cost is the ORIGINAL per-unit cost of the sale."""
+    from database import InventoryItem, CreditNote
+    try:
+        sold = _json.loads(invoice.stock_cogs_json) if invoice.stock_cogs_json else []
+    except Exception:
+        sold = []
+    if not sold:
+        raise HTTPException(status_code=400, detail="That invoice did not sell any tracked stock, so there is nothing to put back.")
+    sold_q, sold_cost = {}, {}
+    for m in sold:
+        sold_q[m["item_id"]] = sold_q.get(m["item_id"], 0) + (m.get("qty") or 0)
+        sold_cost[m["item_id"]] = sold_cost.get(m["item_id"], 0) + (m.get("cost") or 0)
+    back_q = {}
+    for c in db.query(CreditNote).filter(CreditNote.company_id == company_id, CreditNote.invoice_id == invoice.id).all():
+        for r in (_json.loads(c.stock_returns_json) if c.stock_returns_json else []):
+            back_q[r["item_id"]] = back_q.get(r["item_id"], 0) + r["qty"]
+    items = db.query(InventoryItem).filter(InventoryItem.company_id == company_id, InventoryItem.is_active == True).all()
+    plan, total, seen = [], 0.0, {}
+    for ln in restock:
+        key = (ln.code or "").strip().lower()
+        it = next((i for i in items if (i.sku or "").strip().lower() == key or (i.name or "").strip().lower() == key), None)
+        if not it or it.id not in sold_q:
+            raise HTTPException(status_code=400, detail=f"'{ln.code}' was not sold on that invoice.")
+        if not (ln.quantity or 0) > 0:
+            raise HTTPException(status_code=400, detail=f"Returned quantity for '{ln.code}' must be greater than zero.")
+        seen[it.id] = seen.get(it.id, 0) + ln.quantity
+        left = sold_q[it.id] - back_q.get(it.id, 0)
+        if seen[it.id] > left + 1e-6:
+            raise HTTPException(status_code=400, detail=f"Cannot take back {seen[it.id]:g} of '{it.name}': {sold_q[it.id]:g} sold, {back_q.get(it.id, 0):g} already returned.")
+    for iid, q in seen.items():
+        unit = (sold_cost[iid] / sold_q[iid]) if sold_q[iid] else 0
+        cost = round(q * unit, 2)
+        plan.append({"item_id": iid, "qty": q, "cost": cost}); total += cost
+    return plan, round(total, 2)
 
 
 # ── GET /credit-notes ─────────────────────────────────────────────────────────
@@ -145,6 +190,13 @@ async def create_credit_note(
         issue_date=issue_date,
         notes=body.notes,
     )
+    # Goods returned: validate against what the linked invoice actually sold (and earlier returns)
+    _returns, _return_cost = [], 0.0
+    if body.restock:
+        if linked_inv is None:
+            raise HTTPException(status_code=400, detail="To put stock back, link the credit note to the invoice that sold it.")
+        _returns, _return_cost = _plan_stock_return(db, current_user.company_id, linked_inv, body.restock)
+        cn.stock_returns_json = _json.dumps(_returns)
     db.add(cn)
     db.flush()  # get cn.id
 
@@ -152,6 +204,15 @@ async def create_credit_note(
     try:
         je_id = _post_credit_note_journal(cn, current_user.company_id, db)
         cn.journal_entry_id = je_id
+        if _returns:
+            from database import InventoryItem as _II
+            import journal as _jj
+            for _r in _returns:
+                _it = db.query(_II).filter(_II.id == _r["item_id"], _II.company_id == current_user.company_id).first()
+                if _it:
+                    _it.quantity_on_hand = round((_it.quantity_on_hand or 0) + _r["qty"], 4)
+            if _return_cost > 0:
+                _jj.post_credit_note_stock_return(cn, _return_cost, db)
     except Exception as e:
         logger.error(f"Credit note journal post failed: {e}")
         db.rollback()
@@ -197,6 +258,21 @@ async def delete_credit_note(
     try:
         import journal as _j
         _j.reverse_journal_entries(current_user.company_id, "credit_note", cn.id, db, reason=f"Credit note {cn.credit_note_number} deleted")
+        _rets = _json.loads(cn.stock_returns_json) if cn.stock_returns_json else []
+        if _rets:
+            from database import InventoryItem as _II
+            for _r in _rets:
+                _it = db.query(_II).filter(_II.id == _r["item_id"], _II.company_id == current_user.company_id).first()
+                if _it and (_it.quantity_on_hand or 0) + 1e-6 < _r["qty"]:
+                    raise HTTPException(status_code=400, detail=f"Cannot delete {cn.credit_note_number}: the {_r['qty']:g} returned units of '{_it.name}' are no longer on hand.")
+            for _r in _rets:
+                _it = db.query(_II).filter(_II.id == _r["item_id"], _II.company_id == current_user.company_id).first()
+                if _it:
+                    _it.quantity_on_hand = round((_it.quantity_on_hand or 0) - _r["qty"], 4)
+            _j.reverse_journal_entries(current_user.company_id, "credit_note_stock", cn.id, db, reason=f"Credit note {cn.credit_note_number} deleted")
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         logger.error(f"Credit note reversal failed: {e}")
         db.rollback()

@@ -1067,6 +1067,7 @@ class CreditNote(Base):
     issue_date          = Column(DateTime, default=datetime.utcnow)
     notes               = Column(Text, nullable=True)
     journal_entry_id    = Column(Integer, nullable=True)
+    stock_returns_json  = Column(Text, nullable=True)   # [{item_id, qty, cost}] goods put back on the shelf by this credit note
     created_at          = Column(DateTime, default=datetime.utcnow)
     company             = relationship("Company", back_populates="credit_notes")
     invoice             = relationship("Invoice")
@@ -1667,6 +1668,7 @@ def init_db():
             "UPDATE purchase_orders SET stock_received_net = COALESCE((SELECT SUM(jl.debit - jl.credit) FROM journal_lines jl JOIN journal_entries je ON je.id = jl.entry_id JOIN accounts a ON a.id = jl.account_id WHERE je.source = 'purchase_order' AND je.source_id = purchase_orders.id AND je.company_id = purchase_orders.company_id AND a.code = '1200'), 0) WHERE COALESCE(stock_received_net, 0) = 0",
             "UPDATE journal_lines SET account_id = (SELECT a2.id FROM accounts a2 WHERE a2.code = '2100' AND a2.company_id = (SELECT je.company_id FROM journal_entries je WHERE je.id = journal_lines.entry_id)) WHERE entry_id IN (SELECT id FROM journal_entries WHERE source IN ('credit_note', 'credit_note_reversal')) AND account_id IN (SELECT id FROM accounts WHERE code = '2200') AND EXISTS (SELECT 1 FROM accounts a3 WHERE a3.code = '2100' AND a3.company_id = (SELECT je2.company_id FROM journal_entries je2 WHERE je2.id = journal_lines.entry_id))",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS stock_cogs_json TEXT",
+            "ALTER TABLE credit_notes ADD COLUMN IF NOT EXISTS stock_returns_json TEXT",
             "ALTER TABLE fixed_assets ADD COLUMN IF NOT EXISTS disposal_vat FLOAT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_reason TEXT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS bad_debt_recovered_zar FLOAT DEFAULT 0",

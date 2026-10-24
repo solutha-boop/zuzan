@@ -377,16 +377,14 @@ def _zar_parts(invoice):
 
 
 def _open_zar_parts(invoice):
-    """(open_total_zar, open_vat_zar): the ZAR still carried in Accounts Receivable on an invoice
-    after any part payment. Part payments clear AR by the ZAR received, so for part-paid (and
-    part-paid-then-written-off) invoices the open balance is total - paid_amount_zar; the VAT
-    portion is apportioned pro rata."""
+    """(total, vat) in ZAR of the part of the invoice still unpaid. A part-paid (or written-off
+    part-paid) invoice only carries the balance; VAT is apportioned in the same proportion."""
     total, vat = _zar_parts(invoice)
-    status = getattr(invoice.status, "value", invoice.status)
-    paid = float(invoice.paid_amount_zar or 0) if status in ("partial", "written_off") else 0.0
-    open_total = round(max(0.0, total - paid), 2)
-    open_vat = round(vat * (open_total / total), 2) if total else 0.0
-    return open_total, open_vat
+    if str(getattr(invoice, "status", "")).split(".")[-1] in ("partial", "written_off") and invoice.paid_amount_zar and total:
+        paid = min(round(invoice.paid_amount_zar, 2), total)
+        frac = (total - paid) / total
+        return round(total - paid, 2), round(vat * frac, 2)
+    return total, vat
 
 
 def post_bad_debt_writeoff(invoice, db: Session, when=None, reason=None) -> JournalEntry:
@@ -398,7 +396,7 @@ def post_bad_debt_writeoff(invoice, db: Session, when=None, reason=None) -> Jour
       CR Accounts Receivable (1100)    total
     """
     cid = invoice.company_id
-    total, vat_amt = _open_zar_parts(invoice)      # only the unpaid balance of a part-paid invoice
+    total, vat_amt = _open_zar_parts(invoice)   # only the unpaid balance is written off
     net = round(total - vat_amt, 2)
     entry = _make_entry(cid, when or datetime.utcnow(),
         f"Bad debt written off — {invoice.client_name}: {reason or ''}",
@@ -423,7 +421,7 @@ def post_bad_debt_recovery(invoice, amount_zar: float, db: Session, when=None) -
       CR VAT Output (2100)             VAT portion
     """
     cid = invoice.company_id
-    total, vat_total = _open_zar_parts(invoice)    # the balance that was written off
+    total, vat_total = _open_zar_parts(invoice)
     portion = (amount_zar / total) if total else 0
     vat_part = round(vat_total * portion, 2)
     net = round(amount_zar - vat_part, 2)
@@ -441,7 +439,7 @@ def post_bad_debt_recovery(invoice, amount_zar: float, db: Session, when=None) -
     return entry
 
 
-def post_invoice_paid(invoice, db: Session, ar_zar=None) -> JournalEntry:
+def post_invoice_paid(invoice, db: Session, ar_zar: float = None) -> JournalEntry:
     """
     Invoice paid by client:
       DR Bank / Cash           (total incl VAT)
@@ -472,7 +470,7 @@ def post_invoice_paid(invoice, db: Session, ar_zar=None) -> JournalEntry:
     lines = [_line(entry.id, bank, debit=zar_received, description="Cash received")]
     ar_carried = zar_received
     if ar_zar is not None:
-        ar_carried = round(ar_zar, 2)          # caller states the AR to clear (foreign part/final payments)
+        ar_carried = round(ar_zar, 2)          # explicit AR to clear (part-payment settlements)
     elif invoice.currency and invoice.currency != "ZAR":
         ar_carried = round((invoice.total_amount or 0) * float(invoice.exchange_rate or 1.0), 2)
     lines.append(_line(entry.id, ar, credit=ar_carried, description=invoice.invoice_number))
@@ -507,6 +505,23 @@ def post_invoice_cogs(invoice, cogs_amount: float, db: Session) -> JournalEntry:
     lines = [
         _line(entry.id, cogs_acct, debit=cogs_amount,  description="Cost of goods sold"),
         _line(entry.id, inventory, credit=cogs_amount, description=invoice.invoice_number),
+    ]
+    _assert_balanced(lines)
+    for l in lines: db.add(l)
+    return entry
+
+
+def post_credit_note_stock_return(cn, cost_amount: float, db: Session) -> JournalEntry:
+    """Goods returned against a credit note go back on the shelf at their ORIGINAL cost:
+      DR Inventory at Cost (1200) / CR Cost of Sales (5000)"""
+    cid = cn.company_id
+    cost_amount = round(cost_amount, 2)
+    entry = _make_entry(cid, cn.issue_date or datetime.utcnow(),
+        f"Stock returned - {cn.credit_note_number} ({cn.client_name})",
+        cn.credit_note_number, "credit_note_stock", cn.id, db)
+    lines = [
+        _line(entry.id, get_account(cid, "1200", db), debit=cost_amount,  description="Returned stock"),
+        _line(entry.id, get_account(cid, "5000", db), credit=cost_amount, description=cn.credit_note_number),
     ]
     _assert_balanced(lines)
     for l in lines: db.add(l)
@@ -1205,39 +1220,12 @@ def backfill_company(company_id: int, db: Session) -> dict:
 
     # Invoice payments
     for inv in db.query(Invoice).filter(Invoice.company_id == company_id, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all():
-        is_foreign = bool(inv.currency and inv.currency != "ZAR")
         if ("invoice_payment", inv.id) not in existing:
             try:
-                _ar = inv.paid_amount_zar if (is_foreign and inv.status == InvoiceStatus.partial and inv.paid_amount_zar) else None
-                post_invoice_paid(inv, db, ar_zar=_ar)
+                post_invoice_paid(inv, db)
                 posted["invoice_payments"] += 1
             except Exception as e:
                 posted["errors"].append(f"Invoice payment {inv.invoice_number}: {e}")
-        elif inv.paid_amount_zar and (not is_foreign or inv.status == InvoiceStatus.partial):
-            # Top-up repair (audit fix 2026-10-23): ZAR invoices can be part-paid in several
-            # instalments, each posting its own entry. If an instalment's entry is missing,
-            # net Bank (1000) debits on this invoice's payment entries (reversals net out)
-            # fall short of paid_amount_zar — post the shortfall.
-            try:
-                bank = get_account(company_id, "1000", db)
-                rows = (db.query(JournalLine.debit, JournalLine.credit)
-                          .join(JournalEntry, JournalEntry.id == JournalLine.entry_id)
-                          .filter(JournalEntry.company_id == company_id,
-                                  JournalEntry.source == "invoice_payment",
-                                  JournalEntry.source_id == inv.id,
-                                  JournalLine.account_id == bank.id).all())
-                posted_net = round(sum((d or 0) - (c or 0) for d, c in rows), 2)
-                shortfall = round((inv.paid_amount_zar or 0) - posted_net, 2)
-                if shortfall > 0.01:
-                    saved = inv.paid_amount_zar
-                    inv.paid_amount_zar = shortfall
-                    try:
-                        post_invoice_paid(inv, db, ar_zar=(shortfall if is_foreign else None))
-                    finally:
-                        inv.paid_amount_zar = saved
-                    posted["invoice_payments"] += 1
-            except Exception as e:
-                posted["errors"].append(f"Invoice payment top-up {inv.invoice_number}: {e}")
 
     # Expenses
     for exp in db.query(Expense).filter(Expense.company_id == company_id).all():

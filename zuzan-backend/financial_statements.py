@@ -324,31 +324,13 @@ def annual_financial_statements(
     # Current-year income tax is an expense on the income statement but is not journalled, so carry the
     # estimate as a computed current liability and take it out of retained earnings - otherwise the
     # balance sheet, equity statement and cash flow do not agree with the income statement.
-    # Provisional tax paid (IRP6) is debited to 2127 and already sits in the liabilities as a negative
-    # line. Net it against the income tax estimate so the statement shows ONE current tax line:
-    # payable (estimate - payments) or, when payments exceed the estimate, a current tax receivable.
-    # Totals are unchanged (presentation only), so the equity statement and cash flow still agree.
-    _prov = next((l for l in current_liabilities if l["code"] == "2127"), None)
-    _prov_bal = _prov["amount"] if _prov else 0.0
-    if _prov:
-        current_liabilities       = [l for l in current_liabilities if l["code"] != "2127"]
-        total_current_liabilities = _r(total_current_liabilities - _prov_bal)
-        total_liabilities         = _r(total_liabilities - _prov_bal)
-    _tax_net = _r(tax_expense + _prov_bal)       # _prov_bal is negative once provisional tax has been paid
-    if _tax_net > 0.005:
+    if tax_expense > 0.005:
         current_liabilities = current_liabilities + [
-            {"code": "2400", "name": "Income Tax Payable (estimate, net of provisional payments)" if _prov else "Income Tax Payable (estimate)",
-             "amount": _tax_net}
+            {"code": "2400", "name": "Income Tax Payable (estimate)", "amount": _r(tax_expense)}
         ]
-        total_current_liabilities = _r(total_current_liabilities + _tax_net)
-        total_liabilities         = _r(total_liabilities + _tax_net)
-    elif _tax_net < -0.005:
-        current_assets = current_assets + [
-            {"code": "1490", "name": "Income Tax Receivable (provisional payments exceed estimate)", "amount": _r(-_tax_net)}
-        ]
-        total_current_assets = _r(total_current_assets - _tax_net)
-        total_assets         = _r(total_assets - _tax_net)
-    retained_earnings = _r(retained_earnings - tax_expense)
+        total_current_liabilities = _r(total_current_liabilities + tax_expense)
+        total_liabilities         = _r(total_liabilities + tax_expense)
+        retained_earnings         = _r(retained_earnings - tax_expense)
 
     if dt_closing > 0.005:
         non_current_liabilities = non_current_liabilities + [
@@ -615,7 +597,7 @@ def annual_financial_statements(
             .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
             .filter(
                 JournalEntry.company_id == cid,
-                JournalEntry.source.in_(["purchase_order", "purchase_order_reversal"]),
+                JournalEntry.source.in_(["purchase_order", "purchase_order_reversal", "po_payment", "po_payment_reversal"]),
                 JournalEntry.source_id.in_([po.id for po in open_pos]),
                 JournalEntry.date <= end,
                 JournalLine.account_id == ap_acct.id,

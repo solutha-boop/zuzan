@@ -2861,7 +2861,7 @@ async def reconciliation(
                 .join(JournalLine, JournalLine.entry_id == _JE.id)
                 .filter(
                     _JE.company_id == cid,
-                    _JE.source.in_(["purchase_order", "purchase_order_reversal"]),
+                    _JE.source.in_(["purchase_order", "purchase_order_reversal", "po_payment", "po_payment_reversal"]),
                     _JE.source_id.in_([po.id for po in open_po_list]),
                     JournalLine.account_id == ap_acct.id,
                 )
@@ -3333,7 +3333,7 @@ async def cash_flow_13week(
             .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
             .filter(
                 JournalEntry.company_id == cid,
-                JournalEntry.source.in_(["purchase_order", "purchase_order_reversal"]),
+                JournalEntry.source.in_(["purchase_order", "purchase_order_reversal", "po_payment", "po_payment_reversal"]),
                 JournalEntry.source_id.in_(po_ids),
                 JournalLine.account_id == ap_acct.id,
             )
@@ -4033,7 +4033,7 @@ async def creditors_aging(
             .join(_JL, _JL.entry_id == _JE.id)
             .filter(
                 _JE.company_id == cid,
-                _JE.source.in_(["purchase_order", "purchase_order_reversal"]),
+                _JE.source.in_(["purchase_order", "purchase_order_reversal", "po_payment", "po_payment_reversal"]),
                 _JE.source_id.in_(po_ids),
                 _JL.account_id == ap_acct.id,
             )
@@ -4283,8 +4283,12 @@ async def vat201(
     from database import CreditNote as _CN
     cn_vat_total = 0.0
     for _cn in db.query(_CN).filter(_CN.company_id == cid, _CN.issue_date >= start, _CN.issue_date < end).all():
-        _ct = round(_cn.total_amount or 0, 2)
-        _cv = round(_cn.vat_amount or 0, 2)
+        # Foreign-currency credit notes are converted at the original invoice's rate (as the invoice itself was)
+        _cr = 1.0
+        if (_cn.currency or "ZAR") != "ZAR":
+            _cr = float(getattr(getattr(_cn, "invoice", None), "exchange_rate", None) or 1.0)
+        _ct = round((_cn.total_amount or 0) * _cr, 2)
+        _cv = round((_cn.vat_amount or 0) * _cr, 2)
         if _cv > 0:
             standard_supplies_incl -= _ct
             output_vat -= _cv

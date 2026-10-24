@@ -700,6 +700,8 @@ async def list_invoices(
 
 @invoices_router.post("/")
 async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not (data.cogs_amount and data.cogs_amount > 0):
+        _require_stock(data.items_json, current_user.company_id, db)
     # Check plan invoice limits
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     limits = {"starter": 20, "professional": 50, "business": 999999}
@@ -793,12 +795,45 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     return invoice
 
 
+def _stock_shortages(items_json, company_id: int, db: Session) -> list:
+    """Lines whose Code is an inventory SKU but whose total quantity exceeds what is on hand."""
+    import json as _json
+    try:
+        lines = _json.loads(items_json) if items_json else []
+    except Exception:
+        return []
+    want = {}
+    for ln in (lines if isinstance(lines, list) else []):
+        code = (str(ln.get("code") or "")).strip().lower()
+        try:
+            q = float(ln.get("quantity") or 0)
+        except Exception:
+            q = 0
+        if code and q > 0:
+            want[code] = want.get(code, 0) + q
+    if not want:
+        return []
+    short = []
+    for i in db.query(InventoryItem).filter(InventoryItem.company_id == company_id, InventoryItem.is_active == True).all():
+        k = (i.sku or "").strip().lower()
+        if k in want and want[k] > (i.quantity_on_hand or 0) + 1e-6:
+            short.append(f"{i.name}: need {want[k]:g}, only {(i.quantity_on_hand or 0):g} on hand")
+    return short
+
+
+def _require_stock(items_json, company_id: int, db: Session):
+    short = _stock_shortages(items_json, company_id, db)
+    if short:
+        raise HTTPException(status_code=400, detail="Not enough stock to invoice this. " + "; ".join(short) + ". Receive stock first (purchase order or stock adjustment).")
+
+
 def _apply_invoice_stock(invoice, db: Session, force: bool = False):
     """Invoice lines whose Code equals an inventory SKU sell stock: reduce quantity on hand and post
     DR Cost of Sales (5000) / CR Inventory (1200) at the item's cost. Idempotent per invoice."""
     import json as _json
     if not force and invoice.stock_cogs_json != "":
         return   # already applied, or a legacy invoice that must never touch stock
+    _require_stock(invoice.items_json, invoice.company_id, db)   # never sell stock that is not there (keeps Inventory 1200 >= 0)
     moves, cogs = [], 0.0
     try:
         lines = _json.loads(invoice.items_json) if invoice.items_json else []
@@ -2180,148 +2215,150 @@ async def import_bank_statement(
     ignored           = 0
     possible_matches  = []
 
-    journal_engine.init_accounts(current_user.company_id, db)   # once, outside the per-line SAVEPOINTs (it commits)
-    failed = []            # lines that could not be posted (rolled back individually via SAVEPOINT)
     for txn in data.transactions:
-        try:
-          with db.begin_nested():   # SAVEPOINT: one bad line must not discard or corrupt the rest of the import
-              if txn.type not in ("debit", "credit") or not (txn.amount and txn.amount > 0):
-                  ignored += 1          # zero/negative amounts or unknown type are never posted
-                  continue
-              if txn.type == "debit":
-                  # Check for duplicate — same vendor, amount and date.
-                  # Audit fix 2026-07-04: the previous filter compared txn.description against
-                  # Expense.description, but imported expenses store the bank narrative in
-                  # `vendor` and a fixed "Imported from ..." string in `description` — so the
-                  # dedupe never matched and re-importing a statement duplicated every expense.
-                  existing = db.query(Expense).filter(
-                      Expense.company_id   == current_user.company_id,
-                      Expense.vendor       == txn.description[:100],
-                      Expense.amount       == txn.amount,
-                      Expense.expense_date == datetime.fromisoformat(txn.date),
-                  ).first()
+        if txn.type not in ("debit", "credit") or not (txn.amount and txn.amount > 0):
+            ignored += 1          # zero/negative amounts or unknown type are never posted
+            continue
+        if txn.type == "debit":
+            # Check for duplicate — same vendor, amount and date.
+            # Audit fix 2026-07-04: the previous filter compared txn.description against
+            # Expense.description, but imported expenses store the bank narrative in
+            # `vendor` and a fixed "Imported from ..." string in `description` — so the
+            # dedupe never matched and re-importing a statement duplicated every expense.
+            existing = db.query(Expense).filter(
+                Expense.company_id   == current_user.company_id,
+                Expense.vendor       == txn.description[:100],
+                Expense.amount       == txn.amount,
+                Expense.expense_date == datetime.fromisoformat(txn.date),
+            ).first()
 
-                  if existing:
-                      expenses_skipped += 1
-                      continue
+            if existing:
+                expenses_skipped += 1
+                continue
 
-                  # Calculate VAT split if applicable (bank amount is VAT-inclusive).
-                  # Audit fix 2026-07-04: the frontend sends `has_vat` + a precomputed
-                  # `vat_amount` (never the legacy `vat_applicable`), so checking only
-                  # vat_applicable dropped the VAT split on every imported expense —
-                  # overstating P&L expenses and understating input VAT. Mirror the
-                  # credit branch (journal.post_bank_income): honor either flag, prefer
-                  # the provided vat_amount, and fall back to 15/115 back-calculation.
-                  from journal import company_vat_registered as _vatreg
-                  if (txn.has_vat or txn.vat_applicable) and _vatreg(db, current_user.company_id):
-                      imp_vat   = round(float(txn.vat_amount or 0), 2)
-                      if imp_vat <= 0:
-                          imp_vat = round(txn.amount * 0.15 / 1.15, 2)  # back-calculate from incl-VAT
-                      imp_total = txn.amount                            # store as-is (VAT-inclusive)
-                  else:
-                      imp_vat   = 0.0
-                      imp_total = txn.amount
+            # Calculate VAT split if applicable (bank amount is VAT-inclusive).
+            # Audit fix 2026-07-04: the frontend sends `has_vat` + a precomputed
+            # `vat_amount` (never the legacy `vat_applicable`), so checking only
+            # vat_applicable dropped the VAT split on every imported expense —
+            # overstating P&L expenses and understating input VAT. Mirror the
+            # credit branch (journal.post_bank_income): honor either flag, prefer
+            # the provided vat_amount, and fall back to 15/115 back-calculation.
+            from journal import company_vat_registered as _vatreg
+            if (txn.has_vat or txn.vat_applicable) and _vatreg(db, current_user.company_id):
+                imp_vat   = round(float(txn.vat_amount or 0), 2)
+                if imp_vat <= 0:
+                    imp_vat = round(txn.amount * 0.15 / 1.15, 2)  # back-calculate from incl-VAT
+                imp_total = txn.amount                            # store as-is (VAT-inclusive)
+            else:
+                imp_vat   = 0.0
+                imp_total = txn.amount
 
-                  expense = Expense(
-                      company_id   = current_user.company_id,
-                      vendor       = txn.description[:100],
-                      description  = f"Imported from {data.bank.upper()} statement",
-                      amount       = imp_total,
-                      vat_amount   = imp_vat,
-                      category     = txn.category,
-                      expense_date = datetime.fromisoformat(txn.date),
-                  )
-                  db.add(expense)
-                  db.flush()  # get expense.id before journal post
-                  try:
-                      journal_engine.post_expense(expense, db)
-                  except Exception as je:
-                      logger.error(f"Journal post failed for bank import expense: {je}")
-                      raise RuntimeError(f"journal entry failed: {je}")
-                  expenses_created += 1
+            expense = Expense(
+                company_id   = current_user.company_id,
+                vendor       = txn.description[:100],
+                description  = f"Imported from {data.bank.upper()} statement",
+                amount       = imp_total,
+                vat_amount   = imp_vat,
+                category     = txn.category,
+                expense_date = datetime.fromisoformat(txn.date),
+            )
+            db.add(expense)
+            db.flush()  # get expense.id before journal post
+            try:
+                import journal as journal_engine
+                journal_engine.init_accounts(current_user.company_id, db)
+                journal_engine.post_expense(expense, db)
+            except Exception as je:
+                logger.error(f"Journal post failed for bank import expense: {je}")
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Bank import stopped - a journal entry failed ({je}). Nothing from this import was saved; please retry.")
+            expenses_created += 1
 
-              elif txn.type == "credit":
-                  # Duplicate check (audit fix 2026-07-04): credits previously had NO dedupe,
-                  # so re-importing a statement re-posted the income journal entry and
-                  # double-counted revenue in every report. Match on the exact fields
-                  # post_bank_income writes: source, date, description, and the bank-debit
-                  # line amount. The query autoflushes entries posted earlier in this same
-                  # batch, so within-file duplicates are caught too. (Two genuinely identical
-                  # credits — same day, description and amount — must be imported manually.)
-                  from database import JournalEntry, JournalLine
-                  from datetime import date as _date
-                  dup_q = db.query(JournalEntry.id).join(
-                      JournalLine, JournalLine.entry_id == JournalEntry.id
-                  ).filter(
-                      JournalEntry.company_id  == current_user.company_id,
-                      JournalEntry.source      == "bank_import_income",
-                      JournalEntry.description == f"Bank income — {txn.description}",
-                      JournalLine.debit        == round(float(txn.amount or 0), 2),
-                  )
-                  try:
-                      dup_q = dup_q.filter(JournalEntry.date == _date.fromisoformat(txn.date))
-                  except Exception:
-                      pass  # unparseable date — post_bank_income falls back to today; match on description+amount only
-                  if dup_q.first():
-                      credits_skipped += 1
-                      continue
+        elif txn.type == "credit":
+            # Duplicate check (audit fix 2026-07-04): credits previously had NO dedupe,
+            # so re-importing a statement re-posted the income journal entry and
+            # double-counted revenue in every report. Match on the exact fields
+            # post_bank_income writes: source, date, description, and the bank-debit
+            # line amount. The query autoflushes entries posted earlier in this same
+            # batch, so within-file duplicates are caught too. (Two genuinely identical
+            # credits — same day, description and amount — must be imported manually.)
+            from database import JournalEntry, JournalLine
+            from datetime import date as _date
+            dup_q = db.query(JournalEntry.id).join(
+                JournalLine, JournalLine.entry_id == JournalEntry.id
+            ).filter(
+                JournalEntry.company_id  == current_user.company_id,
+                JournalEntry.source      == "bank_import_income",
+                JournalEntry.description == f"Bank income — {txn.description}",
+                JournalLine.debit        == round(float(txn.amount or 0), 2),
+            )
+            try:
+                dup_q = dup_q.filter(JournalEntry.date == _date.fromisoformat(txn.date))
+            except Exception:
+                pass  # unparseable date — post_bank_income falls back to today; match on description+amount only
+            if dup_q.first():
+                credits_skipped += 1
+                continue
 
-                  # Is this the payment of an invoice already raised in ZuZan? Posting it as new income
-                  # would count the revenue twice and leave the invoice unpaid in Accounts Receivable.
-                  if (txn.amount or 0) > 0:
-                      _amt = round(float(txn.amount), 2)
-                      try:
-                          _txd = datetime.fromisoformat(txn.date)
-                      except Exception:
-                          _txd = datetime.utcnow()
-                      # (a) already matched on an earlier import of the same statement -> duplicate
-                      _paid = db.query(Invoice).filter(
-                          Invoice.company_id == current_user.company_id,
-                          Invoice.status == InvoiceStatus.paid,
-                          Invoice.paid_amount_zar == _amt,
-                          Invoice.paid_date >= _txd.replace(hour=0, minute=0, second=0, microsecond=0),
-                          Invoice.paid_date <  _txd.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
-                      ).all()
-                      if any(_desc_names_client(txn.description, i.client_name) for i in _paid):
-                          credits_skipped += 1
-                          continue
-                      # (b) one open ZAR invoice for exactly this total whose client is named in the narrative
-                      _open = [i for i in db.query(Invoice).filter(
-                                  Invoice.company_id == current_user.company_id,
-                                  Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
-                               if (not i.currency or i.currency == "ZAR")
-                               and abs((i.total_amount or 0) - (i.paid_amount_zar or 0 if i.status == InvoiceStatus.partial else 0) - _amt) < 0.005]
-                      _named = [i for i in _open if _desc_names_client(txn.description, i.client_name)]
-                      if len(_named) == 1:
-                          _inv = _named[0]
-                          _before = round(_inv.paid_amount_zar or 0, 2) if _inv.status == InvoiceStatus.partial else 0.0
-                          _inv.status = InvoiceStatus.paid
-                          _inv.paid_date = _txd
-                          _inv.paid_amount_zar = round(_before + _amt, 2)
-                          try:
-                              _full = _inv.paid_amount_zar
-                              _inv.paid_amount_zar = _amt            # post only what this deposit paid
-                              journal_engine.post_invoice_paid(_inv, db)
-                              _inv.paid_amount_zar = _full
-                          except Exception as je:
-                              logger.error(f"Journal post failed for bank-matched invoice payment: {je}")
-                              raise RuntimeError(f"journal entry failed: {je}")
-                          credits_matched += 1
-                          continue
-                      if _open:
-                          possible_matches.append({"description": txn.description, "amount": _amt, "date": txn.date,
-                                                   "possible_invoices": [i.invoice_number for i in _open]})
+            # Is this the payment of an invoice already raised in ZuZan? Posting it as new income
+            # would count the revenue twice and leave the invoice unpaid in Accounts Receivable.
+            if (txn.amount or 0) > 0:
+                _amt = round(float(txn.amount), 2)
+                try:
+                    _txd = datetime.fromisoformat(txn.date)
+                except Exception:
+                    _txd = datetime.utcnow()
+                # (a) already matched on an earlier import of the same statement -> duplicate
+                _paid = db.query(Invoice).filter(
+                    Invoice.company_id == current_user.company_id,
+                    Invoice.status == InvoiceStatus.paid,
+                    Invoice.paid_amount_zar == _amt,
+                    Invoice.paid_date >= _txd.replace(hour=0, minute=0, second=0, microsecond=0),
+                    Invoice.paid_date <  _txd.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
+                ).all()
+                if any(_desc_names_client(txn.description, i.client_name) for i in _paid):
+                    credits_skipped += 1
+                    continue
+                # (b) one open ZAR invoice for exactly this total whose client is named in the narrative
+                _open = [i for i in db.query(Invoice).filter(
+                            Invoice.company_id == current_user.company_id,
+                            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
+                         if (not i.currency or i.currency == "ZAR")
+                         and abs((i.total_amount or 0) - (i.paid_amount_zar or 0 if i.status == InvoiceStatus.partial else 0) - _amt) < 0.005]
+                _named = [i for i in _open if _desc_names_client(txn.description, i.client_name)]
+                if len(_named) == 1:
+                    _inv = _named[0]
+                    _before = round(_inv.paid_amount_zar or 0, 2) if _inv.status == InvoiceStatus.partial else 0.0
+                    _inv.status = InvoiceStatus.paid
+                    _inv.paid_date = _txd
+                    _inv.paid_amount_zar = round(_before + _amt, 2)
+                    try:
+                        import journal as journal_engine
+                        journal_engine.init_accounts(current_user.company_id, db)
+                        _full = _inv.paid_amount_zar
+                        _inv.paid_amount_zar = _amt            # post only what this deposit paid
+                        journal_engine.post_invoice_paid(_inv, db)
+                        _inv.paid_amount_zar = _full
+                    except Exception as je:
+                        logger.error(f"Journal post failed for bank-matched invoice payment: {je}")
+                        db.rollback()
+                        raise HTTPException(status_code=500, detail=f"Bank import stopped - a journal entry failed ({je}). Nothing from this import was saved; please retry.")
+                    credits_matched += 1
+                    continue
+                if _open:
+                    possible_matches.append({"description": txn.description, "amount": _amt, "date": txn.date,
+                                             "possible_invoices": [i.invoice_number for i in _open]})
 
-                  # Post a journal entry so income flows into P&L and the balance sheet
-                  try:
-                      journal_engine.post_bank_income(current_user.company_id, txn, db)
-                      credits_recorded += 1
-                  except Exception as je:
-                      logger.error(f"Journal post failed for bank import income: {je}")
-                      raise RuntimeError(f"journal entry failed: {je}")
-        except Exception as _le:
-            logger.error(f"Bank import line failed and was rolled back: {txn.description!r}: {_le}")
-            failed.append({"description": txn.description, "amount": txn.amount, "date": txn.date, "error": str(_le)})
+            # Post a journal entry so income flows into P&L and the balance sheet
+            try:
+                import journal as journal_engine
+                journal_engine.init_accounts(current_user.company_id, db)
+                journal_engine.post_bank_income(current_user.company_id, txn, db)
+                credits_recorded += 1
+            except Exception as je:
+                logger.error(f"Journal post failed for bank import income: {je}")
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Bank import stopped - a journal entry failed ({je}). Nothing from this import was saved; please retry.")
 
     db.commit()
 
@@ -2335,11 +2372,9 @@ async def import_bank_statement(
         "credits_matched_to_invoices": credits_matched,
         "ignored":          ignored,
         "possible_invoice_matches": possible_matches,
-        "failed":           failed,
         "total_processed":  len(data.transactions),
         "message":          (f"Imported {expenses_created} expenses and {credits_recorded} income entries; "
                              f"{credits_matched} receipts matched to open invoices and marked paid"
                              + (f"; {len(possible_matches)} receipt(s) have the same amount as an open invoice but the client is not named - check they are not invoice payments recorded twice (they were posted as new income)" if possible_matches else "")
-                             + (f"; {ignored} line(s) ignored (zero/negative amount)" if ignored else "")
-                             + (f"; {len(failed)} line(s) could NOT be posted and were skipped - nothing partial was saved for them; fix and re-import (duplicates are skipped automatically)" if failed else "") + "."),
+                             + (f"; {ignored} line(s) ignored (zero/negative amount)" if ignored else "") + "."),
     }

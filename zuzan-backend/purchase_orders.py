@@ -54,6 +54,14 @@ def next_po_number(db, company_id):
         candidate = f"PO-{str(n).zfill(4)}"
     return candidate
 
+def _check_lines(items):
+    for it in items or []:
+        if not (it.quantity or 0) > 0:
+            raise HTTPException(400, f"Quantity for '{it.description}' must be greater than zero")
+        if (it.unit_price or 0) < 0:
+            raise HTTPException(400, f"Unit price for '{it.description}' cannot be negative")
+
+
 def calc_totals(items, vat_applicable):
     subtotal = sum(i.quantity * i.unit_price for i in items)
     vat = round(subtotal * 0.15, 2) if vat_applicable else 0
@@ -102,6 +110,7 @@ async def list_pos(
 
 @router.post("/")
 async def create_po(data: POCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _check_lines(data.items)
     try:
         supplier_name = data.supplier_name
         if data.supplier_id and not supplier_name:
@@ -160,6 +169,7 @@ async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get
     if data.delivery_date is not None:
         po.delivery_date = datetime.strptime(data.delivery_date, "%Y-%m-%d")
     if data.items is not None:
+        _check_lines(data.items)
         # Block item edits once goods have been received (audit fix 2026-07-02):
         # replacing items would wipe quantity_received tracking and desync the
         # journal entries already posted for prior deliveries.
@@ -230,7 +240,22 @@ async def delete_po(po_id: int, current_user: User = Depends(get_current_user), 
     # Block deletion of POs that have already been received or paid — these have
     # journal entries (DR COGS / CR AP, and DR AP / CR Bank) that must be reversed
     # first, otherwise COGS and the AP control account (2000) become permanently misstated.
+    _stock_back = []   # (inventory item, qty) - stock that this PO's deliveries put on the shelf
     if po.status in ("received", "partial", "paid"):
+        _by_key = {}
+        for _ii in db.query(InventoryItem).filter(InventoryItem.company_id == current_user.company_id, InventoryItem.is_active == True).all():
+            for _k in ((_ii.sku or "").strip().lower(), (_ii.name or "").strip().lower()):
+                if _k: _by_key.setdefault(_k, _ii)
+        _need = {}
+        for _it in po.items:
+            _ii = _by_key.get((_it.description or "").strip().lower())
+            if _ii and (_it.quantity_received or 0) > 0:
+                _need[_ii.id] = (_ii, _need.get(_ii.id, (_ii, 0))[1] + _it.quantity_received)
+        for _ii, _q in _need.values():
+            if (_ii.quantity_on_hand or 0) + 1e-6 < _q:
+                raise HTTPException(400, f"Cannot delete {po.po_number}: only {_ii.quantity_on_hand:g} of '{_ii.name}' is on hand but this PO delivered {_q:g}. "
+                                         "Some of that stock has already been sold or written off - reverse those first.")
+            _stock_back.append((_ii, _q))
         # Reverse all journal entries linked to this PO before deleting.
         # Sources: "purchase_order" (received entry) and "po_payment" (payment clearance).
         try:
@@ -240,6 +265,8 @@ async def delete_po(po_id: int, current_user: User = Depends(get_current_user), 
                 journal_engine.reverse_journal_entries(
                     current_user.company_id, src, po.id, db, reason=reason
                 )
+            for _ii, _q in _stock_back:
+                _ii.quantity_on_hand = round(max((_ii.quantity_on_hand or 0) - _q, 0), 4)
             db.commit()
         except Exception as e:
             logger.error(f"Journal reversal failed for PO {po.po_number}: {e}")
@@ -270,8 +297,10 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
     # "paid" is blocked too (audit fix 2026-07-02): receiving after payment would flip the
     # status back to partial/received, re-opening a settled creditor. Deliveries after
     # payment must be recorded on a new PO.
-    if po.status in ("received", "paid", "cancelled"):
+    if po.status in ("received", "cancelled"):
         raise HTTPException(400, f"Cannot receive a PO with status '{po.status}'")
+    # A PO paid while only partly delivered may still receive the rest: the new delivery re-opens ONLY the
+    # undelivered balance as a creditor (earlier payments are netted off in pay_po and the creditors reports).
 
     # Map received quantities to items.
     # Cumulative tracking (audit fix 2026-07-02): each item accumulates quantity_received
@@ -473,7 +502,7 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
             .join(_JE, _JL.entry_id == _JE.id)
             .filter(
                 _JE.company_id == current_user.company_id,
-                _JE.source.in_(["purchase_order", "purchase_order_reversal"]),
+                _JE.source.in_(["purchase_order", "purchase_order_reversal", "po_payment", "po_payment_reversal"]),
                 _JE.source_id == po.id,
                 _JL.account_id == ap_acct.id,
             )
@@ -482,6 +511,8 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
         total_ap_credits = sum(l.credit - l.debit for l in ap_lines)
         if total_ap_credits > 0:
             ap_balance = round(total_ap_credits, 2)
+        elif ap_lines:
+            raise HTTPException(400, "Nothing is outstanding on this purchase order - every delivery so far has been paid.")
 
     # Single commit AFTER the journal post succeeds (audit fix 2026-07-09):
     # previously status="paid" was committed first, so a journal failure left a
