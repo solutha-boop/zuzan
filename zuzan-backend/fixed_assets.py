@@ -218,6 +218,32 @@ class DisposalData(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _parse_date(value: str, field: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except Exception:
+        raise HTTPException(400, f"{field} must be a date in the form YYYY-MM-DD.")
+
+
+def _validate_terms(cost, residual, life, method, rate):
+    """Numbers that would make depreciation meaningless or produce a negative/NaN schedule."""
+    for name, v in (("cost", cost), ("residual value", residual), ("useful life", life), ("depreciation rate", rate)):
+        if v is not None and v != v:
+            raise HTTPException(400, f"The {name} is not a valid number.")
+    if cost is not None and cost <= 0:
+        raise HTTPException(400, "The cost must be greater than zero.")
+    if residual is not None and residual < 0:
+        raise HTTPException(400, "The residual value cannot be negative.")
+    if cost is not None and residual is not None and residual > cost:
+        raise HTTPException(400, "The residual value cannot be more than the cost.")
+    if life is not None and life < 1:
+        raise HTTPException(400, "The useful life must be at least 1 month.")
+    if method is not None and method not in ("straight_line", "diminishing_balance"):
+        raise HTTPException(400, "depreciation_method must be 'straight_line' or 'diminishing_balance'.")
+    if rate is not None and not (0 < rate <= 1):
+        raise HTTPException(400, "depreciation_rate must be between 0 and 1 (e.g. 0.20 for 20% a year).")
+
+
 def _next_asset_number(company_id: int, db: Session) -> str:
     # Max-id seeded with collision check (scale fix 2026-07-03): count()+1
     # produced duplicate numbers after any asset was deleted.
@@ -321,10 +347,16 @@ async def create_asset(
         logger.info(f"Non-standard asset category: {data.category}")
     if data.depreciation_method == "diminishing_balance" and not data.depreciation_rate:
         raise HTTPException(400, "depreciation_rate is required for diminishing balance method (e.g. 0.20 = 20% p.a.)")
+    _validate_terms(data.cost, data.residual_value, data.useful_life_months, data.depreciation_method, data.depreciation_rate)
+    _purchase_dt = _parse_date(data.purchase_date, "purchase_date")
 
     # Validate SARS category if provided
     if data.sars_category and data.sars_category not in SARS_WEAR_TEAR:
         raise HTTPException(400, f"Unknown SARS category: '{data.sars_category}'. Use GET /fixed-assets/wear-tear-table for valid options.")
+
+    if data.post_journal:
+        import journal as journal_engine
+        journal_engine.init_accounts(cid, db)   # commits internally, so it must run BEFORE the asset is added
 
     asset = FixedAsset(
         company_id          = cid,
@@ -333,7 +365,7 @@ async def create_asset(
         category            = data.category,
         description         = data.description,
         location            = data.location,
-        purchase_date       = datetime.strptime(data.purchase_date, "%Y-%m-%d"),
+        purchase_date       = _purchase_dt,
         cost                = data.cost,
         residual_value      = data.residual_value,
         useful_life_months  = data.useful_life_months,
@@ -347,11 +379,11 @@ async def create_asset(
     # Post acquisition journal entry
     if data.post_journal:
         try:
-            import journal as journal_engine
-            journal_engine.init_accounts(cid, db)
             journal_engine.post_asset_acquisition(asset, db)
         except Exception as je:
-            logger.warning(f"Asset acquisition journal failed (non-fatal): {je}")
+            db.rollback()
+            logger.error(f"Asset acquisition journal failed: {je}")
+            raise HTTPException(500, f"Asset NOT saved - its acquisition journal failed: {je}")
 
     db.commit()
     db.refresh(asset)
@@ -375,6 +407,8 @@ async def update_asset(
     if asset.status != "active":
         raise HTTPException(400, "Only active assets can be edited")
 
+    _validate_terms(asset.cost, data.residual_value if data.residual_value is not None else asset.residual_value,
+                    data.useful_life_months, data.depreciation_method, data.depreciation_rate)
     if data.asset_name          is not None: asset.asset_name          = data.asset_name
     if data.description         is not None: asset.description         = data.description
     if data.location            is not None: asset.location            = data.location
@@ -412,7 +446,21 @@ async def dispose_asset(
     if asset.status != "active":
         raise HTTPException(400, "Asset is already disposed or written off")
 
+    _disp_dt = _parse_date(data.disposal_date, "disposal_date")
+    if _disp_dt < asset.purchase_date:
+        raise HTTPException(400, "The disposal date cannot be before the purchase date.")
+    if not data.is_write_off and (data.disposal_proceeds is None or data.disposal_proceeds != data.disposal_proceeds or data.disposal_proceeds < 0):
+        raise HTTPException(400, "The disposal proceeds cannot be negative.")
     proceeds       = 0.0 if data.is_write_off else data.disposal_proceeds
+    # Bring depreciation up to date for every month BEFORE the disposal month first, otherwise an asset
+    # nobody ran depreciation on is derecognised with too little accumulated depreciation (loss overstated).
+    _py, _pm = _disp_dt.year, _disp_dt.month - 1
+    if _pm < 1: _py, _pm = _py - 1, 12
+    try:
+        _run_depreciation_internal(current_user.company_id, db, only_asset=asset, until_period=f"{_py}-{_pm:02d}", commit=False)
+    except HTTPException:
+        db.rollback()
+        raise
     carrying_value = max(0.0, asset.cost - asset.accumulated_depreciation)
     vat_amt = 0.0
     if proceeds > 0 and data.proceeds_include_vat:
@@ -423,7 +471,7 @@ async def dispose_asset(
 
     asset.disposal_vat = vat_amt
     asset.status          = "written_off" if data.is_write_off else "disposed"
-    asset.disposal_date   = datetime.strptime(data.disposal_date, "%Y-%m-%d")
+    asset.disposal_date   = _disp_dt
     asset.disposal_proceeds = proceeds
     asset.disposal_gain_loss = gain_loss
     asset.disposal_notes  = data.disposal_notes
@@ -595,7 +643,7 @@ async def get_deferred_tax(
 
 # ── Internal — called by payroll engine ──────────────────────────────────────
 
-def _run_depreciation_internal(company_id: int, db: Session):
+def _run_depreciation_internal(company_id: int, db: Session, only_asset=None, until_period: str = None, commit: bool = True):
     """
     Run monthly depreciation for all active assets of a company.
     Idempotent — skips assets already depreciated in the current calendar month.
@@ -603,13 +651,15 @@ def _run_depreciation_internal(company_id: int, db: Session):
     """
     import calendar
     now    = datetime.utcnow()
-    period = now.strftime("%Y-%m")
+    period = until_period or now.strftime("%Y-%m")   # until_period: catch up to a given month only (used on disposal)
 
     assets = (
         db.query(FixedAsset)
         .filter(FixedAsset.company_id == company_id, FixedAsset.status == "active")
         .all()
     )
+    if only_asset is not None:
+        assets = [a for a in assets if a.id == only_asset.id]
 
     # Periods already charged, per asset (so months missed earlier are caught up, never doubled)
     posted_periods = {}
@@ -644,7 +694,7 @@ def _run_depreciation_internal(company_id: int, db: Session):
                     break  # fully depreciated
 
                 py, pm = int(per[:4]), int(per[5:7])
-                when = now if per == period else datetime(py, pm, calendar.monthrange(py, pm)[1], 12, 0)
+                when = now if per == now.strftime("%Y-%m") else datetime(py, pm, calendar.monthrange(py, pm)[1], 12, 0)
 
                 asset.accumulated_depreciation = round(asset.accumulated_depreciation + amount, 2)
                 asset.last_depreciation_date   = when
@@ -655,7 +705,10 @@ def _run_depreciation_internal(company_id: int, db: Session):
 
                 charged_count += 1
                 total_amount  += amount
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
     except Exception as je:
         db.rollback()
         logger.error(f"Depreciation run failed for company {company_id}: {je}")
