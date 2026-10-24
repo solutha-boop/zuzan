@@ -175,7 +175,15 @@ def _deferred_tax_balance(db, cid, as_at) -> float:
         if rate is None:
             tax_base = carrying           # unmappable → zero temporary difference
         else:
-            allowance = min(cost, cost * (rate / 100.0) * (months / 12.0))
+            try:
+                from fixed_assets import tax_allowance_to_date as _tatd
+                _sched_allow = _tatd(fa, as_at)       # s12B/12BA/12C assets follow their prescribed schedule
+            except Exception:
+                _sched_allow = None
+            if _sched_allow is not None:
+                allowance = min(cost, _sched_allow)
+            else:
+                allowance = min(cost, cost * (rate / 100.0) * (months / 12.0))
             tax_base = max(0.0, cost - allowance)
         balance += (carrying - tax_base) * _CIT_RATE
     return _r(balance)

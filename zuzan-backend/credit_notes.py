@@ -104,7 +104,52 @@ async def list_credit_notes(
         .order_by(CreditNote.created_at.desc())
         .all()
     )
-    return [_cn_dict(r) for r in rows]
+    # enrich for the screen: the invoice number and the names of any goods put back in stock
+    from database import InventoryItem
+    inv_no = {i.id: i.invoice_number for i in db.query(Invoice).filter(Invoice.company_id == current_user.company_id,
+              Invoice.id.in_([r.invoice_id for r in rows if r.invoice_id] or [0])).all()}
+    names = {i.id: i.name for i in db.query(InventoryItem).filter(InventoryItem.company_id == current_user.company_id).all()}
+    out = []
+    for r in rows:
+        d = _cn_dict(r)
+        d["invoice_number"] = inv_no.get(r.invoice_id)
+        try:
+            rets = _json.loads(r.stock_returns_json) if r.stock_returns_json else []
+        except Exception:
+            rets = []
+        d["stock_returns"] = [{"name": names.get(x["item_id"], "item"), "qty": x["qty"]} for x in rets]
+        out.append(d)
+    return out
+
+
+# ── GET /credit-notes/returnable/{invoice_id} ─────────────────────────────────
+@credit_notes_router.get("/returnable/{invoice_id}")
+async def returnable_stock(
+    invoice_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Stock lines that were sold on this invoice and can still be put back by a credit note."""
+    from database import InventoryItem, CreditNote
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == current_user.company_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    try:
+        sold = _json.loads(inv.stock_cogs_json) if inv.stock_cogs_json else []
+    except Exception:
+        sold = []
+    sold_q = {}
+    for m in sold:
+        sold_q[m["item_id"]] = sold_q.get(m["item_id"], 0) + (m.get("qty") or 0)
+    back_q = {}
+    for cn in db.query(CreditNote).filter(CreditNote.company_id == current_user.company_id, CreditNote.invoice_id == inv.id).all():
+        for r in (_json.loads(cn.stock_returns_json) if cn.stock_returns_json else []):
+            back_q[r["item_id"]] = back_q.get(r["item_id"], 0) + r["qty"]
+    out = []
+    for it in db.query(InventoryItem).filter(InventoryItem.company_id == current_user.company_id, InventoryItem.id.in_(list(sold_q) or [0])).all():
+        left = round(sold_q[it.id] - back_q.get(it.id, 0), 4)
+        out.append({"code": it.sku or it.name, "name": it.name, "sold": sold_q[it.id], "returned": back_q.get(it.id, 0), "returnable": max(0, left)})
+    return out
 
 
 # ── POST /credit-notes ────────────────────────────────────────────────────────

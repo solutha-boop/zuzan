@@ -1870,32 +1870,62 @@ function RecurringInvoicesTab() {
 
 // ── CREDIT NOTES TAB ──────────────────────────────────────────────────────────
 function CreditNotesTab() {
+  const today = () => new Date().toISOString().slice(0,10);
+  const blank = () => ({invoice_id:"",client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:today(),currency:"ZAR"});
   const [items, setItems] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [showNew, setShowNew] = useState(false);
-  const [form, setForm] = useState({client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:new Date().toISOString().slice(0,10)});
+  const [form, setForm] = useState(blank());
+  const [returnable, setReturnable] = useState([]);      // stock lines sold on the linked invoice that can still come back
+  const [qty, setQty] = useState({});                    // code -> quantity coming back
   const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
   const load = () => { api("/credit-notes").then(setItems).catch(()=>{}); };
   useEffect(load, []);
+  useEffect(() => { api("/invoices/").then(r => setInvoices(Array.isArray(r)?r:[])).catch(()=>{}); }, []);
+  const creditable = invoices.filter(i => ["sent","overdue","partial","paid"].includes(String(i.status||"").toLowerCase().replace("invoicestatus.","")));
+  const linked = creditable.find(i => String(i.id) === String(form.invoice_id));
+  const pickInvoice = async (id) => {
+    setErr(""); setQty({}); setReturnable([]);
+    const inv = creditable.find(i => String(i.id) === String(id));
+    if (!inv) { setForm({...form, invoice_id:"", currency:"ZAR"}); return; }
+    const hasVat = (inv.vat_amount||0) > 0;
+    setForm({...form, invoice_id:id, client_name:inv.client_name||form.client_name, currency:inv.currency||"ZAR", vat_rate:hasVat?0.15:0,
+             description: form.description || `Credit against ${inv.invoice_number}`});
+    try { setReturnable((await api(`/credit-notes/returnable/${id}`)).filter(r => r.returnable > 0)); } catch(e) { setReturnable([]); }
+  };
   const handleCreate = async () => {
-    if(!form.client_name||!form.amount){alert("Client name and amount required.");return;}
+    setErr("");
+    if(!form.client_name||!form.amount){setErr("Client name and amount are required.");return;}
+    const restock = returnable.filter(r => +qty[r.code] > 0).map(r => ({code:r.code, quantity:+qty[r.code]}));
+    for (const r of returnable) { if (+qty[r.code] > r.returnable) { setErr(`Only ${r.returnable} of ${r.name} can be taken back.`); return; } }
     setSaving(true);
-    try { await api("/credit-notes",{method:"POST",body:JSON.stringify({...form,amount:+form.amount,vat_rate:+form.vat_rate})}); setShowNew(false); setForm({client_name:"",description:"",amount:"",vat_rate:0.15,notes:"",issue_date:new Date().toISOString().slice(0,10)}); load(); }
-    catch(e){alert("Failed to create credit note.");}
+    try {
+      const body = {client_name:form.client_name, description:form.description, notes:form.notes, issue_date:form.issue_date,
+                    amount:+form.amount, vat_rate:+form.vat_rate, currency:form.currency||"ZAR"};
+      if (form.invoice_id) body.invoice_id = +form.invoice_id;
+      if (restock.length) body.restock = restock;
+      await api("/credit-notes",{method:"POST",body:JSON.stringify(body)});
+      setShowNew(false); setForm(blank()); setReturnable([]); setQty({}); load();
+    }
+    catch(e){ setErr(e.message || "Failed to create credit note."); }
     finally{setSaving(false);}
   };
   const handleDelete = async (id) => {
-    if(!window.confirm("Delete this credit note?"))return;
-    await api(`/credit-notes/${id}`,{method:"DELETE"}).catch(()=>{});
+    if(!window.confirm("Delete this credit note? Any stock it put back on the shelf will be taken out again."))return;
+    try { await api(`/credit-notes/${id}`,{method:"DELETE"}); } catch(e) { alert(e.message || "Could not delete the credit note."); }
     load();
   };
+  const inp = {width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
+  const lbl = {display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5};
   return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
         <div>
           <div style={{fontSize:20,fontWeight:800,fontFamily:"serif",color:C.ink}}>Credit Notes</div>
-          <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Issue credit notes to reduce amounts owed by clients</div>
+          <div style={{fontSize:13,color:C.inkMid,marginTop:2}}>Issue credit notes to reduce amounts owed by clients, and put returned goods back in stock</div>
         </div>
-        <button onClick={()=>setShowNew(true)} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New Credit Note</button>
+        <button onClick={()=>{setErr("");setShowNew(true);}} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"10px 20px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New Credit Note</button>
       </div>
       {showNew && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:250,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -1905,19 +1935,41 @@ function CreditNotesTab() {
               <button onClick={()=>setShowNew(false)} style={{background:"none",border:"none",fontSize:24,cursor:"pointer",color:C.inkMid,lineHeight:1}}>×</button>
             </div>
             <div style={{overflowY:"auto",padding:"20px 28px",flex:1}}>
-              {[{l:"Client Name",k:"client_name",p:"Client name"},{l:"Description",k:"description",p:"Reason for credit note"},{l:"Amount (excl. VAT)",k:"amount",p:"0.00",type:"number"},{l:"Issue Date",k:"issue_date",type:"date"},{l:"Notes",k:"notes",p:"Optional additional notes"}].map(f=>(
+              {err && <div style={{background:C.redLt,color:C.red,borderRadius:10,padding:"10px 14px",fontSize:13,fontWeight:600,marginBottom:14}}>{err}</div>}
+              <div style={{marginBottom:14}}>
+                <label style={lbl}>Credit against invoice (optional)</label>
+                <select value={form.invoice_id} onChange={e=>pickInvoice(e.target.value)} style={inp}>
+                  <option value="">— Not linked to an invoice —</option>
+                  {creditable.map(i => <option key={i.id} value={i.id}>{i.invoice_number} · {i.client_name} · {i.currency&&i.currency!=="ZAR"?i.currency+" ":"R"}{Number(i.total_amount||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}</option>)}
+                </select>
+                {linked && linked.currency && linked.currency!=="ZAR" && <div style={{fontSize:11,color:C.inkMid,marginTop:6}}>Foreign-currency invoice: enter the amount in {linked.currency}; it is converted to rand at the invoice's exchange rate.</div>}
+              </div>
+              {[{l:"Client Name",k:"client_name",p:"Client name"},{l:"Description",k:"description",p:"Reason for credit note"},{l:`Amount (excl. VAT)${linked&&linked.currency&&linked.currency!=="ZAR"?" in "+linked.currency:""}`,k:"amount",p:"0.00",type:"number"},{l:"Issue Date",k:"issue_date",type:"date"},{l:"Notes",k:"notes",p:"Optional additional notes"}].map(f=>(
                 <div key={f.k} style={{marginBottom:14}}>
-                  <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>{f.l}</label>
-                  <input type={f.type||"text"} placeholder={f.p||""} value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+                  <label style={lbl}>{f.l}</label>
+                  <input type={f.type||"text"} placeholder={f.p||""} value={form[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})} style={inp}/>
                 </div>
               ))}
               <div style={{marginBottom:14}}>
-                <label style={{display:"block",fontSize:11,fontWeight:600,color:C.inkMid,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>VAT Rate</label>
-                <select value={form.vat_rate} onChange={e=>setForm({...form,vat_rate:+e.target.value})} style={{width:"100%",padding:"11px 14px",border:`1.5px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <label style={lbl}>VAT Rate</label>
+                <select value={form.vat_rate} onChange={e=>setForm({...form,vat_rate:+e.target.value})} style={inp}>
                   <option value={0.15}>15% VAT</option>
                   <option value={0}>No VAT (0%)</option>
                 </select>
               </div>
+              {returnable.length>0 && (
+                <div style={{marginBottom:14,border:`1.5px solid ${C.border}`,borderRadius:12,padding:"12px 14px",background:C.bg}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:4}}>Goods coming back</div>
+                  <div style={{fontSize:11,color:C.inkMid,marginBottom:10}}>Enter how many units the client is returning. They go back in stock at the cost they were sold at. Leave at 0 for a money-only credit.</div>
+                  {returnable.map(r => (
+                    <div key={r.code} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:8}}>
+                      <div style={{fontSize:13,color:C.ink,flex:1}}>{r.name} <span style={{fontSize:11,color:C.inkMid}}>({r.code}) · sold {r.sold}{r.returned>0?`, ${r.returned} already returned`:""}</span></div>
+                      <input type="number" min="0" max={r.returnable} step="any" placeholder="0" value={qty[r.code]||""} onChange={e=>setQty({...qty,[r.code]:e.target.value})} style={{...inp,width:90,padding:"8px 10px"}}/>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {linked && returnable.length===0 && <div style={{fontSize:11,color:C.inkMid,marginBottom:14}}>No stock items are left to take back on this invoice, so this will be a money-only credit note.</div>}
             </div>
             <div style={{display:"flex",gap:8,padding:"16px 28px",borderTop:`1px solid ${C.border}`,flexShrink:0,background:C.surface,borderRadius:"0 0 20px 20px"}}>
               <button onClick={handleCreate} disabled={saving} style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px 24px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>{saving?"Saving...":"Issue Credit Note"}</button>
@@ -1933,10 +1985,10 @@ function CreditNotesTab() {
           <div style={{fontSize:13}}>Issue a credit note to reduce the amount owed on an invoice.</div>
         </div>
       ) : (
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr style={{background:C.bg}}>
-              {["Number","Client","Description","Amount","Total incl. VAT","Date","Actions"].map(h=>(
+              {["Number","Invoice","Client","Description","Amount","Total incl. VAT","Stock back","Date","Actions"].map(h=>(
                 <th key={h} style={{padding:"11px 16px",textAlign:"left",fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase"}}>{h}</th>
               ))}
             </tr></thead>
@@ -1944,10 +1996,12 @@ function CreditNotesTab() {
               {items.map((cn,i)=>(
                 <tr key={cn.id} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?C.surface:C.bg}}>
                   <td style={{padding:"12px 16px",fontWeight:700,color:C.accent}}>{cn.credit_note_number}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid,fontSize:12}}>{cn.invoice_number||"—"}</td>
                   <td style={{padding:"12px 16px",fontWeight:500}}>{cn.client_name}</td>
                   <td style={{padding:"12px 16px",color:C.inkMid,fontSize:12}}>{cn.description||"—"}</td>
                   <td style={{padding:"12px 16px",fontWeight:700,color:C.red}}>{fmt(cn.amount)}</td>
                   <td style={{padding:"12px 16px",fontWeight:700,color:C.red}}>{fmt(cn.total_amount)}</td>
+                  <td style={{padding:"12px 16px",color:C.inkMid,fontSize:12}}>{(cn.stock_returns&&cn.stock_returns.length)?cn.stock_returns.map(r=>`${r.qty} × ${r.name}`).join(", "):"—"}</td>
                   <td style={{padding:"12px 16px",color:C.inkMid}}>{cn.issue_date?new Date(cn.issue_date).toLocaleDateString("en-ZA"):"—"}</td>
                   <td style={{padding:"12px 16px"}}>
                     <button onClick={()=>handleDelete(cn.id)} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>Delete</button>

@@ -46,24 +46,29 @@ SARS_WEAR_TEAR = {
     # ── Plant & Machinery ────────────────────────────────────────────────────
     "Machinery — general":                     {"years": 5,  "section": "11(e)"},
     "Manufacturing plant (general)":           {"years": 5,  "section": "11(e)"},
-    "Manufacturing plant — new/unused (s12C)": {"years": 4,  "section": "12C",
-                                                "note": "40% yr1, 20% yrs 2-4"},
+    "Manufacturing plant — new/unused (s12C)": {"years": 4,  "section": "12C", "schedule": [0.40, 0.20, 0.20, 0.20],
+                                                "note": "40% / 20% / 20% / 20% over 4 tax years; not pro-rated"},
+    "Manufacturing plant — used (s12C)":       {"years": 5,  "section": "12C", "schedule": [0.20] * 5,
+                                                "note": "20% a year over 5 tax years; not pro-rated"},
     "Tools — hand tools":                      {"years": 3,  "section": "11(e)"},
     "Tools — power tools":                     {"years": 3,  "section": "11(e)"},
     # ── Buildings ────────────────────────────────────────────────────────────
-    "Commercial buildings (s13quin)":          {"years": 25, "section": "13quin",
-                                                "note": "Eligible commercial buildings only"},
-    "Industrial / Manufacturing buildings":    {"years": 10, "section": "13",
-                                                "note": "Used in process of manufacture"},
+    "Commercial buildings (s13quin)":          {"years": 20, "section": "13quin",
+                                                "note": "5% a year of cost. Eligible commercial buildings only; confirm eligibility"},
+    "Industrial / Manufacturing buildings":    {"years": 20, "section": "13",
+                                                "note": "5% a year of cost (buildings erected from 1 Jan 1989). Used in process of manufacture"},
     "Hotel buildings":                         {"years": 20, "section": "13bis"},
-    "Residential rental property":             {"years": 25, "section": "13sex",
-                                                "note": "New/unused residential units only"},
+    "Residential rental property":             {"years": 20, "section": "13sex",
+                                                "note": "5% a year of cost. New/unused residential units only; confirm eligibility"},
     # ── Renewable Energy ─────────────────────────────────────────────────────
-    "Solar PV panels (≤1 MW, s12BA)":          {"years": 1,  "section": "12BA",
-                                                "note": "125% first-year deduction — energy cost only"},
-    "Wind energy equipment":                   {"years": 1,  "section": "12B",
-                                                "note": "100% first-year deduction"},
-    "Biomass / Small hydro equipment":         {"years": 3,  "section": "12B"},
+    "Solar PV panels (≤1 MW, s12BA)":          {"years": 1,  "section": "12B/12BA", "schedule": [1.00], "window_125": True,
+                                                "note": "s12B: 100% in the tax year first used. First used 1 Mar 2023 - 28 Feb 2025: s12BA 125%"},
+    "Solar PV panels (>1 MW, s12B)":           {"years": 3,  "section": "12B", "schedule": [0.50, 0.30, 0.20],
+                                                "note": "50% / 30% / 20% over 3 tax years"},
+    "Wind energy equipment":                   {"years": 3,  "section": "12B", "schedule": [0.50, 0.30, 0.20], "window_125": True,
+                                                "note": "s12B: 50% / 30% / 20%. First used 1 Mar 2023 - 28 Feb 2025: s12BA 125%"},
+    "Biomass / Small hydro equipment":         {"years": 3,  "section": "12B", "schedule": [0.50, 0.30, 0.20], "window_125": True,
+                                                "note": "s12B: 50% / 30% / 20%. First used 1 Mar 2023 - 28 Feb 2025: s12BA 125%"},
     # ── Other ────────────────────────────────────────────────────────────────
     "Bicycles":                                {"years": 4,  "section": "11(e)"},
     "Cash registers / POS systems":            {"years": 3,  "section": "11(e)"},
@@ -76,6 +81,41 @@ SARS_WEAR_TEAR = {
 
 # SA corporate income tax rate (27% from 1 April 2023)
 SA_CIT_RATE = 0.27
+
+
+_S12BA_FROM = datetime(2023, 3, 1)
+_S12BA_TO   = datetime(2025, 2, 28, 23, 59, 59)
+
+
+def _tax_year_start(d) -> int:
+    """SA tax year runs 1 March - end February; returns the calendar year it starts in."""
+    return d.year if d.month >= 3 else d.year - 1
+
+
+def _allowance_schedule(asset):
+    """Fractions of cost allowed in tax year 1, 2, 3 ... counted from the tax year the asset was first used,
+    for categories with a prescribed (non straight-line) pattern: s12B/12BA energy, s12C plant.
+    None = no pattern (use the monthly straight-line wear-and-tear rate instead).
+    These are NOT pro-rated for part-years (SARS: full allowance in the year first used)."""
+    if getattr(asset, "wear_and_tear_rate", None):
+        return None                      # an explicit override rate always wins
+    info = SARS_WEAR_TEAR.get(asset.sars_category) if getattr(asset, "sars_category", None) else None
+    if not info or not info.get("schedule"):
+        return None
+    if info.get("window_125") and _S12BA_FROM <= asset.purchase_date <= _S12BA_TO:
+        return [1.25]                    # s12BA enhanced deduction (first used 1 Mar 2023 - 28 Feb 2025)
+    return info["schedule"]
+
+
+def tax_allowance_to_date(asset, as_at):
+    """Cumulative SARS allowance (rand) claimed up to as_at for assets on a prescribed schedule, else None."""
+    sch = _allowance_schedule(asset)
+    if sch is None:
+        return None
+    if as_at < asset.purchase_date:
+        return 0.0
+    n = _tax_year_start(as_at) - _tax_year_start(asset.purchase_date) + 1
+    return round(asset.cost * sum(sch[:n]), 2)
 
 
 def _calc_tax_base(asset, now: datetime = None) -> dict:
@@ -119,10 +159,17 @@ def _calc_tax_base(asset, now: datetime = None) -> dict:
     else:
         rate_source = "category_heuristic"
 
-    monthly_allowance = round(cost * (rate / 100.0) / 12.0, 2)
-    months_elapsed    = max(0, (now.year  - asset.purchase_date.year) * 12
-                              + (now.month - asset.purchase_date.month))
-    accumulated_allowance = round(min(months_elapsed * monthly_allowance, cost), 2)
+    _sched = _allowance_schedule(asset)
+    if _sched is not None:
+        accumulated_allowance = round(min(tax_allowance_to_date(asset, now), cost), 2)   # tax base never below zero
+        _n = max(0, _tax_year_start(now) - _tax_year_start(asset.purchase_date))
+        monthly_allowance = round(cost * (_sched[_n] if _n < len(_sched) else 0.0) / 12.0, 2)   # this tax year's allowance spread over 12 months (display)
+        rate_source = "sars_schedule"
+    else:
+        monthly_allowance = round(cost * (rate / 100.0) / 12.0, 2)
+        months_elapsed    = max(0, (now.year  - asset.purchase_date.year) * 12
+                                  + (now.month - asset.purchase_date.month))
+        accumulated_allowance = round(min(months_elapsed * monthly_allowance, cost), 2)
 
     tax_base       = round(max(0.0, cost - accumulated_allowance), 2)
     # IAS 16 carrying value (ignoring residual cap — tax base comparison uses gross)
@@ -140,6 +187,7 @@ def _calc_tax_base(asset, now: datetime = None) -> dict:
     return {
         "sars_category":             asset.sars_category,
         "sars_years":                sars_years,
+        "allowance_schedule_pct":    [round(x * 100, 2) for x in _sched] if _sched is not None else None,
         "wt_rate_pct":               round(rate, 2),
         "rate_source":               rate_source,
         "section":                   sars_info["section"] if sars_info else "11(e)",
@@ -567,6 +615,7 @@ async def get_wear_tear_table():
                 "years":         info["years"],
                 "section":       info["section"],
                 "monthly_rate":  round(1 / (info["years"] * 12), 6) if info["years"] > 0 else 1.0,
+                "schedule_pct":  [round(x * 100, 2) for x in info["schedule"]] if info.get("schedule") else None,
                 "note":          info.get("note"),
             }
             for cat, info in SARS_WEAR_TEAR.items()
