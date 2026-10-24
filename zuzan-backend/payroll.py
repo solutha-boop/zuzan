@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta, date as _date
 import calendar as _calendar
-from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine, Emp201Submission
+from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine
 from auth import get_current_user, User
 import hashlib
 import logging
@@ -25,9 +25,6 @@ def _to_zar(inv) -> float:
     return inv.total_amount or 0
 
 
-VAT_RATE = 0.15  # SA standard VAT rate (single definition for this module)
-
-
 def _balance_zar(inv) -> float:
     """ZAR still owed on an invoice: the full amount, less any part payment received."""
     if inv.status == InvoiceStatus.partial:
@@ -37,43 +34,10 @@ def _balance_zar(inv) -> float:
 
 
 def _received_zar(inv) -> float:
-    """ZAR actually received on an invoice: the cash so far for a part-paid invoice, otherwise the
-    paid amount in ZAR (see _to_zar)."""
+    """ZAR actually received on an invoice: the whole amount if paid, the part payments so far if partial."""
     if inv.status == InvoiceStatus.partial:
-        return float(inv.paid_amount_zar or 0)
+        return inv.paid_amount_zar or 0.0
     return _to_zar(inv)
-
-
-def _partial_received(db, cid, start=None, end=None) -> float:
-    """Cash received so far on part-paid invoices (ZAR), optionally within [start, end).
-
-    Part-paid invoices are not 'paid', so the paid-only revenue queries miss the cash already
-    received. Each instalment is dated by its own payment journal entry (Bank 1000 net of
-    reversals), so a part payment lands in the period it was received. Invoices with no payment
-    entry (legacy) fall back to paid_amount_zar dated COALESCE(paid_date, issue_date, created_at).
-    (Audit fix 2026-10-23; journal-dated 2026-10-24.)"""
-    invs = db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == InvoiceStatus.partial).all()
-    if not invs:
-        return 0.0
-    ids = {i.id for i in invs}
-    rows = (db.query(JournalEntry.source_id, JournalEntry.date, JournalLine.debit, JournalLine.credit)
-              .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
-              .join(Account, JournalLine.account_id == Account.id)
-              .filter(JournalEntry.company_id == cid, Account.code == "1000",
-                      JournalEntry.source.in_(["invoice_payment", "invoice_payment_reversal"]),
-                      JournalEntry.source_id.in_(ids)).all())
-    have, total = set(), 0.0
-    for sid, d, dr, cr in rows:
-        have.add(sid)
-        if (start is None or d >= start) and (end is None or d < end):
-            total += (dr or 0) - (cr or 0)
-    for i in invs:
-        if i.id in have:
-            continue
-        d = i.paid_date or i.issue_date or i.created_at
-        if d is not None and (start is None or d >= start) and (end is None or d < end):
-            total += (i.paid_amount_zar or 0)
-    return round(total, 2)
 
 
 def _po_delivered_net(po) -> float:
@@ -1555,13 +1519,6 @@ async def delete_payroll_period(
     import re
     if not re.match(r"^\d{4}-\d{2}$", period):
         raise HTTPException(status_code=400, detail="period must be YYYY-MM")
-    _sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == current_user.company_id,
-                                             Emp201Submission.period == period).first()
-    if _sub:
-        raise HTTPException(status_code=409, detail=(
-            f"The EMP201 for {period} was marked as submitted to SARS on {_sub.submitted_at:%d %b %Y}. "
-            "Its payslips can't be deleted. If a correction is needed, withdraw the submission first "
-            "(DELETE /reports/emp201/submit/" + period + ") and file a corrected EMP201 with SARS."))
     # Payslip has no company_id — scope by employee_id subquery
     emp_ids = [
         e.id for e in db.query(Employee).filter(
@@ -1941,12 +1898,12 @@ async def get_irp5(
             # Income
             "gross_remuneration":      round(gross, 2),
             "code_3601_salary":        round(code_3601, 2),
-            "code_3810_med_fringe":    round(code_3713, 2),
-            "code_3607_overtime":      round(code_3801, 2),
+            "code_3713_med_fringe":    round(code_3713, 2),
+            "code_3801_overtime":      round(code_3801, 2),
             # Employee deductions
-            "code_4102_paye":          round(paye, 2),
-            "code_4141_uif_employee":  round(uif_emp, 2),
-            "code_4001_pension":       round(s11f, 2),
+            "code_4001_paye":          round(paye, 2),
+            "code_4002_uif_employee":  round(uif_emp, 2),
+            "code_4005_pension":       round(s11f, 2),
             # s11F carry-forward disclosure (audit fix 2026-07-19): excess
             # contributions above the cap this year roll to future years;
             # carry_used shows prior-year excess absorbed this year.
@@ -1959,9 +1916,9 @@ async def get_irp5(
             "medical_tax_credit":      round(med_tc, 2),
             "net_pay_annual":          round(net_pay, 2),
             # Employer contributions (informational)
-            "code_4141_uif_employer":  round(uif_empr, 2),
-            "code_4142_sdl":           round(sdl, 2),
-            "pension_employer_contribution":  round(pension_empr, 2),
+            "code_4003_uif_employer":  round(uif_empr, 2),
+            "code_4474_sdl":           round(sdl, 2),
+            "code_7002_pension_empr":  round(pension_empr, 2),
         })
 
     company = db.query(Company).filter(Company.id == cid).first()
@@ -2344,11 +2301,9 @@ async def dashboard(
     # All-time paid invoices — matches the Invoices tab "Paid" KPI exactly
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status == InvoiceStatus.paid,
+        Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
     ).all()
-    total_revenue = sum(_to_zar(i) for i in paid_invoices)
-    # Part-paid invoices: the cash actually received so far counts as revenue received
-    total_revenue += sum((i.paid_amount_zar or 0) for i in db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == InvoiceStatus.partial).all())
+    total_revenue = sum(_received_zar(i) for i in paid_invoices)
     # Add bank-import income (posted as journal entries, not invoices)
     total_revenue += _bank_import_income(db, cid)
 
@@ -2509,23 +2464,21 @@ async def monthly_trend(
         end = datetime(end_year, end_month, 1)
 
         revenue = sum(
-            _to_zar(inv) for inv in db.query(Invoice).filter(
+            _received_zar(inv) for inv in db.query(Invoice).filter(
                 Invoice.company_id == cid,
-                Invoice.status == InvoiceStatus.paid,
-                func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at) >= start,
-                func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at) < end
+                Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
+                Invoice.paid_date >= start,
+                Invoice.paid_date < end
             ).all()
         )
-        # Cash received on part-paid invoices this month
-        revenue += _partial_received(db, cid, start, end)
         # Add bank-import income for this month
         revenue += _bank_import_income(db, cid, start, end)
         # Expenses ex-VAT for P&L
         expenses = sum(
             (exp.amount - (exp.vat_amount or 0)) for exp in db.query(Expense).filter(
                 Expense.company_id == cid,
-                func.coalesce(Expense.expense_date, Expense.created_at) >= start,
-                func.coalesce(Expense.expense_date, Expense.created_at) < end
+                Expense.expense_date >= start,
+                Expense.expense_date < end
             ).all()
         )
         # Add PO COGS for POs received/partial/paid in this month — ex-VAT,
@@ -2722,6 +2675,7 @@ async def reconciliation(
     from datetime import timedelta
     cid = current_user.company_id
     now = datetime.utcnow()
+    VAT_RATE = 0.15
 
     checks = []
 
@@ -2967,8 +2921,7 @@ async def reconciliation(
 
     # ── RULE 8: Unmatched revenue — paid invoices with no expense offset ───────
     # Simple check: gross margin — warn if expenses are >90% of revenue
-    total_rev = round(sum(_to_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status==InvoiceStatus.paid).all()), 2)
-    total_rev = round(total_rev + _partial_received(db, cid), 2)
+    total_rev = round(sum(_received_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all()), 2)
     total_exp = round(sum(e.amount - (e.vat_amount or 0) for e in all_expenses), 2)
     if total_rev > 0:
         expense_ratio = total_exp / total_rev
@@ -3025,14 +2978,13 @@ async def cash_flow(
     # ── Receipts ──────────────────────────────────────────────────────────────
     inv_q = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status == InvoiceStatus.paid,
+        Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
         Invoice.paid_date >= period_start,
     )
     if period_end:
         inv_q = inv_q.filter(Invoice.paid_date < period_end)
     paid_in_period = inv_q.all()
-    cash_receipts  = round(sum(_to_zar(i) for i in paid_in_period), 2)
-    cash_receipts  = round(cash_receipts + _partial_received(db, cid, period_start, period_end), 2)
+    cash_receipts  = round(sum(_received_zar(i) for i in paid_in_period), 2)
     # Add bank-import income (posted as journal entries, not invoices)
     cash_receipts  = round(cash_receipts + _bank_import_income(db, cid, period_start, period_end), 2)
 
@@ -3117,6 +3069,7 @@ def _vat_net_for_month(db: Session, cid: int, year: int, month: int) -> float:
     (audit fix 2026-09-12, action item 3: 13-week forecast previously showed
     vat_payment hard-coded to 0.0.)
     """
+    VAT_RATE = 0.15
     start = datetime(year, month, 1)
     end_month = month + 1 if month < 12 else 1
     end_year  = year if month < 12 else year + 1
@@ -3177,12 +3130,11 @@ def _annual_tax_estimate(db: Session, cid: int, as_of: _date) -> float:
 
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status == InvoiceStatus.paid,
+        Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
         Invoice.paid_date >= hist_start,
         Invoice.paid_date < hist_end,
     ).all()
-    revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
-    revenue = round(revenue + _partial_received(db, cid, hist_start, hist_end), 2)
+    revenue = round(sum(_received_zar(i) for i in paid_invoices), 2)
     revenue = round(revenue + _bank_import_income(db, cid, hist_start, hist_end), 2)
 
     expenses = db.query(Expense).filter(
@@ -3554,13 +3506,9 @@ async def emp201(
     total_uif          = round(total_uif_employee + total_uif_employer, 2)
     total_due_sars     = round(total_paye + total_uif + total_sdl, 2)
 
-    _sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == cid, Emp201Submission.period == period).first()
     return {
         "period":            _date(_py, _pm, 1).strftime("%B %Y"),
         "period_key":        period,
-        "submitted":         bool(_sub),
-        "submitted_at":      _sub.submitted_at.isoformat() if _sub else None,
-        "submission_reference": _sub.reference if _sub else None,
         "due_date":          due_date,
         "employee_count":    len(payslips),
         "employees":         employees_detail,
@@ -3570,46 +3518,6 @@ async def emp201(
         "total_due_sars":    total_due_sars,
         "efiling_reference": f"EMP201-{period}",
     }
-
-
-class Emp201SubmitRequest(BaseModel):
-    reference: Optional[str] = None
-
-
-@reports_router.post("/emp201/submit/{period}")
-async def emp201_mark_submitted(period: str, data: Emp201SubmitRequest = Emp201SubmitRequest(),
-                                current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Record that this month's EMP201 has been filed with SARS; locks the month's payslips against deletion."""
-    import re
-    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", period):
-        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
-    if getattr(current_user, "role", "owner") not in ("owner", "admin", "accountant"):
-        raise HTTPException(status_code=403, detail="Only an owner, admin or accountant can mark an EMP201 as submitted.")
-    cid = current_user.company_id
-    if not db.query(Payslip).join(Employee).filter(Employee.company_id == cid, Payslip.period == period).first():
-        raise HTTPException(status_code=400, detail="There are no payslips for this period.")
-    sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == cid, Emp201Submission.period == period).first()
-    if not sub:
-        sub = Emp201Submission(company_id=cid, period=period, submitted_by=getattr(current_user, "id", None))
-        db.add(sub)
-    if data.reference:
-        sub.reference = data.reference.strip()[:100]
-    db.commit()
-    return {"period": period, "submitted": True, "submitted_at": sub.submitted_at.isoformat(), "reference": sub.reference}
-
-
-@reports_router.delete("/emp201/submit/{period}")
-async def emp201_withdraw_submission(period: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Withdraw the submitted flag (e.g. SARS rejected the filing) so the month can be corrected."""
-    if getattr(current_user, "role", "owner") not in ("owner", "admin"):
-        raise HTTPException(status_code=403, detail="Only an owner or admin can withdraw an EMP201 submission.")
-    sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == current_user.company_id,
-                                            Emp201Submission.period == period).first()
-    if not sub:
-        raise HTTPException(status_code=404, detail="No submission recorded for this period.")
-    db.delete(sub)
-    db.commit()
-    return {"period": period, "submitted": False}
 
 
 @reports_router.get("/management")
@@ -3642,16 +3550,15 @@ async def management_accounts(
     )
 
     # Use COALESCE so invoices with NULL paid_date (legacy records) fall back to
-    # issue_date then created_at — keeps management report consistent with dashboard.
-    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at)
+    # invoice_date then created_at — keeps management report consistent with dashboard.
+    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.invoice_date, Invoice.created_at)
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status == InvoiceStatus.paid,
+        Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
         _eff_paid >= period_start,
         _eff_paid < period_end,
     ).all()
-    revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
-    revenue = round(revenue + _partial_received(db, cid, period_start, period_end), 2)
+    revenue = round(sum(_received_zar(i) for i in paid_invoices), 2)
     # Add bank-import income in the same date range
     revenue = round(revenue + _bank_import_income(db, cid, period_start, period_end), 2)
 
@@ -3730,7 +3637,7 @@ async def management_accounts(
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])
     ).all()
     total_outstanding = round(sum(_balance_zar(i) for i in outstanding), 2)
-    overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue or (i.status in (InvoiceStatus.sent, InvoiceStatus.partial) and i.due_date and i.due_date < now))   # computed from due_date; status is deliberately NOT flipped (partial must stay partial for balance logic)
+    overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue or (i.status == InvoiceStatus.partial and i.due_date and i.due_date < now))
 
     # Anchor the 6-month window to period_end so that when the user filters to a
     # historical range (e.g. FY2026), the trend bars cover that actual period
@@ -3746,8 +3653,8 @@ async def management_accounts(
         start = datetime(y, m, 1)
         end_m, end_y = (m + 1, y) if m < 12 else (1, y + 1)
         end = datetime(end_y, end_m, 1)
-        rev = round(sum(_to_zar(inv) for inv in db.query(Invoice).filter(
-            Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
+        rev = round(sum(_received_zar(inv) for inv in db.query(Invoice).filter(
+            Invoice.company_id == cid, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
             Invoice.paid_date >= start, Invoice.paid_date < end).all()), 2)
         # Bank-import income + any non-invoice revenue for this month
         rev = round(rev + _bank_import_income(db, cid, start, end), 2)
@@ -3911,18 +3818,17 @@ async def provisional_tax(
     """
     cid = current_user.company_id
     now = datetime.utcnow()
-    from fixed_assets import SA_CIT_RATE as CORP_TAX_RATE   # single source of truth for the CIT rate
+    CORP_TAX_RATE = 0.27
 
     # Get all revenue and expenses for the current calendar year (YTD)
     year_start = datetime(now.year, 1, 1)
 
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
-        Invoice.status == InvoiceStatus.paid,
+        Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
         Invoice.paid_date >= year_start
     ).all()
-    ytd_revenue = round(sum(_to_zar(i) for i in paid_invoices), 2)
-    ytd_revenue = round(ytd_revenue + _partial_received(db, cid, year_start), 2)
+    ytd_revenue = round(sum(_received_zar(i) for i in paid_invoices), 2)
     # Add bank-import income (journal entries, not invoices) — avoids double-counting
     ytd_revenue = round(ytd_revenue + _bank_import_income(db, cid, year_start), 2)
 
@@ -4283,6 +4189,7 @@ async def vat201(
     """
     cid = current_user.company_id
     now = datetime.utcnow()
+    VAT_RATE = 0.15
 
     # Determine period
     if period:
@@ -4645,6 +4552,12 @@ async def initiate_payment(
 
 @payments_router.post("/notify")
 async def payfast_notify(request: Request, db: Session = Depends(get_db)):
+    # DISABLED. This legacy endpoint skipped the signature check whenever PAYFAST_SANDBOX was unset/true (the default),
+    # never checked the amount or asked PayFast to confirm, and took the company from the request body - so a hand-made
+    # POST could activate any plan for any company for free. The app pays through /billing/* (verified); nothing uses this.
+    from fastapi.responses import JSONResponse as _JR
+    logger.warning("Legacy /payments/notify called - ignored")
+    return _JR(content={"status": "gone", "detail": "This endpoint has been retired."}, status_code=410)
     form   = await request.form()
     data   = dict(form)
     pf_id  = data.get("m_payment_id")

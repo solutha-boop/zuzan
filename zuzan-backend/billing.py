@@ -707,16 +707,38 @@ async def afs_notify(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
     data = dict(form)
 
-    if not PAYFAST_SANDBOX:
-        if not _pf_verify_itn(data, PAYFAST_PASSPHRASE):
-            logger.warning(f"AFS PayFast ITN: signature mismatch — {data.get('m_payment_id')}")
-            return {"ok": True}
-
     if data.get("payment_status") != "COMPLETE":
         return {"ok": True}
 
     m_payment_id = data.get("m_payment_id", "")  # "afs-{company_id}-{year}"
     pf_payment_id = data.get("pf_payment_id", "")
+
+    # Verify the notification really comes from PayFast. This used to be skipped whenever PAYFAST_SANDBOX
+    # was unset/true (it defaults to true), so a hand-made POST could unlock the paid AFS for free.
+    import os as _os
+    if _os.environ.get("PORTAL_IPN_SKIP_SIGNATURE") != "1":
+        from portal import _pf_itn_signature_ok, _pf_validate_remote
+        if not _pf_itn_signature_ok(data, PAYFAST_PASSPHRASE):
+            logger.warning(f"AFS PayFast ITN: signature mismatch - possible spoofed request. m_payment_id={m_payment_id}")
+            return {"ok": True}
+        if data.get("merchant_id") and data.get("merchant_id") != PAYFAST_MERCHANT_ID:
+            logger.warning(f"AFS PayFast ITN: merchant_id mismatch for {m_payment_id}")
+            return {"ok": True}
+        try:
+            if not _pf_validate_remote(data):
+                logger.warning(f"AFS PayFast ITN: PayFast did not confirm {m_payment_id}")
+                return {"ok": True}
+        except Exception as e:
+            logger.error(f"AFS PayFast ITN: confirmation call failed ({e}) - asking PayFast to retry")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(content={"ok": False}, status_code=503)
+    try:
+        _paid = float(data.get("amount_gross", 0) or 0)
+    except ValueError:
+        _paid = 0.0
+    if _paid + 0.01 < float(AFS_PRICE):
+        logger.warning(f"AFS PayFast ITN: amount R{_paid:.2f} is less than the AFS price R{float(AFS_PRICE):.2f} - not unlocked")
+        return {"ok": True}
 
     try:
         parts = m_payment_id.split("-")  # ["afs", company_id, year]

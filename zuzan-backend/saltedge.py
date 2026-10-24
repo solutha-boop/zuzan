@@ -166,7 +166,7 @@ def _sync_accounts_and_txns(connection_id_str: str, company_id: int, conn_rec: S
     acct_map = {}
     for a in accounts_data:
         sid = str(a["id"])
-        acct = db.query(SaltEdgeBankAccount).filter_by(saltedge_account_id=sid).first()
+        acct = db.query(SaltEdgeBankAccount).filter_by(saltedge_account_id=sid, company_id=company_id).first()
         if not acct:
             acct = SaltEdgeBankAccount(
                 company_id=company_id,
@@ -197,7 +197,7 @@ def _sync_accounts_and_txns(connection_id_str: str, company_id: int, conn_rec: S
                 break
             for t in txns_data:
                 tid = str(t["id"])
-                if db.query(SaltEdgeTransaction).filter_by(saltedge_txn_id=tid).first():
+                if db.query(SaltEdgeTransaction).filter_by(saltedge_txn_id=tid, company_id=company_id).first():
                     continue
                 made_on = datetime.strptime(t["made_on"], "%Y-%m-%d") if isinstance(t.get("made_on"), str) else datetime.utcnow()
                 txn = SaltEdgeTransaction(

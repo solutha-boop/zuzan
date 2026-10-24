@@ -193,7 +193,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
         company_id=company.id,
         first_name=data.first_name,
         last_name=data.last_name,
-        email=data.email,
+        email=(data.email or "").strip().lower(),
         phone=data.phone,
         hashed_password=hash_password(data.password),
         role="owner",
@@ -335,7 +335,7 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
 @limiter.limit("10/minute")
 async def login(request: Request, data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(func.lower(User.email) == (data.email or "").strip().lower()).first()
-    if not user or not verify_password(data.password, user.hashed_password):
+    if not user or not verify_password(data.password, user.hashed_password) or not user.is_active:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     # The old shared default password must never open an account: the owner has to choose their own.
     if (data.password or "") == "Zuzan2025":
@@ -590,9 +590,12 @@ class ResetPasswordRequest(BaseModel):
 @router.post("/forgot-password")
 @limiter.limit("3/minute")
 async def forgot_password(request: Request, data: ForgotPasswordRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.email.lower().strip()).first()
-    if not user:
-        return {"message": "If that email is registered, a reset code has been sent."}
+    # Case-insensitive (accounts registered as "Soso@x.com" could never be found) and the reply is the same
+    # whether or not the address exists, so this cannot be used to find out who has an account.
+    user = db.query(User).filter(func.lower(User.email) == (data.email or "").lower().strip()).first()
+    _same_reply = {"message": "If that email is registered, a reset code has been sent to it.", "expires_in": "30 minutes"}
+    if not user or not user.is_active:
+        return _same_reply
 
     token = secrets.token_hex(4).upper()  # 8-char code e.g. A3F9B21C
     user.reset_token = token
@@ -603,10 +606,7 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
         send_password_reset_email, user.first_name, user.email, token
     )
 
-    return {
-        "message":  "A reset code has been sent to your email address.",
-        "expires_in": "30 minutes",
-    }
+    return _same_reply
 
 
 @router.post("/reset-password")
@@ -619,8 +619,8 @@ async def reset_password(request: Request, data: ResetPasswordRequest, db: Sessi
     if datetime.utcnow() > user.reset_token_expires:
         user.reset_token = None; user.reset_token_expires = None; db.commit()
         raise HTTPException(status_code=400, detail="Reset code has expired. Please request a new one.")
-    if len(data.new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
 
     user.hashed_password = hash_password(data.new_password)
     user.reset_token = None
@@ -697,7 +697,7 @@ async def list_team(
         User.company_id == current_user.company_id,
         User.is_active == True,
     ).all()
-    return [
+    out = [
         {
             "id":         m.id,
             "first_name": m.first_name,
@@ -709,6 +709,18 @@ async def list_team(
         }
         for m in members
     ]
+    # People from another company (an accountant with several clients) who were given access here via an invite.
+    # They used to be invisible, so the owner could never see or take away their access.
+    seen = {m.id for m in members}
+    for mem, u in (db.query(CompanyMembership, User).join(User, User.id == CompanyMembership.user_id)
+                   .filter(CompanyMembership.company_id == current_user.company_id, User.is_active == True).all()):
+        if u.id in seen:
+            continue
+        seen.add(u.id)
+        out.append({"id": u.id, "first_name": u.first_name, "last_name": u.last_name, "email": u.email,
+                    "role": mem.role, "created_at": u.created_at.isoformat() if u.created_at else None,
+                    "is_self": u.id == current_user.id, "external": True})
+    return out
 
 
 @router.get("/team/invites")
@@ -756,11 +768,16 @@ async def invite_member(
 
     # Check if email already in this company
     existing = db.query(User).filter(
-        User.email == email,
+        func.lower(User.email) == email,
         User.company_id == current_user.company_id,
         User.is_active == True,
     ).first()
     if existing:
+        raise HTTPException(status_code=400, detail="This email is already a member of your company.")
+    _u = db.query(User).filter(func.lower(User.email) == email).first()
+    if _u and db.query(CompanyMembership).filter(CompanyMembership.user_id == _u.id,
+                                                 CompanyMembership.company_id == current_user.company_id).first() \
+            and _u.company_id != current_user.company_id:
         raise HTTPException(status_code=400, detail="This email is already a member of your company.")
 
     # Invalidate any prior pending invite for same email+company
@@ -843,8 +860,29 @@ async def accept_invite(
         raise HTTPException(status_code=400, detail="This invite link has expired.")
 
     # Check if email already has an account
-    existing = db.query(User).filter(User.email == invite.email).first()
+    existing = db.query(User).filter(func.lower(User.email) == (invite.email or "").lower()).first()
     if existing:
+        if existing.company_id == invite.company_id and not existing.is_active:
+            # A removed team member being invited back: switch the account on again with the invited role.
+            existing.is_active = True
+            existing.role = invite.role
+            if not db.query(CompanyMembership).filter(CompanyMembership.user_id == existing.id,
+                                                      CompanyMembership.company_id == invite.company_id).first():
+                db.add(CompanyMembership(user_id=existing.id, company_id=invite.company_id, role=invite.role))
+            invite.used_at = now
+            db.commit()
+            log_action(db, invite.company_id, existing, "team.invite_accepted", detail=f"{invite.email} rejoined as {invite.role}")
+            company = db.query(Company).filter(Company.id == invite.company_id).first()
+            return {
+                "access_token": create_token({"user_id": existing.id, "company_id": invite.company_id}),
+                "token_type": "bearer",
+                "user": {"id": existing.id, "first_name": existing.first_name, "last_name": existing.last_name,
+                         "email": existing.email, "role": existing.role},
+                "company": {"id": company.id, "name": company.name, "logo_url": company.logo_url,
+                            "plan": str(company.plan.value), "subscription_status": effective_subscription_status(company),
+                            "trial_ends": company.trial_ends.isoformat() if company.trial_ends else None,
+                            "payroll_enabled": company.payroll_enabled, "afs_enabled": company.afs_enabled},
+            }
         already_member = (
             existing.company_id == invite.company_id
             or db.query(CompanyMembership).filter(
@@ -893,8 +931,8 @@ async def accept_invite(
             },
         }
 
-    if len(data.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    if len(data.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
 
     # Create user
     user = User(
@@ -962,8 +1000,18 @@ async def update_team_member(
         User.id == user_id,
         User.company_id == current_user.company_id,
     ).first()
-    if not member:
+    mem_row = db.query(CompanyMembership).filter(CompanyMembership.user_id == user_id,
+                                                 CompanyMembership.company_id == current_user.company_id).first()
+    if not member and not mem_row:
         raise HTTPException(status_code=404, detail="Team member not found.")
+    if member is None:                       # access granted from another company: change the role here only
+        member = db.query(User).filter(User.id == user_id).first()
+        old_role = mem_row.role
+        mem_row.role = data.role
+        db.commit()
+        log_action(db, current_user.company_id, current_user, "team.role_changed",
+                   target_type="user", target_id=user_id, detail=f"{member.email}: {old_role} → {data.role}")
+        return {"message": f"Role updated to {data.role}", "user_id": user_id}
     if member.role == "owner":
         raise HTTPException(status_code=400, detail="Cannot change the owner's role.")
     if member.id == current_user.id:
@@ -971,6 +1019,8 @@ async def update_team_member(
 
     old_role = member.role
     member.role = data.role
+    if mem_row:
+        mem_row.role = data.role
     db.commit()
 
     log_action(db, current_user.company_id, current_user, "team.role_changed",
@@ -991,14 +1041,26 @@ async def remove_team_member(
         User.id == user_id,
         User.company_id == current_user.company_id,
     ).first()
-    if not member:
+    mem_row = db.query(CompanyMembership).filter(CompanyMembership.user_id == user_id,
+                                                 CompanyMembership.company_id == current_user.company_id).first()
+    if not member and not mem_row:
         raise HTTPException(status_code=404, detail="Team member not found.")
+    if member is None:                       # an outside accountant: take away access to THIS company only
+        ext = db.query(User).filter(User.id == user_id).first()
+        _ext_role = mem_row.role
+        db.delete(mem_row)
+        db.commit()
+        log_action(db, current_user.company_id, current_user, "team.member_removed",
+                   target_type="user", target_id=user_id, detail=f"Removed {ext.email} ({_ext_role}) - access to this company withdrawn")
+        return {"message": f"Member {ext.email} removed."}
     if member.role == "owner":
         raise HTTPException(status_code=400, detail="Cannot remove the company owner.")
     if member.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot remove yourself.")
 
     member.is_active = False
+    if mem_row:
+        db.delete(mem_row)
     db.commit()
 
     log_action(db, current_user.company_id, current_user, "team.member_removed",
