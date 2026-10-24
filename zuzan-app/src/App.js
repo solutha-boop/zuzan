@@ -3872,10 +3872,10 @@ function Payroll({live = {}, user = {}}) {
               {irp5Emps.length>0 && (
                 <ExcelBtn filename={`irp5_${annualTaxYear}.csv`} data={irp5Emps.map(r=>({
                   Employee:`${r.first_name} ${r.last_name}`, EmpNo:r.employee_number, IDNo:r.id_number, TaxNo:r.tax_number,
-                  Gross:r.gross_remuneration, "3601_Salary":r.code_3601_salary, "3713_MedFringe":r.code_3713_med_fringe,
-                  "3801_Overtime":r.code_3801_overtime, "4001_PAYE":r.code_4001_paye, "4002_UIF_Emp":r.code_4002_uif_employee,
-                  "4005_Pension":r.code_4005_pension, "MedTaxCredit":r.medical_tax_credit, NetPay:r.net_pay_annual,
-                  "4003_UIF_Empr":r.code_4003_uif_employer, "4474_SDL":r.code_4474_sdl, "7002_PensionEmpr":r.code_7002_pension_empr,
+                  Gross:r.gross_remuneration, "3601_Salary":r.code_3601_salary, "3810_MedFringe":r.code_3810_med_fringe,
+                  "3607_Overtime":r.code_3607_overtime, "4102_PAYE":r.code_4102_paye, "4141_UIF_Emp":r.code_4141_uif_employee,
+                  "4001_Pension":r.code_4001_pension, "MedTaxCredit":r.medical_tax_credit, NetPay:r.net_pay_annual,
+                  "4141_UIF_Empr":r.code_4141_uif_employer, "4142_SDL":r.code_4142_sdl, "PensionEmpr":r.pension_employer_contribution,
                 }))}/>
               )}
               {irp5Emps.length>0 && (
@@ -3991,7 +3991,7 @@ function Payroll({live = {}, user = {}}) {
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                   <thead>
                     <tr style={{background:C.bg}}>
-                      {["Employee","ID / Tax No","Months","3601 Salary","3713 Med Fringe","3801 OT","4001 PAYE","4002 UIF","4005 Pension","MTC","Net Pay (Annual)","4474 SDL*"].map(h=>(
+                      {["Employee","ID / Tax No","Months","3601 Salary","3810 Med Fringe","3607 OT","4102 PAYE","4141 UIF","4001 Pension","MTC","Net Pay (Annual)","4142 SDL*"].map(h=>(
                         <th key={h} style={{padding:"9px 12px",textAlign:"left",fontSize:9,color:C.inkMid,fontWeight:600,letterSpacing:.4,textTransform:"uppercase",whiteSpace:"nowrap"}}>{h}</th>
                       ))}
                     </tr>
@@ -4003,14 +4003,14 @@ function Payroll({live = {}, user = {}}) {
                         <td style={{padding:"10px 12px",color:C.inkMid,fontSize:10}}>{emp.id_number||"—"} / {emp.tax_number||"—"}</td>
                         <td style={{padding:"10px 12px",textAlign:"center",color:C.inkMid}}>{emp.periods_count}</td>
                         <td style={{padding:"10px 12px"}}>{fmt(emp.code_3601_salary)}</td>
-                        <td style={{padding:"10px 12px",color:emp.code_3713_med_fringe>0?C.gold:"inherit"}}>{fmt(emp.code_3713_med_fringe)}</td>
-                        <td style={{padding:"10px 12px",color:emp.code_3801_overtime>0?C.blue:"inherit"}}>{fmt(emp.code_3801_overtime)}</td>
-                        <td style={{padding:"10px 12px",color:C.red,fontWeight:600}}>{fmt(emp.code_4001_paye)}</td>
-                        <td style={{padding:"10px 12px",color:C.gold}}>{fmt(emp.code_4002_uif_employee)}</td>
-                        <td style={{padding:"10px 12px"}}>{fmt(emp.code_4005_pension)}</td>
+                        <td style={{padding:"10px 12px",color:emp.code_3810_med_fringe>0?C.gold:"inherit"}}>{fmt(emp.code_3810_med_fringe)}</td>
+                        <td style={{padding:"10px 12px",color:emp.code_3607_overtime>0?C.blue:"inherit"}}>{fmt(emp.code_3607_overtime)}</td>
+                        <td style={{padding:"10px 12px",color:C.red,fontWeight:600}}>{fmt(emp.code_4102_paye)}</td>
+                        <td style={{padding:"10px 12px",color:C.gold}}>{fmt(emp.code_4141_uif_employee)}</td>
+                        <td style={{padding:"10px 12px"}}>{fmt(emp.code_4001_pension)}</td>
                         <td style={{padding:"10px 12px",color:C.green}}>{fmt(emp.medical_tax_credit)}</td>
                         <td style={{padding:"10px 12px",fontWeight:700,color:C.green}}>{fmt(emp.net_pay_annual)}</td>
-                        <td style={{padding:"10px 12px",color:C.inkMid,fontSize:10}}>{fmt(emp.code_4474_sdl)}</td>
+                        <td style={{padding:"10px 12px",color:C.inkMid,fontSize:10}}>{fmt(emp.code_4142_sdl)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -4018,20 +4018,20 @@ function Payroll({live = {}, user = {}}) {
                     <tr style={{background:C.bg,borderTop:"2px solid "+C.border}}>
                       <td colSpan={3} style={{padding:"10px 12px",fontWeight:800,color:C.ink}}>TOTALS</td>
                       <td style={{padding:"10px 12px",fontWeight:800}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3601_salary||0),0))}</td>
-                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3713_med_fringe||0),0))}</td>
-                      <td style={{padding:"10px 12px",fontWeight:800,color:C.blue}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3801_overtime||0),0))}</td>
-                      <td style={{padding:"10px 12px",fontWeight:800,color:C.red}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4001_paye||0),0))}</td>
-                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4002_uif_employee||0),0))}</td>
-                      <td style={{padding:"10px 12px",fontWeight:800}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4005_pension||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3810_med_fringe||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.blue}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_3607_overtime||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.red}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4102_paye||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.gold}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4141_uif_employee||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4001_pension||0),0))}</td>
                       <td style={{padding:"10px 12px",fontWeight:800,color:C.green}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.medical_tax_credit||0),0))}</td>
                       <td style={{padding:"10px 12px",fontWeight:800,color:C.green}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.net_pay_annual||0),0))}</td>
-                      <td style={{padding:"10px 12px",fontWeight:800,color:C.inkMid}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4474_sdl||0),0))}</td>
+                      <td style={{padding:"10px 12px",fontWeight:800,color:C.inkMid}}>{fmt(irp5Emps.reduce((s,r)=>s+(r.code_4142_sdl||0),0))}</td>
                     </tr>
                   </tfoot>
                 </table>
               )}
             </div>
-            <p style={{fontSize:10,color:C.inkMid,marginTop:8}}>* SDL (code 4474) is an employer cost — shown for reconciliation, not deducted from employee net pay. MTC = Medical Tax Credit (s6A).</p>
+            <p style={{fontSize:10,color:C.inkMid,marginTop:8}}>* SDL (code 4142) is an employer cost — shown for reconciliation, not deducted from employee net pay. MTC = Medical Tax Credit (s6A).</p>
           </div>
         </div>
       );

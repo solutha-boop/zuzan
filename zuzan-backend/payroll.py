@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta, date as _date
 import calendar as _calendar
-from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine
+from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine, Emp201Submission
 from auth import get_current_user, User
 import hashlib
 import logging
@@ -1555,6 +1555,13 @@ async def delete_payroll_period(
     import re
     if not re.match(r"^\d{4}-\d{2}$", period):
         raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    _sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == current_user.company_id,
+                                             Emp201Submission.period == period).first()
+    if _sub:
+        raise HTTPException(status_code=409, detail=(
+            f"The EMP201 for {period} was marked as submitted to SARS on {_sub.submitted_at:%d %b %Y}. "
+            "Its payslips can't be deleted. If a correction is needed, withdraw the submission first "
+            "(DELETE /reports/emp201/submit/" + period + ") and file a corrected EMP201 with SARS."))
     # Payslip has no company_id — scope by employee_id subquery
     emp_ids = [
         e.id for e in db.query(Employee).filter(
@@ -1934,12 +1941,12 @@ async def get_irp5(
             # Income
             "gross_remuneration":      round(gross, 2),
             "code_3601_salary":        round(code_3601, 2),
-            "code_3713_med_fringe":    round(code_3713, 2),
-            "code_3801_overtime":      round(code_3801, 2),
+            "code_3810_med_fringe":    round(code_3713, 2),
+            "code_3607_overtime":      round(code_3801, 2),
             # Employee deductions
-            "code_4001_paye":          round(paye, 2),
-            "code_4002_uif_employee":  round(uif_emp, 2),
-            "code_4005_pension":       round(s11f, 2),
+            "code_4102_paye":          round(paye, 2),
+            "code_4141_uif_employee":  round(uif_emp, 2),
+            "code_4001_pension":       round(s11f, 2),
             # s11F carry-forward disclosure (audit fix 2026-07-19): excess
             # contributions above the cap this year roll to future years;
             # carry_used shows prior-year excess absorbed this year.
@@ -1952,9 +1959,9 @@ async def get_irp5(
             "medical_tax_credit":      round(med_tc, 2),
             "net_pay_annual":          round(net_pay, 2),
             # Employer contributions (informational)
-            "code_4003_uif_employer":  round(uif_empr, 2),
-            "code_4474_sdl":           round(sdl, 2),
-            "code_7002_pension_empr":  round(pension_empr, 2),
+            "code_4141_uif_employer":  round(uif_empr, 2),
+            "code_4142_sdl":           round(sdl, 2),
+            "pension_employer_contribution":  round(pension_empr, 2),
         })
 
     company = db.query(Company).filter(Company.id == cid).first()
@@ -3547,9 +3554,13 @@ async def emp201(
     total_uif          = round(total_uif_employee + total_uif_employer, 2)
     total_due_sars     = round(total_paye + total_uif + total_sdl, 2)
 
+    _sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == cid, Emp201Submission.period == period).first()
     return {
         "period":            _date(_py, _pm, 1).strftime("%B %Y"),
         "period_key":        period,
+        "submitted":         bool(_sub),
+        "submitted_at":      _sub.submitted_at.isoformat() if _sub else None,
+        "submission_reference": _sub.reference if _sub else None,
         "due_date":          due_date,
         "employee_count":    len(payslips),
         "employees":         employees_detail,
@@ -3559,6 +3570,46 @@ async def emp201(
         "total_due_sars":    total_due_sars,
         "efiling_reference": f"EMP201-{period}",
     }
+
+
+class Emp201SubmitRequest(BaseModel):
+    reference: Optional[str] = None
+
+
+@reports_router.post("/emp201/submit/{period}")
+async def emp201_mark_submitted(period: str, data: Emp201SubmitRequest = Emp201SubmitRequest(),
+                                current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Record that this month's EMP201 has been filed with SARS; locks the month's payslips against deletion."""
+    import re
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", period):
+        raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    if getattr(current_user, "role", "owner") not in ("owner", "admin", "accountant"):
+        raise HTTPException(status_code=403, detail="Only an owner, admin or accountant can mark an EMP201 as submitted.")
+    cid = current_user.company_id
+    if not db.query(Payslip).join(Employee).filter(Employee.company_id == cid, Payslip.period == period).first():
+        raise HTTPException(status_code=400, detail="There are no payslips for this period.")
+    sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == cid, Emp201Submission.period == period).first()
+    if not sub:
+        sub = Emp201Submission(company_id=cid, period=period, submitted_by=getattr(current_user, "id", None))
+        db.add(sub)
+    if data.reference:
+        sub.reference = data.reference.strip()[:100]
+    db.commit()
+    return {"period": period, "submitted": True, "submitted_at": sub.submitted_at.isoformat(), "reference": sub.reference}
+
+
+@reports_router.delete("/emp201/submit/{period}")
+async def emp201_withdraw_submission(period: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Withdraw the submitted flag (e.g. SARS rejected the filing) so the month can be corrected."""
+    if getattr(current_user, "role", "owner") not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only an owner or admin can withdraw an EMP201 submission.")
+    sub = db.query(Emp201Submission).filter(Emp201Submission.company_id == current_user.company_id,
+                                            Emp201Submission.period == period).first()
+    if not sub:
+        raise HTTPException(status_code=404, detail="No submission recorded for this period.")
+    db.delete(sub)
+    db.commit()
+    return {"period": period, "submitted": False}
 
 
 @reports_router.get("/management")
@@ -3679,7 +3730,7 @@ async def management_accounts(
         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])
     ).all()
     total_outstanding = round(sum(_balance_zar(i) for i in outstanding), 2)
-    overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue or (i.status == InvoiceStatus.partial and i.due_date and i.due_date < now))
+    overdue_count     = sum(1 for i in outstanding if i.status == InvoiceStatus.overdue or (i.status in (InvoiceStatus.sent, InvoiceStatus.partial) and i.due_date and i.due_date < now))   # computed from due_date; status is deliberately NOT flipped (partial must stay partial for balance logic)
 
     # Anchor the 6-month window to period_end so that when the user filters to a
     # historical range (e.g. FY2026), the trend bars cover that actual period
