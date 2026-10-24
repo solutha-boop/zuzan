@@ -701,9 +701,53 @@ JOURNAL_ALIASES: dict[str, list[str]] = {
 
 # ── Account helpers ───────────────────────────────────────────────────────────
 
+def _guess_account_type(s: str):
+    """Best-effort account type from free text ('Non-current liabilities', 'Trade and other receivables'...).
+    Returns None when nothing recognisable is in the text (the caller must not silently call it an asset)."""
+    v = (s or "").strip().lower()
+    if not v:
+        return None
+    t = _parse_account_type_exact(v.replace(" ", "_"))
+    if t is not None:
+        return t
+    for words, typ in (
+        (("liabilit", "payable", "creditor", "loan", "overdraft", "provision", "deferred income"), AccountType.liability),
+        (("equity", "capital", "retained", "reserve", "drawings", "share"), AccountType.equity),
+        (("revenue", "income", "sales", "turnover", "fees earned"), AccountType.revenue),
+        (("expense", "cost", "overhead", "salar", "wages", "depreciation", "interest paid"), AccountType.expense),
+        (("asset", "bank", "cash", "receivable", "debtor", "inventor", "stock", "prepaid", "equipment", "vehicle", "property", "investment"), AccountType.asset),
+    ):
+        if any(w in v for w in words):
+            return typ
+    return None
+
+
 def _parse_account_type(s: str) -> AccountType:
-    """Map a freeform type string to an AccountType enum value."""
-    v = s.strip().lower().replace(" ", "_") if s else ""
+    """Map a freeform type string to an AccountType enum value (asset when unrecognised - legacy callers)."""
+    return _guess_account_type(s) or AccountType.asset
+
+
+def _resolve_type(type_text: str, code: str):
+    """Type from the text column, else from the account code's first digit; None if neither says."""
+    t = _guess_account_type(type_text)
+    if t is not None:
+        return t
+    if code and str(code).strip()[:1].isdigit():
+        return _infer_type_from_code(code)
+    return None
+
+
+def _signed_dr_cr(atype, bal: float):
+    """(debit, credit) for a signed closing balance: debit-normal types (asset/expense) post a positive
+    balance as a debit and a negative one (accumulated depreciation, overdrawn bank) as a credit;
+    credit-normal types the other way round."""
+    if atype in (AccountType.asset, AccountType.expense):
+        return (bal, 0.0) if bal >= 0 else (0.0, -bal)
+    return (0.0, bal) if bal >= 0 else (-bal, 0.0)
+
+
+def _parse_account_type_exact(v: str):
+    """Exact-token mapping (the original table); None if the token is not one of them."""
     if v in ("asset", "assets", "current_asset", "current_assets", "fixed_asset",
              "non_current_asset", "bank", "cash", "receivable", "accounts_receivable",
              "trade_receivable", "other_asset"):
@@ -722,7 +766,7 @@ def _parse_account_type(s: str) -> AccountType:
              "cost_of_goods_sold", "overhead", "operating_expense",
              "direct_cost", "admin", "other_expense"):
         return AccountType.expense
-    return AccountType.asset  # safe default
+    return None
 
 
 def _infer_type_from_code(code: str) -> AccountType:
@@ -763,9 +807,12 @@ def _find_or_create_account(
             Account.company_id == cid, Account.code == code
         ).first()
     if acct is None and name:
+        # Fall back to the account NAME, but only an account of the same kind: an imported asset called
+        # "Equipment" must not land in the expense account "Equipment" (5260).
         acct = db.query(Account).filter(
             Account.company_id == cid,
             func.lower(func.trim(Account.name)) == name.lower(),
+            Account.type == atype,
         ).first()
     if acct:
         return acct
@@ -801,6 +848,36 @@ def _ob_equity_account(db, cid: int) -> Account:
     return acct
 
 
+def _opening_date(as_at):
+    """Posting date for an opening-balance import: the as-at date given by the user, else today."""
+    if as_at and str(as_at).strip():
+        d = _parse_date(str(as_at))
+        if d is None:
+            raise HTTPException(400, f"Could not read the as-at date '{as_at}'. Use YYYY-MM-DD.")
+        return d
+    return datetime.utcnow()
+
+
+def _guard_reimport(db, cid: int, reference: str, replace: bool) -> None:
+    """Opening-balance files post one entry. Importing the same kind twice doubles every balance, so refuse
+    unless the caller asks to replace: the earlier entry is then reversed (kept on file) and the new one posted."""
+    reversed_ids = {r[0] for r in db.query(JournalEntry.is_reversal_of).filter(
+        JournalEntry.company_id == cid, JournalEntry.is_reversal_of.isnot(None)).all()}
+    live = [e for e in db.query(JournalEntry).filter(
+                JournalEntry.company_id == cid, JournalEntry.source == "import",
+                JournalEntry.reference == reference).all()
+            if e.id not in reversed_ids and e.is_reversal_of is None]
+    if not live:
+        return
+    if not replace:
+        raise HTTPException(409, f"An opening-balance import ({reference}) already exists for this company. "
+                                 "Importing again would double every balance. Re-send with replace=true to reverse "
+                                 "the earlier import and post this file instead.")
+    import journal as journal_engine
+    for e in live:
+        journal_engine.reverse_entry_by_id(e.id, db, reason=f"Replaced by a new {reference} import")
+
+
 def _add_ob_offset(db, entry_id: int, acct_id: int, ob_offset: float) -> None:
     """Add the balancing line to the opening balance equity account."""
     amt = round(ob_offset, 2)
@@ -819,6 +896,8 @@ def _add_ob_offset(db, entry_id: int, acct_id: int, ob_offset: float) -> None:
 @router.post("/trial_balance")
 async def import_trial_balance(
     file: UploadFile = File(...),
+    as_at: Optional[str] = None,
+    replace: bool = False,
     db:   Session    = Depends(get_db),
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
@@ -842,10 +921,12 @@ async def import_trial_balance(
             "Expected one of: Name, Account Name, Account."
         )
 
+    _post_date = _opening_date(as_at)
+    _guard_reimport(db, cid, "OB-TB", replace)
     ob_acct = _ob_equity_account(db, cid)
     entry = JournalEntry(
         company_id  = cid,
-        date        = datetime.utcnow(),
+        date        = _post_date,
         description = "Opening Balances — Trial Balance Import",
         reference   = "OB-TB",
         source      = "import",
@@ -863,21 +944,26 @@ async def import_trial_balance(
                 continue
 
             code   = _get(row, m, "code")
-            atype  = _parse_account_type(_get(row, m, "type"))
             debit  = _parse_float(_get(row, m, "debit"))
             credit = _parse_float(_get(row, m, "credit"))
             bal    = _parse_float(_get(row, m, "balance"))
+            if debit < 0 or credit < 0:                 # a negative in the Debit column is a credit and vice versa
+                net = debit - credit
+                debit, credit = (net, 0.0) if net >= 0 else (0.0, -net)
 
-            # Infer DR/CR from balance column when explicit columns are absent
-            if debit == 0.0 and credit == 0.0 and bal != 0.0:
-                if atype in (AccountType.asset, AccountType.expense):
-                    debit = abs(bal)
-                else:
-                    credit = abs(bal)
-
-            if debit == 0.0 and credit == 0.0:
+            if debit == 0.0 and credit == 0.0 and bal == 0.0:
                 skipped += 1
                 continue
+
+            atype = _resolve_type(_get(row, m, "type"), code)
+            if atype is None and (debit == 0.0 and credit == 0.0):
+                raise ValueError(f"Cannot tell what kind of account '{name}' is (no recognisable Type and no numeric code) - row not imported.")
+            if atype is None:
+                atype = AccountType.asset   # explicit Debit/Credit given: the side is known, so the type only labels a new account
+
+            # Balance column only: the sign says which side (a negative asset is a credit)
+            if debit == 0.0 and credit == 0.0:
+                debit, credit = _signed_dr_cr(atype, bal)
 
             acct = _find_or_create_account(db, cid, code, name, atype)
             db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
@@ -887,10 +973,16 @@ async def import_trial_balance(
         except Exception as e:
             errors.append({"row": i, "message": str(e)})
 
+    out_of_balance = round(ob_offset, 2)
     _add_ob_offset(db, entry.id, ob_acct.id, ob_offset)
     db.commit()
-    return {"entity": "trial_balance", "total_rows": len(rows),
-            "imported": imported, "skipped": skipped, "errors": errors}
+    res = {"entity": "trial_balance", "total_rows": len(rows),
+           "imported": imported, "skipped": skipped, "errors": errors,
+           "balancing_to_opening_equity": out_of_balance}
+    if abs(out_of_balance) >= 0.01:
+        res["warning"] = (f"The file does not balance (debits and credits differ by R{abs(out_of_balance):,.2f}). The difference was "
+                          "posted to Opening Balance Equity (3999) - check the file for missing or mis-signed rows.")
+    return res
 
 
 # ── BALANCE SHEET ─────────────────────────────────────────────────────────────
@@ -898,6 +990,8 @@ async def import_trial_balance(
 @router.post("/balance_sheet")
 async def import_balance_sheet(
     file: UploadFile = File(...),
+    as_at: Optional[str] = None,
+    replace: bool = False,
     db:   Session    = Depends(get_db),
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
@@ -920,10 +1014,12 @@ async def import_balance_sheet(
             "Expected one of: Name, Account Name, Account."
         )
 
+    _post_date = _opening_date(as_at)
+    _guard_reimport(db, cid, "OB-BS", replace)
     ob_acct = _ob_equity_account(db, cid)
     entry = JournalEntry(
         company_id  = cid,
-        date        = datetime.utcnow(),
+        date        = _post_date,
         description = "Opening Balances — Balance Sheet Import",
         reference   = "OB-BS",
         source      = "import",
@@ -941,21 +1037,26 @@ async def import_balance_sheet(
                 continue
 
             code   = _get(row, m, "code")
-            atype  = _parse_account_type(_get(row, m, "classification"))
             debit  = _parse_float(_get(row, m, "debit"))
             credit = _parse_float(_get(row, m, "credit"))
             bal    = _parse_float(_get(row, m, "balance"))
+            if debit < 0 or credit < 0:
+                net = debit - credit
+                debit, credit = (net, 0.0) if net >= 0 else (0.0, -net)
 
-            # Balance sheet rule: assets → DR, liabilities/equity → CR
-            if debit == 0.0 and credit == 0.0 and bal != 0.0:
-                if atype in (AccountType.asset, AccountType.expense):
-                    debit = abs(bal)
-                else:
-                    credit = abs(bal)
-
-            if debit == 0.0 and credit == 0.0:
+            if debit == 0.0 and credit == 0.0 and bal == 0.0:
                 skipped += 1
                 continue
+
+            atype = _resolve_type(_get(row, m, "classification"), code)
+            if atype is None and (debit == 0.0 and credit == 0.0):
+                raise ValueError(f"Cannot tell whether '{name}' is an asset, liability or equity (no recognisable Classification and no numeric code) - row not imported.")
+            if atype is None:
+                atype = AccountType.asset
+
+            # Balance sheet rule: assets -> DR, liabilities/equity -> CR; a negative balance flips the side
+            if debit == 0.0 and credit == 0.0:
+                debit, credit = _signed_dr_cr(atype, bal)
 
             acct = _find_or_create_account(db, cid, code, name, atype)
             db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
@@ -965,10 +1066,16 @@ async def import_balance_sheet(
         except Exception as e:
             errors.append({"row": i, "message": str(e)})
 
+    out_of_balance = round(ob_offset, 2)
     _add_ob_offset(db, entry.id, ob_acct.id, ob_offset)
     db.commit()
-    return {"entity": "balance_sheet", "total_rows": len(rows),
-            "imported": imported, "skipped": skipped, "errors": errors}
+    res = {"entity": "balance_sheet", "total_rows": len(rows),
+           "imported": imported, "skipped": skipped, "errors": errors,
+           "balancing_to_opening_equity": out_of_balance}
+    if abs(out_of_balance) >= 0.01:
+        res["note"] = (f"R{abs(out_of_balance):,.2f} was posted to Opening Balance Equity (3999) so the entry balances. "
+                       "For a balance sheet that is normal (it is the owner's equity / retained earnings) unless the file already includes equity.")
+    return res
 
 
 # ── INCOME STATEMENT / PROFIT & LOSS ──────────────────────────────────────────
@@ -976,6 +1083,8 @@ async def import_balance_sheet(
 @router.post("/profit_loss")
 async def import_profit_loss(
     file: UploadFile = File(...),
+    as_at: Optional[str] = None,
+    replace: bool = False,
     db:   Session    = Depends(get_db),
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
@@ -1009,9 +1118,11 @@ async def import_profit_loss(
         db.add(re_acct)
         db.flush()
 
+    _post_date = _opening_date(as_at)
+    _guard_reimport(db, cid, "OB-PL", replace)
     entry = JournalEntry(
         company_id  = cid,
-        date        = datetime.utcnow(),
+        date        = _post_date,
         description = "P&L Opening Balances — Import",
         reference   = "OB-PL",
         source      = "import",
@@ -1034,17 +1145,18 @@ async def import_profit_loss(
                 skipped += 1
                 continue
 
-            atype = _parse_account_type(tp) if tp else AccountType.revenue
+            atype = _resolve_type(tp, code)
+            if atype not in (AccountType.revenue, AccountType.expense):
+                raise ValueError(f"Cannot tell whether '{name}' is income or an expense (Type '{tp}') - row not imported.")
             acct  = _find_or_create_account(db, cid, code, name, atype)
 
+            # A negative amount reverses the normal side (e.g. a credit note against sales)
             if atype == AccountType.revenue:
-                db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
-                                   debit=0.0, credit=amount, description=name))
-                re_offset += amount  # revenue increases retained earnings
+                d, c = (0.0, amount) if amount > 0 else (-amount, 0.0)
             else:
-                db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
-                                   debit=amount, credit=0.0, description=name))
-                re_offset -= amount  # expenses reduce retained earnings
+                d, c = (amount, 0.0) if amount > 0 else (0.0, -amount)
+            db.add(JournalLine(entry_id=entry.id, account_id=acct.id, debit=d, credit=c, description=name))
+            re_offset += c - d
 
             imported += 1
         except Exception as e:
@@ -1078,17 +1190,36 @@ def _import_journal_rows(
     """
     from collections import defaultdict
 
-    groups: dict[str, list[tuple[int, list[str]]]] = defaultdict(list)
+    # One journal = same reference AND same date (a reference such as "JNL1" reused in a later month
+    # is a different journal, not more lines of the first one).
+    groups: dict[tuple, list[tuple[int, list[str]]]] = defaultdict(list)
     for i, row in enumerate(rows, start=2):
         ref = _get(row, m, "reference") or f"IMP-{i:04d}"
-        groups[ref].append((i, row))
+        groups[(ref, _get(row, m, "date"))].append((i, row))
 
     imported, skipped, errors = 0, 0, []
 
-    for ref, group_rows in groups.items():
+    # Journals already imported (same reference, date and total) are skipped, so re-uploading the same file
+    # cannot double the ledger.
+    reversed_ids = {r[0] for r in db.query(JournalEntry.is_reversal_of).filter(
+        JournalEntry.company_id == cid, JournalEntry.is_reversal_of.isnot(None)).all()}
+    _have = set()
+    for e in db.query(JournalEntry).filter(JournalEntry.company_id == cid, JournalEntry.source == "import").all():
+        if e.id in reversed_ids or e.is_reversal_of is not None:
+            continue
+        tot = sum((l.debit or 0) for l in db.query(JournalLine).filter(JournalLine.entry_id == e.id).all())
+        _have.add((e.reference, e.date.strftime("%Y-%m-%d") if e.date else "", round(tot, 2)))
+
+    for (ref, _raw_date), group_rows in groups.items():
         try:
             first_row  = group_rows[0][1]
-            entry_date = _parse_date(_get(first_row, m, "date")) or datetime.utcnow()
+            _d_txt = _get(first_row, m, "date")
+            entry_date = _parse_date(_d_txt)
+            if _d_txt and entry_date is None:
+                skipped += 1
+                errors.append({"row": group_rows[0][0], "message": f"Journal '{ref}': could not read the date '{_d_txt}' - group NOT imported."})
+                continue
+            entry_date = entry_date or datetime.utcnow()
             description = _get(first_row, m, "description") or f"{entity.replace('_',' ').title()} Import"
 
             # Parse and validate ALL lines BEFORE creating the entry (audit fix
@@ -1104,6 +1235,9 @@ def _import_journal_rows(
                     continue
                 debit  = _parse_float(_get(row, m, "debit"))
                 credit = _parse_float(_get(row, m, "credit"))
+                if debit < 0 or credit < 0:           # negative in one column = the other side
+                    _net = debit - credit
+                    debit, credit = (_net, 0.0) if _net >= 0 else (0.0, -_net)
                 if debit == 0.0 and credit == 0.0:
                     continue
                 line_desc = _get(row, m, "description") or description
@@ -1128,6 +1262,13 @@ def _import_journal_rows(
                     ),
                 })
                 continue
+
+            _sig = (ref, entry_date.strftime("%Y-%m-%d"), round(total_dr, 2))
+            if _sig in _have:
+                skipped += 1
+                errors.append({"row": group_rows[0][0], "message": f"Journal '{ref}' dated {_sig[1]} for R{total_dr:,.2f} is already in the books - skipped."})
+                continue
+            _have.add(_sig)
 
             entry = JournalEntry(
                 company_id  = cid,
@@ -1289,13 +1430,29 @@ PAYROLL_ADJ_ALIASES: dict[str, list[str]] = {
 
 
 def _parse_float_field(val: str) -> float:
+    """Number from an HR/payroll export. Uses the same reader as the other imports, so a decimal comma
+    (1234,56) is no longer read as 123 456 and a trailing % is accepted."""
     if not val:
         return 0.0
-    cleaned = val.strip().replace("R", "").replace(",", "").replace(" ", "")
-    try:
-        return float(cleaned)
-    except ValueError:
-        return 0.0
+    return _parse_float(str(val).replace("%", ""))
+
+
+def _num_strict(raw: str):
+    """None for a blank cell; the number otherwise; ValueError for text that is not a number or is negative."""
+    import re as _re
+    if raw is None or not str(raw).strip():
+        return None
+    if not _re.search(r"\d", str(raw)):
+        raise ValueError(f"'{raw}' is not a number")
+    v = _parse_float(str(raw).replace("%", ""))
+    if v < 0:
+        raise ValueError(f"'{raw}' cannot be negative")
+    return v
+
+
+_EMP_NUMERIC_KEYS = ("hourly_rate", "pension_fund_employee_pct", "pension_fund_employer_pct", "pension_employee_fixed",
+                     "pension_employer_fixed", "medical_aid_employee", "medical_aid_employer", "union_subscription",
+                     "advance_monthly_deduction", "medical_aid_dependants")
 
 
 def _parse_int_field(val: str) -> int:
@@ -1368,6 +1525,20 @@ async def import_employees(
             errors += 1
             continue
 
+        # Numeric columns: a value that is not a number (or is negative) skips this row instead of silently becoming 0
+        _numbad = None
+        for _nk in _EMP_NUMERIC_KEYS:
+            if _nk in m:
+                try:
+                    _num_strict(_get(row, m, _nk))
+                except ValueError as _ne:
+                    _numbad = f"{_nk}: {_ne}"
+                    break
+        if _numbad:
+            error_rows.append({"row": i, "name": f"{first} {last}", "reason": _numbad})
+            errors += 1
+            continue
+
         # ── NBCPSS values: validate + normalise BEFORE touching any employee ──────
         # (a bad value skips only this row; nothing is half-applied)
         nb: dict = {}
@@ -1406,6 +1577,12 @@ async def import_employees(
             emp = db.query(Employee).filter_by(company_id=cid, id_number=id_no).first()
         if not emp:
             emp = db.query(Employee).filter_by(company_id=cid, first_name=first, last_name=last).first()
+            # Same name but a different ID number (or employee number) is a different person - never overwrite them
+            if emp is not None and ((id_no and emp.id_number and emp.id_number != id_no) or
+                                    (emp_no and emp.employee_number and emp.employee_number != emp_no)):
+                emp = None
+        if id_no and (not id_no.isdigit() or len(id_no) != 13):
+            warning_rows.append({"row": i, "name": f"{first} {last}", "reason": f"id_number '{id_no}' is not a 13-digit SA ID number"})
 
         is_new = emp is None
         if is_new:
@@ -1617,15 +1794,33 @@ async def import_payroll_adjustments(
             "grade":      "grade",
         }
         changed = False
+        # Validate first, apply after: nothing is half-applied and a blank cell leaves the value alone
+        # (it used to set the gross salary to R0 for every employee with an empty salary cell).
+        _vals, _bad = {}, None
         for csv_key, model_attr in numeric_fields.items():
             if csv_key in m:
-                val = _parse_float_field(_get(row, m, csv_key))
-                if val or csv_key == "gross_salary":
-                    setattr(emp, model_attr, val)
-                    changed = True
-        if "medical_aid_dependants" in m:
-            val = _parse_int_field(_get(row, m, "medical_aid_dependants"))
-            emp.medical_aid_dependants = val
+                try:
+                    v = _num_strict(_get(row, m, csv_key))
+                except ValueError as ne:
+                    _bad = f"{csv_key}: {ne}"; break
+                if v is None:
+                    continue
+                if csv_key == "gross_salary" and v <= 0:
+                    _bad = "gross_salary must be greater than zero"; break
+                _vals[model_attr] = v
+        if not _bad and "medical_aid_dependants" in m:
+            try:
+                v = _num_strict(_get(row, m, "medical_aid_dependants"))
+                if v is not None:
+                    _vals["medical_aid_dependants"] = int(v)
+            except ValueError as ne:
+                _bad = f"medical_aid_dependants: {ne}"
+        if _bad:
+            error_rows.append({"row": i, "identifier": id_no or emp_no or f"{first} {last}", "reason": _bad})
+            errors += 1
+            continue
+        for _a, _v in _vals.items():
+            setattr(emp, _a, _v)
             changed = True
         for csv_key, model_attr in text_fields.items():
             if csv_key in m:
@@ -1638,7 +1833,7 @@ async def import_payroll_adjustments(
             updated += 1
 
     db.commit()
-    total = updated + not_found
+    total = updated + not_found + errors
     return {
         "total_rows": total,
         "imported":   updated,
