@@ -1831,6 +1831,12 @@ def _tax_year_periods(tax_year: int):
     return periods
 
 
+def _tax_year_end_label(ty: int) -> str:
+    """Last day of the tax year ending February `ty` (29 February in a leap year)."""
+    import calendar as _cal
+    return f"{29 if _cal.isleap(ty) else 28} February {ty}"
+
+
 def _default_tax_year() -> int:
     now = datetime.utcnow()
     return now.year + 1 if now.month >= 3 else now.year
@@ -1847,9 +1853,11 @@ async def get_irp5(
     ty = tax_year or _default_tax_year()
     periods = _tax_year_periods(ty)
 
+    # Everyone who was paid in the tax year gets a certificate - including people who have since left
+    # (they used to be dropped, so their IRP5 was never produced and the IRP5 totals did not agree with the EMP501).
     employees = (
         db.query(Employee)
-        .filter(Employee.company_id == cid, Employee.is_active == True, _not_example_emp())
+        .filter(Employee.company_id == cid, _not_example_emp())
         .all()
     )
 
@@ -1925,7 +1933,7 @@ async def get_irp5(
     return {
         "tax_year":    ty,
         "period_from": f"01 March {ty - 1}",
-        "period_to":   f"28 February {ty}",
+        "period_to":   _tax_year_end_label(ty),
         "company_name": company.name if company else "",
         "employees":   irp5_list,
     }
@@ -1971,7 +1979,7 @@ async def get_emp501(
     return {
         "tax_year":                   ty,
         "period_from":                f"01 March {ty - 1}",
-        "period_to":                  f"28 February {ty}",
+        "period_to":                  _tax_year_end_label(ty),
         "company_name":               company.name if company else "",
         "total_employees":            len(set(p.employee_id for p in all_ps)),
         "months_submitted":           len(monthly),
@@ -2077,12 +2085,13 @@ async def get_easyfile_export(
     # ── EMPLOYEE CERTIFICATE RECORDS ──────────────────────────────────────────
     employees = (
         db.query(Employee)
-        .filter(Employee.company_id == cid, Employee.is_active == True, _not_example_emp())
+        .filter(Employee.company_id == cid, _not_example_emp())      # leavers who were paid in the year still get a certificate
         .all()
     )
 
+    import calendar as _cal
     period_start = f"{ty - 1}0301"                                 # CCYYMMDD: 01 March prior year
-    period_end   = f"{ty - 1}0831" if interim else f"{ty}0228"    # Interim: 31 Aug; Annual: 28 Feb
+    period_end   = f"{ty - 1}0831" if interim else f"{ty}{'0229' if _cal.isleap(ty) else '0228'}"    # Interim: 31 Aug; Annual: last day of Feb
     cert_month   = "08" if interim else "02"                       # used in cert number + fields
     months_total = "6.0000" if interim else "12.0000"             # field 3200
 
@@ -2155,8 +2164,15 @@ async def get_easyfile_export(
         emp_lines.append(f'3151,"ZA"')
         if emp.employee_number:
             emp_lines.append(f"3160,{q(str(emp.employee_number)[:25])}")
-        emp_lines.append(f"3170,{period_start}")
-        emp_lines.append(f"3180,{period_end}")
+        # Employment period on the certificate: from the day they started (if that is inside the year) to the day they
+        # left (if that is inside the year) - not always the whole tax year.
+        _s = getattr(emp, "start_date", None); _t = getattr(emp, "termination_date", None)
+        _from = max(period_start, _s.strftime("%Y%m%d")) if _s else period_start
+        _to   = min(period_end,   _t.strftime("%Y%m%d")) if _t else period_end
+        if _from > _to:
+            _from, _to = period_start, period_end
+        emp_lines.append(f"3170,{_from}")
+        emp_lines.append(f"3180,{_to}")
         emp_lines.append(f'3195,"N"')
         emp_lines.append(f"3200,{months_total}")
         emp_lines.append(f"3210,{len(payslips)}.0000")
@@ -3550,8 +3566,8 @@ async def management_accounts(
     )
 
     # Use COALESCE so invoices with NULL paid_date (legacy records) fall back to
-    # invoice_date then created_at — keeps management report consistent with dashboard.
-    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.invoice_date, Invoice.created_at)
+    # issue_date then created_at — keeps management report consistent with dashboard.
+    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at)
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),

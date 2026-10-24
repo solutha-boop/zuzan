@@ -696,19 +696,6 @@ class CompanyDocument(Base):
     company     = relationship("Company", back_populates="documents")
 
 
-class Emp201Submission(Base):
-    """Marks a payroll month's EMP201 as submitted to SARS. Once submitted, that month's payslips
-    cannot be deleted/re-run until the submission is explicitly withdrawn (audit fix 2026-10-24)."""
-    __tablename__ = "emp201_submissions"
-    __table_args__ = (UniqueConstraint("company_id", "period", name="uq_emp201_company_period"),)
-    id           = Column(Integer, primary_key=True, index=True)
-    company_id   = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
-    period       = Column(String, nullable=False)            # YYYY-MM
-    reference    = Column(String, nullable=True)             # eFiling / payment reference
-    submitted_by = Column(Integer, nullable=True)
-    submitted_at = Column(DateTime, default=datetime.utcnow)
-
-
 # ── PILLAR 3: STITCH BANK FEEDS ──────────────────────────────────────────────
 
 class StitchConnection(Base):
@@ -1766,20 +1753,20 @@ def init_db():
             conn.rollback()
 
 
-        # Backfill: generate portal_token for any invoices missing one
+        # Backfill: generate portal_token for any invoices missing one.
+        # Raw SQL on the SAME connection (no ORM session): the ORM query selected columns that a legacy
+        # database does not have yet (added later in this function), failed, and leaked an open transaction
+        # that holds a lock on `invoices` and can block the ALTER TABLEs that follow.
         try:
             import uuid as _uuid
-            from database import Invoice as _Inv
-            _db2 = SessionLocal()
-            _missing = _db2.query(_Inv).filter(_Inv.portal_token == None).all()
-            for _inv in _missing:
-                _inv.portal_token = str(_uuid.uuid4()).replace("-", "")
-                _inv.portal_token_created_at = datetime.utcnow()
-            if _missing:
-                _db2.commit()
-            _db2.close()
+            _rows = conn.execute(text("SELECT id FROM invoices WHERE portal_token IS NULL")).fetchall()
+            for (_iid,) in _rows:
+                conn.execute(text("UPDATE invoices SET portal_token = :t, portal_token_created_at = :n WHERE id = :i"),
+                             {"t": str(_uuid.uuid4()).replace("-", ""), "n": datetime.utcnow(), "i": _iid})
+            conn.commit()
         except Exception:
-            pass
+            conn.rollback()
+
 
 def get_db():
     db = SessionLocal()
