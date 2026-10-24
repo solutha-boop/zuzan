@@ -56,7 +56,7 @@ results["paid_invoices_missing_payment_entry"] = [
     for r in rows if r[0] not in pay_je_ids
 ]
 
-# 2b. Part-paid ZAR invoices whose net Bank (1000) payment postings fall short of paid_amount_zar
+# 2b. Part-paid invoices (ZAR and foreign) whose net Bank (1000) payment postings fall short of paid_amount_zar
 results["partial_invoices_payment_shortfall"] = []
 for r in db.execute(text(
     "SELECT i.id, i.company_id, i.invoice_number, i.paid_amount_zar, "
@@ -65,7 +65,7 @@ for r in db.execute(text(
     "JOIN accounts a ON a.id = jl.account_id "
     "WHERE je.source = 'invoice_payment' AND je.source_id = i.id AND je.company_id = i.company_id "
     "AND a.code = '1000'), 0) "
-    "FROM invoices i WHERE i.status = 'partial' AND (i.currency IS NULL OR i.currency = 'ZAR')"
+    "FROM invoices i WHERE i.status = 'partial'"
 )).all():
     if round((r[3] or 0) - (r[4] or 0), 2) > 0.01:
         results["partial_invoices_payment_shortfall"].append(

@@ -376,6 +376,19 @@ def _zar_parts(invoice):
     return total, vat
 
 
+def _open_zar_parts(invoice):
+    """(open_total_zar, open_vat_zar): the ZAR still carried in Accounts Receivable on an invoice
+    after any part payment. Part payments clear AR by the ZAR received, so for part-paid (and
+    part-paid-then-written-off) invoices the open balance is total - paid_amount_zar; the VAT
+    portion is apportioned pro rata."""
+    total, vat = _zar_parts(invoice)
+    status = getattr(invoice.status, "value", invoice.status)
+    paid = float(invoice.paid_amount_zar or 0) if status in ("partial", "written_off") else 0.0
+    open_total = round(max(0.0, total - paid), 2)
+    open_vat = round(vat * (open_total / total), 2) if total else 0.0
+    return open_total, open_vat
+
+
 def post_bad_debt_writeoff(invoice, db: Session, when=None, reason=None) -> JournalEntry:
     """
     Invoice written off as irrecoverable (VAT Act s22(1)): the vendor may deduct the VAT that was accounted
@@ -385,7 +398,7 @@ def post_bad_debt_writeoff(invoice, db: Session, when=None, reason=None) -> Jour
       CR Accounts Receivable (1100)    total
     """
     cid = invoice.company_id
-    total, vat_amt = _zar_parts(invoice)
+    total, vat_amt = _open_zar_parts(invoice)      # only the unpaid balance of a part-paid invoice
     net = round(total - vat_amt, 2)
     entry = _make_entry(cid, when or datetime.utcnow(),
         f"Bad debt written off — {invoice.client_name}: {reason or ''}",
@@ -410,7 +423,7 @@ def post_bad_debt_recovery(invoice, amount_zar: float, db: Session, when=None) -
       CR VAT Output (2100)             VAT portion
     """
     cid = invoice.company_id
-    total, vat_total = _zar_parts(invoice)
+    total, vat_total = _open_zar_parts(invoice)    # the balance that was written off
     portion = (amount_zar / total) if total else 0
     vat_part = round(vat_total * portion, 2)
     net = round(amount_zar - vat_part, 2)
@@ -428,7 +441,7 @@ def post_bad_debt_recovery(invoice, amount_zar: float, db: Session, when=None) -
     return entry
 
 
-def post_invoice_paid(invoice, db: Session) -> JournalEntry:
+def post_invoice_paid(invoice, db: Session, ar_zar=None) -> JournalEntry:
     """
     Invoice paid by client:
       DR Bank / Cash           (total incl VAT)
@@ -458,7 +471,9 @@ def post_invoice_paid(invoice, db: Session) -> JournalEntry:
     # balance on a fully paid invoice.
     lines = [_line(entry.id, bank, debit=zar_received, description="Cash received")]
     ar_carried = zar_received
-    if invoice.currency and invoice.currency != "ZAR":
+    if ar_zar is not None:
+        ar_carried = round(ar_zar, 2)          # caller states the AR to clear (foreign part/final payments)
+    elif invoice.currency and invoice.currency != "ZAR":
         ar_carried = round((invoice.total_amount or 0) * float(invoice.exchange_rate or 1.0), 2)
     lines.append(_line(entry.id, ar, credit=ar_carried, description=invoice.invoice_number))
     fx = round(zar_received - ar_carried, 2)
@@ -1193,11 +1208,12 @@ def backfill_company(company_id: int, db: Session) -> dict:
         is_foreign = bool(inv.currency and inv.currency != "ZAR")
         if ("invoice_payment", inv.id) not in existing:
             try:
-                post_invoice_paid(inv, db)
+                _ar = inv.paid_amount_zar if (is_foreign and inv.status == InvoiceStatus.partial and inv.paid_amount_zar) else None
+                post_invoice_paid(inv, db, ar_zar=_ar)
                 posted["invoice_payments"] += 1
             except Exception as e:
                 posted["errors"].append(f"Invoice payment {inv.invoice_number}: {e}")
-        elif not is_foreign and inv.paid_amount_zar:
+        elif inv.paid_amount_zar and (not is_foreign or inv.status == InvoiceStatus.partial):
             # Top-up repair (audit fix 2026-10-23): ZAR invoices can be part-paid in several
             # instalments, each posting its own entry. If an instalment's entry is missing,
             # net Bank (1000) debits on this invoice's payment entries (reversals net out)
@@ -1216,7 +1232,7 @@ def backfill_company(company_id: int, db: Session) -> dict:
                     saved = inv.paid_amount_zar
                     inv.paid_amount_zar = shortfall
                     try:
-                        post_invoice_paid(inv, db)
+                        post_invoice_paid(inv, db, ar_zar=(shortfall if is_foreign else None))
                     finally:
                         inv.paid_amount_zar = saved
                     posted["invoice_payments"] += 1

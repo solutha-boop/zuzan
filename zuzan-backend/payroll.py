@@ -25,26 +25,55 @@ def _to_zar(inv) -> float:
     return inv.total_amount or 0
 
 
+VAT_RATE = 0.15  # SA standard VAT rate (single definition for this module)
+
+
 def _balance_zar(inv) -> float:
     """ZAR still owed on an invoice: the full amount, less any part payment received."""
     if inv.status == InvoiceStatus.partial:
-        return max(0.0, round((inv.total_amount or 0) - (inv.paid_amount_zar or 0), 2))
+        rate = float(inv.exchange_rate or 1.0) if (inv.currency and inv.currency != "ZAR") else 1.0
+        return max(0.0, round((inv.total_amount or 0) * rate - (inv.paid_amount_zar or 0), 2))
+    return _to_zar(inv)
+
+
+def _received_zar(inv) -> float:
+    """ZAR actually received on an invoice: the cash so far for a part-paid invoice, otherwise the
+    paid amount in ZAR (see _to_zar)."""
+    if inv.status == InvoiceStatus.partial:
+        return float(inv.paid_amount_zar or 0)
     return _to_zar(inv)
 
 
 def _partial_received(db, cid, start=None, end=None) -> float:
     """Cash received so far on part-paid invoices (ZAR), optionally within [start, end).
 
-    Part-paid invoices are not 'paid', so the paid-only revenue queries miss the
-    cash already received. Dated by COALESCE(paid_date, issue_date, created_at),
-    matching the management-accounts fallback. (Audit fix 2026-10-23.)"""
-    q = db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == InvoiceStatus.partial)
-    eff = func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at)
-    if start is not None:
-        q = q.filter(eff >= start)
-    if end is not None:
-        q = q.filter(eff < end)
-    return round(sum((i.paid_amount_zar or 0) for i in q.all()), 2)
+    Part-paid invoices are not 'paid', so the paid-only revenue queries miss the cash already
+    received. Each instalment is dated by its own payment journal entry (Bank 1000 net of
+    reversals), so a part payment lands in the period it was received. Invoices with no payment
+    entry (legacy) fall back to paid_amount_zar dated COALESCE(paid_date, issue_date, created_at).
+    (Audit fix 2026-10-23; journal-dated 2026-10-24.)"""
+    invs = db.query(Invoice).filter(Invoice.company_id == cid, Invoice.status == InvoiceStatus.partial).all()
+    if not invs:
+        return 0.0
+    ids = {i.id for i in invs}
+    rows = (db.query(JournalEntry.source_id, JournalEntry.date, JournalLine.debit, JournalLine.credit)
+              .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+              .join(Account, JournalLine.account_id == Account.id)
+              .filter(JournalEntry.company_id == cid, Account.code == "1000",
+                      JournalEntry.source.in_(["invoice_payment", "invoice_payment_reversal"]),
+                      JournalEntry.source_id.in_(ids)).all())
+    have, total = set(), 0.0
+    for sid, d, dr, cr in rows:
+        have.add(sid)
+        if (start is None or d >= start) and (end is None or d < end):
+            total += (dr or 0) - (cr or 0)
+    for i in invs:
+        if i.id in have:
+            continue
+        d = i.paid_date or i.issue_date or i.created_at
+        if d is not None and (start is None or d >= start) and (end is None or d < end):
+            total += (i.paid_amount_zar or 0)
+    return round(total, 2)
 
 
 def _po_delivered_net(po) -> float:
@@ -2476,8 +2505,8 @@ async def monthly_trend(
             _to_zar(inv) for inv in db.query(Invoice).filter(
                 Invoice.company_id == cid,
                 Invoice.status == InvoiceStatus.paid,
-                Invoice.paid_date >= start,
-                Invoice.paid_date < end
+                func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at) >= start,
+                func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at) < end
             ).all()
         )
         # Cash received on part-paid invoices this month
@@ -2488,8 +2517,8 @@ async def monthly_trend(
         expenses = sum(
             (exp.amount - (exp.vat_amount or 0)) for exp in db.query(Expense).filter(
                 Expense.company_id == cid,
-                Expense.expense_date >= start,
-                Expense.expense_date < end
+                func.coalesce(Expense.expense_date, Expense.created_at) >= start,
+                func.coalesce(Expense.expense_date, Expense.created_at) < end
             ).all()
         )
         # Add PO COGS for POs received/partial/paid in this month — ex-VAT,
@@ -2686,7 +2715,6 @@ async def reconciliation(
     from datetime import timedelta
     cid = current_user.company_id
     now = datetime.utcnow()
-    VAT_RATE = 0.15
 
     checks = []
 
@@ -3082,7 +3110,6 @@ def _vat_net_for_month(db: Session, cid: int, year: int, month: int) -> float:
     (audit fix 2026-09-12, action item 3: 13-week forecast previously showed
     vat_payment hard-coded to 0.0.)
     """
-    VAT_RATE = 0.15
     start = datetime(year, month, 1)
     end_month = month + 1 if month < 12 else 1
     end_year  = year if month < 12 else year + 1
@@ -3833,7 +3860,7 @@ async def provisional_tax(
     """
     cid = current_user.company_id
     now = datetime.utcnow()
-    CORP_TAX_RATE = 0.27
+    from fixed_assets import SA_CIT_RATE as CORP_TAX_RATE   # single source of truth for the CIT rate
 
     # Get all revenue and expenses for the current calendar year (YTD)
     year_start = datetime(now.year, 1, 1)
@@ -4205,7 +4232,6 @@ async def vat201(
     """
     cid = current_user.company_id
     now = datetime.utcnow()
-    VAT_RATE = 0.15
 
     # Determine period
     if period:
