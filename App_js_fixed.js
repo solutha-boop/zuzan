@@ -742,14 +742,17 @@ function Dashboard({live = {}}) {
     try {
       if (type === "revenue") {
         const invs = await api("/invoices");
-        // All-time paid — matches dashboard revenue KPI exactly
-        const rows = invs.filter(i => i.status==="paid")
+        // All-time paid + partial — matches dashboard revenue KPI exactly
+        const rows = invs.filter(i => i.status==="paid" || i.status==="partial")
           .sort((a,b) => new Date(b.paid_date||b.created_at||0)-new Date(a.paid_date||a.created_at||0));
-        setDrill({type, title:"Revenue — All Paid Invoices", color:C.green,
-          total: rows.reduce((s,i)=>s+toZarD(i),0),
-          cols:["Invoice","Client","Currency","Amount (ZAR)","Paid Date"],
-          rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client, i.currency||"ZAR",
-            fmt(toZarD(i)), i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
+        // For partial invoices, show only what has been received
+        const rowAmt = i => i.status==="partial" ? (i.paid_amount_zar||0) : toZarD(i);
+        setDrill({type, title:"Revenue — Paid & Part-Paid Invoices", color:C.green,
+          total: rows.reduce((s,i)=>s+rowAmt(i),0),
+          cols:["Invoice","Client","Status","Amount Received (ZAR)","Paid Date"],
+          rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client,
+            i.status==="partial"?"Partial":"Paid",
+            fmt(rowAmt(i)), i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
       } else if (type === "expenses") {
         const [exps, deprSchedule, allPOs] = await Promise.all([
           api("/expenses"),
@@ -2261,7 +2264,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
                 <div style={{fontWeight:800,fontSize:16,color:C.ink}}>
                   {inv.status === "partial"
-                    ? fmt(owedZar(inv))
+                    ? filterStatus === "paid_this_month" ? fmt(cashThisMonth(inv)) : fmt(owedZar(inv))
                     : inv.status === "paid" && inv.paid_amount_zar
                     ? fmt(inv.paid_amount_zar)
                     : inv.currency && inv.currency!=="ZAR" ? fmt((inv.amount||0)*(inv.exchange_rate||1)) : fmt(inv.amount||0)}
@@ -2291,7 +2294,9 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
                   <td style={{padding:"13px 16px",color:C.inkMid,fontSize:12}}>{inv.desc}</td>
                   <td style={{padding:"13px 16px",fontWeight:700}}>
                     {inv.status === "partial"
-                      ? <div>{fmt(owedZar(inv))}<div style={{fontSize:10,color:"#b45309",fontWeight:400,marginTop:2}}>outstanding</div></div>
+                      ? filterStatus === "paid_this_month"
+                        ? <div>{fmt(cashThisMonth(inv))}<div style={{fontSize:10,color:C.green,fontWeight:400,marginTop:2}}>received</div></div>
+                        : <div>{fmt(owedZar(inv))}<div style={{fontSize:10,color:"#b45309",fontWeight:400,marginTop:2}}>outstanding</div></div>
                       : inv.status === "paid" && inv.paid_amount_zar
                       ? fmt(inv.paid_amount_zar)
                       : inv.currency && inv.currency!=="ZAR"
