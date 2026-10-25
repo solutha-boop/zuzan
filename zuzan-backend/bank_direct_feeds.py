@@ -137,19 +137,28 @@ def _auto_match(txn_amount: float, txn_desc: str, company_id: int, db: Session):
             Invoice.company_id == company_id,
             Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
         ).all()
-        best, best_conf = None, 0.0
+        best, best_conf, tie = None, 0.0, False
         for inv in invoices:
             bal = invoice_balance_zar(inv)
-            if bal <= 0 or abs(bal - amount) / bal > 0.01:
-                continue                    # the amount must agree (within 1%) - a matching name alone is not enough
-            amount_match = 1.0 - min(abs(bal - amount) / max(amount, 1), 1.0)
-            name_match   = 0.5 if inv.client_name and inv.client_name.lower()[:6] in desc else 0.0
-            inv_match    = 0.3 if inv.invoice_number and inv.invoice_number.lower() in desc else 0.0
-            if not (name_match or inv_match):
-                continue                    # same amount alone is coincidence (two clients can owe the same): need the name or invoice no.
-            conf = amount_match * 0.6 + name_match + inv_match
-            if conf > best_conf:
-                best, best_conf = inv.id, conf
+            if bal <= 0:
+                continue
+            name_match = 0.5 if inv.client_name and inv.client_name.lower()[:6] in desc else 0.0
+            inv_match  = 0.3 if inv.invoice_number and inv.invoice_number.lower() in desc else 0.0
+            if abs(bal - amount) / bal <= 0.01:
+                if not (name_match or inv_match):
+                    continue                # same amount alone is coincidence (two clients can owe the same): need the name or invoice no.
+                amount_match = 1.0 - min(abs(bal - amount) / max(amount, 1), 1.0)
+                conf = amount_match * 0.6 + name_match + inv_match
+            elif amount < bal and inv_match:
+                conf = 0.5 + inv_match      # a PART deposit: only when the narrative names the invoice number
+            else:
+                continue
+            if conf > best_conf + 1e-9:
+                best, best_conf, tie = inv.id, conf, False
+            elif abs(conf - best_conf) <= 1e-9:
+                tie = True                  # two invoices fit equally well: do not guess
+        if tie:
+            return None, None, 0.0
         if best_conf >= 0.5:
             return best, None, round(best_conf, 3)
 

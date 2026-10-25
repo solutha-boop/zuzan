@@ -15437,6 +15437,9 @@ function DataImport() {
   const [err,         setErr]         = useState(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const fileRef = useRef(null);
+  const [asAt, setAsAt] = useState(new Date().toISOString().slice(0,10));   // statements: date the balances are as at
+  const [replaceImp, setReplaceImp] = useState(false);
+  const HAS_ASAT = ["trial_balance","balance_sheet","profit_loss"].includes(tab);
 
   const ITABS = [
     {id:"xero_wizard",        label:"Migrate from Xero",  icon:"🔀"},
@@ -15604,14 +15607,14 @@ function DataImport() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`${BASE_URL}/import/${tab}`, {
+      const r = await fetch(`${BASE_URL}/import/${tab}${HAS_ASAT ? `?as_at=${encodeURIComponent(asAt)}&replace=${replaceImp}` : ""}`, {
         method: "POST",
         headers: {Authorization: "Bearer " + token},
         body: fd,
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        throw new Error(body.detail || "Import failed");
+        throw new Error(typeof body.detail === "string" ? body.detail : "Import failed");
       }
       const data = await r.json();
       setResult(data);
@@ -15755,6 +15758,18 @@ function DataImport() {
               </div>
             </div>
           </div>
+
+          {HAS_ASAT && !result && (
+            <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,fontSize:12,color:C.inkMid}}>
+              <label style={{display:"block",marginBottom:8}}>Balances are as at (date)<br/>
+                <input type="date" value={asAt} onChange={e=>setAsAt(e.target.value)} style={{marginTop:4,padding:"8px 10px",fontSize:16,border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit"}}/>
+              </label>
+              <label style={{display:"flex",gap:8,alignItems:"flex-start",lineHeight:1.5}}>
+                <input type="checkbox" checked={replaceImp} onChange={e=>setReplaceImp(e.target.checked)} style={{marginTop:3}}/>
+                <span>Replace the opening balances I already imported (tick this if you are re-importing a corrected file; otherwise a second import is refused so balances are never doubled)</span>
+              </label>
+            </div>
+          )}
 
           {/* Upload zone — shown until a file is chosen */}
           {!result && (
