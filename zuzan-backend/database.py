@@ -696,6 +696,19 @@ class CompanyDocument(Base):
     company     = relationship("Company", back_populates="documents")
 
 
+class Emp201Submission(Base):
+    """Marks a payroll month's EMP201 as submitted to SARS. Once submitted, that month's payslips
+    cannot be deleted/re-run until the submission is explicitly withdrawn (audit fix 2026-10-24)."""
+    __tablename__ = "emp201_submissions"
+    __table_args__ = (UniqueConstraint("company_id", "period", name="uq_emp201_company_period"),)
+    id           = Column(Integer, primary_key=True, index=True)
+    company_id   = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    period       = Column(String, nullable=False)            # YYYY-MM
+    reference    = Column(String, nullable=True)             # eFiling / payment reference
+    submitted_by = Column(Integer, nullable=True)
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+
+
 # ── PILLAR 3: STITCH BANK FEEDS ──────────────────────────────────────────────
 
 class StitchConnection(Base):

@@ -112,7 +112,7 @@ def _auto_match(company_id: int, db: Session):
                 if abs(txn.amount - inv_zar) / inv_zar > 0.01:
                     continue
                 # Date proximity score
-                inv_date = inv.due_date or inv.invoice_date
+                inv_date = inv.due_date or inv.issue_date
                 if inv_date:
                     if isinstance(inv_date, datetime):
                         inv_date = inv_date.date()
