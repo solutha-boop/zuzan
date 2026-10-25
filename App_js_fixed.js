@@ -49,7 +49,28 @@ const BASE_URL = "https://zuzan-backend.onrender.com";
 // though the correct value is R34.49/hr. Capping both min and max at 2 fixes every
 // call site that passes an unrounded number through fmt(), not just this one.
 const fmt = n => `R${Number(n).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
-const fmtDate = d => new Date(d).toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"});
+const fmtDate = d => { const x = d ? new Date(d) : null; return x && !isNaN(x) ? x.toLocaleDateString("en-ZA",{day:"2-digit",month:"short",year:"numeric"}) : "—"; };
+// Latest invoices for the dashboards: the company's real invoices, newest first (demo rows only before data loads).
+const recentInvoicesFrom = (live, n) => Array.isArray(live && live.invoices)
+  ? live.invoices.slice(0, n).map(i => ({ id: i.invoice_number || ("INV-" + i.id), client: i.client_name || i.client || "",
+      due: i.due_date, amount: Number(i.total_amount || i.amount || 0), status: String(i.status || "").replace("InvoiceStatus.", "") }))
+  : MOCK_INVOICES.slice(0, n);
+// Phone layout: phones in portrait (<=768px wide) AND phones in landscape (short and <=950px wide). Reactive, so
+// rotating the phone (or resizing the window) switches layout without a reload.
+const MOBILE_QUERY = "(max-width: 768px), (max-height: 500px) and (max-width: 950px)";
+function useIsMobile() {
+  const get = () => typeof window !== "undefined" && !!window.matchMedia && window.matchMedia(MOBILE_QUERY).matches;
+  const [m, setM] = useState(get);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia(MOBILE_QUERY);
+    const on = () => setM(mq.matches);
+    on();
+    if (mq.addEventListener) mq.addEventListener("change", on); else mq.addListener(on);
+    return () => { if (mq.removeEventListener) mq.removeEventListener("change", on); else mq.removeListener(on); };
+  }, []);
+  return m;
+}
 
 // ── PAYFAST FORM SUBMIT ───────────────────────────────────────────────────────
 // PayFast requires a POST form with all params as hidden inputs.
@@ -407,7 +428,7 @@ const StatusBadge = ({status}) => {
 };
 
 const KPI = ({label,value,sub,color=C.ink,icon,onClick,active=false}) => (
-  <div onClick={onClick} style={{background:C.surface,border:active?`2px solid ${color}`:`1px solid ${C.border}`,borderRadius:14,padding:active?"15px 17px":"16px 18px",flex:1,cursor:onClick?"pointer":"default",transition:"box-shadow 0.15s, border 0.15s",boxShadow:active?"0 0 0 3px "+color+"18":"none"}}
+  <div onClick={onClick} style={{background:C.surface,border:active?`2px solid ${color}`:`1px solid ${C.border}`,borderRadius:14,padding:active?"15px 17px":"16px 18px",flex:"1 1 140px",minWidth:0,cursor:onClick?"pointer":"default",transition:"box-shadow 0.15s, border 0.15s",boxShadow:active?"0 0 0 3px "+color+"18":"none"}}
     onMouseEnter={e=>{if(onClick)e.currentTarget.style.boxShadow=active?"0 0 0 3px "+color+"18":"0 4px 16px rgba(0,0,0,0.10)";}}
     onMouseLeave={e=>{e.currentTarget.style.boxShadow=active?"0 0 0 3px "+color+"18":"none";}}>
     <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
@@ -1013,7 +1034,7 @@ function Dashboard({live = {}}) {
             </tr>
           </thead>
           <tbody>
-            {MOCK_INVOICES.map((inv,i) => (
+            {recentInvoicesFrom(live,8).map((inv,i) => (
               <tr key={inv.id} style={{borderBottom:`1px solid ${C.border}30`}}>
                 <td style={{padding:"12px 16px",fontWeight:700,color:C.accent}}>{inv.id}</td>
                 <td style={{padding:"12px 16px"}}>{inv.client}</td>
@@ -2133,13 +2154,13 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
 
   // InvFormFields moved outside component — see top-level definition below
 
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+  const isMobile = useIsMobile();
   const printInvoice = () => { const el=document.getElementById("invoice-preview-content"); if(!el)return; const w=window.open("","_blank"); if(!w){alert("Allow popups to print.");return;} w.document.write(`<html><head><title>Invoice ${preview.id}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#1A1209;}@media print{body{padding:20px;}}</style></head><body>${el.innerHTML}</body></html>`); w.document.close(); w.onload=()=>{w.focus();w.print();w.close();}; };
 
   return (
     <div>
-      <div style={{display:"flex",gap:0,marginBottom:24,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
-        <div style={{flex:1,paddingBottom:10}}>
+      <div style={{display:"flex",gap:0,marginBottom:24,borderBottom:`1px solid ${C.border}`,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{flex:isMobile?"1 0 100%":1,paddingBottom:10}}>
           <div style={{fontSize:22,fontWeight:800,fontFamily:"serif",color:C.ink}}>Invoicing</div>
         </div>
         {[{id:"invoices",label:"Invoices"},{id:"recurring",label:"Recurring"},{id:"credit_notes",label:"Credit Notes"}].map(t=>(
@@ -2148,7 +2169,7 @@ function Invoicing({live = {}, user = {}, docTemplate}) {
         {invTab==="invoices" && <button onClick={()=>setShowNew(true)} style={{marginLeft:16,background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginBottom:8}}>+ New Invoice</button>}
       </div>
       {invTab==="invoices" && <>
-      <div style={{display:"flex",gap:12,marginBottom:filterStatus?12:24}}>
+      <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:filterStatus?12:24}}>
         <KPI label="Paid This Month" value={fmt(totalPaidThisMonth)} color={C.green} icon="✓" sub="Current month" onClick={()=>toggleFilter("paid_this_month")} active={filterStatus==="paid_this_month"}/>
         <KPI label="Pending" value={fmt(totalPending)} color={C.gold}  icon="⏳" onClick={()=>toggleFilter("sent")} active={filterStatus==="sent"}/>
         <KPI label="Overdue" value={fmt(totalOverdue)} color={C.red}   icon="⚠️" onClick={()=>toggleFilter("overdue")} active={filterStatus==="overdue"}/>
@@ -2736,7 +2757,7 @@ function Expenses({live = {}}) {
         <div style={{marginLeft:"auto",fontSize:13,fontWeight:700,color:C.ink}}>Total: {fmt(total)}</div>
       </div>
 
-      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflow:"hidden"}}>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
         {displayed.length === 0 ? (
           <div style={{padding:40,textAlign:"center",color:C.inkMid,fontSize:13}}>
             {view==="unposted" ? "All expenses have been categorised." : "No posted expenses yet."}
@@ -8252,7 +8273,7 @@ function ChartOfAccounts() {
 
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:24}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:24,flexWrap:"wrap",gap:12}}>
         <div>
           <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Chart of Accounts</h2>
           <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>IFRS for SMEs · SA-compliant · {loading ? "Loading…" : `${accounts.length} accounts`}</p>
@@ -8342,7 +8363,7 @@ function ChartOfAccounts() {
         const gc = GROUP_COLORS[group];
         const isExpanded = expanded.has(group);
         return (
-          <div key={group} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,marginBottom:12,overflow:"hidden"}}>
+          <div key={group} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,marginBottom:12,overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
             <div onClick={() => toggleGroup(group)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 20px",cursor:"pointer",background:gc.bg,borderBottom:isExpanded ? `1px solid ${C.border}` : "none"}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <span style={{fontSize:20}}>{gc.icon}</span>
@@ -11929,7 +11950,7 @@ function Quotes({live={},user={},onNavigate,docTemplate}) {
   };
 
   const inputStyle = {width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"};
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+  const isMobile = useIsMobile();
   const printQuote = () => { const w=window.open("","_blank");if(!w)return;w.document.write(`<html><head><title>Quote ${(preview||{}).id||""}</title><style>body{font-family:${(docTemplate||DEFAULT_DOC_TEMPLATE).fontFamily};padding:40px;}</style></head><body>${(document.getElementById("quote-print-content")||{}).innerHTML||""}</body></html>`);w.document.close();w.onload=()=>{w.focus();w.print();w.close();}; };
 
   return (
@@ -12768,6 +12789,7 @@ const AI_QUICK_PROMPTS = {
 };
 
 function AIAssistant({tab}) {
+  const isMobile = useIsMobile();
   const [open,     setOpen]     = useState(false);
   const [messages, setMessages] = useState([{role:"assistant",text:"Hi! I'm ZuZan AI. Ask me anything about invoicing, quotes, expenses, payroll, or SARS compliance."}]);
   const [input,    setInput]    = useState("");
@@ -12804,7 +12826,7 @@ function AIAssistant({tab}) {
   return (
     <>
       {/* Floating button */}
-      <button onClick={()=>setOpen(o=>!o)} style={{position:"fixed",bottom:90,right:20,width:50,height:50,borderRadius:"50%",background:C.accent,color:"#fff",border:"none",fontSize:22,cursor:"pointer",boxShadow:"0 4px 20px rgba(200,64,26,0.4)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{position:"fixed",bottom:isMobile?78:90,right:isMobile?12:20,width:isMobile?44:50,height:isMobile?44:50,borderRadius:"50%",background:C.accent,color:"#fff",border:"none",fontSize:isMobile?20:22,cursor:"pointer",boxShadow:"0 4px 20px rgba(200,64,26,0.4)",opacity:isMobile&&!open?0.9:1,zIndex:isMobile&&!open?150:500,display:"flex",alignItems:"center",justifyContent:"center"}}>
         {open?"✕":"🤖"}
       </button>
 
@@ -14020,7 +14042,7 @@ function MobileDashboard({live, user, onNavigate}) {
 
         {/* Recent invoices */}
         <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:10}}>Recent Invoices</div>
-        {MOCK_INVOICES.slice(0,4).map(inv=>{
+        {recentInvoicesFrom(live,4).map(inv=>{
           const statusColor = inv.status==="paid"?C.green:inv.status==="overdue"?C.red:C.gold;
           const statusBg    = inv.status==="paid"?C.greenLt:inv.status==="overdue"?C.redLt:C.goldLt;
           return (
@@ -14098,7 +14120,10 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
 
   return (
     <div style={{fontFamily:"sans-serif",background:C.bg,minHeight:"100vh",minHeight:"100dvh"}}>
-      <style>{`*{box-sizing:border-box;margin:0;padding:0;}button:active{opacity:0.7;}`}</style>
+      <style>{`*{box-sizing:border-box;margin:0;padding:0;}button:active{opacity:0.7;}
+        /* wide tables scroll sideways inside their card instead of being cut off */
+        div:has(> table), div:has(> div > table){overflow-x:auto !important;-webkit-overflow-scrolling:touch;}
+        input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px !important;} /* stops iOS zooming in on focus */`}</style>
 
       {/* Top bar */}
       <div style={{position:"fixed",top:0,left:0,right:0,height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",zIndex:50}}>
@@ -15678,7 +15703,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
     try { localStorage.setItem("zuzan_doc_template", JSON.stringify(tmpl)); } catch {}
   };
   const [expanded, setExpanded] = useState({sales: false, procurement: false, banking: false});
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+  const isMobile = useIsMobile();
 
   // ── Trial-to-Live modal state ─────────────────────────────────────────────
   const [showTrialModal, setShowTrialModal] = useState(false);

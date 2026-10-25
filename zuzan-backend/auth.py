@@ -227,7 +227,6 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
     # These are tagged [zuzan-example] in notes and are auto-deleted on first activation.
     try:
         from database import Invoice as _Inv, InvoiceStatus as _IS, Employee as _Emp
-        from datetime import timedelta
         _today = datetime.utcnow()
         _due   = _today + timedelta(days=30)
         _ex_inv = _Inv(
