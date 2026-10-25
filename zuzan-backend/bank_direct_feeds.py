@@ -145,6 +145,8 @@ def _auto_match(txn_amount: float, txn_desc: str, company_id: int, db: Session):
             amount_match = 1.0 - min(abs(bal - amount) / max(amount, 1), 1.0)
             name_match   = 0.5 if inv.client_name and inv.client_name.lower()[:6] in desc else 0.0
             inv_match    = 0.3 if inv.invoice_number and inv.invoice_number.lower() in desc else 0.0
+            if not (name_match or inv_match):
+                continue                    # same amount alone is coincidence (two clients can owe the same): need the name or invoice no.
             conf = amount_match * 0.6 + name_match + inv_match
             if conf > best_conf:
                 best, best_conf = inv.id, conf
@@ -159,6 +161,8 @@ def _auto_match(txn_amount: float, txn_desc: str, company_id: int, db: Session):
                 continue
             amount_match = 1.0 - min(abs(exp.amount - amount) / max(amount, 1), 1.0)
             vendor_match = 0.4 if exp.vendor and exp.vendor.lower()[:6] in desc else 0.0
+            if not vendor_match:
+                continue                    # same amount alone is coincidence: the vendor must also appear in the description
             conf = amount_match * 0.6 + vendor_match
             if conf > best_conf:
                 best, best_conf = exp.id, conf

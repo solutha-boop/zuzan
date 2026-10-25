@@ -2035,8 +2035,8 @@ function CreditNotesTab() {
 // ── INVOICING ─────────────────────────────────────────────────────────────────
 function Invoicing({live = {}, user = {}, docTemplate}) {
   const liveInvoices = live.invoices;
-  const [invoices, setInvoices] = useState(MOCK_INVOICES);
-  useEffect(() => { if (liveInvoices && liveInvoices.length > 0) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, clientEmail: i.client_email || "", amount: i.total_amount || i.amount, portalToken: i.portal_token || null, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
+  const [invoices, setInvoices] = useState([]);
+  useEffect(() => { if (Array.isArray(liveInvoices)) setInvoices(liveInvoices.map(i => ({...i, _dbId: i.id, date: i.issue_date || i.date, due: i.due_date || i.due, client: i.client_name || i.client, desc: i.description, clientEmail: i.client_email || "", amount: i.total_amount || i.amount, portalToken: i.portal_token || null, id: i.invoice_number || `INV-${String(i.id).padStart(3,"0")}`}))); }, [liveInvoices]);
 
   const [showNew,      setShowNew]      = useState(false);
   const [preview,      setPreview]      = useState(null);   // view modal
@@ -14076,6 +14076,7 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
     {id:"debtors",         label:"Debtors",     icon:"📥"},
     {id:"creditors",       label:"Creditors",   icon:"📤"},
     {id:"coa",             label:"Accounts",    icon:"📒"},
+    {id:"data_import",     label:"Import Data", icon:"⬆️"},
     {id:"settings",        label:"Settings",    icon:"⚙️"},
   ];
 
@@ -14098,6 +14099,7 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
     debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
     creditors:  <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div>,
     coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
+    data_import: <div style={{padding:"16px 16px 100px"}}><DataImport/></div>,
     settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={onTemplateChange}/></div>,
   };
 
@@ -14108,13 +14110,15 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
       <style>{`*{box-sizing:border-box;margin:0;padding:0;}button:active{opacity:0.7;}
         /* wide tables scroll sideways inside their card instead of being cut off */
         div:has(> table), div:has(> div > table){overflow-x:auto !important;-webkit-overflow-scrolling:touch;}
-        input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px !important;} /* stops iOS zooming in on focus */`}</style>
+        input:not([type=checkbox]):not([type=radio]),select,textarea{font-size:16px !important;} /* stops iOS zooming in on focus */
+        button,select{min-height:36px;} /* comfortable tap size */
+        input[type=checkbox],input[type=radio]{width:20px;height:20px;}`}</style>
 
       {/* Top bar */}
       <div style={{position:"fixed",top:0,left:0,right:0,height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",zIndex:50}}>
         <div style={{fontFamily:"serif",fontSize:22,fontWeight:800,color:C.ink}}><span style={{color:C.accent}}>Zu</span>Zan</div>
         <div style={{fontSize:14,fontWeight:600,color:C.ink}}>{activeLabel}</div>
-        <button onClick={()=>navigate("settings")} style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}}>{user?.firstName?.[0]||"👤"}</button>
+        <button onClick={()=>navigate("settings")} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",minWidth:40,minHeight:40}}>{user?.firstName?.[0]||"👤"}</button>
       </div>
 
       {/* Content */}
@@ -14888,6 +14892,8 @@ function XeroMigrationWizard() {
   const [busy,    setBusy]    = useState(false);
   const [err,     setErr]     = useState(null);
   const fileRefs = useRef({});
+  const [asAt, setAsAt] = useState(new Date().toISOString().slice(0,10));   // opening balances: date of the trial balance
+  const [replaceOb, setReplaceOb] = useState(false);
 
   const totalSteps = STEPS.length;
   const isWelcome = step === 0;
@@ -14902,15 +14908,15 @@ function XeroMigrationWizard() {
     try {
       const fd = new FormData();
       fd.append("file", f);
-      const r = await fetch(`${BASE_URL}${curStep.endpoint}`, {
+      const r = await fetch(`${BASE_URL}${curStep.endpoint}${curStep.id === "balances" ? `?as_at=${encodeURIComponent(asAt)}&replace=${replaceOb}` : ""}`, {
         method:"POST",
         headers:{Authorization:"Bearer "+token},
         body: fd,
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || "Import failed");
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 401) throw new Error("Your session has expired. Please sign in again.");
+      if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : (Array.isArray(data.detail) ? data.detail.map(d=>d.msg).join("; ") : "Import failed"));
       setResults(prev => ({...prev, [curStep.id]: data}));
-      setStep(s => s + 1);
     } catch(e) { setErr(e.message); }
     finally    { setBusy(false); }
   }
@@ -14928,7 +14934,7 @@ function XeroMigrationWizard() {
 
   // ── Welcome screen ────────────────────────────────────────────────────────
   if (isWelcome) return (
-    <div style={{maxWidth:640,margin:"0 auto"}}>
+    <div style={{maxWidth:640,width:"100%",boxSizing:"border-box",margin:"0 auto"}}>
       <div style={{textAlign:"center",padding:"40px 0 32px"}}>
         <div style={{fontSize:52,marginBottom:12}}>🔀</div>
         <h2 style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink,margin:"0 0 10px"}}>
@@ -15040,6 +15046,18 @@ function XeroMigrationWizard() {
           💡 {curStep.tip}
         </div>
 
+        {curStep.id === "balances" && (
+          <div style={{marginBottom:16,padding:"12px 14px",background:C.bg,borderRadius:8,fontSize:12,color:C.inkMid}}>
+            <label style={{display:"block",marginBottom:8}}>Trial balance date (as at)<br/>
+              <input type="date" value={asAt} onChange={e=>setAsAt(e.target.value)} style={{marginTop:4,padding:"8px 10px",fontSize:16,border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit"}}/>
+            </label>
+            <label style={{display:"flex",gap:8,alignItems:"flex-start",lineHeight:1.5}}>
+              <input type="checkbox" checked={replaceOb} onChange={e=>setReplaceOb(e.target.checked)} style={{marginTop:3}}/>
+              <span>Replace opening balances I already imported (tick this if you are re-importing a corrected file)</span>
+            </label>
+          </div>
+        )}
+
         {/* File upload zone */}
         <div
           onClick={()=>{ if(fileRefs.current[curStep.id]) fileRefs.current[curStep.id].click(); }}
@@ -15076,9 +15094,15 @@ function XeroMigrationWizard() {
           <div style={{marginTop:12,padding:"12px 16px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:8,fontSize:12,color:"#166534"}}>
             ✓ <strong>{stepResult.imported}</strong> records imported
             {stepResult.skipped > 0 && <span> · {stepResult.skipped} skipped (already exist)</span>}
+            {(stepResult.errors||[]).length > 0 && (
+              <ul style={{margin:"6px 0 0 16px",paddingLeft:0}}>
+                {stepResult.errors.slice(0,5).map((w,i)=><li key={i} style={{color:"#b91c1c"}}>{w}</li>)}
+                {stepResult.errors.length > 5 && <li style={{color:"#b91c1c"}}>…and {stepResult.errors.length - 5} more</li>}
+              </ul>
+            )}
             {(stepResult.warnings||[]).length > 0 && (
               <ul style={{margin:"6px 0 0 16px",paddingLeft:0}}>
-                {stepResult.warnings.slice(0,3).map((w,i)=><li key={i} style={{color:"#92400e"}}>{w}</li>)}
+                {stepResult.warnings.slice(0,5).map((w,i)=><li key={i} style={{color:"#92400e"}}>{w}</li>)}
               </ul>
             )}
           </div>
@@ -15096,7 +15120,7 @@ function XeroMigrationWizard() {
             background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,
             padding:"10px 20px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:C.inkMid,
           }}>Skip</button>
-          <button onClick={doImport} disabled={busy || !stepFile} style={{
+          <button onClick={stepResult ? skipStep : doImport} disabled={busy || (!stepResult && !stepFile)} style={{
             background: (!stepFile||busy) ? C.border : C.accent,
             color:"#fff",border:"none",borderRadius:10,
             padding:"10px 28px",fontSize:13,fontWeight:700,cursor:(!stepFile||busy)?"not-allowed":"pointer",
@@ -15162,6 +15186,8 @@ function QuickBooksMigrationWizard() {
   const [busy,    setBusy]    = useState(false);
   const [err,     setErr]     = useState(null);
   const fileRefs = useRef({});
+  const [asAt, setAsAt] = useState(new Date().toISOString().slice(0,10));   // opening balances: date of the trial balance
+  const [replaceOb, setReplaceOb] = useState(false);
 
   const totalSteps = STEPS.length;
   const isWelcome = step === 0;
@@ -15176,15 +15202,15 @@ function QuickBooksMigrationWizard() {
     try {
       const fd = new FormData();
       fd.append("file", f);
-      const r = await fetch(`${BASE_URL}${curStep.endpoint}`, {
+      const r = await fetch(`${BASE_URL}${curStep.endpoint}${curStep.id === "balances" ? `?as_at=${encodeURIComponent(asAt)}&replace=${replaceOb}` : ""}`, {
         method:"POST",
         headers:{Authorization:"Bearer "+token},
         body: fd,
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || "Import failed");
+      const data = await r.json().catch(() => ({}));
+      if (r.status === 401) throw new Error("Your session has expired. Please sign in again.");
+      if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : (Array.isArray(data.detail) ? data.detail.map(d=>d.msg).join("; ") : "Import failed"));
       setResults(prev => ({...prev, [curStep.id]: data}));
-      setStep(s => s + 1);
     } catch(e) { setErr(e.message); }
     finally    { setBusy(false); }
   }
@@ -15202,7 +15228,7 @@ function QuickBooksMigrationWizard() {
 
   // ── Welcome screen ────────────────────────────────────────────────────────
   if (isWelcome) return (
-    <div style={{maxWidth:640,margin:"0 auto"}}>
+    <div style={{maxWidth:640,width:"100%",boxSizing:"border-box",margin:"0 auto"}}>
       <div style={{textAlign:"center",padding:"40px 0 32px"}}>
         <div style={{fontSize:52,marginBottom:12}}>💚</div>
         <h2 style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink,margin:"0 0 10px"}}>
@@ -15314,6 +15340,18 @@ function QuickBooksMigrationWizard() {
           💡 {curStep.tip}
         </div>
 
+        {curStep.id === "balances" && (
+          <div style={{marginBottom:16,padding:"12px 14px",background:C.bg,borderRadius:8,fontSize:12,color:C.inkMid}}>
+            <label style={{display:"block",marginBottom:8}}>Trial balance date (as at)<br/>
+              <input type="date" value={asAt} onChange={e=>setAsAt(e.target.value)} style={{marginTop:4,padding:"8px 10px",fontSize:16,border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit"}}/>
+            </label>
+            <label style={{display:"flex",gap:8,alignItems:"flex-start",lineHeight:1.5}}>
+              <input type="checkbox" checked={replaceOb} onChange={e=>setReplaceOb(e.target.checked)} style={{marginTop:3}}/>
+              <span>Replace opening balances I already imported (tick this if you are re-importing a corrected file)</span>
+            </label>
+          </div>
+        )}
+
         {/* File upload zone */}
         <div
           onClick={()=>{ if(fileRefs.current[curStep.id]) fileRefs.current[curStep.id].click(); }}
@@ -15350,9 +15388,15 @@ function QuickBooksMigrationWizard() {
           <div style={{marginTop:12,padding:"12px 16px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:8,fontSize:12,color:"#166534"}}>
             ✓ <strong>{stepResult.imported}</strong> records imported
             {stepResult.skipped > 0 && <span> · {stepResult.skipped} skipped (already exist)</span>}
+            {(stepResult.errors||[]).length > 0 && (
+              <ul style={{margin:"6px 0 0 16px",paddingLeft:0}}>
+                {stepResult.errors.slice(0,5).map((w,i)=><li key={i} style={{color:"#b91c1c"}}>{w}</li>)}
+                {stepResult.errors.length > 5 && <li style={{color:"#b91c1c"}}>…and {stepResult.errors.length - 5} more</li>}
+              </ul>
+            )}
             {(stepResult.warnings||[]).length > 0 && (
               <ul style={{margin:"6px 0 0 16px",paddingLeft:0}}>
-                {stepResult.warnings.slice(0,3).map((w,i)=><li key={i} style={{color:"#92400e"}}>{w}</li>)}
+                {stepResult.warnings.slice(0,5).map((w,i)=><li key={i} style={{color:"#92400e"}}>{w}</li>)}
               </ul>
             )}
           </div>
@@ -15370,7 +15414,7 @@ function QuickBooksMigrationWizard() {
             background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,
             padding:"10px 20px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:C.inkMid,
           }}>Skip</button>
-          <button onClick={doImport} disabled={busy || !stepFile} style={{
+          <button onClick={stepResult ? skipStep : doImport} disabled={busy || (!stepResult && !stepFile)} style={{
             background: (!stepFile||busy) ? C.border : "#2ca01c",
             color:"#fff",border:"none",borderRadius:10,
             padding:"10px 28px",fontSize:13,fontWeight:700,cursor:(!stepFile||busy)?"not-allowed":"pointer",
@@ -15383,6 +15427,7 @@ function QuickBooksMigrationWizard() {
 }
 
 function DataImport() {
+  const isMobile = useIsMobile();
   const token = localStorage.getItem("zuzan_token");
   const [tab,       setTab]       = useState("customers");
   const [file,      setFile]      = useState(null);
@@ -15596,15 +15641,15 @@ function DataImport() {
         </p>
       </div>
 
-      <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
+      <div style={{display:"flex",gap:20,alignItems:"flex-start",flexDirection:isMobile?"column":"row"}}>
 
         {/* ── Left sidebar: entity picker ── */}
-        <div style={{width:190,flexShrink:0,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:10}}>
+        <div style={{width:isMobile?"100%":190,boxSizing:"border-box",display:isMobile?"flex":"block",flexWrap:"wrap",gap:isMobile?6:0,flexShrink:0,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:10}}>
           <div style={{fontSize:10,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.8,padding:"6px 10px 10px"}}>Data Type</div>
           {ITABS.map(t => (
             <button key={t.id} onClick={()=>switchTab(t.id)} style={{
-              display:"flex",alignItems:"center",gap:10,width:"100%",textAlign:"left",
-              padding:"11px 14px",borderRadius:10,border:"none",cursor:"pointer",
+              display:"flex",alignItems:"center",gap:10,width:isMobile?"auto":"100%",textAlign:"left",
+              padding:isMobile?"10px 12px":"11px 14px",minHeight:isMobile?40:undefined,borderRadius:10,border:"none",cursor:"pointer",
               fontFamily:"inherit",fontSize:13,marginBottom:2,
               background:tab===t.id ? C.accentLt : "transparent",
               color:tab===t.id ? C.accent : C.ink,
@@ -15617,7 +15662,7 @@ function DataImport() {
         </div>
 
         {/* ── Right panel ── */}
-        <div style={{flex:1,minWidth:0}}>
+        <div style={{flex:1,minWidth:0,width:"100%"}}>
 
           {/* Xero Migration Wizard — full-panel takeover */}
           {tab === "xero_wizard" ? <XeroMigrationWizard/> : tab === "qbo_wizard" ? <QuickBooksMigrationWizard/> : (<>

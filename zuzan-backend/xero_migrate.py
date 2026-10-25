@@ -1,618 +1,395 @@
 """
-Xero → ZuZan Migration Router
-==============================
-Provides guided import endpoints for each step of the Xero migration wizard.
+Xero -> ZuZan migration wizard (routes mounted under /xero).
 
-Endpoints
----------
-POST /xero/accounts           — Chart of Accounts (Xero CoA CSV export)
-POST /xero/opening-balances   — Opening balances (Xero Trial Balance CSV export)
-POST /xero/contacts           — Customers & Suppliers (Xero Contacts CSV export)
-POST /xero/invoices           — Invoices (Xero Invoice CSV export, ACCREC + ACCPAY)
-POST /xero/employees          — Employees (Xero Payroll Employee CSV export)
+Every step is a thin ADAPTER: it reads the Xero export (CSV or Excel), renames/reshapes the columns, and hands the
+result to the importers in csv_import.py - the same, tested code the Import screens use. That keeps the rules the same
+everywhere: duplicate invoices are refused, foreign currency needs a rate, opening balances post to the real ledger and
+can be re-run safely, imported invoices/expenses are posted to the journal, and so on.
 
-Contacts and invoices reuse csv_import.py logic internally; these endpoints
-add Xero-specific column normalisation on top.
+POST /xero/accounts           Chart of accounts (Xero "Chart of Accounts" export)
+POST /xero/opening-balances   Trial balance (Xero "Trial Balance" export)         ?as_at=YYYY-MM-DD&replace=false
+POST /xero/contacts           Customers and suppliers (Xero contacts export)
+POST /xero/invoices           Sales invoices (ACCREC) and supplier bills (ACCPAY -> expenses)
+POST /xero/employees          Employees
 
-All endpoints return:
-  { imported: int, skipped: int, errors: [str], warnings: [str] }
+All steps return { imported, skipped, errors: [str], warnings: [str] } plus a few step-specific counts.
 """
+import csv, io, re
+from collections import OrderedDict
+from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-import csv, io, re
-from datetime import datetime, date
-from typing import Optional
 
-from database import (
-    get_db, CompanyAccount, Customer, Supplier, Invoice, InvoiceStatus,
-    Employee, Account, AccountType, JournalEntry, JournalLine,
-)
+from database import get_db, Account, AccountType
 from auth import require_role
+import csv_import as CI
 
 router = APIRouter()
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024        # 10 MB is far more than any real export
+MAX_ROWS = 50000
+_ROLES = ("owner", "admin", "accountant")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
-def _norm(s: str) -> str:
-    return s.strip().lower().replace(" ", "_").replace("-", "_").replace("/", "_")
+# ── shared helpers (also used by quickbooks_migrate) ─────────────────────────
 
-def _parse_date(val: str) -> Optional[datetime]:
-    if not val or not val.strip():
-        return None
-    val = val.strip()
-    fmts = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y",
-            "%d %b %Y", "%d %B %Y", "%Y/%m/%d", "%d %b %y"]
-    for f in fmts:
-        try:
-            return datetime.strptime(val, f)
-        except ValueError:
-            pass
-    return None
+def key(h) -> str:
+    """Header -> lookup key: '*ContactName' / 'Contact Name' / 'contact_name' all become 'contactname'."""
+    return re.sub(r"[^a-z0-9]+", "", str(h or "").lower())
 
-def _parse_money(val: str) -> float:
-    if not val or not val.strip():
-        return 0.0
-    cleaned = re.sub(r"[R$£€,\s]", "", val.strip())
+
+async def read_table(file: UploadFile) -> list[dict]:
+    """The upload as a list of {header-key: value} rows (CSV or Excel). Rejects empty, huge or unreadable files."""
+    content = await file.read()
+    if not content or not content.strip():
+        raise HTTPException(400, "The file is empty.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "The file is too large (limit 10 MB). Export a smaller date range or split it.")
     try:
-        return float(cleaned)
-    except ValueError:
-        return 0.0
+        headers, rows = CI._read_csv(content)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(400, "Could not read this file. Export it again as CSV or Excel (.xlsx).")
+    if not headers or not rows:
+        raise HTTPException(400, "The file has no data rows.")
+    if len(rows) > MAX_ROWS:
+        raise HTTPException(413, f"Too many rows ({len(rows):,}); the limit is {MAX_ROWS:,} per file.")
+    keys = [key(h) for h in headers]
+    return [{k: (str(v).strip() if v is not None else "") for k, v in zip(keys, r)} for r in rows]
 
-def _parse_csv(content: bytes) -> list[dict]:
-    text = content.decode("utf-8-sig", errors="replace")
-    reader = csv.DictReader(io.StringIO(text))
-    rows = []
-    for row in reader:
-        rows.append({_norm(k): (v.strip() if v else "") for k, v in row.items()})
-    return rows
 
-def _get_col(row: dict, *aliases) -> str:
-    for a in aliases:
-        v = row.get(_norm(a), "")
+def pick(row: dict, *names) -> str:
+    for n in names:
+        v = row.get(key(n))
         if v:
             return v
     return ""
 
-# Xero account type → ZuZan group + normal side
-XERO_TYPE_MAP = {
-    "bank":        ("Assets",        "Debit"),
-    "current":     ("Assets",        "Debit"),
-    "fixed":       ("Assets",        "Debit"),
-    "otherasset":  ("Assets",        "Debit"),
-    "prepayment":  ("Assets",        "Debit"),
-    "inventory":   ("Assets",        "Debit"),
-    "liability":   ("Liabilities",   "Credit"),
-    "currliab":    ("Liabilities",   "Credit"),
-    "termliab":    ("Liabilities",   "Credit"),
-    "otherliaility":("Liabilities",  "Credit"),
-    "equity":      ("Equity",        "Credit"),
-    "revenue":     ("Income",        "Credit"),
-    "sales":       ("Income",        "Credit"),
-    "otherincome": ("Income",        "Credit"),
-    "directcosts": ("Cost of Sales", "Debit"),
-    "overheads":   ("Expenses",      "Debit"),
-    "expense":     ("Expenses",      "Debit"),
-    "depreciatn":  ("Expenses",      "Debit"),
-    "otherexpense":("Expenses",      "Debit"),
-}
+
+def pick_containing(row: dict, must: tuple, prefer: tuple = ()) -> str:
+    """First non-empty column whose key contains every word in `must` (columns with a `prefer` word first)."""
+    cols = [k for k in row if all(w in k for w in must)]
+    cols.sort(key=lambda k: 0 if any(p in k for p in prefer) else 1)
+    for k in cols:
+        if row[k]:
+            return row[k]
+    return ""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Chart of Accounts
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post("/xero/accounts")
-async def import_xero_accounts(
-    file: UploadFile = File(...),
-    current_user=Depends(require_role(["owner","admin","accountant"])),
-    db: Session = Depends(get_db),
-):
-    """
-    Accepts Xero's Chart of Accounts CSV export.
-    Expected columns: Code, Name, Type, Tax Code, Description
-    """
-    content = await file.read()
-    rows = _parse_csv(content)
-    if not rows:
-        raise HTTPException(400, "Empty or unreadable CSV file.")
-
-    company_id = current_user.company_id
-    imported = skipped = 0
-    errors = []
-    warnings = []
-
-    # Load existing codes to avoid duplicates
-    existing_codes = {
-        r.code for r in db.query(CompanyAccount.code)
-        .filter(CompanyAccount.company_id == company_id, CompanyAccount.is_deleted == False)
-    }
-
-    for i, row in enumerate(rows, 1):
-        code = _get_col(row, "code", "account_code", "account code")
-        name = _get_col(row, "name", "account_name", "account name", "description")
-        xtype = _get_col(row, "type", "account_type", "account type").lower().replace(" ", "").replace("_", "")
-        desc  = _get_col(row, "description", "notes")
-
-        if not code or not name:
-            skipped += 1
-            continue
-
-        if code in existing_codes:
-            warnings.append(f"Row {i}: account code {code} already exists — skipped.")
-            skipped += 1
-            continue
-
-        group, normal = XERO_TYPE_MAP.get(xtype, ("Expenses", "Debit"))
-
-        db.add(CompanyAccount(
-            company_id  = company_id,
-            code        = code,
-            name        = name,
-            type        = "Detail",
-            group       = group,
-            normal      = normal,
-            description = desc,
-        ))
-        existing_codes.add(code)
-        imported += 1
-
-    db.commit()
-    return {"imported": imported, "skipped": skipped, "errors": errors, "warnings": warnings}
+def make_upload(fieldnames: list[str], rows: list[dict], filename="import.csv") -> UploadFile:
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    w.writeheader()
+    for r in rows:
+        w.writerow(r)
+    return UploadFile(file=io.BytesIO(buf.getvalue().encode("utf-8")), filename=filename)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Opening Balances (Trial Balance)
-# ─────────────────────────────────────────────────────────────────────────────
+def money(v) -> float:
+    return CI._parse_float(v)
 
-@router.post("/xero/opening-balances")
-async def import_xero_opening_balances(
-    file: UploadFile = File(...),
-    current_user=Depends(require_role(["owner","admin","accountant"])),
-    db: Session = Depends(get_db),
-):
-    """
-    Accepts Xero's Trial Balance CSV export.
-    Expected columns: Account Code, Account Name, YTD Debit, YTD Credit  (or Debit/Credit)
 
-    Posts a single opening-balance journal entry dated today.
-    Accounts are identified by code; if a matching CompanyAccount exists its
-    normal-side is used, otherwise Assets/Expenses are DR, everything else CR.
-    """
-    content = await file.read()
-    rows = _parse_csv(content)
-    if not rows:
-        raise HTTPException(400, "Empty or unreadable CSV file.")
+def truthy(v: str) -> bool:
+    return str(v or "").strip().lower() in ("true", "yes", "y", "1")
 
-    company_id = current_user.company_id
 
-    # Build code → group lookup from CompanyAccount
-    coa = {r.code: r for r in
-           db.query(CompanyAccount)
-           .filter(CompanyAccount.company_id == company_id, CompanyAccount.is_deleted == False)}
+def falsy(v: str) -> bool:
+    return str(v or "").strip().lower() in ("false", "no", "n", "0")
 
-    lines_data = []   # (account_code, account_name, amount, side)
-    errors   = []
-    warnings = []
 
-    for i, row in enumerate(rows, 1):
-        code  = _get_col(row, "account_code", "code", "account code")
-        name  = _get_col(row, "account_name", "name", "account", "account name")
-        ytd_dr = _parse_money(_get_col(row, "ytd_debit",  "debit",  "dr", "balance_debit"))
-        ytd_cr = _parse_money(_get_col(row, "ytd_credit", "credit", "cr", "balance_credit"))
-        net    = _parse_money(_get_col(row, "net_movement", "net", "balance", "closing_balance", "closing balance"))
-
-        if not name and not code:
-            skipped_row = True
-            continue
-
-        # Determine net amount and natural side
-        if ytd_dr or ytd_cr:
-            amount = ytd_dr - ytd_cr   # positive = net debit
-        elif net:
-            amount = net
+def fmt_errors(errs) -> list[str]:
+    out = []
+    for e in errs or []:
+        if isinstance(e, dict):
+            where = f"Row {e['row']}: " if e.get("row") else ""
+            out.append(where + str(e.get("message") or e.get("reason") or e))
         else:
-            continue
+            out.append(str(e))
+    return out
 
-        if abs(amount) < 0.01:
-            continue
 
-        if amount > 0:
-            side = "DR"
-        else:
-            side = "CR"
-            amount = abs(amount)
+def result(res: dict, warnings=None, **extra) -> dict:
+    """Normalise a csv_import result (or a merged one) to the wizard's shape."""
+    warns = list(warnings or [])
+    if res.get("warning"):
+        warns.append(res["warning"])
+    out = {"imported": int(res.get("imported", 0) or 0), "skipped": int(res.get("skipped", 0) or 0),
+           "errors": fmt_errors(res.get("errors")), "warnings": warns}
+    out.update(extra)
+    return out
 
-        lines_data.append((code or name, name or code, amount, side))
 
-    if not lines_data:
-        return {"imported": 0, "skipped": 0, "errors": ["No non-zero balance lines found."], "warnings": warnings}
+def merge(*parts: dict) -> dict:
+    out = {"imported": 0, "skipped": 0, "errors": [], "warnings": []}
+    for p in parts:
+        out["imported"] += p["imported"]; out["skipped"] += p["skipped"]
+        out["errors"] += p["errors"]; out["warnings"] += p["warnings"]
+    return out
 
-    # Create the opening-balance journal entry
-    je = JournalEntry(
-        company_id  = company_id,
-        entry_date  = datetime.utcnow(),
-        description = "Opening balances — migrated from Xero",
-        reference   = "XERO-OB",
-        source      = "xero_migration",
+
+def classify_account_type(type_text: str, code: str):
+    """AccountType for an exported account type ('Current Asset', 'Direct Costs', 'Accounts Receivable (A/R)' ...)."""
+    t = key(type_text)
+    table = (
+        (("prepay", "inventor", "bank", "fixedasset", "currentasset", "noncurrentasset", "otherasset", "undepositedfunds",
+          "accountsreceivable", "receivable"), AccountType.asset),
+        (("liabilit", "payable", "creditcard", "currliab", "termliab"), AccountType.liability),
+        (("equity", "retained"), AccountType.equity),
+        (("revenue", "sales", "income"), AccountType.revenue),
+        (("directcost", "costofgoods", "costofsales", "cogs", "overhead", "expense", "depreciat", "cost"), AccountType.expense),
     )
-    db.add(je)
-    db.flush()
-
-    # Fetch the suspense / retained earnings account code (3000)
-    total_dr = sum(a for _, _, a, s in lines_data if s == "DR")
-    total_cr = sum(a for _, _, a, s in lines_data if s == "CR")
-    diff = round(total_dr - total_cr, 2)
-
-    for code, name, amount, side in lines_data:
-        db.add(JournalLine(
-            journal_entry_id = je.id,
-            account_code     = code,
-            account_name     = name,
-            debit            = amount if side == "DR" else 0,
-            credit           = amount if side == "CR" else 0,
-            description      = "Opening balance",
-        ))
-
-    # Balance the entry via retained earnings / equity if it doesn't balance
-    if abs(diff) > 0.01:
-        warnings.append(
-            f"Trial balance is out by R{diff:,.2f} — difference posted to account 3000 (Retained Earnings)."
-        )
-        db.add(JournalLine(
-            journal_entry_id = je.id,
-            account_code     = "3000",
-            account_name     = "Retained Earnings",
-            debit            = -diff if diff < 0 else 0,
-            credit           = diff  if diff > 0 else 0,
-            description      = "Opening balance plug",
-        ))
-
-    db.commit()
-    return {
-        "imported": len(lines_data),
-        "skipped":  0,
-        "errors":   errors,
-        "warnings": warnings,
-    }
+    for words, typ in table:
+        if any(w in t for w in words):
+            return typ
+    return CI._resolve_type(type_text, code)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Contacts  (Customers + Suppliers)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post("/xero/contacts")
-async def import_xero_contacts(
-    file: UploadFile = File(...),
-    current_user=Depends(require_role(["owner","admin","accountant"])),
-    db: Session = Depends(get_db),
-):
-    """
-    Accepts Xero's Contacts CSV export.
-    Contacts with IsSupplier=TRUE → Supplier, others → Customer.
-    If both flags are true the contact is imported as both.
-    """
-    content = await file.read()
-    rows = _parse_csv(content)
-    if not rows:
-        raise HTTPException(400, "Empty or unreadable CSV file.")
-
-    company_id = current_user.company_id
-    cust_imported = cust_skipped = sup_imported = sup_skipped = 0
-    errors = []
-
-    existing_cust_names = {
-        r.name.lower() for r in
-        db.query(Customer.name).filter(Customer.company_id == company_id)
-    }
-    existing_sup_names = {
-        r.name.lower() for r in
-        db.query(Supplier.name).filter(Supplier.company_id == company_id)
-    }
-
-    for i, row in enumerate(rows, 1):
-        name    = _get_col(row, "name", "contact_name", "contactname", "company_name", "display_name")
-        email   = _get_col(row, "email_address", "email", "emailaddress")
-        phone   = _get_col(row, "phone", "phone_number", "phonenumber", "telephone")
-        contact = _get_col(row, "first_name", "firstname") + " " + _get_col(row, "last_name", "lastname")
-        contact = contact.strip()
-        address = " ".join(filter(None, [
-            _get_col(row, "postal_address_line_1", "poaddressline1", "street", "address_line_1"),
-            _get_col(row, "postal_city", "city"),
-            _get_col(row, "postal_region", "region", "province"),
-            _get_col(row, "postal_postal_code", "postal_code", "postalcode", "zip"),
-        ]))
-        vat     = _get_col(row, "tax_number", "vat_number", "vatnumber", "tax_number")
-        is_cust = _get_col(row, "is_customer", "iscustomer", "customer").lower() not in ("false","no","0","")
-        is_sup  = _get_col(row, "is_supplier", "issupplier", "supplier").lower() in ("true","yes","1")
-
-        # If neither flag set, default to customer
-        if not is_sup and not is_cust:
-            is_cust = True
-
-        if not name:
-            errors.append(f"Row {i}: no name — skipped.")
-            continue
-
-        # Customer
-        if is_cust:
-            if name.lower() in existing_cust_names:
-                cust_skipped += 1
-            else:
-                db.add(Customer(
-                    company_id     = company_id,
-                    name           = name,
-                    email          = email,
-                    phone          = phone,
-                    contact_person = contact or None,
-                    address        = address or None,
-                    vat_number     = vat or None,
-                ))
-                existing_cust_names.add(name.lower())
-                cust_imported += 1
-
-        # Supplier
-        if is_sup:
-            if name.lower() in existing_sup_names:
-                sup_skipped += 1
-            else:
-                db.add(Supplier(
-                    company_id     = company_id,
-                    name           = name,
-                    email          = email,
-                    phone          = phone,
-                    contact_person = contact or None,
-                    address        = address or None,
-                    vat_number     = vat or None,
-                ))
-                existing_sup_names.add(name.lower())
-                sup_imported += 1
-
-    db.commit()
-    return {
-        "imported": cust_imported + sup_imported,
-        "skipped":  cust_skipped  + sup_skipped,
-        "errors":   errors,
-        "warnings": [
-            f"Customers imported: {cust_imported} (skipped: {cust_skipped})",
-            f"Suppliers imported: {sup_imported} (skipped: {sup_skipped})",
-        ],
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. Invoices  (ACCREC = sales invoices, ACCPAY = bills → expenses)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _next_inv_number(db: Session, company_id: int) -> str:
-    from sqlalchemy import func as sf
-    row = db.query(sf.max(Invoice.invoice_number)).filter(
-        Invoice.company_id == company_id
-    ).scalar()
-    if not row:
-        return "INV-0001"
-    m = re.search(r"(\d+)$", str(row))
-    n = (int(m.group(1)) + 1) if m else 1
-    return f"INV-{n:04d}"
-
-@router.post("/xero/invoices")
-async def import_xero_invoices(
-    file: UploadFile = File(...),
-    current_user=Depends(require_role(["owner","admin","accountant"])),
-    db: Session = Depends(get_db),
-):
-    """
-    Accepts Xero's Invoice CSV export.
-    Key columns: ContactName, InvoiceNumber, InvoiceDate, DueDate,
-                 Description, Quantity, UnitAmount, TaxType, TaxAmount,
-                 Currency, Type (ACCREC|ACCPAY), Status
-    ACCREC → Invoice (sales), ACCPAY → Expense (creditor bill).
-    """
-    content = await file.read()
-    rows = _parse_csv(content)
-    if not rows:
-        raise HTTPException(400, "Empty or unreadable CSV file.")
-
-    company_id = current_user.company_id
-    inv_counter = _next_inv_number(db, company_id)
+def import_chart(db: Session, cu, rows: list[dict], code_cols, name_cols, type_cols) -> dict:
+    """Create ledger accounts from an exported chart of accounts. Accounts that already exist (same code, or same
+    name and kind) are left alone and counted as skipped."""
+    cid = cu.company_id
+    existing_ids = {r[0] for r in db.query(Account.id).filter(Account.company_id == cid).all()}
     imported = skipped = 0
-    errors = []
-    warnings = []
-
-    # Group rows by InvoiceNumber (multi-line items)
-    grouped: dict[str, list] = {}
-    ungrouped = []
-    for row in rows:
-        inv_no = _get_col(row, "invoice_number", "invoicenumber", "reference", "invoice_no")
-        if inv_no:
-            grouped.setdefault(inv_no, []).append(row)
-        else:
-            ungrouped.append(row)
-
-    # Also treat ungrouped as individual single-line invoices
-    all_groups = list(grouped.values()) + [[r] for r in ungrouped]
-
-    for group in all_groups:
-        first = group[0]
-        client  = _get_col(first, "contact_name", "contactname", "customer", "supplier", "name")
-        inv_no  = _get_col(first, "invoice_number", "invoicenumber", "reference", "invoice_no")
-        itype   = _get_col(first, "type", "invoice_type", "invoicetype").upper()
-        status  = _get_col(first, "status", "invoice_status").lower()
-        idate   = _parse_date(_get_col(first, "invoice_date", "invoicedate", "date", "issue_date"))
-        ddate   = _parse_date(_get_col(first, "due_date", "duedate", "due"))
-        pdate   = _parse_date(_get_col(first, "fully_paid_on_date", "paid_date", "payment_date"))
-        currency= _get_col(first, "currency", "currencycode") or "ZAR"
-        ex_rate = float(_get_col(first, "currency_rate", "exchange_rate") or 1) or 1
-
-        if not client:
-            skipped += 1
+    errors, warnings = [], []
+    for i, row in enumerate(rows, start=2):
+        code = pick(row, *code_cols)
+        name = pick(row, *name_cols)
+        if not name:
             continue
-
-        # Aggregate line amounts
-        subtotal = 0.0
-        vat_total = 0.0
-        items = []
-        for line in group:
-            qty   = float(_get_col(line, "quantity", "qty") or 1)
-            price = _parse_money(_get_col(line, "unit_amount", "unitamount", "unit_price", "price", "amount"))
-            disc  = float(_get_col(line, "discount", "discount_rate") or 0) / 100
-            tax   = _parse_money(_get_col(line, "tax_amount", "taxamount", "vat_amount"))
-            desc  = _get_col(line, "description", "item_description", "line_description")
-            line_total = qty * price * (1 - disc)
-            subtotal  += line_total
-            vat_total += tax
-            if desc or price:
-                items.append({
-                    "description": desc,
-                    "quantity":    qty,
-                    "unit_price":  price,
-                    "vat_amount":  tax,
-                    "total":       line_total + tax,
-                })
-
-        total = round(subtotal + vat_total, 2)
-        if total == 0:
-            skipped += 1
+        atype = classify_account_type(pick(row, *type_cols), code)
+        if atype is None:
+            errors.append(f"Row {i}: account '{name}' - cannot tell what kind of account it is (no recognisable Type); not imported.")
             continue
-
-        # Map status
-        if status in ("paid", "authorised") and pdate:
-            zstatus = InvoiceStatus.paid
-        elif status in ("voided", "void"):
-            zstatus = InvoiceStatus.written_off
-        elif status in ("draft", "submitted"):
-            zstatus = InvoiceStatus.draft
+        acct = CI._find_or_create_account(db, cid, code, name, atype)
+        if acct.id in existing_ids:
+            skipped += 1
         else:
-            zstatus = InvoiceStatus.sent
-
-        # Use existing inv number or generate
-        used_no = inv_no or inv_counter
-        if not inv_no:
-            m = re.search(r"(\d+)$", inv_counter)
-            n = int(m.group(1)) + 1 if m else 1
-            inv_counter = f"INV-{n:04d}"
-
-        import json as _json
-        db.add(Invoice(
-            company_id     = company_id,
-            invoice_number = used_no,
-            client_name    = client,
-            description    = items[0]["description"] if items else "",
-            amount         = round(subtotal, 2),
-            vat_amount     = round(vat_total, 2),
-            total_amount   = total,
-            currency       = currency,
-            exchange_rate  = ex_rate,
-            status         = zstatus,
-            issue_date     = idate or datetime.utcnow(),
-            due_date       = ddate,
-            paid_date      = pdate if zstatus == InvoiceStatus.paid else None,
-            paid_amount_zar= total if zstatus == InvoiceStatus.paid else None,
-            items_json     = _json.dumps(items) if len(items) > 1 else None,
-        ))
-        imported += 1
-
+            existing_ids.add(acct.id)
+            imported += 1
     db.commit()
     return {"imported": imported, "skipped": skipped, "errors": errors, "warnings": warnings}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. Employees
-# ─────────────────────────────────────────────────────────────────────────────
+def invoice_total_lines(group: list[dict], qty_cols, price_cols, disc_cols, tax_cols, amount_cols=()) -> tuple[float, float]:
+    """(net, vat) of one invoice from its line rows."""
+    net = vat = 0.0
+    for ln in group:
+        qty = money(pick(ln, *qty_cols)) if pick(ln, *qty_cols) else 1.0
+        price = money(pick(ln, *price_cols))
+        disc = money(pick(ln, *disc_cols)) / 100.0 if disc_cols and pick(ln, *disc_cols) else 0.0
+        line = round(qty * price * (1 - disc), 2) if price_cols and pick(ln, *price_cols) else money(pick(ln, *amount_cols))
+        net += line
+        vat += money(pick(ln, *tax_cols))
+    return round(net, 2), round(vat, 2)
 
-@router.post("/xero/employees")
-async def import_xero_employees(
-    file: UploadFile = File(...),
-    current_user=Depends(require_role(["owner","admin","accountant"])),
-    db: Session = Depends(get_db),
-):
-    """
-    Accepts Xero Payroll Employee export CSV.
-    Key columns: First Name, Last Name, Date of Birth, Email,
-                 Phone, Start Date, Pay Rate, Job Title/Classification.
-    """
-    content = await file.read()
-    rows = _parse_csv(content)
-    if not rows:
-        raise HTTPException(400, "Empty or unreadable CSV file.")
 
-    company_id = current_user.company_id
-    imported = skipped = 0
-    errors = []
+# ── 1. Chart of accounts ─────────────────────────────────────────────────────
 
-    # Build set of existing employee names
-    existing = {
-        f"{r.first_name} {r.last_name}".lower()
-        for r in db.query(Employee.first_name, Employee.last_name)
-        .filter(Employee.company_id == company_id)
-    }
+@router.post("/accounts")
+async def import_xero_accounts(file: UploadFile = File(...), current_user=Depends(require_role(*_ROLES)),
+                               db: Session = Depends(get_db)):
+    """Xero Chart of Accounts export: Code, Name, Type (Tax Code / Description are ignored)."""
+    rows = await read_table(file)
+    if not any(pick(r, "name", "account name") for r in rows):
+        raise HTTPException(400, "No 'Name' column found. Use Accounting > Chart of Accounts > Export in Xero.")
+    return result(import_chart(db, current_user, rows, ("code", "account code"), ("name", "account name"), ("type", "account type")))
 
-    # Get next employee number
-    max_no = db.query(func.max(Employee.employee_number)).filter(
-        Employee.company_id == company_id
-    ).scalar()
-    try:
-        next_no = int(re.sub(r"\D", "", str(max_no or "0"))) + 1
-    except:
-        next_no = 1
 
-    for i, row in enumerate(rows, 1):
-        first = _get_col(row, "first_name", "firstname", "given_name")
-        last  = _get_col(row, "last_name", "lastname", "surname", "family_name")
+# ── 2. Opening balances (trial balance) ──────────────────────────────────────
+
+@router.post("/opening-balances")
+async def import_xero_opening_balances(file: UploadFile = File(...), as_at: Optional[str] = None, replace: bool = False,
+                                       current_user=Depends(require_role(*_ROLES)), db: Session = Depends(get_db)):
+    """Xero Trial Balance export. Posted as ONE opening-balance entry to the real ledger (dated `as_at`, default today);
+    any difference goes to Opening Balance Equity. Sending the same kind of file twice is refused unless replace=true."""
+    rows = await read_table(file)
+    out = []
+    for r in rows:
+        name = pick(r, "account", "account name", "name")
+        if not name or key(name) in ("total", "totals", "grandtotal"):
+            continue                                        # skip the report's total line
+        debit = pick_containing(r, ("debit",), prefer=("ytd", "yeartodate"))
+        credit = pick_containing(r, ("credit",), prefer=("ytd", "yeartodate"))
+        out.append({"code": pick(r, "account code", "code"), "name": name, "type": pick(r, "account type", "type"),
+                    "debit": debit, "credit": credit, "balance": "" if (debit or credit) else pick(r, "balance", "closing balance", "net")})
+    if not out:
+        raise HTTPException(400, "No account lines found. Export the Trial Balance from Xero (Accounting > Reports > Trial Balance).")
+    up = make_upload(["code", "name", "type", "debit", "credit", "balance"], out)
+    return result(await CI.import_trial_balance(file=up, as_at=as_at, replace=replace, db=db, cu=current_user))
+
+
+# ── 3. Contacts ──────────────────────────────────────────────────────────────
+
+def contact_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(customers, suppliers) in csv_import's column names. IsSupplier=TRUE -> supplier; IsCustomer=TRUE (or no flag at all)
+    -> customer; both flags -> both."""
+    customers, suppliers = [], []
+    for r in rows:
+        name = pick(r, "contactname", "name", "contact name", "displayname")
+        if not name:
+            continue
+        addr = " ".join(x for x in (pick(r, "poaddressline1", "postaladdressline1", "saaddressline1", "address", "street"),
+                                    pick(r, "pocity", "postalcity", "sacity", "city"),
+                                    pick(r, "poregion", "postalregion", "saregion", "region"),
+                                    pick(r, "popostalcode", "postalpostalcode", "sapostalcode", "postalcode")) if x)
+        rec = {"name": name, "email": pick(r, "emailaddress", "email"), "phone": pick(r, "phonenumber", "phone", "mobile", "telephone"),
+               "address": addr, "vat_number": pick(r, "taxnumber", "vatnumber", "vat number")}
+        is_sup, is_cust = truthy(pick(r, "issupplier")), truthy(pick(r, "iscustomer"))
+        if not is_sup and not is_cust and not falsy(pick(r, "iscustomer")):
+            is_cust = True
+        if is_cust:
+            customers.append(rec)
+        if is_sup:
+            suppliers.append(rec)
+    return customers, suppliers
+
+
+async def run_contacts(rows, current_user, db) -> dict:
+    customers, suppliers = contact_rows(rows)
+    if not customers and not suppliers:
+        raise HTTPException(400, "No contacts found (a 'ContactName' / 'Name' column is needed).")
+    fields = ["name", "email", "phone", "address", "vat_number"]
+    parts, warnings = [], []
+    if customers:
+        res = result(await CI.import_customers(file=make_upload(fields, customers), db=db, cu=current_user))
+        warnings.append(f"Customers: {res['imported']} imported, {res['skipped']} skipped")
+        parts.append(res)
+    if suppliers:
+        res = result(await CI.import_suppliers(file=make_upload(fields, suppliers), db=db, cu=current_user))
+        warnings.append(f"Suppliers: {res['imported']} imported, {res['skipped']} skipped")
+        parts.append(res)
+    out = merge(*parts)
+    out["warnings"] = warnings + out["warnings"]
+    return out
+
+
+@router.post("/contacts")
+async def import_xero_contacts(file: UploadFile = File(...), current_user=Depends(require_role(*_ROLES)),
+                               db: Session = Depends(get_db)):
+    return await run_contacts(await read_table(file), current_user, db)
+
+
+# ── 4. Invoices and bills ────────────────────────────────────────────────────
+
+def group_documents(rows: list[dict], number_cols) -> "OrderedDict[str, list[dict]]":
+    """Xero/QBO exports one row per invoice LINE: gather the lines of each document (rows with no number stand alone)."""
+    groups: "OrderedDict[str, list[dict]]" = OrderedDict()
+    for n, r in enumerate(rows):
+        num = pick(r, *number_cols)
+        groups.setdefault(num or f"\0row{n}", []).append(r)
+    return groups
+
+
+async def run_documents(rows, current_user, db, *, number_cols, party_cols, date_cols, due_cols, status_cols, type_cols, desc_cols,
+                        qty_cols, price_cols, disc_cols, tax_cols, amount_cols, total_cols, currency_cols, rate_cols,
+                        bill_values, void_values, skip_status_note: str, gross_split: bool = False) -> dict:
+    from journal import company_vat_registered
+    vat_reg = company_vat_registered(db, current_user.company_id) if gross_split else False
+    sales, bills, warnings = [], [], []
+    voided = 0
+    for num, grp in group_documents(rows, number_cols).items():
+        first = grp[0]
+        party = pick(first, *party_cols)
+        status = pick(first, *status_cols)
+        if key(status) in void_values:
+            voided += 1                                      # a voided/deleted document never happened: don't book it
+            continue
+        net, vat = invoice_total_lines(grp, qty_cols, price_cols, disc_cols, tax_cols, amount_cols)
+        if gross_split and not vat:   # export gives one VAT-inclusive total: split it at the standard 15% (or none if not a VAT vendor)
+            if vat_reg:
+                gross = net
+                net = round(gross / 1.15, 2); vat = round(gross - net, 2)
+        total = money(pick(first, *total_cols)) if total_cols and pick(first, *total_cols) else 0.0
+        if not net and total:
+            net = round(total - vat, 2)
+        desc = next((pick(g, *desc_cols) for g in grp if pick(g, *desc_cols)), "")
+        rec = {"invoice_number": "" if num.startswith("\0row") else num, "client_name": party, "description": desc,
+               "amount": f"{net:.2f}", "vat_amount": f"{vat:.2f}", "total_amount": f"{round(net + vat, 2):.2f}",
+               "currency": pick(first, *currency_cols), "exchange_rate": pick(first, *rate_cols),
+               "issue_date": pick(first, *date_cols), "due_date": pick(first, *due_cols), "status": status}
+        (bills if key(pick(first, *type_cols)) in bill_values else sales).append(rec)
+    if voided:
+        warnings.append(f"{voided} voided/deleted document(s) were ignored.")
+    parts = []
+    if sales:
+        fields = ["invoice_number", "client_name", "description", "amount", "vat_amount", "total_amount", "currency",
+                  "exchange_rate", "issue_date", "due_date", "status"]
+        res = result(await CI.import_invoices(file=make_upload(fields, sales), db=db, cu=current_user))
+        warnings.append(f"Sales invoices: {res['imported']} imported")
+        parts.append(res)
+    if bills:
+        exp = [{"vendor": b["client_name"], "description": b["description"] or f"Bill {b['invoice_number']}".strip(),
+                "amount": b["amount"], "vat_amount": b["vat_amount"], "expense_date": b["issue_date"],
+                "category": ""} for b in bills]
+        res = result(await CI.import_expenses(file=make_upload(["vendor", "description", "amount", "vat_amount", "expense_date", "category"], exp),
+                                              db=db, cu=current_user))
+        warnings.append(f"Supplier bills imported as expenses: {res['imported']}")
+        parts.append(res)
+    if not parts:
+        raise HTTPException(400, "Nothing to import: no usable invoice or bill rows were found." + skip_status_note)
+    out = merge(*parts)
+    out["warnings"] = warnings + out["warnings"]
+    return out
+
+
+@router.post("/invoices")
+async def import_xero_invoices(file: UploadFile = File(...), current_user=Depends(require_role(*_ROLES)),
+                               db: Session = Depends(get_db)):
+    """Xero invoice export (one row per invoice line is fine). Type ACCREC (or no Type) = sales invoice, ACCPAY = supplier
+    bill, imported as an expense. Voided/deleted documents are ignored. Invoices already in ZuZan are not imported twice."""
+    rows = await read_table(file)
+    return await run_documents(
+        rows, current_user, db,
+        number_cols=("invoicenumber", "invoice number", "invoiceno", "number"),
+        party_cols=("contactname", "contact name", "customer", "supplier", "name"),
+        date_cols=("invoicedate", "invoice date", "date"), due_cols=("duedate", "due date"),
+        status_cols=("status", "invoicestatus"), type_cols=("type", "invoicetype"),
+        desc_cols=("description", "itemdescription"),
+        qty_cols=("quantity", "qty"), price_cols=("unitamount", "unit amount", "unitprice"), disc_cols=("discount", "discountrate"),
+        tax_cols=("taxamount", "totaltax", "vatamount"), amount_cols=("subtotal", "amount", "linetotal"),
+        total_cols=(), currency_cols=("currency", "currencycode"), rate_cols=("currencyrate", "exchangerate"),
+        bill_values=("accpay", "bill", "supplierbill"), void_values=("voided", "void", "deleted"),
+        skip_status_note="")
+
+
+# ── 5. Employees ─────────────────────────────────────────────────────────────
+
+def employee_rows(rows: list[dict], first_cols, last_cols, name_cols, extra: dict) -> list[dict]:
+    out = []
+    for r in rows:
+        first, last = pick(r, *first_cols), pick(r, *last_cols)
         if not first and not last:
-            full = _get_col(row, "name", "employee_name", "full_name")
+            full = pick(r, *name_cols)
             parts = full.split(" ", 1)
-            first = parts[0]
-            last  = parts[1] if len(parts) > 1 else ""
-
-        if not first:
-            errors.append(f"Row {i}: no name — skipped.")
-            skipped += 1
+            first, last = parts[0], (parts[1] if len(parts) > 1 else "")
+        if not first or not last:
             continue
+        rec = {"first_name": first, "last_name": last}
+        for field, cols in extra.items():
+            rec[field] = pick(r, *cols)
+        out.append(rec)
+    return out
 
-        key = f"{first} {last}".lower()
-        if key in existing:
-            skipped += 1
-            continue
 
-        dob   = _parse_date(_get_col(row, "date_of_birth", "dateofbirth", "dob", "birth_date"))
-        email = _get_col(row, "email", "email_address", "emailaddress")
-        phone = _get_col(row, "phone", "phone_number", "mobile")
-        addr  = _get_col(row, "address", "street_address", "home_address",
-                         "address_line_1", "addressline1")
-        city  = _get_col(row, "city", "suburb", "town")
-        start = _parse_date(_get_col(row, "start_date", "startdate", "employment_start_date"))
-        pos   = _get_col(row, "job_title", "jobtitle", "classification", "position",
-                         "title", "role", "occupation")
-        dept  = _get_col(row, "department", "dept", "cost_centre")
-        tax_no= _get_col(row, "tax_number", "taxnumber", "income_tax_number", "tax_file_number")
-        id_no = _get_col(row, "id_number", "idnumber", "national_id", "national_insurance_number")
-        salary_str = _get_col(row, "pay_rate", "payrate", "salary", "annual_salary",
-                               "hourly_rate", "basic_salary")
-        salary = _parse_money(salary_str)
-
-        db.add(Employee(
-            company_id        = company_id,
-            employee_number   = f"EMP{next_no:04d}",
-            first_name        = first,
-            last_name         = last,
-            id_number         = id_no or None,
-            tax_number        = tax_no or None,
-            date_of_birth     = dob,
-            appointment_date  = start,
-            address           = " ".join(filter(None, [addr, city])) or None,
-            position          = pos or None,
-            department        = dept or None,
-            basic_salary      = salary or 0,
-            employment_type   = "permanent",
-        ))
-        existing.add(key)
-        next_no += 1
-        imported += 1
-
-    db.commit()
-    return {"imported": imported, "skipped": skipped, "errors": errors, "warnings": []}
+@router.post("/employees")
+async def import_xero_employees(file: UploadFile = File(...), current_user=Depends(require_role(*_ROLES)),
+                                db: Session = Depends(get_db)):
+    """Employee export: First Name, Last Name, ID/Tax number, Date of Birth, Start Date, Job Title, Department, Pay Rate.
+    Pay Rate is read as the MONTHLY gross salary - check it before running payroll."""
+    rows = await read_table(file)
+    fields = ["first_name", "last_name", "id_number", "tax_number", "date_of_birth", "start_date", "position", "department",
+              "gross_salary", "email"]
+    recs = employee_rows(rows, ("firstname", "first name", "givenname"), ("lastname", "last name", "surname", "familyname"),
+                         ("name", "employeename", "fullname"),
+                         {"id_number": ("idnumber", "nationalid", "id number"), "tax_number": ("taxnumber", "incometaxnumber", "taxfilenumber"),
+                          "date_of_birth": ("dateofbirth", "dob", "birthdate"), "start_date": ("startdate", "employmentstartdate", "hiredate", "dateofhire"),
+                          "position": ("jobtitle", "classification", "position", "title", "role"), "department": ("department", "costcentre"),
+                          "gross_salary": ("payrate", "salary", "basicsalary", "monthlysalary", "annualsalary"), "email": ("email", "emailaddress")})
+    if not recs:
+        raise HTTPException(400, "No employees found (First Name and Last Name columns are needed).")
+    res = result(await CI.import_employees(file=make_upload(fields, recs), db=db, cu=current_user),
+                 warnings=["Pay Rate was read as the monthly gross salary. Check each employee's salary before running payroll."])
+    return res
