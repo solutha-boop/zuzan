@@ -512,12 +512,11 @@ async def api_list_employees(auth=Depends(require_api_key)):
 @app.get("/v1/summary", tags=["Public API"])
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
-    from payroll import _to_zar, _balance_zar, _po_cost_net, _stock_pl_cost, _bank_import_income
+    from payroll import _to_zar, _balance_zar, _received_zar, _po_cost_net, _stock_pl_cost, _bank_import_income
     from database import InvoiceStatus, PurchaseOrder, Payslip, DepreciationEntry
-    paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.paid).all()
+    paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all()
     out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
-    total_revenue  = sum(_to_zar(i) for i in paid_invs)
-    total_revenue += sum((i.paid_amount_zar or 0) for i in db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status==InvoiceStatus.partial).all())
+    total_revenue  = sum(_received_zar(i) for i in paid_invs)
     total_revenue += _bank_import_income(db, company.id)
     # Expenses ex-VAT
     exp_rows = db.query(Expense).filter(Expense.company_id==company.id).all()
