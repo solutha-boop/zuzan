@@ -31,7 +31,7 @@ def _invoice_summary(company_id: int, db: Session) -> dict:
             Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.partial, InvoiceStatus.draft]),
         ).all()
         overdue = [i for i in unpaid if i.due_date and i.due_date < now and i.status in (InvoiceStatus.sent, InvoiceStatus.partial)]
-        unpaid_total = sum(float(i.total_amount or 0) - (float(i.paid_amount_zar or 0) if i.status == InvoiceStatus.partial else 0.0) for i in unpaid if i.status in (InvoiceStatus.sent, InvoiceStatus.partial))
+        unpaid_total = sum(float(i.total_amount or 0) * (float(i.exchange_rate or 1.0) if (i.currency and i.currency != 'ZAR') else 1.0) - (float(i.paid_amount_zar or 0) if i.status == InvoiceStatus.partial else 0.0) for i in unpaid if i.status in (InvoiceStatus.sent, InvoiceStatus.partial))
         return {
             "unpaid_count": len([i for i in unpaid if i.status in (InvoiceStatus.sent, InvoiceStatus.partial)]),
             "unpaid_total": round(unpaid_total, 2),

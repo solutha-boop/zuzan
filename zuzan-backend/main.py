@@ -401,8 +401,6 @@ from journal import router as journal_router
 from leave import router as leave_router
 from fixed_assets import router as fixed_assets_router
 from portal import portal_router
-from stitch import stitch_router
-from saltedge import saltedge_router
 from financial_statements import router as fin_stmts_router
 from bank_direct_feeds import absa_router, nedbank_router, investec_router, standardbank_router, bank_interest_router
 from documents import router as documents_router
@@ -438,8 +436,6 @@ app.include_router(journal_router,   prefix="/journal",         tags=["Journal"]
 app.include_router(leave_router,        prefix="/leave",           tags=["Leave"])
 app.include_router(fixed_assets_router, prefix="/fixed-assets",    tags=["Fixed Assets"])
 app.include_router(portal_router,        prefix="/portal",           tags=["Portal"])
-app.include_router(stitch_router,        prefix="/banking/stitch",   tags=["Bank Feeds"])
-app.include_router(saltedge_router,      prefix="/banking/saltedge", tags=["Bank Feeds"])
 app.include_router(absa_router,          prefix="/banking/absa",         tags=["Bank Feeds"])
 app.include_router(nedbank_router,       prefix="/banking/nedbank",      tags=["Bank Feeds"])
 app.include_router(investec_router,      prefix="/banking/investec",     tags=["Bank Feeds"])
@@ -559,14 +555,16 @@ async def api_summary(auth=Depends(require_api_key)):
 
 # ── AI CHAT ───────────────────────────────────────────────────────────────────
 from pydantic import BaseModel as BM
+from pydantic import Field as _Field
 class ChatRequest(BM):
-    message: str
-    context: str = ""
+    message: str = _Field(min_length=1, max_length=2000)   # bounded: every character is billed by the AI provider
+    context: str = _Field(default="", max_length=100)
 
 ZUZAN_SYSTEM_PROMPT = """You are ZuZan AI, the built-in assistant for ZuZan — a South African bookkeeping and payroll platform for SMEs. You help users navigate the app and understand SA tax/accounting rules.
 
 ZuZan's modules and how they work:
-- Sales → Invoices: Create invoices (+ New Invoice), mark as paid, send to clients by email. INV-XXXX numbering. 15% VAT calculated automatically. Multi-currency (ZAR/USD) supported.
+- Sales → Invoices: Create invoices (+ New Invoice), record payments, send to clients by email. INV-XXXX numbering. 15% VAT calculated automatically. Multi-currency (ZAR/USD) supported. Part payments are supported: record the total received so far and the invoice shows "paid of total · due" and stays Partial until fully paid; for a foreign-currency invoice tick "This payment settles the invoice" on the last payment.
+- Sales → Invoices → Credit Notes: issue a credit note (+ New Credit Note), optionally against an invoice. If the invoice sold stock items, enter the units coming back and they go back in stock at their original cost.
 - Sales → Quotes: Create quotes (+ New Quote), set validity date, update status (Draft/Sent/Accepted/Declined), convert accepted quotes to invoices.
 - Expenses: Add expenses (+ Add Expense), scan receipts with camera, categorise to chart-of-accounts codes (6000-7300). Input VAT tracked automatically.
 - Procurement → Purchase Orders: Create POs (+ New PO), send to suppliers by email (📧 Send to Supplier), receive goods (📦 Receive Goods), mark as paid. Statuses: Draft/Sent/Received/Partial/Paid/Cancelled. Edit POs in draft/sent status.
@@ -588,7 +586,7 @@ SA tax rules you know:
 - Dividends tax: 20%, withheld by company.
 - Entertainment expenses: 50% deductible, input VAT not claimable.
 - Bad debts: Deductible when irrecoverable — account 7300.
-- Wear & tear: Computers 3 years, vehicles 5 years.
+- Wear & tear: Computers 3 years, vehicles 5 years. Fixed Assets also follows the SARS special allowances: s12C new manufacturing plant 40/20/20/20, s12B solar up to 1 MW 100% in the first year, other s12B energy assets 50/30/20.
 
 Response style:
 - Be concise and practical. Give step-by-step instructions when explaining how to do something in the app.
@@ -634,11 +632,13 @@ def _keyword_fallback(msg: str, ctx: str) -> dict:
     if "overdue" in msg and "invoice" in msg:
         return {"reply":"Overdue invoices appear in red on the Invoices tab. ZuZan marks an invoice as overdue once the due date passes without payment. Follow up with the client and record payment once received by clicking 'Mark as Paid'."}
     if ("mark" in msg or "record" in msg) and "paid" in msg:
-        return {"reply":"To mark an invoice as paid: open the invoice, click 'Mark as Paid'. ZuZan records the payment date and updates the invoice status."}
+        return {"reply":"To record a payment: open the invoice and click 'Mark as Paid', then enter the amount received. If it is less than the total the invoice becomes Partial and keeps showing the balance due. ZuZan records the payment date and updates the status."}
     if "send" in msg and "invoice" in msg:
         return {"reply":"To send an invoice: open the invoice and click 'Send Invoice'. ZuZan emails it to the client's email address."}
     if "credit note" in msg:
-        return {"reply":"To issue a credit note: go to Sales → Invoices, open the paid invoice, and click 'Credit Note'. ZuZan reverses the journal entries and creates a linked credit note."}
+        return {"reply":"To issue a credit note: go to Sales → Invoices → Credit Notes tab and click '+ New Credit Note'. Pick the invoice you are crediting (optional), enter the amount excl. VAT, and if goods are coming back enter the units so they return to stock. ZuZan reverses the revenue and VAT in the journal."}
+    if ("part" in msg and ("pay" in msg or "paid" in msg)) or "partial" in msg or "deposit" in msg:
+        return {"reply":"Part payments are supported: open the invoice, record the total received so far, and it shows as Partial with the balance due until the rest is paid. For a foreign-currency invoice, tick 'This payment settles the invoice' on the final payment."}
     # Quotes
     if ("quote" in msg or "estimate" in msg) and any(x in msg for x in ["create","new","add","make","how","find","where"]):
         return {"reply":"To create a quote: go to Sales → Quotes, click '+ New Quote', fill in the client name, description, amount and validity date. Once accepted, click 'Convert to Invoice'."}
@@ -690,9 +690,9 @@ def _keyword_fallback(msg: str, ctx: str) -> dict:
     if "budget" in msg:
         return {"reply":"Budgeting is under the Reports → Budget tab. Set monthly budgets per category and ZuZan shows actuals vs budget variance in real time."}
     if "fixed asset" in msg or "depreciation" in msg:
-        return {"reply":"Fixed assets are under the Fixed Assets tab. Add an asset with cost, useful life and SARS category. ZuZan calculates depreciation automatically each month and posts the journal entry."}
+        return {"reply":"Fixed assets are under the Fixed Assets tab. Add an asset with cost, useful life and SARS category. ZuZan calculates depreciation automatically each month and posts the journal entry. SARS special allowances (s12B/s12C) are applied for deferred tax."}
     if "bank" in msg and any(x in msg for x in ["feed","import","connect","reconcil","statement"]):
-        return {"reply":"Bank feeds are under the Banking tab. Connect via Stitch or Salt Edge to import transactions automatically, or upload a CSV. ZuZan matches transactions to invoices and expenses for easy reconciliation."}
+        return {"reply":"Bank feeds are under the Banking tab. Import your bank statement as a CSV or Excel file (or use a direct bank feed where your bank supports one). ZuZan matches transactions to invoices and expenses for easy reconciliation."}
     if "reconcil" in msg:
         return {"reply":"Bank reconciliation is in Reports → Reconciliation. Match your bank transactions to ZuZan records. Any unmatched items are flagged for review."}
     if "customer" in msg:

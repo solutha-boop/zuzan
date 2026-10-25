@@ -259,23 +259,56 @@ def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
     # ── Excel ─────────────────────────────────────────────────────────────────
     if file_bytes[:4] in (b"PK\x03\x04", b"\xd0\xcf\x11\xe0"):
         # xlsx (zip) or xls (OLE2 compound document)
+        if file_bytes[:4] == b"\xd0\xcf\x11\xe0":
+            raise HTTPException(400, "This is an old-format Excel file (.xls). Open it in Excel and use Save As -> Excel Workbook (.xlsx) "
+                                     "(or CSV), then upload it again.")
         try:
             import openpyxl
         except ImportError:
             raise HTTPException(500, "openpyxl is not installed — cannot read Excel files")
 
         import io as _io
-        wb  = openpyxl.load_workbook(_io.BytesIO(file_bytes), read_only=True, data_only=True)
-        ws  = wb.active
-        rows_raw: list[list[str]] = []
-        for row in ws.iter_rows(values_only=True):
-            str_row = [str(c) if c is not None else "" for c in row]
-            if any(c.strip() for c in str_row):
-                rows_raw.append(str_row)
+        try:
+            wb = openpyxl.load_workbook(_io.BytesIO(file_bytes), read_only=True, data_only=True)
+        except Exception as e:
+            raise HTTPException(400, f"Could not open this Excel file ({e}). It may be corrupt or password-protected - save it as .xlsx or CSV and try again.")
+
+        def _cell_text(c) -> str:
+            v = c.value
+            if v is None:
+                return ""
+            if isinstance(v, bool):
+                return str(v)
+            if isinstance(v, float) or isinstance(v, int):
+                if "%" in (getattr(c, "number_format", "") or ""):
+                    v = round(v * 100, 6)             # a cell shown as 7.5% holds 0.075
+                if isinstance(v, float) and v == int(v) and abs(v) < 1e15:
+                    v = int(v)                         # 1001.0 -> "1001", 8001015009087.0 -> "8001015009087"
+                return str(v)
+            return str(v)
+
+        def _sheet_rows(ws):
+            try:
+                ws.reset_dimensions()                  # some exporters write a wrong sheet size; read_only would then cut rows off
+            except Exception:
+                pass
+            out = []
+            for row in ws.iter_rows():
+                str_row = [_cell_text(c) for c in row]
+                if any(c.strip() for c in str_row):
+                    out.append(str_row)
+            return out
+
+        rows_raw = _sheet_rows(wb.active)
+        if not rows_raw:                               # the active tab is empty (e.g. a blank cover sheet): use the first tab with data
+            for _ws in wb.worksheets:
+                rows_raw = _sheet_rows(_ws)
+                if rows_raw:
+                    break
         wb.close()
 
         if not rows_raw:
-            raise HTTPException(400, "Excel file is empty or has no data on the active sheet")
+            raise HTTPException(400, "Excel file is empty or has no data on any sheet")
 
         hi = _find_header_row(rows_raw)
         return rows_raw[hi], rows_raw[hi + 1:]

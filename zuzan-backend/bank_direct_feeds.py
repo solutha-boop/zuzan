@@ -107,6 +107,24 @@ def _pop_state(state: str) -> int | None:
     return entry["company_id"]
 
 
+def invoice_balance_zar(inv) -> float:
+    """ZAR still owed on an open invoice: the full ZAR value, less any part payment already received."""
+    rate = float(inv.exchange_rate or 1.0) if (inv.currency and inv.currency != "ZAR") else 1.0
+    total = (inv.total_amount or 0) * rate
+    if str(inv.status).split(".")[-1] == "partial":
+        total -= (inv.paid_amount_zar or 0)
+    return round(max(total, 0.0), 2)
+
+
+def check_match_owner(db, company_id: int, invoice_id=None, expense_id=None) -> None:
+    """A transaction may only be matched to this company's own invoice/expense (it used to accept any id, which
+    let one company link to - and then read the details of - another company's invoice)."""
+    if invoice_id is not None and not db.query(Invoice).filter(Invoice.id == invoice_id, Invoice.company_id == company_id).first():
+        raise HTTPException(404, "Invoice not found")
+    if expense_id is not None and not db.query(Expense).filter(Expense.id == expense_id, Expense.company_id == company_id).first():
+        raise HTTPException(404, "Expense not found")
+
+
 # ── Auto-matching engine (shared) ─────────────────────────────────────────────
 
 def _auto_match(txn_amount: float, txn_desc: str, company_id: int, db: Session):
@@ -121,7 +139,10 @@ def _auto_match(txn_amount: float, txn_desc: str, company_id: int, db: Session):
         ).all()
         best, best_conf = None, 0.0
         for inv in invoices:
-            amount_match = 1.0 - min(abs(inv.total_amount - amount) / max(amount, 1), 1.0)
+            bal = invoice_balance_zar(inv)
+            if bal <= 0 or abs(bal - amount) / bal > 0.01:
+                continue                    # the amount must agree (within 1%) - a matching name alone is not enough
+            amount_match = 1.0 - min(abs(bal - amount) / max(amount, 1), 1.0)
             name_match   = 0.5 if inv.client_name and inv.client_name.lower()[:6] in desc else 0.0
             inv_match    = 0.3 if inv.invoice_number and inv.invoice_number.lower() in desc else 0.0
             conf = amount_match * 0.6 + name_match + inv_match
@@ -134,6 +155,8 @@ def _auto_match(txn_amount: float, txn_desc: str, company_id: int, db: Session):
         expenses = db.query(Expense).filter(Expense.company_id == company_id).all()
         best, best_conf = None, 0.0
         for exp in expenses:
+            if (exp.amount or 0) <= 0 or abs(exp.amount - amount) / exp.amount > 0.01:
+                continue
             amount_match = 1.0 - min(abs(exp.amount - amount) / max(amount, 1), 1.0)
             vendor_match = 0.4 if exp.vendor and exp.vendor.lower()[:6] in desc else 0.0
             conf = amount_match * 0.6 + vendor_match
@@ -376,6 +399,7 @@ class MatchPayload(BaseModel):
 def absa_match(txn_id: int, payload: MatchPayload, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     txn = db.query(AbsaTransaction).filter(AbsaTransaction.id == txn_id, AbsaTransaction.company_id == current_user.company_id).first()
     if not txn: raise HTTPException(404, "Transaction not found")
+    check_match_owner(db, current_user.company_id, payload.invoice_id, payload.expense_id)
     txn.match_status = "matched"; txn.matched_invoice_id = payload.invoice_id; txn.matched_expense_id = payload.expense_id
     txn.match_confidence = 1.0; txn.matched_at = datetime.utcnow()
     db.commit()
@@ -625,6 +649,7 @@ def nedbank_transactions(
 def nedbank_match(txn_id: int, payload: MatchPayload, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     txn = db.query(NedbankTransaction).filter(NedbankTransaction.id == txn_id, NedbankTransaction.company_id == current_user.company_id).first()
     if not txn: raise HTTPException(404, "Transaction not found")
+    check_match_owner(db, current_user.company_id, payload.invoice_id, payload.expense_id)
     txn.match_status = "matched"; txn.matched_invoice_id = payload.invoice_id; txn.matched_expense_id = payload.expense_id
     txn.match_confidence = 1.0; txn.matched_at = datetime.utcnow()
     db.commit(); return {"status": "matched"}
@@ -896,6 +921,7 @@ def investec_transactions(
 def investec_match(txn_id: int, payload: MatchPayload, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     txn = db.query(InvestecTransaction).filter(InvestecTransaction.id == txn_id, InvestecTransaction.company_id == current_user.company_id).first()
     if not txn: raise HTTPException(404, "Transaction not found")
+    check_match_owner(db, current_user.company_id, payload.invoice_id, payload.expense_id)
     txn.match_status = "matched"; txn.matched_invoice_id = payload.invoice_id; txn.matched_expense_id = payload.expense_id
     txn.match_confidence = 1.0; txn.matched_at = datetime.utcnow()
     db.commit(); return {"status": "matched"}
@@ -1163,6 +1189,7 @@ def standardbank_transactions(
 def standardbank_match(txn_id: int, payload: MatchPayload, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     txn = db.query(StandardBankTransaction).filter(StandardBankTransaction.id == txn_id, StandardBankTransaction.company_id == current_user.company_id).first()
     if not txn: raise HTTPException(404, "Transaction not found")
+    check_match_owner(db, current_user.company_id, payload.invoice_id, payload.expense_id)
     txn.match_status = "matched"; txn.matched_invoice_id = payload.invoice_id; txn.matched_expense_id = payload.expense_id
     txn.match_confidence = 1.0; txn.matched_at = datetime.utcnow()
     db.commit(); return {"status": "matched"}
