@@ -15873,10 +15873,10 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
                   <div style={{fontSize:10,color:C.inkDim,textTransform:"capitalize"}}>{c.role||"member"}</div>
                 </button>
               ))}
-              <button onClick={async ()=>{setShowSwitcher(false); const n=window.prompt("New client company name:"); if(!n||!n.trim()) return; try{ const r1=await api("/companies/create-new",{method:"POST",body:JSON.stringify({name:n.trim()})}); const r2=await api(`/auth/switch-company/${r1.id}`,{method:"POST"}); localStorage.setItem("zuzan_token",r2.access_token); window.location.reload(); }catch(e){alert(e.message||"Could not create company.");}}} style={{
+              <button onClick={async ()=>{setShowSwitcher(false); const n=window.prompt("New entity / client company name:"); if(!n||!n.trim()) return; try{ const r1=await api("/auth/add-company",{method:"POST",body:JSON.stringify({company_name:n.trim()})}); localStorage.setItem("zuzan_token",r1.access_token); window.location.reload(); }catch(e){alert(e.message||"Could not create company.");}}} style={{
                 display:"block",width:"100%",textAlign:"left",padding:"10px 14px",border:"none",
                 background:"transparent",cursor:"pointer",fontFamily:"inherit",color:C.accent,fontWeight:700,fontSize:12,
-              }}>+ Add Client</button>
+              }}>+ Add New Entity</button>
             </div>
           )}
         </div>
@@ -16112,21 +16112,32 @@ export default function App() {
     }
   };
 
-  const handleNewCompany = async (name, plan="starter") => {
+  const handleNewCompany = async (name, plan="starter", industry="") => {
     const token = localStorage.getItem("zuzan_token");
-    const res1 = await fetch(`${BASE_URL}/companies/create-new`, {
+    const res = await fetch(`${BASE_URL}/auth/add-company`, {
       method:"POST", headers:{"Authorization":"Bearer "+token,"Content-Type":"application/json"},
-      body: JSON.stringify({name, plan}),
+      body: JSON.stringify({company_name: name, plan, industry}),
     });
-    const newCo = await res1.json();
-    if (!res1.ok) throw new Error(newCo.detail || "Could not create company.");
-    const res2 = await fetch(`${BASE_URL}/auth/switch-company/${newCo.id}`, {
-      method:"POST", headers:{"Authorization":"Bearer "+token},
-    });
-    const data = await res2.json();
-    if (!res2.ok) throw new Error(data.detail || "Could not switch company.");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Could not create entity.");
     localStorage.setItem("zuzan_token", data.access_token);
-    window.location.reload();
+    const _rawSub = data.company.subscription_status || "trial";
+    const newUser = {
+      firstName: data.user.first_name, lastName: data.user.last_name, email: data.user.email,
+      companyName: data.company.name, logoUrl: "", headerImageUrl: "", invoiceTemplateHtml: "",
+      plan: {name: data.company.plan, id: data.company.plan},
+      access_token: data.access_token, trialEnds: data.company.trial_ends,
+      subscriptionStatus: _rawSub, role: "owner",
+      payrollEnabled: false, afsEnabled: false, billingExempt: false, industry: data.company.industry || "",
+    };
+    // Refresh company list then switch into new entity
+    try {
+      const r2 = await fetch(`${BASE_URL}/auth/my-companies`, {headers:{"Authorization":"Bearer "+data.access_token}});
+      if (r2.ok) { const list = await r2.json(); if (Array.isArray(list)) setCompanies(list); }
+    } catch(e) {}
+    Sentry.setUser({ email: newUser.email, username: newUser.companyName });
+    setUser(newUser);
+    setScreen("app");
   };
 
   const handleRegistrationComplete = userData => {

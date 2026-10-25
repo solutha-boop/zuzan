@@ -532,6 +532,86 @@ async def switch_company(
     }
 
 
+class AddCompanyRequest(BaseModel):
+    company_name: str
+    industry: str = ""
+    vat_registered: bool = True
+    plan: str = "starter"
+
+@router.post("/add-company")
+async def add_company(
+    data: AddCompanyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Create a second (or nth) entity under the same login profile.
+    A new Company row is created with a trial subscription, and a
+    CompanyMembership row links the current user to it as owner.
+    Returns a switch token so the frontend can immediately land on
+    the new entity.
+    """
+    home_user = db.query(User).filter(User.id == current_user.id).first()
+
+    plan_enum = PlanType.starter
+    for p in PlanType:
+        if p.value == data.plan:
+            plan_enum = p
+            break
+
+    company = Company(
+        name=data.company_name.strip(),
+        industry=data.industry or None,
+        vat_registered=data.vat_registered,
+        plan=plan_enum,
+        billing_cycle=BillingCycle.monthly,
+        subscription_status=SubscriptionStatus.trial,
+        trial_ends=datetime.utcnow() + timedelta(days=14),
+        payroll_enabled=False,
+        afs_enabled=False,
+    )
+    db.add(company)
+    db.flush()
+
+    db.add(CompanyMembership(user_id=home_user.id, company_id=company.id, role="owner"))
+    db.flush()
+
+    # Initialise chart of accounts for the new entity
+    try:
+        from journal import init_accounts as _init_accounts
+        _init_accounts(company.id, db)
+    except Exception:
+        pass
+
+    db.commit()
+
+    token = create_token({"user_id": home_user.id, "company_id": company.id})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "company": {
+            "id":                    company.id,
+            "name":                  company.name,
+            "plan":                  str(company.plan.value),
+            "subscription_status":   "trial",
+            "trial_ends":            company.trial_ends.isoformat(),
+            "payroll_enabled":       False,
+            "afs_enabled":           False,
+            "billing_exempt":        False,
+            "industry":              company.industry or "",
+            "invoice_header_url":    "",
+            "invoice_template_html": "",
+        },
+        "user": {
+            "id":         home_user.id,
+            "first_name": home_user.first_name,
+            "last_name":  home_user.last_name,
+            "email":      home_user.email,
+            "role":       "owner",
+        },
+    }
+
+
 @router.get("/verify-email/{token}", response_class=HTMLResponse)
 async def verify_email(token: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     from email_service import FRONTEND_URL
