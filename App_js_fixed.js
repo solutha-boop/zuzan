@@ -930,7 +930,7 @@ function Dashboard({live = {}}) {
         <KPI label="Expenses" value={fmt(totalExpenses)} sub="Excl. VAT, all time" color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
         <KPI label="Net Profit" value={fmt(profit)} sub="After all costs &amp; 27% tax" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
         <KPI label="Outstanding" value={fmt(outstanding)} sub="Pending invoices" color={C.gold} icon="⏳" onClick={()=>openDrill("outstanding")}/>
-        <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${d?.employee_count||""} employees`} color={C.blue} icon="👥" onClick={()=>openDrill("payroll")}/>
+        <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${d?.employee_count||""} employees`} color={C.blue} icon="👥"/>
         <KPI label="Net VAT" value={netVatPayable !== null ? fmt(Math.abs(netVatPayable)) : "—"} sub={vatSub} color={vatColor} icon="🏛️" onClick={()=>openDrill("vat")}/>
       </div>
 
