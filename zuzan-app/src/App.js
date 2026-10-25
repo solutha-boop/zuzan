@@ -15108,6 +15108,280 @@ function XeroMigrationWizard() {
   );
 }
 
+// ── QUICKBOOKS MIGRATION WIZARD ──────────────────────────────────────────────
+function QuickBooksMigrationWizard() {
+  const token = localStorage.getItem("zuzan_token");
+  const STEPS = [
+    { id:"accounts",   icon:"📒", label:"Chart of Accounts",
+      endpoint:"/qbo/accounts",
+      qboPath: "Accounting → Chart of Accounts → Run Report → Export",
+      hint: "Columns: Account, Type, Detail Type, Description, Balance",
+      required: false,
+      tip: "Import your account list first so opening balances can reference the right codes.",
+    },
+    { id:"balances",   icon:"⚖️", label:"Opening Balances",
+      endpoint:"/qbo/opening-balances",
+      qboPath: "Reports → Trial Balance → set date → Export",
+      hint: "Columns: Account, Debit, Credit",
+      required: false,
+      tip: "Run the Trial Balance as at your migration date. This posts a single opening-balance journal entry.",
+    },
+    { id:"customers",  icon:"👤", label:"Customers",
+      endpoint:"/qbo/customers",
+      qboPath: "Sales → Customers → Export → Customer Contact List",
+      hint: "Columns: Customer, Company, Email, Phone, Street, City, State, ZIP, Country, Tax Reg. No.",
+      required: false,
+      tip: "QBO exports customers and vendors separately. Import customers first, then vendors.",
+    },
+    { id:"vendors",    icon:"🏭", label:"Vendors / Suppliers",
+      endpoint:"/qbo/vendors",
+      qboPath: "Expenses → Vendors → Export → Vendor Contact List",
+      hint: "Columns: Vendor, Company, Email, Phone, Street, City, State, ZIP, Country, Tax Reg. No.",
+      required: false,
+      tip: "Vendors are imported as ZuZan Suppliers.",
+    },
+    { id:"invoices",   icon:"🧾", label:"Invoices & Bills",
+      endpoint:"/qbo/invoices",
+      qboPath: "Sales → Invoices → Export  (repeat for Expenses → Bills → Export)",
+      hint: "Columns: Invoice No., Customer, Invoice Date, Due Date, Terms, Status, Amount, Balance Due",
+      required: false,
+      tip: "Run exports for both Invoices (Sales) and Bills (Expenses). Upload each file separately — the same endpoint handles both.",
+    },
+    { id:"employees",  icon:"🧑‍💼", label:"Employees (optional)",
+      endpoint:"/qbo/employees",
+      qboPath: "Payroll → Employees → Export → Employee Contact List",
+      hint: "Columns: Employee, Email, Phone, Mobile, Street, City, State, Hire Date, Status, Employee Type, Billing Rate",
+      required: false,
+      tip: "Skip this step if you are not using ZuZan payroll, or if you prefer to capture employees manually.",
+    },
+  ];
+
+  const [step,    setStep]    = useState(0);
+  const [results, setResults] = useState({});
+  const [files,   setFiles]   = useState({});
+  const [busy,    setBusy]    = useState(false);
+  const [err,     setErr]     = useState(null);
+  const fileRefs = useRef({});
+
+  const totalSteps = STEPS.length;
+  const isWelcome = step === 0;
+  const isDone    = step === totalSteps + 1;
+  const curStep   = STEPS[step - 1];
+
+  async function doImport() {
+    if (!curStep) return;
+    const f = files[curStep.id];
+    if (!f) { setErr("Please select a file first."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const r = await fetch(`${BASE_URL}${curStep.endpoint}`, {
+        method:"POST",
+        headers:{Authorization:"Bearer "+token},
+        body: fd,
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "Import failed");
+      setResults(prev => ({...prev, [curStep.id]: data}));
+      setStep(s => s + 1);
+    } catch(e) { setErr(e.message); }
+    finally    { setBusy(false); }
+  }
+
+  function skipStep() { setStep(s => s + 1); }
+
+  function pickFile(e) {
+    const f = e.target.files[0];
+    if (!f || !curStep) return;
+    setFiles(prev => ({...prev, [curStep.id]: f}));
+    setErr(null);
+  }
+
+  const totalImported = Object.values(results).reduce((s, r) => s + (r.imported || 0), 0);
+
+  // ── Welcome screen ────────────────────────────────────────────────────────
+  if (isWelcome) return (
+    <div style={{maxWidth:640,margin:"0 auto"}}>
+      <div style={{textAlign:"center",padding:"40px 0 32px"}}>
+        <div style={{fontSize:52,marginBottom:12}}>💚</div>
+        <h2 style={{fontFamily:"serif",fontSize:26,fontWeight:800,color:C.ink,margin:"0 0 10px"}}>
+          Migrate from QuickBooks
+        </h2>
+        <p style={{fontSize:14,color:C.inkMid,lineHeight:1.7,maxWidth:480,margin:"0 auto 28px"}}>
+          This wizard imports your QuickBooks Online data step by step — accounts, opening balances,
+          customers, vendors, invoices and employees. Each step is independent; skip any you don't need.
+        </p>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:24,textAlign:"left",marginBottom:28}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:14}}>Before you start, export these files from QuickBooks Online:</div>
+          {STEPS.map((s,i) => (
+            <div key={s.id} style={{display:"flex",gap:12,marginBottom:10,alignItems:"flex-start"}}>
+              <span style={{fontSize:20,lineHeight:1.3,flexShrink:0}}>{s.icon}</span>
+              <div>
+                <div style={{fontWeight:600,fontSize:13,color:C.ink}}>{s.label}</div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{s.qboPath}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={()=>setStep(1)} style={{
+          background:"#2ca01c",color:"#fff",border:"none",borderRadius:12,
+          padding:"14px 36px",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+        }}>Start Migration →</button>
+      </div>
+    </div>
+  );
+
+  // ── Done screen ───────────────────────────────────────────────────────────
+  if (isDone) return (
+    <div style={{maxWidth:560,margin:"0 auto",textAlign:"center",padding:"40px 0"}}>
+      <div style={{fontSize:52,marginBottom:12}}>🎉</div>
+      <h2 style={{fontFamily:"serif",fontSize:24,fontWeight:800,color:C.ink,margin:"0 0 8px"}}>Migration Complete</h2>
+      <p style={{fontSize:14,color:C.inkMid,marginBottom:28}}>{totalImported} records imported across all steps.</p>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:28,textAlign:"left"}}>
+        {STEPS.map(s => {
+          const r = results[s.id];
+          if (!r) return (
+            <div key={s.id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13}}>
+              <span style={{color:C.inkMid}}>{s.icon} {s.label}</span>
+              <span style={{color:C.inkDim}}>Skipped</span>
+            </div>
+          );
+          return (
+            <div key={s.id} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`,fontSize:13}}>
+              <span style={{color:C.ink,fontWeight:600}}>{s.icon} {s.label}</span>
+              <span style={{color:"#2e7d32",fontWeight:700}}>✓ {r.imported} imported{r.skipped ? ` · ${r.skipped} skipped` : ""}</span>
+            </div>
+          );
+        })}
+      </div>
+      <p style={{fontSize:12,color:C.inkMid,marginBottom:20}}>Check your Dashboard, Invoicing and Contacts screens to verify the data.</p>
+      <button onClick={()=>{setStep(0);setResults({});setFiles({});setErr(null);}} style={{
+        background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,
+        padding:"10px 24px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:C.ink,
+      }}>Run Again</button>
+    </div>
+  );
+
+  // ── Step screen ───────────────────────────────────────────────────────────
+  const stepFile   = files[curStep.id];
+  const stepResult = results[curStep.id];
+
+  return (
+    <div style={{maxWidth:620,margin:"0 auto"}}>
+      {/* Progress bar */}
+      <div style={{marginBottom:28}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+          {STEPS.map((s,i) => (
+            <div key={s.id} onClick={()=>setStep(i+1)} style={{
+              display:"flex",flexDirection:"column",alignItems:"center",gap:4,cursor:"pointer",flex:1,
+            }}>
+              <div style={{
+                width:32,height:32,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:13,fontWeight:700,
+                background: step > i+1 ? "#2e7d32" : step === i+1 ? "#2ca01c" : C.border,
+                color: step >= i+1 ? "#fff" : C.inkMid,
+                transition:"background 0.2s",
+              }}>{step > i+1 ? "✓" : i+1}</div>
+              <div style={{fontSize:9,color:step===i+1?"#2ca01c":C.inkMid,fontWeight:step===i+1?700:400,textAlign:"center",lineHeight:1.3,maxWidth:70}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{height:3,background:C.border,borderRadius:2}}>
+          <div style={{height:"100%",background:"#2ca01c",borderRadius:2,transition:"width 0.3s",width:`${((step-1)/totalSteps)*100}%`}}/>
+        </div>
+      </div>
+
+      {/* Step card */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+          <span style={{fontSize:28}}>{curStep.icon}</span>
+          <div>
+            <div style={{fontSize:17,fontWeight:700,color:C.ink}}>{curStep.label}</div>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>Step {step} of {totalSteps}</div>
+          </div>
+        </div>
+
+        {/* QBO export instructions */}
+        <div style={{background:"#f0fdf4",border:"1px solid #86efac",borderRadius:10,padding:"12px 16px",marginBottom:18}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#166534",marginBottom:4}}>📤 How to export from QuickBooks Online</div>
+          <div style={{fontSize:12,color:"#166534",marginBottom:4}}><strong>Path:</strong> {curStep.qboPath}</div>
+          <div style={{fontSize:11,color:"#15803d",lineHeight:1.5}}>{curStep.hint}</div>
+        </div>
+
+        {/* Tip */}
+        <div style={{fontSize:12,color:C.inkMid,lineHeight:1.6,marginBottom:20,padding:"10px 14px",background:C.bg,borderRadius:8,border:`1px solid ${C.border}`}}>
+          💡 {curStep.tip}
+        </div>
+
+        {/* File upload zone */}
+        <div
+          onClick={()=>{ if(fileRefs.current[curStep.id]) fileRefs.current[curStep.id].click(); }}
+          style={{
+            border:`2px dashed ${stepFile ? "#2ca01c" : C.border}`,
+            borderRadius:12,padding:"28px 20px",textAlign:"center",cursor:"pointer",
+            background: stepFile ? "#f0fdf4" : C.bg,
+            transition:"all 0.15s",marginBottom:4,
+          }}
+        >
+          <input
+            type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}}
+            ref={el=>{ if(el) fileRefs.current[curStep.id]=el; }}
+            onChange={pickFile}
+          />
+          {stepFile ? (
+            <>
+              <div style={{fontSize:22,marginBottom:6}}>📄</div>
+              <div style={{fontSize:13,fontWeight:600,color:"#2ca01c"}}>{stepFile.name}</div>
+              <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Click to change file</div>
+            </>
+          ) : (
+            <>
+              <div style={{fontSize:22,marginBottom:6}}>⬆️</div>
+              <div style={{fontSize:13,fontWeight:600,color:C.ink}}>Click to select CSV or Excel file</div>
+              <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>QuickBooks Online CSV export accepted directly</div>
+            </>
+          )}
+        </div>
+
+        {err && <div style={{marginTop:10,padding:"10px 14px",background:"#fff5f5",border:"1px solid #fca5a5",borderRadius:8,fontSize:12,color:"#b91c1c"}}>{err}</div>}
+
+        {stepResult && (
+          <div style={{marginTop:12,padding:"12px 16px",background:"#f0fdf4",border:"1px solid #86efac",borderRadius:8,fontSize:12,color:"#166534"}}>
+            ✓ <strong>{stepResult.imported}</strong> records imported
+            {stepResult.skipped > 0 && <span> · {stepResult.skipped} skipped (already exist)</span>}
+            {(stepResult.warnings||[]).length > 0 && (
+              <ul style={{margin:"6px 0 0 16px",paddingLeft:0}}>
+                {stepResult.warnings.slice(0,3).map((w,i)=><li key={i} style={{color:"#92400e"}}>{w}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <button onClick={()=>setStep(s=>Math.max(0,s-1))} style={{
+          background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,
+          padding:"10px 20px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:C.inkMid,
+        }}>← Back</button>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={skipStep} style={{
+            background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"10px 20px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",color:C.inkMid,
+          }}>Skip</button>
+          <button onClick={doImport} disabled={busy || !stepFile} style={{
+            background: (!stepFile||busy) ? C.border : "#2ca01c",
+            color:"#fff",border:"none",borderRadius:10,
+            padding:"10px 28px",fontSize:13,fontWeight:700,cursor:(!stepFile||busy)?"not-allowed":"pointer",
+            fontFamily:"inherit",opacity:(!stepFile||busy)?0.6:1,
+          }}>{busy ? "Importing…" : stepResult ? "Next →" : "Import & Next →"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DataImport() {
   const token = localStorage.getItem("zuzan_token");
   const [tab,       setTab]       = useState("customers");
@@ -15121,6 +15395,7 @@ function DataImport() {
 
   const ITABS = [
     {id:"xero_wizard",        label:"Migrate from Xero",  icon:"🔀"},
+    {id:"qbo_wizard",         label:"Migrate from QuickBooks", icon:"💚"},
     {id:"customers",          label:"Customers",          icon:"👥"},
     {id:"suppliers",          label:"Suppliers",          icon:"🏭"},
     {id:"invoices",           label:"Invoices",           icon:"🧾"},
@@ -15345,7 +15620,7 @@ function DataImport() {
         <div style={{flex:1,minWidth:0}}>
 
           {/* Xero Migration Wizard — full-panel takeover */}
-          {tab === "xero_wizard" ? <XeroMigrationWizard/> : (<>
+          {tab === "xero_wizard" ? <XeroMigrationWizard/> : tab === "qbo_wizard" ? <QuickBooksMigrationWizard/> : (<>
 
           {/* Info + template bar */}
           <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"18px 22px",marginBottom:16}}>

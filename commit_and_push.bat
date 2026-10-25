@@ -33,6 +33,7 @@ git add zuzan-backend/accountant.py
 git add zuzan-backend/integrations.py
 git add zuzan-backend/clocking.py
 git add zuzan-backend/xero_migrate.py
+git add zuzan-backend/quickbooks_migrate.py
 git add zuzan-backend/journal_check.py
 git add clock.html
 git add netlify.toml
@@ -42,7 +43,7 @@ git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=feat: Xero migration wizard + partial payments + multi-entity switcher [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=feat: QuickBooks migration wizard + Xero wizard + partial payments + multi-entity switcher [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===

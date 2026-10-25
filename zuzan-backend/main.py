@@ -414,6 +414,7 @@ from credit_notes import credit_notes_router
 from accountant import router as accountant_router
 from clocking import router as clocking_router
 from xero_migrate import router as xero_migrate_router
+from quickbooks_migrate import router as qbo_migrate_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -454,6 +455,7 @@ app.include_router(credit_notes_router,    prefix="/credit-notes",       tags=["
 app.include_router(accountant_router,      prefix="/accountant",          tags=["Accountant"])
 app.include_router(clocking_router,        prefix="/clocking",             tags=["Clocking"])
 app.include_router(xero_migrate_router,    prefix="/xero",                 tags=["Xero Migration"])
+app.include_router(qbo_migrate_router,     prefix="/qbo",                  tags=["QuickBooks Migration"])
 
 
 @app.get("/")
