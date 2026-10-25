@@ -57,6 +57,11 @@ const recentInvoicesFrom = (live, n) => Array.isArray(live && live.invoices)
   : MOCK_INVOICES.slice(0, n);
 // Phone layout: phones in portrait (<=768px wide) AND phones in landscape (short and <=950px wide). Reactive, so
 // rotating the phone (or resizing the window) switches layout without a reload.
+// ZAR still owed on an invoice: full ZAR value less any part payment (foreign invoices: total x rate, never the amount received)
+const owedZar = i => {
+  const full = (i.currency && i.currency !== "ZAR") ? (i.total_amount||i.amount||0)*(i.exchange_rate||1) : (i.total_amount||i.amount||0);
+  return Math.max(0, full - (i.status==="partial" ? (i.paid_amount_zar||0) : 0));
+};
 const MOBILE_QUERY = "(max-width: 768px), (max-height: 500px) and (max-width: 950px)";
 function useIsMobile() {
   const get = () => typeof window !== "undefined" && !!window.matchMedia && window.matchMedia(MOBILE_QUERY).matches;
@@ -752,28 +757,19 @@ function Dashboard({live = {}}) {
   const [drill, setDrill] = useState(null); // {type, title, rows, cols, total, color}
   const [drillLoading, setDrillLoading] = useState(false);
 
-  // Use total_amount (VAT-inclusive) for ZAR — matches backend _to_zar exactly
-  const toZarD = i => (i.currency && i.currency !== "ZAR")
-    ? (i.paid_amount_zar || (i.total_amount||i.amount||0)*(i.exchange_rate||1))
-    : (i.total_amount||i.amount||0);
 
   const openDrill = async (type) => {
     setDrillLoading(true);
     setDrill({type, rows:[], cols:[], title:"", total:0, color:C.ink});
     try {
       if (type === "revenue") {
-        const invs = await api("/invoices");
-        // All-time paid + partial — matches dashboard revenue KPI exactly
-        const rows = invs.filter(i => i.status==="paid" || i.status==="partial")
-          .sort((a,b) => new Date(b.paid_date||b.created_at||0)-new Date(a.paid_date||a.created_at||0));
-        // For partial invoices, show only what has been received
-        const rowAmt = i => i.status==="partial" ? (i.paid_amount_zar||0) : toZarD(i);
-        setDrill({type, title:"Revenue — Paid & Part-Paid Invoices", color:C.green,
-          total: rows.reduce((s,i)=>s+rowAmt(i),0),
-          cols:["Invoice","Client","Status","Amount Received (ZAR)","Paid Date"],
-          rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client,
-            i.status==="partial"?"Partial":"Paid",
-            fmt(rowAmt(i)), i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
+        // Same rows the Revenue card adds up (fully AND part paid invoices + bank-import income); VAT shown separately
+        const det = await api(`/reports/management/revenue-detail?date_from=2000-01-01&date_to=${new Date().toISOString().slice(0,10)}`);
+        const rows = (det.rows||[]).map(r => [r.invoice_number, r.client, r.status==="partial" ? "Part paid" : "Paid",
+          fmt(r.received_zar), fmt(r.vat_zar), fmt(r.revenue_zar), r.paid_date ? new Date(r.paid_date).toLocaleDateString("en-ZA") : "—"]);
+        if (det.bank_import_income) rows.push(["Bank import","Income posted from bank statements","","","",fmt(det.bank_import_income),""]);
+        setDrill({type, title:"Revenue — cash received, excluding VAT", color:C.green, total: det.total,
+          cols:["Invoice","Client","Status","Received","VAT","Revenue","Paid Date"], rows});
       } else if (type === "expenses") {
         const [exps, deprSchedule, allPOs] = await Promise.all([
           api("/expenses"),
@@ -813,12 +809,12 @@ function Dashboard({live = {}}) {
           .sort((a,b) => new Date(a.due_date||0)-new Date(b.due_date||0));
         const today = new Date();
         setDrill({type, title:"Outstanding — Pending & Overdue", color:C.gold,
-          total: rows.reduce((s,i)=>s+toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0),0),
+          total: rows.reduce((s,i)=>s+owedZar(i),0),
           cols:["Invoice","Client","Amount (ZAR)","Due Date","Days Overdue"],
           rows: rows.map(i=>{
             const due = i.due_date ? new Date(i.due_date) : null;
             const overdue = due ? Math.max(0, Math.floor((today-due)/(1000*60*60*24))) : 0;
-            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0)),
+            return [i.invoice_number||i.id, i.client_name||i.client, fmt(owedZar(i)),
               due ? due.toLocaleDateString("en-ZA") : "—",
               overdue > 0 ? `${overdue}d` : "Current"];
           })});
@@ -852,15 +848,14 @@ function Dashboard({live = {}}) {
             [netVat>=0?"Net VAT payable to SARS":"Net VAT refund due from SARS", fmt(Math.abs(netVat))],
           ]});
       } else if (type === "profit") {
-        const [invs, exps, allPOs, deprSchedule, emps] = await Promise.all([
-          api("/invoices"),
+        const [exps, allPOs, deprSchedule, emps] = await Promise.all([
           api("/expenses"),
           api("/purchase-orders/").catch(()=>[]),
           api("/fixed-assets/schedule").catch(()=>[]),
           api("/employees").catch(()=>[]),
         ]);
-        const paidInvs = invs.filter(i=>i.status==="paid");
-        const rev  = paidInvs.reduce((s,i)=>s+toZarD(i),0);
+        const rdet = await api(`/reports/management/revenue-detail?date_from=2000-01-01&date_to=${new Date().toISOString().slice(0,10)}`).catch(()=>null);
+        const rev  = rdet ? rdet.total : 0;   // same figure as the Revenue card: cash received excluding VAT
         const exp  = exps.reduce((s,e)=>s+((e.amount||0)-(e.vat_amount||0)),0);
         const poCogs = (allPOs||[])
           .filter(po=>["received","partial","paid"].includes(po.status))
@@ -874,7 +869,7 @@ function Dashboard({live = {}}) {
           total: netProfit,
           cols:["Category","Amount"],
           rows:[
-            ["Revenue (paid invoices)",          fmt(rev)],
+            ["Revenue (cash received, excl. VAT)", fmt(rev)],
             ["Expenses (excl. VAT)",             `- ${fmt(exp)}`],
             ["Cost of Sales — POs (excl. VAT)",  `- ${fmt(poCogs)}`],
             ["Depreciation (IAS 16)",            `- ${fmt(depr)}`],
@@ -6392,26 +6387,16 @@ function Reports({live = {}, user = null}) {
     if (mgmtDrill && mgmtDrill.type === type) { setMgmtDrill(null); return; } // toggle off
     setMgmtDrillLoading(true);
     setMgmtDrill({type, title:"", cols:[], rows:[], total:0, color:C.ink});
-    const toZarD = i => (i.currency && i.currency !== "ZAR")
-      ? (i.paid_amount_zar || (i.total_amount||i.amount||0)*(i.exchange_rate||1))
-      : (i.total_amount||i.amount||0);
     try {
       const m = mgmt;
       const pl = m ? m.pl : null;
       if (type === "revenue") {
-        const invs = await api("/invoices");
-        const dfrom = new Date(dateFrom); const dto = new Date(dateTo);
-        const rows = invs.filter(i => {
-          if (i.status !== "paid") return false;
-          const d = new Date(i.paid_date || i.created_at || 0);
-          return d >= dfrom && d <= dto;
-        }).sort((a,b)=>new Date(b.paid_date||0)-new Date(a.paid_date||0));
-        setMgmtDrill({type, title:"Revenue — Paid Invoices (period)", color:C.green,
-          total: rows.reduce((s,i)=>s+toZarD(i),0),
-          cols:["Invoice","Client","Currency","Amount (ZAR)","Paid Date"],
-          rows: rows.map(i=>[i.invoice_number||i.id, i.client_name||i.client,
-            i.currency||"ZAR", fmt(toZarD(i)),
-            i.paid_date ? new Date(i.paid_date).toLocaleDateString("en-ZA") : "—"])});
+        const det = await api(`/reports/management/revenue-detail?${dateParams}`);
+        const rows = (det.rows||[]).map(r => [r.invoice_number, r.client, r.status==="partial" ? "Part paid" : "Paid",
+          fmt(r.received_zar), fmt(r.vat_zar), fmt(r.revenue_zar), r.paid_date ? new Date(r.paid_date).toLocaleDateString("en-ZA") : "—"]);
+        if (det.bank_import_income) rows.push(["Bank import","Income posted from bank statements","","","",fmt(det.bank_import_income),""]);
+        setMgmtDrill({type, title:"Revenue — cash received, excluding VAT (period)", color:C.green, total: det.total,
+          cols:["Invoice","Client","Status","Received","VAT","Revenue","Paid Date"], rows});
       } else if (type === "profit") {
         // Use management accounts P&L breakdown
         const bd = pl ? (pl.expense_breakdown || {}) : {};
@@ -6438,12 +6423,12 @@ function Reports({live = {}, user = null}) {
         const rows = invs.filter(i=>["sent","overdue","partial"].includes(i.status))
           .sort((a,b)=>new Date(a.due_date||0)-new Date(b.due_date||0));
         setMgmtDrill({type, title:"Outstanding — Pending & Overdue Invoices", color:C.gold,
-          total: rows.reduce((s,i)=>s+toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0),0),
+          total: rows.reduce((s,i)=>s+owedZar(i),0),
           cols:["Invoice","Client","Amount (ZAR)","Due Date","Status"],
           rows: rows.map(i=>{
             const due = i.due_date ? new Date(i.due_date) : null;
             const overdue = due ? Math.max(0,Math.floor((today-due)/(1000*60*60*24))) : 0;
-            return [i.invoice_number||i.id, i.client_name||i.client, fmt(toZarD(i)-(i.status==="partial"?(i.paid_amount_zar||0):0)),
+            return [i.invoice_number||i.id, i.client_name||i.client, fmt(owedZar(i)),
               due ? due.toLocaleDateString("en-ZA") : "—",
               overdue > 0 ? `${overdue}d overdue` : i.status];
           })});
@@ -13998,7 +13983,7 @@ function MobileDashboard({live, user, onNavigate}) {
   const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i=>i.status==="paid").reduce((s,i)=>s+i.amount,0);
   const totalExpenses = d ? d.total_expenses : MOCK_EXPENSES.reduce((s,e)=>s+e.amount,0);
   const outstanding   = d ? d.total_outstanding : MOCK_INVOICES.filter(i=>i.status!=="paid").reduce((s,i)=>s+i.amount,0);
-  const profit        = totalRevenue - totalExpenses;
+  const profit        = d ? Math.round((d.net_profit - (d.tax_provision||0))*100)/100 : totalRevenue - totalExpenses;   // same as the desktop dashboard: after payroll and tax
 
   return (
     <div style={{padding:"0 0 100px"}}>
@@ -14012,7 +13997,7 @@ function MobileDashboard({live, user, onNavigate}) {
       <div style={{padding:"0 16px"}}>
         {/* Main KPI card */}
         <div style={{background:C.surface,borderRadius:20,padding:20,boxShadow:"0 4px 24px rgba(0,0,0,0.08)",marginBottom:16}}>
-          <div style={{fontSize:11,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Net Profit This Month</div>
+          <div style={{fontSize:11,color:C.inkMid,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>Net Profit (all time, after tax)</div>
           <div style={{fontFamily:"serif",fontSize:36,fontWeight:800,color:profit>=0?C.green:C.red}}>{fmt(profit)}</div>
           <div style={{display:"flex",gap:16,marginTop:12}}>
             <div><div style={{fontSize:10,color:C.inkMid}}>Revenue</div><div style={{fontSize:15,fontWeight:700,color:C.green}}>{fmt(totalRevenue)}</div></div>

@@ -29,6 +29,18 @@ def _to_zar(inv) -> float:
     return inv.total_amount or 0
 
 
+def _received_net_zar(inv) -> float:
+    """ZAR received on an invoice EXCLUDING the VAT in it - this is what counts as revenue. The VAT part is owed to SARS
+    (output VAT), so including it overstated revenue and profit by the VAT collected whenever a company is VAT registered.
+    Part payments are apportioned in the invoice's own net/gross ratio."""
+    got = _received_zar(inv)
+    gross = inv.total_amount or 0
+    vat = inv.vat_amount or 0
+    if gross > 0 and 0 < vat < gross:
+        return round(got * (gross - vat) / gross, 2)
+    return got
+
+
 def _balance_zar(inv) -> float:
     """ZAR still owed on an invoice: the full amount, less any part payment received."""
     if inv.status == InvoiceStatus.partial:
@@ -2330,7 +2342,7 @@ async def dashboard(
         Invoice.company_id == cid,
         Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
     ).all()
-    total_revenue = sum(_received_zar(i) for i in paid_invoices)
+    total_revenue = sum(_received_net_zar(i) for i in paid_invoices)
     # Add bank-import income (posted as journal entries, not invoices)
     total_revenue += _bank_import_income(db, cid)
 
@@ -2466,6 +2478,46 @@ async def dashboard(
     }
 
 
+@reports_router.get("/management/revenue-detail")
+async def management_revenue_detail(
+    date_from: Optional[str] = None,
+    date_to:   Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """The rows behind the Management Pack "Revenue" card: exactly the invoices (fully and part paid) and bank-import
+    income that /reports/management adds up, so the card and its breakdown always agree."""
+    cid = current_user.company_id
+    now = datetime.utcnow()
+    try:
+        period_start = datetime.strptime(date_from, "%Y-%m-%d")
+        period_end   = datetime.strptime(date_to,   "%Y-%m-%d") + timedelta(days=1)
+    except (TypeError, ValueError):
+        period_start = datetime(now.year, now.month, 1)
+        period_end   = now + timedelta(days=1)
+    _eff_paid = func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at)
+    invs = db.query(Invoice).filter(
+        Invoice.company_id == cid,
+        Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
+        _eff_paid >= period_start, _eff_paid < period_end,
+    ).order_by(_eff_paid.desc()).all()
+    rows = []
+    for i in invs:
+        got = round(_received_zar(i), 2)
+        net = round(_received_net_zar(i), 2)
+        rows.append({
+            "invoice_number": i.invoice_number, "client": i.client_name, "currency": i.currency or "ZAR",
+            "status": "partial" if i.status == InvoiceStatus.partial else "paid",
+            "received_zar": got, "vat_zar": round(got - net, 2), "revenue_zar": net,
+            "paid_date": (i.paid_date or i.issue_date or i.created_at).isoformat() if (i.paid_date or i.issue_date or i.created_at) else None,
+        })
+    bank_income = round(_bank_import_income(db, cid, period_start, period_end), 2)
+    total = round(sum(r["revenue_zar"] for r in rows) + bank_income, 2)
+    return {"rows": rows, "bank_import_income": bank_income, "total": total,
+            "received_total": round(sum(r["received_zar"] for r in rows), 2),
+            "vat_total": round(sum(r["vat_zar"] for r in rows), 2)}
+
+
 @reports_router.get("/monthly-trend")
 async def monthly_trend(
     current_user: User = Depends(get_current_user),
@@ -2491,7 +2543,7 @@ async def monthly_trend(
         end = datetime(end_year, end_month, 1)
 
         revenue = sum(
-            _received_zar(inv) for inv in db.query(Invoice).filter(
+            _received_net_zar(inv) for inv in db.query(Invoice).filter(
                 Invoice.company_id == cid,
                 Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
                 Invoice.paid_date >= start,
@@ -2947,7 +2999,7 @@ async def reconciliation(
 
     # ── RULE 8: Unmatched revenue — paid invoices with no expense offset ───────
     # Simple check: gross margin — warn if expenses are >90% of revenue
-    total_rev = round(sum(_received_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all()), 2)
+    total_rev = round(sum(_received_net_zar(i) for i in db.query(Invoice).filter(Invoice.company_id==cid, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all()), 2)
     total_exp = round(sum(e.amount - (e.vat_amount or 0) for e in all_expenses), 2)
     if total_rev > 0:
         expense_ratio = total_exp / total_rev
@@ -3159,7 +3211,7 @@ def _annual_tax_estimate(db: Session, cid: int, as_of: _date) -> float:
         Invoice.paid_date >= hist_start,
         Invoice.paid_date < hist_end,
     ).all()
-    revenue = round(sum(_received_zar(i) for i in paid_invoices), 2)
+    revenue = round(sum(_received_net_zar(i) for i in paid_invoices), 2)
     revenue = round(revenue + _bank_import_income(db, cid, hist_start, hist_end), 2)
 
     expenses = db.query(Expense).filter(
@@ -3627,7 +3679,7 @@ async def management_accounts(
         _eff_paid >= period_start,
         _eff_paid < period_end,
     ).all()
-    revenue = round(sum(_received_zar(i) for i in paid_invoices), 2)
+    revenue = round(sum(_received_net_zar(i) for i in paid_invoices), 2)
     # Add bank-import income in the same date range
     revenue = round(revenue + _bank_import_income(db, cid, period_start, period_end), 2)
 
@@ -3722,7 +3774,7 @@ async def management_accounts(
         start = datetime(y, m, 1)
         end_m, end_y = (m + 1, y) if m < 12 else (1, y + 1)
         end = datetime(end_y, end_m, 1)
-        rev = round(sum(_received_zar(inv) for inv in db.query(Invoice).filter(
+        rev = round(sum(_received_net_zar(inv) for inv in db.query(Invoice).filter(
             Invoice.company_id == cid, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
             Invoice.paid_date >= start, Invoice.paid_date < end).all()), 2)
         # Bank-import income + any non-invoice revenue for this month
@@ -3902,7 +3954,7 @@ async def provisional_tax(
         Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
         Invoice.paid_date >= year_start
     ).all()
-    ytd_revenue = round(sum(_received_zar(i) for i in paid_invoices), 2)
+    ytd_revenue = round(sum(_received_net_zar(i) for i in paid_invoices), 2)
     # Add bank-import income (journal entries, not invoices) — avoids double-counting
     ytd_revenue = round(ytd_revenue + _bank_import_income(db, cid, year_start), 2)
 
