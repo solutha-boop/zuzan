@@ -13,7 +13,7 @@ def clean(value, max_len=500):
 
 router = APIRouter()
 
-VAT_RATE = 0.15
+from payroll import VAT_RATE  # single source of truth (15%)
 QUOTE_STATUSES = {"draft", "sent", "accepted", "declined", "rejected", "expired", "converted", "invoiced"}
 
 

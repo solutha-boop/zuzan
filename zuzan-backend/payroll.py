@@ -10,10 +10,11 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta, date as _date
 import calendar as _calendar
-from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine, Emp201Submission
+from database import get_db, Employee, Payslip, Invoice, Expense, Company, Payment, InvoiceStatus, InventoryItem, PurchaseOrder, DepreciationEntry, Account, AccountType, JournalEntry, JournalLine, Emp201Submission, EmployeeBenefit, BenefitScheme
 from auth import get_current_user, User
 import hashlib
 import logging
+import json as _json
 
 # SA standard VAT rate (single source for this module; 15% since 1 Apr 2018)
 VAT_RATE = 0.15
@@ -1236,6 +1237,50 @@ async def run_payroll(
             psspf_member=not bool(getattr(emp, "psspf_exempt", False)),
             contract_gross_monthly=emp.gross_salary,
         )
+        # ── Employer benefit scheme contributions ─────────────────────────────
+        # Fetch active enrollments; compute per-scheme employee deduction and
+        # employer cost, then adjust c["net_pay"] and c["total_cost"].
+        benefit_lines = []
+        benefit_employee_total = 0.0
+        benefit_employer_total = 0.0
+        try:
+            enrollments = (
+                db.query(EmployeeBenefit)
+                .join(BenefitScheme, EmployeeBenefit.scheme_id == BenefitScheme.id)
+                .filter(
+                    EmployeeBenefit.employee_id == emp.id,
+                    EmployeeBenefit.is_active == True,
+                    BenefitScheme.is_active == True,
+                )
+                .all()
+            )
+            gross_for_benefit = emp.gross_salary or 0.0
+            for en in enrollments:
+                sch = en.scheme
+                emp_pct = (en.employer_pct_override if en.employer_pct_override is not None else sch.employer_pct) or 0.0
+                ee_pct  = (en.employee_pct_override  if en.employee_pct_override  is not None else sch.employee_pct)  or 0.0
+                emp_cost = round(gross_for_benefit * emp_pct / 100, 2)
+                ee_ded   = round(gross_for_benefit * ee_pct  / 100, 2)
+                benefit_employer_total += emp_cost
+                benefit_employee_total += ee_ded
+                benefit_lines.append({
+                    "scheme_id":             sch.id,
+                    "name":                  sch.name,
+                    "type":                  sch.benefit_type,
+                    "employer_pct":          emp_pct,
+                    "employee_pct":          ee_pct,
+                    "employer_contribution": emp_cost,
+                    "employee_contribution": ee_ded,
+                })
+        except Exception as _be:
+            logger.error(f"Benefit scheme lookup failed for employee {emp.id}: {_be}")
+
+        c["net_pay"]   = round(c["net_pay"]   - benefit_employee_total, 2)
+        c["total_cost"]= round(c["total_cost"] + benefit_employer_total, 2)
+        c["benefit_contributions_json"] = _json.dumps(benefit_lines) if benefit_lines else None
+        c["benefit_employee_total"]     = round(benefit_employee_total, 2)
+        c["benefit_employer_total"]     = round(benefit_employer_total, 2)
+
         if c["net_pay"] < 0:
             problems.append(f"{_name}: net pay would be R{c['net_pay']:,.2f} - advances/garnishees/other deductions exceed their pay; reduce them first")
             continue
@@ -1306,6 +1351,7 @@ async def run_payroll(
             once_off_deduction=c["once_off_deduction"],
             once_off_allowance_taxable=c["once_off_allowance_taxable"],
             once_off_allowance_nontaxable=c["once_off_allowance_nontaxable"],
+            benefit_contributions_json=c.get("benefit_contributions_json"),
         )
         db.add(payslip)
         db.flush()   # get payslip.id before journal post

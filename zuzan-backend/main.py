@@ -415,6 +415,7 @@ from accountant import router as accountant_router
 from clocking import router as clocking_router
 from xero_migrate import router as xero_migrate_router
 from quickbooks_migrate import router as qbo_migrate_router
+from benefits import router as benefits_router
 
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
@@ -456,6 +457,7 @@ app.include_router(accountant_router,      prefix="/accountant",          tags=[
 app.include_router(clocking_router,        prefix="/clocking",             tags=["Clocking"])
 app.include_router(xero_migrate_router,    prefix="/xero",                 tags=["Xero Migration"])
 app.include_router(qbo_migrate_router,     prefix="/qbo",                  tags=["QuickBooks Migration"])
+app.include_router(benefits_router,        prefix="/benefits",              tags=["Benefits"])
 
 
 @app.get("/")
@@ -867,8 +869,10 @@ async def admin_clear_company_data(company_id: int, request: Request, db: Sessio
     )
     from database import (
         Customer, Supplier, PurchaseOrder, Employee, Payslip, LeaveRequest, LeaveBalance,
-        InventoryItem, StockMovement, BankTransaction, Budget, FixedAsset, DepreciationEntry,
-        Document, CategoryRule, CompanyAccount, ServiceItem, ClockEvent,
+        InventoryItem, Budget, FixedAsset, DepreciationEntry,
+        CompanyDocument, CategoryRule, CompanyAccount, ServiceItem, ClockEvent,
+        StitchTransaction, SaltEdgeTransaction, AbsaTransaction, NedbankTransaction,
+        InvestecTransaction, StandardBankTransaction,
     )
     co = db.query(_Company).filter(_Company.id == company_id).first()
     if not co:
@@ -897,13 +901,14 @@ async def admin_clear_company_data(company_id: int, request: Request, db: Sessio
     _del(db, LeaveRequest, company_id)
     _del(db, LeaveBalance, company_id)
     _del(db, Employee, company_id)
-    _del(db, StockMovement, company_id)
     _del(db, InventoryItem, company_id)
-    _del(db, BankTransaction, company_id)
+    for _TxnModel in (StitchTransaction, SaltEdgeTransaction, AbsaTransaction, NedbankTransaction,
+                      InvestecTransaction, StandardBankTransaction):
+        _del(db, _TxnModel, company_id)
     _del(db, Budget, company_id)
     _del(db, DepreciationEntry, company_id)
     _del(db, FixedAsset, company_id)
-    _del(db, Document, company_id)
+    _del(db, CompanyDocument, company_id)
     _del(db, CategoryRule, company_id)
     _del(db, ClockEvent, company_id)
     db.commit()

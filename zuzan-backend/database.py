@@ -120,11 +120,12 @@ class Company(Base):
     fixed_assets=relationship("FixedAsset",back_populates="company")
     category_rules=relationship("CategoryRule",back_populates="company")
     documents=relationship("CompanyDocument",back_populates="company")
-    stitch_connection=relationship("StitchConnection",foreign_keys="StitchConnection.company_id",uselist=False)
+    stitch_connection=relationship("StitchConnection",foreign_keys="StitchConnection.company_id",uselist=False,overlaps="company")
     stitch_bank_accounts=relationship("StitchBankAccount",foreign_keys="StitchBankAccount.company_id",overlaps="company")
     stitch_transactions=relationship("StitchTransaction",foreign_keys="StitchTransaction.company_id",overlaps="company")
     recurring_invoices=relationship("RecurringInvoice",back_populates="company")
     credit_notes=relationship("CreditNote",back_populates="company")
+    benefit_schemes=relationship("BenefitScheme",back_populates="company",cascade="all, delete-orphan")
 
 class User(Base):
     __tablename__ = "users"
@@ -248,6 +249,7 @@ class Employee(Base):
     leave_requests=relationship("LeaveRequest",back_populates="employee")
     leave_balance=relationship("LeaveBalance",back_populates="employee",uselist=False)
     garnishee_orders=relationship("EmployeeGarnishee",back_populates="employee",cascade="all, delete-orphan")
+    benefit_enrollments=relationship("EmployeeBenefit",back_populates="employee",cascade="all, delete-orphan")
 
 class EmployeeGarnishee(Base):
     """Court-ordered emolument attachment orders (garnishee orders) — recurring monthly deduction."""
@@ -259,6 +261,37 @@ class EmployeeGarnishee(Base):
     active=Column(Boolean,default=True)       # set False to suspend without deleting
     created_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="garnishee_orders")
+
+class BenefitScheme(Base):
+    """Company-level benefit scheme template (e.g. 'Pension Fund A — 5% match')."""
+    __tablename__ = "benefit_schemes"
+    id=Column(Integer,primary_key=True,index=True)
+    company_id=Column(Integer,ForeignKey("companies.id"),nullable=False)
+    name=Column(String,nullable=False)           # e.g. "Discovery Pension Fund"
+    benefit_type=Column(String,nullable=False)   # pension | medical | group_life | other
+    description=Column(Text,nullable=True)       # e.g. fund number, policy reference
+    # Employer side — what the company contributes
+    employer_pct=Column(Float,default=0.0)       # % of gross salary (e.g. 5.0 = 5%)
+    # Employee side — deducted from net pay
+    employee_pct=Column(Float,default=0.0)       # % of gross salary (e.g. 5.0 = 5%)
+    is_active=Column(Boolean,default=True)
+    created_at=Column(DateTime,default=datetime.utcnow)
+    company=relationship("Company",back_populates="benefit_schemes")
+    enrollments=relationship("EmployeeBenefit",back_populates="scheme",cascade="all, delete-orphan")
+
+class EmployeeBenefit(Base):
+    """Enrollment — links an employee to a BenefitScheme, with optional per-employee overrides."""
+    __tablename__ = "employee_benefits"
+    id=Column(Integer,primary_key=True,index=True)
+    employee_id=Column(Integer,ForeignKey("employees.id"),nullable=False)
+    scheme_id=Column(Integer,ForeignKey("benefit_schemes.id"),nullable=False)
+    # Override the scheme defaults for this specific employee (NULL = use scheme default)
+    employer_pct_override=Column(Float,nullable=True)
+    employee_pct_override=Column(Float,nullable=True)
+    enrolled_at=Column(DateTime,default=datetime.utcnow)
+    is_active=Column(Boolean,default=True)
+    employee=relationship("Employee",back_populates="benefit_enrollments")
+    scheme=relationship("BenefitScheme",back_populates="enrollments")
 
 class InventoryItem(Base):
     __tablename__ = "inventory"
@@ -329,6 +362,9 @@ class Payslip(Base):
     once_off_allowance_taxable=Column(Float,default=0.0)    # once-off taxable allowance (travel, etc.) — added to gross
     once_off_allowance_nontaxable=Column(Float,default=0.0) # once-off non-taxable allowance (tools, PPE, etc.) — added to net only
     on_maternity_leave=Column(Boolean,default=False)     # True = gross zeroed; employee on UIF maternity benefit
+    # Employer benefit scheme contributions — stored as JSON list of per-scheme dicts
+    # [{scheme_id, name, type, employee_contribution, employer_contribution}]
+    benefit_contributions_json=Column(Text,nullable=True)
     generated_at=Column(DateTime,default=datetime.utcnow)
     employee=relationship("Employee",back_populates="payslips")
 
@@ -723,7 +759,7 @@ class StitchConnection(Base):
     scopes        = Column(String, nullable=True)    # granted OAuth scopes
     connected_at  = Column(DateTime, default=datetime.utcnow)
     last_synced   = Column(DateTime, nullable=True)
-    company       = relationship("Company", foreign_keys=[company_id])
+    company       = relationship("Company", foreign_keys=[company_id], overlaps="stitch_connection")
 
 
 class StitchBankAccount(Base):
@@ -1749,6 +1785,31 @@ def init_db():
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_category VARCHAR DEFAULT 'permanent'",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_reason VARCHAR",
             "ALTER TABLE employees ADD COLUMN IF NOT EXISTS termination_date TIMESTAMP",
+            # ── Employer benefit schemes (2026-10) ───────────────────────────────────
+            """CREATE TABLE IF NOT EXISTS benefit_schemes (
+                id          SERIAL PRIMARY KEY,
+                company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+                name        VARCHAR NOT NULL,
+                benefit_type VARCHAR NOT NULL,
+                description TEXT,
+                employer_pct FLOAT NOT NULL DEFAULT 0,
+                employee_pct FLOAT NOT NULL DEFAULT 0,
+                is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at  TIMESTAMP DEFAULT NOW()
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_benefit_schemes_company ON benefit_schemes (company_id)",
+            """CREATE TABLE IF NOT EXISTS employee_benefits (
+                id                   SERIAL PRIMARY KEY,
+                employee_id          INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+                scheme_id            INTEGER NOT NULL REFERENCES benefit_schemes(id) ON DELETE CASCADE,
+                employer_pct_override FLOAT,
+                employee_pct_override FLOAT,
+                enrolled_at          TIMESTAMP DEFAULT NOW(),
+                is_active            BOOLEAN NOT NULL DEFAULT TRUE,
+                UNIQUE (employee_id, scheme_id)
+            )""",
+            "CREATE INDEX IF NOT EXISTS ix_employee_benefits_employee ON employee_benefits (employee_id)",
+            "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS benefit_contributions_json TEXT",
         ]:
             try:
                 conn.execute(text(sql))

@@ -34,16 +34,19 @@ git add zuzan-backend/integrations.py
 git add zuzan-backend/clocking.py
 git add zuzan-backend/xero_migrate.py
 git add zuzan-backend/quickbooks_migrate.py
+git add zuzan-backend/benefits.py
 git add zuzan-backend/journal_check.py
 git add clock.html
 git add netlify.toml
 git add commit_and_push.bat
+git add zuzan-backend/tests zuzan-backend/pytest.ini zuzan-backend/requirements-test.txt
+git add zuzan-backend/quotes.py zuzan-backend/financial_statements.py zuzan-backend/journal.py zuzan-backend/csv_import.py
 git add patch_backend.py
 git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=feat: QuickBooks migration wizard + Xero wizard + partial payments + multi-entity switcher [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=chore: sync working copy [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===

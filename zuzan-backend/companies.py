@@ -513,7 +513,7 @@ companies_router = router
 # ── INVOICES ──────────────────────────────────────────────────────────────────
 invoices_router = APIRouter()
 
-VAT_RATE = 0.15  # SA standard VAT rate
+from payroll import VAT_RATE  # single source of truth for the SA standard VAT rate (15%)
 
 class InvoiceCreate(BaseModel):
     client_name:     str

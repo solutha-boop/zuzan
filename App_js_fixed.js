@@ -3488,6 +3488,383 @@ const PATTERSON_RANGES = {
   F3: { min:500000, median:800000, max:1200000 },
 };
 
+// ── BENEFITS MANAGER ─────────────────────────────────────────────────────────
+function BenefitsManager({ employees = [] }) {
+  const BENEFIT_ICONS  = { pension:"🏦", medical:"🏥", group_life:"🛡️", other:"⚙️" };
+  const BENEFIT_LABELS = { pension:"Pension / Provident Fund", medical:"Medical Aid", group_life:"Group Life / Risk Cover", other:"Other" };
+
+  const [schemes,       setSchemes]       = useState([]);
+  const [enrollments,   setEnrollments]   = useState({});   // schemeId → [{…}]
+  const [summary,       setSummary]       = useState(null);
+  const [selectedId,    setSelectedId]    = useState(null);
+  const [loading,       setLoading]       = useState(true);
+  const [err,           setErr]           = useState("");
+  const [showModal,     setShowModal]     = useState(false);
+  const [editing,       setEditing]       = useState(null);  // null = create
+  const [form,          setForm]          = useState({ name:"", benefit_type:"pension", description:"", employer_pct:"", employee_pct:"" });
+  const [formErr,       setFormErr]       = useState("");
+  const [saving,        setSaving]        = useState(false);
+  const [enrollModal,   setEnrollModal]   = useState(false);
+  const [enrollTarget,  setEnrollTarget]  = useState(null); // employee to enroll
+  const [overrides,     setOverrides]     = useState({ employer_pct:"", employee_pct:"" });
+
+  const fmtPct  = v => v == null ? "" : v + "%";
+  const fmtZAR  = v => "R " + (v||0).toLocaleString("en-ZA", {minimumFractionDigits:2, maximumFractionDigits:2});
+
+  const loadAll = async () => {
+    setLoading(true); setErr("");
+    try {
+      const [sc, sm] = await Promise.all([
+        api("/benefits/schemes"),
+        api("/benefits/summary"),
+      ]);
+      setSchemes(sc);
+      setSummary(sm);
+      if (sc.length && !selectedId) setSelectedId(sc[0].id);
+    } catch(e) { setErr(e.message); }
+    finally    { setLoading(false); }
+  };
+
+  const loadEnrollments = async (schemeId) => {
+    if (!schemeId) return;
+    try {
+      // Fetch all active employees' enrollments for this scheme
+      const allEnrollments = await Promise.all(
+        employees.map(emp => api(`/benefits/employee/${emp.id}`).catch(()=>[]))
+      );
+      const forScheme = allEnrollments.flat().filter(e => e.scheme_id === schemeId && e.is_active);
+      setEnrollments(prev => ({ ...prev, [schemeId]: forScheme }));
+    } catch(e) { /* silent */ }
+  };
+
+  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { if (selectedId) loadEnrollments(selectedId); }, [selectedId]);
+
+  const openCreate = () => {
+    setEditing(null);
+    setForm({ name:"", benefit_type:"pension", description:"", employer_pct:"", employee_pct:"" });
+    setFormErr(""); setShowModal(true);
+  };
+  const openEdit = (s) => {
+    setEditing(s);
+    setForm({ name:s.name, benefit_type:s.benefit_type, description:s.description||"", employer_pct:String(s.employer_pct), employee_pct:String(s.employee_pct) });
+    setFormErr(""); setShowModal(true);
+  };
+
+  const saveScheme = async () => {
+    const epct = parseFloat(form.employer_pct); const eepct = parseFloat(form.employee_pct);
+    if (!form.name.trim())      { setFormErr("Name is required."); return; }
+    if (isNaN(epct)||epct<0||epct>100)  { setFormErr("Employer % must be 0–100."); return; }
+    if (isNaN(eepct)||eepct<0||eepct>100){ setFormErr("Employee % must be 0–100."); return; }
+    setSaving(true); setFormErr("");
+    try {
+      const body = { name:form.name.trim(), benefit_type:form.benefit_type, description:form.description||null, employer_pct:epct, employee_pct:eepct };
+      if (editing) {
+        await api(`/benefits/schemes/${editing.id}`, { method:"PUT", body:JSON.stringify(body) });
+      } else {
+        const created = await api("/benefits/schemes", { method:"POST", body:JSON.stringify(body) });
+        setSelectedId(created.id);
+      }
+      setShowModal(false);
+      await loadAll();
+    } catch(e) { setFormErr(e.message); }
+    finally    { setSaving(false); }
+  };
+
+  const deactivateScheme = async (s) => {
+    if (!window.confirm(`Deactivate "${s.name}"? It will no longer apply to payroll.`)) return;
+    try {
+      await api(`/benefits/schemes/${s.id}`, { method:"DELETE" });
+      if (selectedId === s.id) setSelectedId(null);
+      await loadAll();
+    } catch(e) { setErr(e.message); }
+  };
+
+  const unenroll = async (enrollmentId) => {
+    try {
+      await api(`/benefits/enrollment/${enrollmentId}`, { method:"DELETE" });
+      await loadEnrollments(selectedId);
+      await loadAll();
+    } catch(e) { setErr(e.message); }
+  };
+
+  const openEnroll = (emp) => {
+    setEnrollTarget(emp);
+    setOverrides({ employer_pct:"", employee_pct:"" });
+    setEnrollModal(true);
+  };
+
+  const submitEnroll = async () => {
+    const scheme = schemes.find(s => s.id === selectedId);
+    if (!scheme) return;
+    const body = {
+      employee_id: enrollTarget.id,
+      scheme_id:   selectedId,
+      employer_pct_override: overrides.employer_pct !== "" ? parseFloat(overrides.employer_pct) : null,
+      employee_pct_override: overrides.employee_pct !== "" ? parseFloat(overrides.employee_pct) : null,
+    };
+    try {
+      await api("/benefits/enroll", { method:"POST", body:JSON.stringify(body) });
+      setEnrollModal(false);
+      await loadEnrollments(selectedId);
+      await loadAll();
+    } catch(e) { alert(e.message); }
+  };
+
+  const selectedScheme   = schemes.find(s => s.id === selectedId);
+  const schemeEnrollments= (enrollments[selectedId] || []);
+  const enrolledIds      = new Set(schemeEnrollments.map(e => e.employee_id));
+  const unenrolledEmps   = employees.filter(e => !enrolledIds.has(e.id));
+
+  const btnPrimary = { background:"#4361ee", color:"#fff", border:"none", borderRadius:6, padding:"7px 16px", cursor:"pointer", fontWeight:600, fontSize:13 };
+  const btnDanger  = { background:"transparent", color:"#e53e3e", border:"1px solid #e53e3e", borderRadius:6, padding:"5px 10px", cursor:"pointer", fontSize:12 };
+  const btnGhost   = { background:"transparent", color:"#4361ee", border:"1px solid #4361ee", borderRadius:6, padding:"5px 10px", cursor:"pointer", fontSize:12 };
+  const card       = { background:"#fff", border:"1px solid #e8eaf0", borderRadius:10, padding:"16px 20px" };
+
+  if (loading) return <div style={{padding:40,textAlign:"center",color:"#888"}}>Loading benefit schemes…</div>;
+  if (err)     return <div style={{padding:40,textAlign:"center",color:"#e53e3e"}}>{err}</div>;
+
+  return (
+    <div>
+      {/* ── Summary cards ── */}
+      {summary && (
+        <div style={{display:"flex",gap:16,marginBottom:24,flexWrap:"wrap"}}>
+          <div style={{...card,flex:1,minWidth:180}}>
+            <div style={{fontSize:12,color:"#888",marginBottom:4}}>Total Employer Cost / Month</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#4361ee"}}>{fmtZAR(summary.total_employer_monthly)}</div>
+          </div>
+          <div style={{...card,flex:1,minWidth:180}}>
+            <div style={{fontSize:12,color:"#888",marginBottom:4}}>Total Employee Deductions / Month</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#e53e3e"}}>{fmtZAR(summary.total_employee_monthly)}</div>
+          </div>
+          <div style={{...card,flex:1,minWidth:180}}>
+            <div style={{fontSize:12,color:"#888",marginBottom:4}}>Active Enrollments</div>
+            <div style={{fontSize:22,fontWeight:700,color:"#333"}}>{summary.enrollment_count}</div>
+          </div>
+          {(summary.by_type||[]).map(t => (
+            <div key={t.label} style={{...card,flex:1,minWidth:200}}>
+              <div style={{fontSize:12,color:"#888",marginBottom:4}}>{t.icon} {t.label}</div>
+              <div style={{fontSize:13}}><span style={{color:"#4361ee",fontWeight:600}}>{fmtZAR(t.employer_cost)}</span> employer · <span style={{color:"#e53e3e",fontWeight:600}}>{fmtZAR(t.employee_deductions)}</span> employee</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:20,alignItems:"flex-start"}}>
+        {/* ── Scheme list ── */}
+        <div style={{width:260,flexShrink:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontWeight:700,fontSize:15}}>Benefit Schemes</div>
+            <button style={btnPrimary} onClick={openCreate}>+ New</button>
+          </div>
+          {schemes.length === 0 && (
+            <div style={{...card,color:"#888",fontSize:13,textAlign:"center",padding:24}}>No schemes yet. Create one to get started.</div>
+          )}
+          {schemes.map(s => (
+            <div key={s.id} onClick={()=>setSelectedId(s.id)} style={{
+              ...card, marginBottom:8, cursor:"pointer",
+              borderColor: s.id===selectedId ? "#4361ee" : "#e8eaf0",
+              background:  s.id===selectedId ? "#f0f3ff" : "#fff",
+            }}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontWeight:600,fontSize:13}}>{BENEFIT_ICONS[s.benefit_type]||"⚙️"} {s.name}</div>
+                  <div style={{fontSize:11,color:"#888",marginTop:2}}>{BENEFIT_LABELS[s.benefit_type]||s.benefit_type}</div>
+                  <div style={{fontSize:11,marginTop:4}}>
+                    <span style={{color:"#4361ee"}}>Employer {s.employer_pct}%</span>
+                    {" · "}
+                    <span style={{color:"#e53e3e"}}>Employee {s.employee_pct}%</span>
+                  </div>
+                  <div style={{fontSize:11,color:"#888",marginTop:2}}>{s.enrollment_count} enrolled</div>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                  <button style={{...btnGhost,padding:"3px 8px"}} onClick={e=>{e.stopPropagation();openEdit(s);}}>Edit</button>
+                  <button style={{...btnDanger,padding:"3px 8px"}} onClick={e=>{e.stopPropagation();deactivateScheme(s);}}>Delete</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Enrollment panel ── */}
+        <div style={{flex:1}}>
+          {!selectedScheme ? (
+            <div style={{...card,textAlign:"center",color:"#888",padding:40}}>Select a scheme to manage enrollments.</div>
+          ) : (
+            <>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:12}}>
+                {BENEFIT_ICONS[selectedScheme.benefit_type]||"⚙️"} {selectedScheme.name} — Enrollments
+              </div>
+              {selectedScheme.description && (
+                <div style={{fontSize:13,color:"#555",marginBottom:12}}>{selectedScheme.description}</div>
+              )}
+
+              {/* Enrolled employees */}
+              {schemeEnrollments.length > 0 && (
+                <div style={{...card,marginBottom:16}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                    <thead>
+                      <tr style={{borderBottom:"1px solid #e8eaf0",color:"#888"}}>
+                        <th style={{textAlign:"left",padding:"6px 8px",fontWeight:600}}>Employee</th>
+                        <th style={{textAlign:"right",padding:"6px 8px",fontWeight:600}}>Gross</th>
+                        <th style={{textAlign:"right",padding:"6px 8px",fontWeight:600}}>Employer %</th>
+                        <th style={{textAlign:"right",padding:"6px 8px",fontWeight:600}}>Employer / Mo</th>
+                        <th style={{textAlign:"right",padding:"6px 8px",fontWeight:600}}>Employee %</th>
+                        <th style={{textAlign:"right",padding:"6px 8px",fontWeight:600}}>Deduction / Mo</th>
+                        <th style={{padding:"6px 8px"}}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {schemeEnrollments.map(en => (
+                        <tr key={en.id} style={{borderBottom:"1px solid #f5f5f5"}}>
+                          <td style={{padding:"7px 8px"}}>
+                            <div style={{fontWeight:600}}>{en.employee_name}</div>
+                            <div style={{fontSize:11,color:"#888"}}>{en.employee_number}</div>
+                          </td>
+                          <td style={{textAlign:"right",padding:"7px 8px"}}>{fmtZAR(en.gross_salary)}</td>
+                          <td style={{textAlign:"right",padding:"7px 8px",color:"#4361ee"}}>
+                            {en.employer_pct}%
+                            {en.employer_pct_override!=null && <span style={{fontSize:10,color:"#888"}}> (override)</span>}
+                          </td>
+                          <td style={{textAlign:"right",padding:"7px 8px",color:"#4361ee",fontWeight:600}}>{fmtZAR(en.employer_monthly)}</td>
+                          <td style={{textAlign:"right",padding:"7px 8px",color:"#e53e3e"}}>
+                            {en.employee_pct}%
+                            {en.employee_pct_override!=null && <span style={{fontSize:10,color:"#888"}}> (override)</span>}
+                          </td>
+                          <td style={{textAlign:"right",padding:"7px 8px",color:"#e53e3e",fontWeight:600}}>{fmtZAR(en.employee_monthly)}</td>
+                          <td style={{padding:"7px 8px"}}>
+                            <button style={btnDanger} onClick={()=>unenroll(en.id)}>Remove</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Enroll more */}
+              {unenrolledEmps.length > 0 && (
+                <div style={{...card}}>
+                  <div style={{fontWeight:600,fontSize:13,marginBottom:10,color:"#555"}}>Enroll employees</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    {unenrolledEmps.map(emp => (
+                      <button key={emp.id} style={btnGhost} onClick={()=>openEnroll(emp)}>
+                        + {emp.first_name} {emp.last_name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {unenrolledEmps.length === 0 && schemeEnrollments.length > 0 && (
+                <div style={{fontSize:13,color:"#888",marginTop:8}}>All active employees are enrolled in this scheme.</div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Create / Edit modal ── */}
+      {showModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowModal(false)}>
+          <div style={{background:"#fff",borderRadius:12,padding:28,width:420,maxWidth:"95vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontWeight:700,fontSize:17,marginBottom:18}}>{editing?"Edit Scheme":"New Benefit Scheme"}</div>
+
+            <div style={{marginBottom:14}}>
+              <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:4}}>Scheme Name *</label>
+              <input value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))}
+                placeholder="e.g. Company Pension Plan"
+                style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+
+            <div style={{marginBottom:14}}>
+              <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:4}}>Benefit Type *</label>
+              <select value={form.benefit_type} onChange={e=>setForm(p=>({...p,benefit_type:e.target.value}))}
+                style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}>
+                {Object.entries(BENEFIT_LABELS).map(([k,v])=>(
+                  <option key={k} value={k}>{BENEFIT_ICONS[k]} {v}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{display:"flex",gap:12,marginBottom:14}}>
+              <div style={{flex:1}}>
+                <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:4}}>Employer Contribution %</label>
+                <input type="number" min="0" max="100" step="0.5"
+                  value={form.employer_pct} onChange={e=>setForm(p=>({...p,employer_pct:e.target.value}))}
+                  placeholder="e.g. 5"
+                  style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+                <div style={{fontSize:11,color:"#888",marginTop:2}}>% of gross salary paid by employer</div>
+              </div>
+              <div style={{flex:1}}>
+                <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:4}}>Employee Contribution %</label>
+                <input type="number" min="0" max="100" step="0.5"
+                  value={form.employee_pct} onChange={e=>setForm(p=>({...p,employee_pct:e.target.value}))}
+                  placeholder="e.g. 5"
+                  style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+                <div style={{fontSize:11,color:"#888",marginTop:2}}>% of gross salary deducted from employee</div>
+              </div>
+            </div>
+
+            <div style={{marginBottom:18}}>
+              <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:4}}>Description (optional)</label>
+              <textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))}
+                placeholder="Any notes about this scheme…"
+                rows={2}
+                style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"8px 10px",fontSize:13,boxSizing:"border-box",resize:"vertical"}}/>
+            </div>
+
+            {formErr && <div style={{color:"#e53e3e",fontSize:13,marginBottom:12}}>{formErr}</div>}
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button style={{...btnGhost,padding:"8px 18px"}} onClick={()=>setShowModal(false)}>Cancel</button>
+              <button style={{...btnPrimary,padding:"8px 20px",opacity:saving?0.6:1}} onClick={saveScheme} disabled={saving}>
+                {saving?"Saving…":"Save Scheme"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Enroll employee modal ── */}
+      {enrollModal && enrollTarget && selectedScheme && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setEnrollModal(false)}>
+          <div style={{background:"#fff",borderRadius:12,padding:28,width:380,maxWidth:"95vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontWeight:700,fontSize:16,marginBottom:6}}>Enroll {enrollTarget.first_name} {enrollTarget.last_name}</div>
+            <div style={{fontSize:13,color:"#555",marginBottom:18}}>Scheme: {BENEFIT_ICONS[selectedScheme.benefit_type]} {selectedScheme.name}</div>
+
+            <div style={{fontSize:13,color:"#888",marginBottom:14}}>
+              Default rates: Employer <strong style={{color:"#4361ee"}}>{selectedScheme.employer_pct}%</strong> · Employee <strong style={{color:"#e53e3e"}}>{selectedScheme.employee_pct}%</strong>.
+              Leave overrides blank to use defaults.
+            </div>
+
+            <div style={{display:"flex",gap:12,marginBottom:18}}>
+              <div style={{flex:1}}>
+                <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:4}}>Employer % override</label>
+                <input type="number" min="0" max="100" step="0.5"
+                  value={overrides.employer_pct} onChange={e=>setOverrides(p=>({...p,employer_pct:e.target.value}))}
+                  placeholder={String(selectedScheme.employer_pct)}
+                  style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:4}}>Employee % override</label>
+                <input type="number" min="0" max="100" step="0.5"
+                  value={overrides.employee_pct} onChange={e=>setOverrides(p=>({...p,employee_pct:e.target.value}))}
+                  placeholder={String(selectedScheme.employee_pct)}
+                  style={{width:"100%",border:"1px solid #ddd",borderRadius:6,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button style={{...btnGhost,padding:"8px 18px"}} onClick={()=>setEnrollModal(false)}>Cancel</button>
+              <button style={{...btnPrimary,padding:"8px 20px"}} onClick={submitEnroll}>Enroll</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Payroll({live = {}, user = {}}) {
   const liveEmployees = live.employees;
   const [employees, setEmployees] = useState(MOCK_EMPLOYEES);
@@ -3852,10 +4229,10 @@ function Payroll({live = {}, user = {}}) {
     );
   }
 
-  const SECTION_LABELS = {payroll:"Payroll", leave:"Leave Management", emp201:"EMP201 / IRP5"};
+  const SECTION_LABELS = {payroll:"Payroll", leave:"Leave Management", benefits:"Benefits", emp201:"EMP201 / IRP5"};
   const SectionTabs = () => (
     <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:24,borderBottom:"1px solid "+C.border}}>
-      {["payroll","leave","emp201"].map(s => (
+      {["payroll","leave","benefits","emp201"].map(s => (
         <button key={s} onClick={()=>setPayrollSection(s)}
           style={{background:"none",border:"none",borderBottom:payrollSection===s?`2px solid ${C.accent}`:"2px solid transparent",padding:"10px 18px",fontSize:13,fontWeight:payrollSection===s?700:400,color:payrollSection===s?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
           {SECTION_LABELS[s]}
@@ -3870,6 +4247,16 @@ function Payroll({live = {}, user = {}}) {
       <div>
         <SectionTabs/>
         <LeaveManagement employees={employees.filter(e=>e.is_active!==false)} />
+      </div>
+    );
+  }
+
+  // Benefits sub-tab
+  if (payrollSection === "benefits") {
+    return (
+      <div>
+        <SectionTabs/>
+        <BenefitsManager employees={employees.filter(e=>e.is_active!==false)}/>
       </div>
     );
   }
@@ -4199,7 +4586,7 @@ function Payroll({live = {}, user = {}}) {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
         <div>
           <div style={{display:"flex",gap:4,marginBottom:0}}>
-            {["payroll","leave","emp201"].map(s => (
+            {["payroll","leave","benefits","emp201"].map(s => (
               <button key={s} onClick={()=>setPayrollSection(s)} style={{background:"none",border:"none",borderBottom:payrollSection===s?`2px solid ${C.accent}`:"2px solid transparent",padding:"4px 14px",fontSize:13,fontWeight:payrollSection===s?700:400,color:payrollSection===s?C.accent:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
                 {SECTION_LABELS[s]}
               </button>
