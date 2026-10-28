@@ -41,6 +41,7 @@ loudly if a new *_amount-shaped Float column shows up on Payslip that isn't
 in either TESTED_MONEY_FIELDS or EXCLUDED_MONEY_FIELDS, forcing you to
 classify it (and therefore notice the gap) before merging.
 """
+import json
 import os
 import sys
 
@@ -151,6 +152,7 @@ BASE = dict(
 
 SCENARIOS = {
     "baseline (nothing optional set)": {},
+    "benefit scheme (employee + employer share)": dict(_benefit_ee=300.0, _benefit_er=450.0),
     "overtime (weekday/Sunday/PH)": dict(overtime_hours=10, sunday_hours=5, ph_hours=2),
     "pension (employee + employer)": dict(pension_employee_pct=0.075, pension_employer_pct=0.075),
     "medical aid": dict(medical_aid_employee=1500, medical_aid_employer=1500, medical_aid_dependants=2),
@@ -240,6 +242,7 @@ def build_payslip(employee, c: dict) -> Payslip:
         once_off_deduction=c["once_off_deduction"],
         once_off_allowance_taxable=c["once_off_allowance_taxable"],
         once_off_allowance_nontaxable=c["once_off_allowance_nontaxable"],
+        benefit_contributions_json=c.get("benefit_contributions_json"),
     )
 
 
@@ -267,7 +270,17 @@ def run():
     failures = []
     for name, overrides in SCENARIOS.items():
         kwargs = {**BASE, **overrides}
+        # Benefit-scheme scenario (audit fix 2026-10-28): benefits are applied
+        # in payroll.py after calc_payroll(), so mimic that step here.
+        ben_ee = kwargs.pop("_benefit_ee", 0.0)
+        ben_er = kwargs.pop("_benefit_er", 0.0)
         c = calc_payroll(kwargs.pop("gross_monthly"), **kwargs)
+        if ben_ee or ben_er:
+            c["net_pay"] = round(c["net_pay"] - ben_ee, 2)
+            c["total_cost"] = round(c["total_cost"] + ben_er, 2)
+            c["benefit_contributions_json"] = json.dumps([{
+                "scheme_id": 1, "name": "Test scheme",
+                "employee_contribution": ben_ee, "employer_contribution": ben_er}])
         payslip = build_payslip(employee, c)
         db.add(payslip)
         db.flush()

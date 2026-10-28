@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
+import json
 from typing import Optional, List
 from datetime import datetime
 from database import (
@@ -66,6 +67,10 @@ DEFAULT_ACCOUNTS = [
     # init_accounts upserts, so existing companies get these on the next run.
     {"code": "2310", "name": "Garnishee Orders Payable",      "type": AccountType.liability},
     {"code": "2320", "name": "Payroll Deductions Payable",    "type": AccountType.liability},
+    # Employer benefit scheme contributions (audit fix 2026-10-28) — the Benefit
+    # Schemes feature lowers net_pay by the employee share and raises total_cost
+    # by the employer share, which was never journalled (unbalanced payroll run).
+    {"code": "2330", "name": "Benefit Schemes Payable",       "type": AccountType.liability},
     {"code": "2126", "name": "Income Tax Payable",           "type": AccountType.liability},
     {"code": "2127", "name": "Provisional Tax Payable",      "type": AccountType.liability},
     # Equity
@@ -86,6 +91,7 @@ DEFAULT_ACCOUNTS = [
     # Pass-through employer cost for expense-claim reimbursements and once-off
     # non-taxable allowances (audit fix 2026-09-17) — same gap as above.
     {"code": "5180", "name": "Employee Reimbursements & Allowances (Non-Taxable)", "type": AccountType.expense},
+    {"code": "5190", "name": "Employer Benefit Scheme Contributions", "type": AccountType.expense},
     {"code": "5200", "name": "Utilities",                    "type": AccountType.expense},
     {"code": "5210", "name": "Telecoms",                     "type": AccountType.expense},
     {"code": "5220", "name": "Office Expenses",              "type": AccountType.expense},
@@ -805,6 +811,20 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
     expense_claim         = round(getattr(payslip, "expense_claim", 0) or 0, 2)
     once_off_allow_nontax = round(getattr(payslip, "once_off_allowance_nontaxable", 0) or 0, 2)
 
+    # Benefit scheme contributions (audit fix 2026-10-28): employee share is
+    # already deducted from net_pay (so it must be credited to a payable);
+    # employer share is an extra cost on top of gross.
+    benefit_ee = benefit_er = 0.0
+    _bj = getattr(payslip, "benefit_contributions_json", None)
+    if _bj:
+        try:
+            for _b in json.loads(_bj):
+                benefit_ee += float(_b.get("employee_contribution") or 0)
+                benefit_er += float(_b.get("employer_contribution") or 0)
+        except (ValueError, TypeError, AttributeError):
+            benefit_ee = benefit_er = 0.0
+        benefit_ee, benefit_er = round(benefit_ee, 2), round(benefit_er, 2)
+
     lines = [
         _line(entry.id, sal,  debit=gross_incl_ot,                               description="Gross salary incl. overtime, allowances and any annual bonus"),
         _line(entry.id, levy, debit=employer_contrib,                             description="Employer UIF + SDL"),
@@ -858,6 +878,12 @@ def post_payroll(payslip, employee, db: Session) -> JournalEntry:
         if nbcpss_med2_er:
             lines.append(_line(entry.id, med2_exp, debit=nbcpss_med2_er,         description="Employer NBCPSS prescribed medical aid (PSSSBC) contribution"))
         lines.append(_line(entry.id, med2_pay, credit=round(nbcpss_med2_ee + nbcpss_med2_er, 2), description="NBCPSS prescribed medical aid (PSSSBC) payable"))
+    if benefit_ee or benefit_er:
+        ben_pay = get_account(cid, "2330", db)
+        if benefit_er:
+            ben_exp = get_account(cid, "5190", db)
+            lines.append(_line(entry.id, ben_exp, debit=benefit_er, description="Employer benefit scheme contributions"))
+        lines.append(_line(entry.id, ben_pay, credit=round(benefit_ee + benefit_er, 2), description="Benefit schemes payable (employee deduction + employer share)"))
     if union_ded:
         union_pay = get_account(cid, "2300", db)
         lines.append(_line(entry.id, union_pay, credit=union_ded, description="Union dues payable"))
