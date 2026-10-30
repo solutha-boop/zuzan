@@ -83,15 +83,39 @@ class CompanyUpdate(BaseModel):
     contact_name:           Optional[str] = None
 
 
-def _company_dict(c: Company) -> dict:
-    """Return company as dict with bank fields decrypted."""
+_MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+
+
+def _masked(v):
+    """Secrets are never sent back in full: the form shows a mask and the server ignores a mask that comes back unchanged."""
+    return (_MASK + v[-2:]) if v and len(v) > 4 else (_MASK if v else "")
+
+
+def _clean_html(html: str) -> str:
+    """Strip active content (scripts, frames, event handlers, javascript: links) from an owner-supplied invoice template."""
+    import re as _re
+    if not html:
+        return html
+    html = _re.sub(r"(?is)<\s*(script|iframe|object|embed|applet|meta|link|base|form)\b.*?(<\s*/\s*\1\s*>|$)", "", html)
+    html = _re.sub(r"(?is)<\s*(script|iframe|object|embed|applet|meta|link|base|form)\b[^>]*>", "", html)
+    html = _re.sub(r"(?is)\son[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", "", html)
+    html = _re.sub(r"(?is)(href|src|xlink:href|action|formaction)\s*=\s*([\"']?)\s*(javascript|vbscript|data:text/html)[^\"'>\s]*", r"\1=\2#", html)
+    return html
+
+
+_SECRET_ROLES = ("owner", "admin", "accountant")
+
+
+def _company_dict(c: Company, role: str = "owner") -> dict:
+    """Return company as dict with bank fields decrypted (secrets masked; bank details only for roles that manage the books)."""
+    _full = role in _SECRET_ROLES
     return {
         "id": c.id, "name": c.name, "reg_number": c.reg_number,
         "vat_number": c.vat_number, "vat_registered": c.vat_registered is not False, "industry": c.industry,
         "address": c.address, "phone": c.phone, "email": c.email,
-        "bank_name":    decrypt_field(c.bank_name),
-        "bank_account": decrypt_field(c.bank_account),
-        "bank_branch":  decrypt_field(c.bank_branch),
+        "bank_name":    decrypt_field(c.bank_name)    if _full else "",
+        "bank_account": decrypt_field(c.bank_account) if _full else "",
+        "bank_branch":  decrypt_field(c.bank_branch)  if _full else "",
         "logo_url": c.logo_url, "invoice_header_url": c.invoice_header_url,
         "invoice_template_html": c.invoice_template_html or "",
         "billing_exempt": bool(c.billing_exempt),
@@ -100,9 +124,9 @@ def _company_dict(c: Company) -> dict:
         "trial_ends": c.trial_ends.isoformat() if c.trial_ends else None,
         "payroll_enabled": c.payroll_enabled, "payroll_employees": c.payroll_employees,
         "afs_enabled": c.afs_enabled,
-        "payfast_merchant_id":  decrypt_field(c.payfast_merchant_id)  if c.payfast_merchant_id  else "",
-        "payfast_merchant_key": decrypt_field(c.payfast_merchant_key) if c.payfast_merchant_key else "",
-        "payfast_passphrase":   decrypt_field(c.payfast_passphrase)   if c.payfast_passphrase   else "",
+        "payfast_merchant_id":  _masked(decrypt_field(c.payfast_merchant_id))  if (_full and c.payfast_merchant_id)  else "",
+        "payfast_merchant_key": _masked(decrypt_field(c.payfast_merchant_key)) if (_full and c.payfast_merchant_key) else "",
+        "payfast_passphrase":   _masked(decrypt_field(c.payfast_passphrase))   if (_full and c.payfast_passphrase)   else "",
         "cipc_registration_date": c.cipc_registration_date.isoformat() if c.cipc_registration_date else None,
         "financial_year_end":     c.financial_year_end or None,
         "paye_ref": c.paye_ref or "",
@@ -119,13 +143,23 @@ async def get_company(current_user: User = Depends(get_current_user), db: Sessio
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
-    return _company_dict(company)
+    return _company_dict(company, current_user.role)
 
 
 @router.put("/me")
 async def update_company(data: CompanyUpdate, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     for field, value in data.dict(exclude_none=True).items():
+        # Only ZuZan itself (admin console / PayFast confirmation) may grant partner status or paid add-ons.
+        # These used to be writable here, so any owner could send {"billing_exempt": true} and stop paying.
+        if field in ("billing_exempt", "afs_enabled"):
+            continue
+        if isinstance(value, str) and value.startswith(_MASK):
+            continue                                   # an unchanged masked secret coming back from the form
+        if field in ("logo_url", "invoice_header_url") and value and not (value.startswith(("http://", "https://", "data:image/"))):
+            raise HTTPException(status_code=400, detail=f"{field} must be an http(s) link or an image.")
+        if field == "invoice_template_html":
+            value = _clean_html(value)
         if field in ("bank_name", "bank_account", "bank_branch",
                      "payfast_merchant_id", "payfast_merchant_key", "payfast_passphrase"):
             setattr(company, field, encrypt_field(value))
@@ -176,7 +210,11 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(requi
         else:
             setattr(company, field, value)
     db.commit()
-    return _company_dict(company)
+    return _company_dict(company, current_user.role)
+
+
+from security import Throttle as _Throttle
+_pin_fail = _Throttle(5, 900)          # 5 wrong payroll PINs per user, then 15 minutes locked
 
 
 class PayrollPinSet(BaseModel):
@@ -199,7 +237,14 @@ async def verify_payroll_pin(data: PayrollPinVerify, current_user: User = Depend
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
     if not company.payroll_pin_hash:
         return {"valid": True, "pin_set": False}  # No PIN configured — allow access
+    _k = f"pin|{company.id}|{current_user.id}"
+    if _pin_fail.blocked(_k):
+        raise HTTPException(status_code=429, detail="Too many wrong PINs. Try again in 15 minutes.")
     valid = _pin_ctx.verify(data.pin, company.payroll_pin_hash)
+    if valid:
+        _pin_fail.clear(_k)
+    else:
+        _pin_fail.hit(_k)
     return {"valid": valid, "pin_set": True}
 
 @router.get("/payroll-pin-status")

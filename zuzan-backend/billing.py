@@ -292,9 +292,9 @@ async def initiate_subscription(
     amount = base_amount + payroll_cost
 
     # Per-company credentials (override global if set)
-    pf_id  = (decrypt_field(co.payfast_merchant_id)  if co.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
-    pf_key = (decrypt_field(co.payfast_merchant_key) if co.payfast_merchant_key else None) or PAYFAST_MERCHANT_KEY
-    pf_pp  = (decrypt_field(co.payfast_passphrase)   if co.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
+    pf_id  = PAYFAST_MERCHANT_ID
+    pf_key = PAYFAST_MERCHANT_KEY
+    pf_pp  = PAYFAST_PASSPHRASE
 
     # PayFast frequency: 3 = monthly, 6 = annual
     pf_frequency = "3" if cycle == "monthly" else "6"
@@ -365,8 +365,8 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     if _os.environ.get("PORTAL_IPN_SKIP_SIGNATURE") != "1":
         from portal import _pf_itn_signature_ok, _pf_validate_remote
         _co = db.query(Company).filter(Company.id == company_id).first() if company_id else None
-        _pp = (decrypt_field(_co.payfast_passphrase) if _co and _co.payfast_passphrase else None) or PAYFAST_PASSPHRASE
-        _mid = (decrypt_field(_co.payfast_merchant_id) if _co and _co.payfast_merchant_id else None) or PAYFAST_MERCHANT_ID
+        _pp = PAYFAST_PASSPHRASE
+        _mid = PAYFAST_MERCHANT_ID
         if not _pf_itn_signature_ok(data, _pp):
             logger.warning(f"PayFast ITN: signature mismatch - possible spoofed request. m_payment_id={m_payment_id}")
             return {"ok": True}   # 200 so PayFast stops retrying; nothing is processed
@@ -398,6 +398,23 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     co = db.query(Company).filter(Company.id == company_id).first()
     if not co:
         logger.warning(f"PayFast ITN: company {company_id} not found")
+        return {"ok": True}
+
+    # The amount must be in line with the plan: a hand-edited checkout form (R5 instead of R399) must not buy a subscription.
+    try:
+        _plan = co.plan.value if co.plan else "starter"
+        _cycle = co.billing_cycle.value if co.billing_cycle else "monthly"
+        _floor = 0.5 * PLAN_PRICES.get(_plan, PLAN_PRICES["starter"]).get(_cycle, 399)
+    except Exception:
+        _floor = 100.0
+    try:   # accountant-practice accounts have their own, discounted price formula: no plan floor for them
+        _own = db.query(User).filter(User.company_id == co.id, User.role == "owner").first()
+        if _own is not None and (getattr(_own, "user_type", "") == "bookkeeper"):
+            _floor = 0.0
+    except Exception:
+        pass
+    if amount_gross + 0.01 < _floor:
+        logger.error(f"PayFast ITN: amount R{amount_gross:.2f} is far below the {co.plan} plan price for company {co.id} - NOT activated")
         return {"ok": True}
 
     # Capture ad-hoc token if present (subscription_type=2)
@@ -515,8 +532,8 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     amount = base_amount + payroll_cost + client_cost
     ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
-    pf_id  = (decrypt_field(company.payfast_merchant_id)  if company.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
-    pf_pp  = (decrypt_field(company.payfast_passphrase)   if company.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
+    pf_id  = PAYFAST_MERCHANT_ID
+    pf_pp  = PAYFAST_PASSPHRASE
 
     body = {
         "amount":           str(int(amount * 100)),  # PayFast adhoc expects cents
@@ -598,8 +615,8 @@ def cancel_payfast_subscription(company: "Company", db: Session) -> dict:
         logger.info(f"Cancel (no token) company {company.id} — marked cancelled locally")
         return {"ok": True, "payfast_cancelled": False}
 
-    pf_id  = (decrypt_field(company.payfast_merchant_id)  if company.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
-    pf_pp  = (decrypt_field(company.payfast_passphrase)   if company.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
+    pf_id  = PAYFAST_MERCHANT_ID
+    pf_pp  = PAYFAST_PASSPHRASE
 
     ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -678,9 +695,9 @@ async def afs_initiate(
     co = db.query(Company).filter(Company.id == current_user.company_id).first()
     m_payment_id = f"afs-{co.id}-{fy}"
 
-    merchant_id  = (decrypt_field(co.payfast_merchant_id)  if co.payfast_merchant_id  else None) or PAYFAST_MERCHANT_ID
-    merchant_key = (decrypt_field(co.payfast_merchant_key) if co.payfast_merchant_key else None) or PAYFAST_MERCHANT_KEY
-    passphrase   = (decrypt_field(co.payfast_passphrase)   if co.payfast_passphrase   else None) or PAYFAST_PASSPHRASE
+    merchant_id  = PAYFAST_MERCHANT_ID
+    merchant_key = PAYFAST_MERCHANT_KEY
+    passphrase   = PAYFAST_PASSPHRASE
 
     data = {
         "merchant_id":   merchant_id,

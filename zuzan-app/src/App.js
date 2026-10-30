@@ -1255,8 +1255,27 @@ function InvFormFields({data, onChange, customers=[]}) {
 
 // ── CUSTOM HTML TEMPLATE RENDERER ────────────────────────────────────────────
 // Replaces {{variable}} placeholders with live invoice data.
+// Free text is escaped before it goes into a custom HTML template, and the finished HTML is stripped of anything
+// active (scripts, frames, on* handlers, javascript: links) before it is shown: an imported or typed client name
+// like <img src=x onerror=...> must never run in the owner's session.
+const escHtml = v => String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+function sanitizeHtml(html) {
+  try {
+    const doc = new DOMParser().parseFromString(String(html || ""), "text/html");
+    doc.querySelectorAll("script,iframe,frame,frameset,object,embed,applet,link,meta,base,form,noscript,template").forEach(n => n.remove());
+    doc.querySelectorAll("*").forEach(el => {
+      Array.from(el.attributes).forEach(a => {
+        const n = a.name.toLowerCase(), v = (a.value || "").replace(/[\s\u0000-\u001f]+/g, "").toLowerCase();
+        if (n.startsWith("on") || n === "srcdoc" || n === "formaction" ||
+            (["href","src","xlink:href","action","poster","background"].includes(n) && /^(javascript|vbscript|data:text\/html)/.test(v))) el.removeAttribute(a.name);
+      });
+    });
+    return doc.body ? doc.body.innerHTML : "";
+  } catch (e) { return ""; }
+}
+
 function renderTemplate(html, doc, user) {
-  const fmt = v => v !== undefined && v !== null ? String(v) : "";
+  const fmt = v => v !== undefined && v !== null ? escHtml(v) : "";
   const fmtAmt = v => isNaN(Number(v)) ? "0.00" : Number(v).toFixed(2);
   const fmtDate = v => v ? (v.includes("T") ? v.substring(0,10) : v) : "";
 
@@ -1408,7 +1427,7 @@ function InvoiceDocument({type, doc, user, tmpl = DEFAULT_DOC_TEMPLATE}) {
   // If company has a custom HTML template, use it instead of built-in layouts
   if (user.invoiceTemplateHtml && type === "invoice") {
     const rendered = renderTemplate(user.invoiceTemplateHtml, doc, user);
-    return <div dangerouslySetInnerHTML={{__html: rendered}} style={{fontFamily:"Arial,sans-serif"}}/>;
+    return <div dangerouslySetInnerHTML={{__html: sanitizeHtml(rendered)}} style={{fontFamily:"Arial,sans-serif"}}/>;
   }
   const t = {...DEFAULT_DOC_TEMPLATE, ...tmpl};
   const pc = t.primaryColor;

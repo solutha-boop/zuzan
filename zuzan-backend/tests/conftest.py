@@ -10,6 +10,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_TMP}/zuzan_test.db"
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
 os.environ.pop("RENDER", None)
 os.environ.pop("CORS_ORIGINS", None)
+os.environ["ZUZAN_DISABLE_THROTTLE"] = "1"      # the per-IP request ceiling would trip on the big route sweeps; tests/test_security_hardening.py switches it on
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:

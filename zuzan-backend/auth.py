@@ -14,7 +14,12 @@ from email_service import send_verification_email, send_welcome_email, send_pass
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-limiter = Limiter(key_func=get_remote_address)
+from security import client_ip as _client_ip, Throttle as _Throttle, check_password as _check_password, derived_secret as _derived_secret
+limiter = Limiter(key_func=_client_ip)   # real caller behind Render's proxy
+_login_fail = _Throttle(8, 900)          # per ACCOUNT: 8 wrong passwords then 15 minutes locked, whichever IP they come from
+_login_fail_ip = _Throttle(30, 900)      # per IP across all accounts
+_reset_fail_ip = _Throttle(10, 900)
+_reset_fail_all = _Throttle(300, 3600)
 
 import os
 try:
@@ -28,9 +33,14 @@ except ImportError:
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
 if SECRET_KEY == "zuzan-dev-key-change-in-production" and os.environ.get("RENDER"):
-    # Anyone who knows this default can forge a login token for any account. Set SECRET_KEY in Render.
+    # Anyone who knows the default can forge a login token for any account. Never sign with it in production:
+    # fall back to a key derived from the (secret) database URL until SECRET_KEY is set in Render.
     import logging as _lg
-    _lg.getLogger("uvicorn.error").critical("SECURITY: SECRET_KEY is not set - using the public default. Set SECRET_KEY in Render env vars NOW.")
+    SECRET_KEY = _derived_secret()
+    _lg.getLogger("uvicorn.error").critical("SECURITY: SECRET_KEY is not set in Render - using a key derived from DATABASE_URL instead. Set SECRET_KEY (32+ random characters) in Render env vars.")
+elif os.environ.get("RENDER") and len(SECRET_KEY) < 32:
+    import logging as _lg
+    _lg.getLogger("uvicorn.error").critical("SECURITY: SECRET_KEY is shorter than 32 characters - use a long random value.")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 
@@ -83,6 +93,9 @@ class LoginRequest(BaseModel):
     password: str
 
 
+from crypto import encrypt_field as _enc
+
+
 def make_safe_password(password: str) -> str:
     """Truncate password to 50 chars to stay within bcrypt 72-byte limit."""
     # An empty password must NEVER be silently turned into a real one (it used to become "Zuzan2025").
@@ -95,19 +108,65 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(make_safe_password(password))
 
 
+_DUMMY_HASH = pwd_context.hash("timing-equaliser-not-a-real-password")   # so unknown emails cost the same time as real ones
+
+
 def verify_password(plain: str, hashed: str) -> bool:
     if not plain or not hashed:
         return False
     return pwd_context.verify(make_safe_password(plain), hashed)
 
 
+def _pv(hashed_password: str) -> str:
+    """Fingerprint of the current password hash: a token minted before a password change/reset stops working."""
+    import hashlib
+    return hashlib.sha256((hashed_password or "").encode()).hexdigest()[:16]
+
+
 def create_token(data: dict) -> str:
     payload = data.copy()
     payload["exp"] = datetime.utcnow() + timedelta(hours=TOKEN_EXPIRE_HOURS)
+    if payload.get("user_id") and "pv" not in payload:
+        try:
+            from database import SessionLocal
+            _s = SessionLocal()
+            try:
+                _u = _s.query(User).filter(User.id == payload["user_id"]).first()
+                if _u:
+                    payload["pv"] = _pv(_u.hashed_password)
+            finally:
+                _s.close()
+        except Exception:
+            pass
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
+# ── Server-side role policy ──────────────────────────────────────────────────
+# The app hides tabs by role, but hiding is not security: these limits are enforced here, on every request.
+#   owner / admin / accountant : everything their endpoints already allow
+#   payroll  : payroll, employees, leave, clocking, own profile, the company profile (read only)
+#   employee : own profile and the company profile (read only)
+_ROLE_PREFIXES = {
+    "payroll":  ("/auth/", "/payroll/", "/employees/", "/employees", "/leave/", "/clocking/", "/benefits/", "/companies/me",
+                 "/companies/payroll-pin-status", "/companies/verify-payroll-pin", "/reports/emp201", "/api-keys/usage"),
+    "employee": ("/auth/", "/companies/me", "/companies/payroll-pin-status"),
+}
+_READ_ONLY_PREFIXES = ("/companies/me",)
+
+
+def role_allows(role: str, method: str, path: str) -> bool:
+    allowed = _ROLE_PREFIXES.get(role)
+    if allowed is None:
+        return True
+    if not any(path == p.rstrip("/") or path.startswith(p) for p in allowed):
+        return False
+    if method not in ("GET", "HEAD", "OPTIONS") and any(path.startswith(p) for p in _READ_ONLY_PREFIXES):
+        return False
+    return True
+
+
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ):
@@ -121,12 +180,15 @@ def get_current_user(
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
         active_company_id = payload.get("company_id")
+        token_pv = payload.get("pv")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found")
+    if token_pv and token_pv != _pv(user.hashed_password):
+        raise HTTPException(status_code=401, detail="Your password was changed. Please sign in again.")
 
     # Accountant Practice / multi-client: the JWT's company_id is the "active"
     # company for this session, which may differ from the user's home company
@@ -148,14 +210,21 @@ def get_current_user(
         # If no membership is found (e.g. removed access, tampered token),
         # silently fall back to the user's real home company rather than
         # erroring the whole request.
+    if not role_allows(user.role, request.method, request.url.path):
+        raise HTTPException(status_code=403, detail="Your role does not have access to this.")
     return user
 
 
 @router.post("/register")
 @limiter.limit("5/minute")
 async def register(request: Request, data: RegisterRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    if len(data.password or "") < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    _pw_msg = _check_password(data.password, data.email, data.first_name, data.last_name)
+    if _pw_msg:
+        raise HTTPException(status_code=400, detail=_pw_msg)
+    if data.plan not in ("starter", "professional", "business") or data.billing_cycle not in ("monthly", "annual"):
+        raise HTTPException(status_code=400, detail="Invalid plan or billing cycle.")
+    if not (data.company_name or "").strip() or not (data.first_name or "").strip():
+        raise HTTPException(status_code=400, detail="Company name and first name are required.")
     # Check email not already registered
     existing = db.query(User).filter(func.lower(User.email) == (data.email or "").strip().lower()).first()
     if existing:
@@ -174,8 +243,8 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
         payroll_employees=data.employee_count,
         mandate_account_holder=data.mandate_account_holder,
         mandate_bank=data.mandate_bank,
-        mandate_account_number=data.mandate_account_number,
-        mandate_branch_code=data.mandate_branch_code,
+        mandate_account_number=_enc(data.mandate_account_number),
+        mandate_branch_code=_enc(data.mandate_branch_code),
         mandate_account_type=data.mandate_account_type,
         mandate_collection_day=data.mandate_collection_day,
         mandate_signed_name=data.mandate_signed_name,
@@ -333,9 +402,17 @@ async def register(request: Request, data: RegisterRequest, background_tasks: Ba
 @router.post("/login")
 @limiter.limit("10/minute")
 async def login(request: Request, data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(func.lower(User.email) == (data.email or "").strip().lower()).first()
-    if not user or not verify_password(data.password, user.hashed_password) or not user.is_active:
+    _email_key = (data.email or "").strip().lower()
+    _ip = _client_ip(request)
+    if _login_fail.blocked(_email_key) or _login_fail_ip.blocked(_ip):
+        raise HTTPException(status_code=429, detail="Too many failed sign-in attempts. Please wait 15 minutes, or use 'Forgot password'.")
+    user = db.query(User).filter(func.lower(User.email) == _email_key).first()
+    # Always run one password check (even for an unknown address) so response time does not reveal which emails exist
+    _ok = verify_password(data.password, user.hashed_password if user else _DUMMY_HASH)
+    if not user or not _ok or not user.is_active:
+        _login_fail.hit(_email_key); _login_fail_ip.hit(_ip)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    _login_fail.clear(_email_key)
     # The old shared default password must never open an account: the owner has to choose their own.
     if (data.password or "") == "Zuzan2025":
         raise HTTPException(status_code=403, detail="This account still uses the old default password, which is no longer accepted. Use 'Forgot password' on the login page to set a new one.")
@@ -692,14 +769,19 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
 @limiter.limit("5/minute")
 async def reset_password(request: Request, data: ResetPasswordRequest, db: Session = Depends(get_db)):
     token = data.token.upper().strip()
-    user = db.query(User).filter(User.reset_token == token).first()
+    _ip = _client_ip(request)
+    if _reset_fail_ip.blocked(_ip) or _reset_fail_all.blocked("all"):
+        raise HTTPException(status_code=429, detail="Too many attempts. Please wait a while and try again.")
+    user = db.query(User).filter(User.reset_token == token).first() if len(token) >= 6 else None
     if not user:
+        _reset_fail_ip.hit(_ip); _reset_fail_all.hit("all")
         raise HTTPException(status_code=400, detail="Invalid reset code.")
     if datetime.utcnow() > user.reset_token_expires:
         user.reset_token = None; user.reset_token_expires = None; db.commit()
         raise HTTPException(status_code=400, detail="Reset code has expired. Please request a new one.")
-    if len(data.new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    _pw_msg = _check_password(data.new_password, user.email, user.first_name)
+    if _pw_msg:
+        raise HTTPException(status_code=400, detail=_pw_msg)
 
     user.hashed_password = hash_password(data.new_password)
     user.reset_token = None
@@ -721,6 +803,9 @@ def require_role(*allowed_roles):
         Depends(require_role("owner", "admin"))
     Returns the current user if their role is in allowed_roles, else 403.
     """
+    # Accept both require_role("a", "b") and require_role(["a", "b"]) (a list used to match no role at all and crash the 403 message)
+    allowed_roles = tuple(r for a in allowed_roles for r in ((a,) if isinstance(a, str) else tuple(a)))
+
     def _check(current_user: User = Depends(get_current_user)):
         if current_user.role not in allowed_roles:
             raise HTTPException(
@@ -1010,8 +1095,9 @@ async def accept_invite(
             },
         }
 
-    if len(data.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    _pw_msg = _check_password(data.password, invite.email, data.first_name)
+    if _pw_msg:
+        raise HTTPException(status_code=400, detail=_pw_msg)
 
     # Create user
     user = User(

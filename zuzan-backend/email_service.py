@@ -125,6 +125,8 @@ def _btn(text: str, url: str) -> str:
 
 # ── Core send ──────────────────────────────────────────────────────────────────
 def send_email(to: str, subject: str, html: str, from_email: str = None, attachments: list = None) -> bool:
+    import html as _h
+    subject = _h.unescape(subject or "").replace("\r", " ").replace("\n", " ")[:200]   # plain text: no entities, no header injection
     if not RESEND_API_KEY:
         logger.warning(f"[EMAIL skipped — no RESEND_API_KEY] To: {to} | {subject}")
         return False
@@ -949,3 +951,39 @@ def send_add_payment_method_email(
         _wrap(body, email, transactional=True),
         from_email=FROM_SUPPORT_EMAIL,
     )
+
+
+# ── HTML safety for every outgoing template ───────────────────────────────────
+# Names, descriptions and company names are typed by users and end up inside HTML emails that go to OTHER people
+# (invitations, invoices, reminders, purchase orders). Escape every free-text argument so a company called
+# <a href="https://evil">Click here</a> cannot put a phishing link into an email sent from ZuZan's own address.
+import functools as _ft, html as _html
+
+_RAW_ARGS = {"email", "to", "admin_email", "user_email", "invitee_email", "client_email", "supplier_email", "token", "reset_code",
+             "subscribe_url", "portal_url", "portal_url_base", "portal_token", "pdf_bytes", "from_email", "attachments"}
+
+
+def _esc(v):
+    if isinstance(v, str):
+        return _html.escape(v, quote=True)
+    if isinstance(v, dict):
+        return {k: _esc(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return type(v)(_esc(x) for x in v)
+    return v
+
+
+def _escaped(fn):
+    import inspect
+    names = list(inspect.signature(fn).parameters)
+
+    @_ft.wraps(fn)
+    def wrapper(*args, **kwargs):
+        args = [a if names[i] in _RAW_ARGS else _esc(a) for i, a in enumerate(args)]
+        kwargs = {k: (v if k in _RAW_ARGS else _esc(v)) for k, v in kwargs.items()}
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+for _n in [n for n in list(globals()) if n.startswith("send_") and n != "send_email" and callable(globals()[n])]:
+    globals()[_n] = _escaped(globals()[_n])

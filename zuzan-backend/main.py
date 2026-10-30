@@ -21,7 +21,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("zuzan.api")
 
-limiter = Limiter(key_func=get_remote_address)
+from security import client_ip as _client_ip, SecurityMiddleware as _SecurityMiddleware
+limiter = Limiter(key_func=_client_ip)   # the real caller behind Render's proxy, not the proxy's own address
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -121,7 +122,7 @@ async def lifespan(app: FastAPI):
             # Company bank fields
             for co in db.query(Company).all():
                 changed = False
-                for attr in ("bank_name", "bank_account", "bank_branch"):
+                for attr in ("bank_name", "bank_account", "bank_branch", "mandate_account_number", "mandate_branch_code"):
                     val = getattr(co, attr)
                     if val and not _is_fernet_token(val):
                         setattr(co, attr, encrypt_field(val)); changed = True
@@ -282,6 +283,7 @@ class _CORSMiddleware:
             await send(message)
         await self.app(scope, receive, _send_with_cors)
 
+app.add_middleware(_SecurityMiddleware)   # security headers, size cap, per-IP throttles (inside CORS so a 429 still carries CORS headers)
 app.add_middleware(_CORSMiddleware)
 
 import json as _json
