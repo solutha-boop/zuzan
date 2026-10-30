@@ -35,6 +35,7 @@ git add zuzan-backend/clocking.py
 git add zuzan-backend/xero_migrate.py
 git add zuzan-backend/quickbooks_migrate.py
 git add zuzan-backend/benefits.py
+git add zuzan-backend/security.py
 git add zuzan-backend/journal_check.py
 git add clock.html
 git add netlify.toml
