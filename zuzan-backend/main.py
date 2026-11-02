@@ -574,7 +574,8 @@ ZuZan's modules and how they work:
 - Sales → Invoices: Create invoices (+ New Invoice), record payments, send to clients by email. INV-XXXX numbering. 15% VAT calculated automatically. Multi-currency (ZAR/USD) supported. Part payments are supported: record the total received so far and the invoice shows "paid of total · due" and stays Partial until fully paid; for a foreign-currency invoice tick "This payment settles the invoice" on the last payment.
 - Sales → Invoices → Credit Notes: issue a credit note (+ New Credit Note), optionally against an invoice. If the invoice sold stock items, enter the units coming back and they go back in stock at their original cost.
 - Sales → Quotes: Create quotes (+ New Quote), set validity date, update status (Draft/Sent/Accepted/Declined), convert accepted quotes to invoices.
-- Expenses: Add expenses (+ Add Expense), scan receipts with camera, categorise to chart-of-accounts codes (6000-7300). Input VAT tracked automatically.
+- Expenses: Add expenses (+ Add Expense), scan receipts with camera, categorise to chart-of-accounts codes (6000-7300). Input VAT tracked automatically. Yes, ZuZan categorises expenses — manually when adding, and automatically via category rules.
+- Banking → Category Rules: ZuZan learns from how you categorise each payee and auto-applies the same category on future imports. You can also create explicit rules under Banking → Category Rules (match by payee name → assign account code). This means bank-imported transactions are categorised automatically.
 - Procurement → Purchase Orders: Create POs (+ New PO), send to suppliers by email (📧 Send to Supplier), receive goods (📦 Receive Goods), mark as paid. Statuses: Draft/Sent/Received/Partial/Paid/Cancelled. Edit POs in draft/sent status.
 - Procurement → Suppliers: Manage supplier details including email addresses.
 - Customers: Manage customer records.
@@ -655,6 +656,8 @@ def _keyword_fallback(msg: str, ctx: str) -> dict:
     # Expenses
     if "expense" in msg and any(x in msg for x in ["add","create","new","record","how","make"]):
         return {"reply":"To add an expense: go to Expenses, click '+ Add Expense', fill in the vendor, amount, category, and date. You can also scan a receipt using the camera icon."}
+    if "categori" in msg or "categorize" in msg:
+        return {"reply":"Yes, ZuZan categorises expenses in two ways: (1) Manual — when adding an expense you choose a category (account code 6000–7300). (2) Auto-categorisation — under Banking, once you import transactions, ZuZan remembers how you categorised each payee and applies the same category automatically next time. You can also set category rules under Banking → Category Rules to automate this further."}
     # Purchase orders
     if "purchase order" in msg or " po " in msg or msg.startswith("po "):
         return {"reply":"To create a PO: go to Procurement → Purchase Orders, click '+ New PO'. You can send it to the supplier by email, receive goods, and mark it as paid when done."}
