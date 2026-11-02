@@ -606,6 +606,76 @@ Response style:
 
 _ANTHROPIC_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
 
+def _build_company_context(company_id: int, db) -> str:
+    """Fetch live company data and format it as a concise context block for the AI prompt."""
+    try:
+        from database import InvoiceStatus, Payslip
+        from payroll import _received_net_zar, _balance_zar
+        import datetime as _dt
+
+        now = _dt.datetime.utcnow()
+        fy_start = _dt.datetime(now.year if now.month >= 3 else now.year - 1, 3, 1)
+
+        # Revenue (paid + partial, current FY)
+        paid_invs = db.query(Invoice).filter(
+            Invoice.company_id == company_id,
+            Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
+            Invoice.invoice_date >= fy_start,
+        ).all()
+        total_revenue = sum(_received_net_zar(i) for i in paid_invs)
+
+        # Outstanding debtors (sent / overdue / partial)
+        out_invs = db.query(Invoice).filter(
+            Invoice.company_id == company_id,
+            Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial]),
+        ).order_by(Invoice.due_date).all()
+        total_outstanding = sum(_balance_zar(i) for i in out_invs)
+
+        # Expenses (current FY, excl. VAT)
+        exps = db.query(Expense).filter(
+            Expense.company_id == company_id,
+            Expense.date >= fy_start,
+        ).all()
+        total_expenses = sum(
+            (e.amount / 1.15 if getattr(e, "vat_inclusive", True) else e.amount)
+            for e in exps
+        )
+
+        # Employees
+        emp_count = db.query(Employee).filter(
+            Employee.company_id == company_id,
+            Employee.is_active == True,
+        ).count()
+
+        # Last payroll total
+        last_payslips = db.query(Payslip).filter(Payslip.company_id == company_id).order_by(Payslip.id.desc()).limit(50).all()
+        last_payroll = sum(p.net_pay for p in last_payslips) if last_payslips else 0
+        last_payroll_period = last_payslips[0].period_label if last_payslips and hasattr(last_payslips[0], "period_label") else "last run"
+
+        # Top unpaid invoices (up to 5)
+        top_debtors = "\n".join(
+            f"  - {i.client_name}: R{_balance_zar(i):,.0f} due {i.due_date or 'n/a'} [{i.status.value}]"
+            for i in out_invs[:5]
+        )
+
+        lines = [
+            "--- LIVE BUSINESS DATA (current financial year, fetched now) ---",
+            f"Revenue collected (excl. VAT, FY to date): R{total_revenue:,.0f}",
+            f"Total expenses (excl. VAT, FY to date):    R{total_expenses:,.0f}",
+            f"Gross profit (FY to date):                 R{total_revenue - total_expenses:,.0f}",
+            f"Outstanding debtor balance:                R{total_outstanding:,.0f}",
+            f"Active employees:                          {emp_count}",
+            f"Last payroll net pay total ({last_payroll_period}): R{last_payroll:,.0f}",
+        ]
+        if top_debtors:
+            lines.append(f"Top unpaid invoices:\n{top_debtors}")
+        lines.append("--- END LIVE DATA ---")
+        return "\n".join(lines)
+    except Exception as ex:
+        logger.warning(f"AI context fetch failed: {ex}")
+        return ""
+
+
 @app.post("/ai/chat")
 @limiter.limit("30/minute")
 async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__import__("auth").get_current_user)):
@@ -614,7 +684,21 @@ async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__im
 
     try:
         import anthropic as _anthropic
+        from database import SessionLocal
         client = _anthropic.Anthropic(api_key=_ANTHROPIC_KEY)
+
+        # Fetch live company data for this user
+        db = SessionLocal()
+        try:
+            from database import Company as _Co
+            company = db.query(_Co).filter(_Co.id == current_user.company_id).first()
+            live_ctx = _build_company_context(current_user.company_id, db) if company else ""
+        finally:
+            db.close()
+
+        system_prompt = ZUZAN_SYSTEM_PROMPT
+        if live_ctx:
+            system_prompt = ZUZAN_SYSTEM_PROMPT + "\n\n" + live_ctx
 
         user_msg = data.message
         if data.context:
@@ -622,8 +706,8 @@ async def ai_chat(request: Request, data: ChatRequest, current_user=Depends(__im
 
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            system=ZUZAN_SYSTEM_PROMPT,
+            max_tokens=500,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
         )
         reply = response.content[0].text.strip()
