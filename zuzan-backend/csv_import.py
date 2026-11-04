@@ -713,7 +713,11 @@ GENERAL_LEDGER_ALIASES: dict[str, list[str]] = {
                      "particulars", "comment"],
     "account_code": ["account_code", "code", "acc_code", "account_no", "account_number",
                      "gl_code", "accountcode"],
-    "account_name": ["account_name", "account", "name", "gl_account", "accountname"],
+    "account_name": ["account_name", "account", "gl_account", "accountname"],
+    # Xero GL exports a 'Name' column containing the account class/type descriptor
+    # ("Bank", "Revenue", "Current Liability", "Equity", etc.). Capturing it lets us
+    # assign the correct AccountType instead of guessing from the code range.
+    "xero_type":    ["name"],
     "debit":        ["debit", "dr", "debit_amount"],
     "credit":       ["credit", "cr", "credit_amount"],
     # Xero exports a single signed amount column instead of separate debit/credit
@@ -803,6 +807,47 @@ def _parse_account_type_exact(v: str):
              "direct_cost", "admin", "other_expense"):
         return AccountType.expense
     return None
+
+
+_XERO_TYPE_MAP: dict[str, AccountType] = {
+    # Balance-sheet — assets
+    "bank":               AccountType.asset,
+    "current asset":      AccountType.asset,
+    "current assets":     AccountType.asset,
+    "non-current asset":  AccountType.asset,
+    "non-current assets": AccountType.asset,
+    "fixed asset":        AccountType.asset,
+    "fixed assets":       AccountType.asset,
+    "inventory":          AccountType.asset,
+    # Balance-sheet — liabilities
+    "current liability":      AccountType.liability,
+    "current liabilities":    AccountType.liability,
+    "non-current liability":  AccountType.liability,
+    "non-current liabilities":AccountType.liability,
+    "tax liability":          AccountType.liability,
+    # Balance-sheet — equity
+    "equity":          AccountType.equity,
+    "retained earnings": AccountType.equity,
+    # P&L — revenue
+    "revenue":       AccountType.revenue,
+    "sales":         AccountType.revenue,
+    "other income":  AccountType.revenue,
+    "income":        AccountType.revenue,
+    # P&L — expense
+    "expense":        AccountType.expense,
+    "expenses":       AccountType.expense,
+    "direct costs":   AccountType.expense,
+    "overhead":       AccountType.expense,
+    "depreciation":   AccountType.expense,
+}
+
+
+def _type_from_xero_name(xero_type_str: str) -> Optional[AccountType]:
+    """Map a Xero 'Name' column value (e.g. 'Current Liability') to AccountType.
+    Returns None if the string is not a recognised Xero type descriptor."""
+    if not xero_type_str:
+        return None
+    return _XERO_TYPE_MAP.get(xero_type_str.strip().lower())
 
 
 def _infer_type_from_code(code: str) -> AccountType:
@@ -1280,8 +1325,9 @@ def _import_journal_rows(
                     debit, credit = (_net, 0.0) if _net >= 0 else (0.0, -_net)
                 if debit == 0.0 and credit == 0.0:
                     continue
-                line_desc = _get(row, m, "description") or description
-                pending_lines.append((code, name, debit, credit, line_desc))
+                line_desc  = _get(row, m, "description") or description
+                xero_type  = _get(row, m, "xero_type")
+                pending_lines.append((code, name, debit, credit, line_desc, xero_type))
                 total_dr += debit
                 total_cr += credit
 
@@ -1320,8 +1366,10 @@ def _import_journal_rows(
             db.add(entry)
             db.flush()
 
-            for code, name, debit, credit, line_desc in pending_lines:
-                atype = _infer_type_from_code(code)
+            for code, name, debit, credit, line_desc, xero_type in pending_lines:
+                # Prefer the Xero 'Name' type descriptor when present and recognised;
+                # fall back to GAAP code-range inference for non-Xero files.
+                atype = _type_from_xero_name(xero_type) or _infer_type_from_code(code)
                 acct  = _find_or_create_account(db, cid, code, name, atype)
                 db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
                                    debit=debit, credit=credit, description=line_desc))
