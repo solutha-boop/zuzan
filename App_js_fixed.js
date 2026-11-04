@@ -16033,6 +16033,23 @@ function DataImport() {
     finally   { setImporting(false); }
   }
 
+  async function handleClearImports() {
+    if (!window.confirm("This will delete ALL journal entries that were created by any import (GL, journals, trial balance, balance sheet, P&L). Invoices, expenses and employees are NOT affected.\n\nAre you sure?")) return;
+    try {
+      const r = await fetch(`${BASE_URL}/import/all`, {
+        method: "DELETE",
+        headers: {Authorization: "Bearer " + token},
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || "Failed to clear imports");
+      }
+      const data = await r.json();
+      alert(`Done — ${data.deleted_entries} journal entr${data.deleted_entries === 1 ? "y" : "ies"} removed. You can now re-import.`);
+      reset();
+    } catch(e) { alert("Error: " + e.message); }
+  }
+
   function reset() {
     setFile(null); setPreview(null); setResult(null); setErr(null);
     if (fileRef.current) fileRef.current.value = "";
@@ -16043,11 +16060,19 @@ function DataImport() {
   return (
     <div>
       {/* Header */}
-      <div style={{marginBottom:24}}>
-        <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:"0 0 4px"}}>Import Data</h2>
-        <p style={{fontSize:13,color:C.inkMid,margin:0}}>
-          Migrate history from Xero, QuickBooks, or any CSV / Excel export. Duplicates are skipped automatically.
-        </p>
+      <div style={{marginBottom:24,display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+        <div>
+          <h2 style={{fontSize:20,fontWeight:700,color:C.ink,margin:"0 0 4px"}}>Import Data</h2>
+          <p style={{fontSize:13,color:C.inkMid,margin:0}}>
+            Migrate history from Xero, QuickBooks, or any CSV / Excel export. Duplicates are skipped automatically.
+          </p>
+        </div>
+        <button
+          onClick={handleClearImports}
+          style={{flexShrink:0,padding:"8px 16px",border:"1px solid #dc2626",borderRadius:10,background:"transparent",color:"#dc2626",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+        >
+          🗑 Reset All Imports
+        </button>
       </div>
 
       <div style={{display:"flex",gap:20,alignItems:"flex-start",flexDirection:isMobile?"column":"row"}}>

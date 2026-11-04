@@ -1873,3 +1873,33 @@ async def import_payroll_adjustments(
         "skipped":    not_found,
         "errors":     [{"row": e["row"], "message": f"{e['identifier']}: {e['reason']}"} for e in error_rows],
     }
+
+
+# ── CLEAR ALL IMPORTS ─────────────────────────────────────────────────────────
+
+@router.delete("/all")
+async def clear_all_imports(
+    db: Session = Depends(get_db),
+    cu          = Depends(require_role("owner", "admin")),
+):
+    """
+    Delete every journal entry (and its lines) that was created by any import
+    for this company.  This covers GL, journals, trial balance, balance sheet,
+    P&L and opening-balance imports.  It does NOT touch invoices, expenses,
+    employees or other records created via their own import tabs.
+    """
+    from database import JournalLine
+    cid = cu.company_id
+
+    entries = db.query(JournalEntry).filter(
+        JournalEntry.company_id == cid,
+        JournalEntry.source == "import",
+    ).all()
+
+    ids = [e.id for e in entries]
+    if ids:
+        db.query(JournalLine).filter(JournalLine.entry_id.in_(ids)).delete(synchronize_session=False)
+        db.query(JournalEntry).filter(JournalEntry.id.in_(ids)).delete(synchronize_session=False)
+        db.commit()
+
+    return {"deleted_entries": len(ids)}
