@@ -29,7 +29,7 @@ from database import (
     Account, AccountType, JournalEntry, JournalLine, Employee,
 )
 from crypto import encrypt_field
-from auth import require_role
+from auth import require_role, get_current_user
 
 router = APIRouter()
 
@@ -1880,7 +1880,7 @@ async def import_payroll_adjustments(
 @router.delete("/all")
 async def clear_all_imports(
     db: Session = Depends(get_db),
-    cu          = Depends(require_role("owner", "admin")),
+    cu          = Depends(get_current_user),
 ):
     """
     Delete every journal entry (and its lines) that was created by any import
