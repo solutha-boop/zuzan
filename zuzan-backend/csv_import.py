@@ -920,6 +920,12 @@ def _find_or_create_account(
             Account.type == atype,
         ).first()
     if acct:
+        # If we now have a confident type classification (e.g. from the Xero
+        # 'Name' column) and it differs from what was stored, update it.
+        # This fixes accounts that were previously imported with wrong GAAP
+        # code-range inference and later re-imported after the fix.
+        if atype and acct.type != atype:
+            acct.type = atype
         return acct
     acct = Account(
         company_id = cid,
@@ -2030,6 +2036,22 @@ async def clear_all_imports(
     if ids:
         db.query(JournalLine).filter(JournalLine.entry_id.in_(ids)).delete(synchronize_session=False)
         db.query(JournalEntry).filter(JournalEntry.id.in_(ids)).delete(synchronize_session=False)
-        db.commit()
+        db.flush()
 
-    return {"deleted_entries": len(ids)}
+    # Remove Account records that were created by imports and now have no journal
+    # lines at all (orphaned after the entries above were deleted).  We only
+    # remove non-system accounts so that built-in COA accounts are preserved.
+    from database import JournalLine as JL
+    orphan_accounts = (
+        db.query(Account)
+        .filter(Account.company_id == cid, Account.is_system == False)
+        .outerjoin(JL, JL.account_id == Account.id)
+        .filter(JL.id == None)
+        .all()
+    )
+    orphan_ids = [a.id for a in orphan_accounts]
+    if orphan_ids:
+        db.query(Account).filter(Account.id.in_(orphan_ids)).delete(synchronize_session=False)
+
+    db.commit()
+    return {"deleted_entries": len(ids), "deleted_accounts": len(orphan_ids)}
