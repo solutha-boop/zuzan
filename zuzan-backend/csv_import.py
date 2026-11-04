@@ -850,6 +850,30 @@ def _type_from_xero_name(xero_type_str: str) -> Optional[AccountType]:
     return _XERO_TYPE_MAP.get(xero_type_str.strip().lower())
 
 
+def _infer_type_from_xero_code(code: str) -> Optional[AccountType]:
+    """Infer AccountType from Xero's standard SA/NZ/AU chart-of-accounts code ranges.
+    These differ from GAAP: Xero uses 2xx for Revenue, 3xx-5xx for Expenses,
+    7xx for Fixed Assets, 8xx for Liabilities, 9xx for Equity.
+    Returns None if code is empty or the prefix is not in Xero's standard ranges.
+    """
+    if not code or not code.strip():
+        return None
+    try:
+        prefix = int(str(code).strip()[0])
+    except (ValueError, IndexError):
+        return None
+    return {
+        1: AccountType.asset,      # 1xx: bank accounts, current assets
+        2: AccountType.revenue,    # 2xx: sales / revenue / other income
+        3: AccountType.expense,    # 3xx: direct costs / COGS
+        4: AccountType.expense,    # 4xx: operating expenses
+        5: AccountType.expense,    # 5xx: other expenses (tax, interest, etc.)
+        7: AccountType.asset,      # 7xx: fixed assets (buildings, equipment)
+        8: AccountType.liability,  # 8xx: VAT, tax liabilities
+        9: AccountType.equity,     # 9xx: equity, retained earnings, director loans
+    }.get(prefix)
+
+
 def _infer_type_from_code(code: str) -> AccountType:
     """Infer AccountType from the first digit of a GAAP-style account code."""
     if not code or not code.strip():
@@ -1367,9 +1391,12 @@ def _import_journal_rows(
             db.flush()
 
             for code, name, debit, credit, line_desc, xero_type in pending_lines:
-                # Prefer the Xero 'Name' type descriptor when present and recognised;
-                # fall back to GAAP code-range inference for non-Xero files.
-                atype = _type_from_xero_name(xero_type) or _infer_type_from_code(code)
+                # Priority: Xero 'Name' string → Xero code ranges → GAAP code ranges
+                atype = (
+                    _type_from_xero_name(xero_type)
+                    or _infer_type_from_xero_code(code)
+                    or _infer_type_from_code(code)
+                )
                 acct  = _find_or_create_account(db, cid, code, name, atype)
                 db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
                                    debit=debit, credit=credit, description=line_desc))
@@ -1410,6 +1437,54 @@ async def import_general_ledger(
         )
 
     return _import_journal_rows(db, cid, rows, m, entity="general_ledger")
+
+
+# ── RECLASSIFY EXISTING GL ACCOUNTS ──────────────────────────────────────────
+
+@router.post("/reclassify-gl-accounts")
+async def reclassify_gl_accounts(
+    db: Session = Depends(get_db),
+    cu         = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Fix account types that were created with the wrong GAAP code-range inference
+    during an earlier GL import.  Applies the Xero SA/NZ/AU COA code ranges
+    (1xx=asset, 2xx=revenue, 3xx-5xx=expense, 7xx=asset, 8xx=liability, 9xx=equity)
+    to every account that was misclassified, then also applies the Xero 'Name'
+    string map to any account whose name matches a known Xero descriptor.
+
+    Safe to call multiple times — only accounts whose type differs from the
+    correct classification are updated.
+    """
+    cid = cu.company_id
+    accounts = db.query(Account).filter(Account.company_id == cid).all()
+
+    fixed = []
+    for acct in accounts:
+        correct = (
+            _type_from_xero_name(acct.name)      # e.g. account named "Revenue"
+            or _infer_type_from_xero_code(acct.code)
+        )
+        if correct and acct.type != correct:
+            fixed.append({
+                "code":     acct.code or "—",
+                "name":     acct.name,
+                "old_type": acct.type.value,
+                "new_type": correct.value,
+            })
+            acct.type = correct
+
+    db.commit()
+    return {
+        "fixed":    len(fixed),
+        "accounts": fixed,
+        "message":  (
+            f"Reclassified {len(fixed)} account(s). "
+            "Refresh your trial balance and reports to see corrected figures."
+            if fixed else
+            "All accounts are already correctly classified."
+        ),
+    }
 
 
 # ── JOURNALS ──────────────────────────────────────────────────────────────────

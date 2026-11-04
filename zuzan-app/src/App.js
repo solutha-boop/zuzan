@@ -6261,6 +6261,8 @@ function Reports({live = {}, user = null}) {
   const [aiInsights,    setAiInsights]    = useState(null);  // [{text}] or null
   const [aiLoading,     setAiLoading]     = useState(false);
   const [aiError,       setAiError]       = useState(null);
+  const [reclassLoading, setReclassLoading] = useState(false);
+  const [reclassResult,  setReclassResult]  = useState(null); // null | {fixed, message}
 
   // ── Date range ──────────────────────────────────────────────────
   const now = new Date();
@@ -6501,6 +6503,43 @@ function Reports({live = {}, user = null}) {
             <div style={{fontSize:15,fontWeight:700,color:trialBal.balanced?C.green:C.red}}>
               {trialBal.balanced ? "✅ Balanced" : `❌ Off by R ${Math.abs(trialBal.imbalance).toLocaleString("en-ZA",{minimumFractionDigits:2})}`}
             </div>
+          </div>
+        </div>
+        {/* ── Fix Account Types (Xero reclassify) ─────────────────────────── */}
+        <div style={{marginBottom:16,padding:"12px 16px",background:"#fffbeb",border:"1px solid #f59e0b",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:"#92400e"}}>⚠️ Imported from Xero?</div>
+            <div style={{fontSize:12,color:"#78350f",marginTop:2}}>If accounts appear under the wrong section (e.g. expenses under Revenues), click <strong>Fix Account Types</strong> to reclassify them using Xero's chart-of-accounts codes.</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+            {reclassResult && (
+              <span style={{fontSize:12,color:reclassResult.fixed>0?C.green:C.inkMid,fontWeight:600}}>
+                {reclassResult.fixed>0 ? `✅ ${reclassResult.fixed} account(s) reclassified — refresh to see updated figures` : "✅ All accounts already correctly classified"}
+              </span>
+            )}
+            <button
+              disabled={reclassLoading}
+              onClick={async()=>{
+                setReclassLoading(true);
+                setReclassResult(null);
+                try {
+                  const res = await api("/csv-import/reclassify-gl-accounts",{method:"POST"});
+                  setReclassResult(res);
+                  if (res.fixed>0) {
+                    // Reload trial balance to show corrected types
+                    const tb = await api("/journal/trial-balance");
+                    setTrialBal(tb);
+                  }
+                } catch(e) {
+                  setReclassResult({fixed:0,message:"Error: "+e.message});
+                } finally {
+                  setReclassLoading(false);
+                }
+              }}
+              style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:reclassLoading?"not-allowed":"pointer",fontFamily:"inherit",opacity:reclassLoading?0.6:1,whiteSpace:"nowrap"}}
+            >
+              {reclassLoading ? "Fixing…" : "Fix Account Types"}
+            </button>
           </div>
         </div>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
