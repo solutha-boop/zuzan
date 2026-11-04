@@ -6547,7 +6547,7 @@ function Reports({live = {}, user = null}) {
   };
 
   const renderJournal = () => {
-    if (!journal) return <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading journal…</div>;
+    if (!journal) return <div style={{color:C.red,fontSize:13,padding:20}}>⚠️ Could not load journal entries — the server returned an error. Try refreshing the page. If the problem persists, please contact support.</div>;
     const SOURCE_ICON = {invoice:"🧾",invoice_payment:"💰",invoice_reversal:"↩️",expense:"💳",expense_reversal:"↩️",payroll:"👥",purchase_order:"📦",po_payment:"🏭",purchase_order_reversal:"↩️",po_payment_reversal:"↩️",manual:"✏️",manual_reversal:"↩️"};
     const toggle = id => setJnlExpanded(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
 

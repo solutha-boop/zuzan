@@ -1603,8 +1603,8 @@ async def list_journal(
             "is_reversal_of":getattr(e, "is_reversal_of", None),
             "lines": [
                 {
-                    "account_code": l.account.code,
-                    "account_name": l.account.name,
+                    "account_code": l.account.code if l.account else None,
+                    "account_name": l.account.name if l.account else None,
                     "debit":        l.debit,
                     "credit":       l.credit,
                     "description":  l.description,
