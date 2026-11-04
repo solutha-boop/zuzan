@@ -15957,9 +15957,19 @@ function DataImport() {
     if (has("invoicenumber","invoiceno","inv_no"))            return "invoices";
     if (has("expensedate","expense_date"))                    return "expenses";
     if (has("idnumber","id_number","employeenumber","emp_no"))return "payroll_adjustments";
-    if (has("code","accountname","account_name","debit","credit") &&
-        has("accountname","account_name"))                    return "trial_balance";
+    // General Ledger: has a date column + a journal/reference column (before trial_balance check,
+    // because Xero GL files also have AccountName which would otherwise match trial_balance).
+    if (has("journaldate","journalnumber","journalno","journalnum") &&
+        has("accountname","accountcode","account_name","account_code")) return "general_ledger";
+    if (has("date") && has("journalnumber","journalno","journalnum","reference","ref") &&
+        (has("debit","credit","netamount","net_amount")))     return "general_ledger";
     if (has("classification"))                                return "balance_sheet";
+    // Trial Balance: account names/codes with debit/credit but NO date column
+    if (has("accountname","account_name") && !has("date","journaldate") &&
+        has("debit","credit"))                                return "trial_balance";
+    if (has("code","accountname","account_name") &&
+        has("accountname","account_name") &&
+        !has("date","journaldate"))                           return "trial_balance";
     if (has("journalno","journalnum"))                        return "journals";
     // suppliers have bank columns; customers don't
     if (has("bankname","bank_name","accountnumber","account_number")) return "suppliers";
