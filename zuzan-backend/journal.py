@@ -1565,15 +1565,30 @@ async def backfill_endpoint(
 
 @router.get("/")
 async def list_journal(
-    limit: int = 50,
+    limit: int = 200,
     offset: int = 0,
     source: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from datetime import date as _date
     q = db.query(JournalEntry).filter(JournalEntry.company_id == current_user.company_id)
     if source:
         q = q.filter(JournalEntry.source == source)
+    if date_from:
+        try:
+            df = datetime.strptime(date_from, "%Y-%m-%d").date()
+            q = q.filter(JournalEntry.date >= df)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+            q = q.filter(JournalEntry.date <= dt)
+        except ValueError:
+            pass
     entries = q.order_by(JournalEntry.date.desc()).offset(offset).limit(limit).all()
     return [
         {

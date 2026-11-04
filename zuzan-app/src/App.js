@@ -6313,7 +6313,7 @@ function Reports({live = {}, user = null}) {
       if (tab==="recon") setRecon(await api(`/reports/reconciliation`).catch(()=>null));
       if (tab==="tb")    setTrialBal(await api(`/journal/trial-balance`).catch(()=>null));
       if (tab==="jnl") {
-        setJournal(await api(`/journal/?limit=100`).catch(()=>null));
+        setJournal(await api(`/journal/?limit=500&${dateParams}`).catch(()=>null));
         if (!jnlAccounts.length) api("/journal/accounts").then(setJnlAccounts).catch(()=>null);
       }
       if (tab==="cf")   setCfData(await api(`/reports/cash-flow?${dateParams}`).catch(()=>null));
@@ -6571,7 +6571,7 @@ function Reports({live = {}, user = null}) {
           auto_reverse:jnlForm.auto_reverse, reversal_date:jnlForm.auto_reverse?jnlForm.reversal_date:undefined,
         })});
         setJnlForm(null);
-        setJournal(await api("/journal/?limit=100"));
+        setJournal(await api(`/journal/?limit=500&${dateParams}`));
       } catch(e) { alert("Failed to save: "+(e.message||e)); }
     };
 
@@ -6587,7 +6587,7 @@ function Reports({live = {}, user = null}) {
               style={{background:jnlForm?C.surface:C.accent,color:jnlForm?C.inkMid:"#fff",border:`1px solid ${jnlForm?C.border:C.accent}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
               {jnlForm ? "✕ Cancel" : "+ New Entry"}
             </button>
-            <button onClick={async()=>{setLoading(true);try{await api("/journal/backfill",{method:"POST"});setJournal(await api("/journal/?limit=100"));}catch(e){alert("Backfill failed");}finally{setLoading(false);}}}
+            <button onClick={async()=>{setLoading(true);try{await api("/journal/backfill",{method:"POST"});setJournal(await api(`/journal/?limit=500&${dateParams}`));}catch(e){alert("Backfill failed");}finally{setLoading(false);}}}
               style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",color:C.inkMid}}>
               ↻ Re-run backfill
             </button>
