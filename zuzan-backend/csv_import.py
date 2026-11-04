@@ -705,30 +705,33 @@ PROFIT_LOSS_ALIASES: dict[str, list[str]] = {
 
 GENERAL_LEDGER_ALIASES: dict[str, list[str]] = {
     "date":         ["date", "transaction_date", "posting_date", "entry_date",
-                     "accounting_date"],
-    "reference":    ["reference", "ref", "journal_no", "journal_number", "document_no",
-                     "doc_no", "transaction_no", "batch_no", "source_ref",
+                     "accounting_date", "journal_date", "journaldate"],
+    "reference":    ["reference", "ref", "journal_no", "journal_number", "journalnumber",
+                     "document_no", "doc_no", "transaction_no", "batch_no", "source_ref",
                      "source_document"],
     "description":  ["description", "narration", "memo", "notes", "details",
                      "particulars", "comment"],
     "account_code": ["account_code", "code", "acc_code", "account_no", "account_number",
-                     "gl_code"],
-    "account_name": ["account_name", "account", "name", "gl_account"],
+                     "gl_code", "accountcode"],
+    "account_name": ["account_name", "account", "name", "gl_account", "accountname"],
     "debit":        ["debit", "dr", "debit_amount"],
     "credit":       ["credit", "cr", "credit_amount"],
+    # Xero exports a single signed amount column instead of separate debit/credit
+    "net_amount":   ["net_amount", "netamount", "signed_amount", "amount"],
 }
 
 JOURNAL_ALIASES: dict[str, list[str]] = {
     "date":         ["date", "transaction_date", "posting_date", "journal_date",
-                     "entry_date"],
-    "reference":    ["journal_no", "journal_number", "reference", "ref", "batch_no",
-                     "document_no", "doc_no", "source_document"],
+                     "entry_date", "journaldate"],
+    "reference":    ["journal_no", "journal_number", "journalnumber", "reference", "ref",
+                     "batch_no", "document_no", "doc_no", "source_document"],
     "description":  ["narration", "description", "memo", "notes", "details",
                      "particulars", "comment"],
-    "account_code": ["account_code", "code", "acc_code", "account_no", "gl_code"],
-    "account_name": ["account_name", "account", "name", "gl_account"],
+    "account_code": ["account_code", "code", "acc_code", "account_no", "gl_code", "accountcode"],
+    "account_name": ["account_name", "account", "name", "gl_account", "accountname"],
     "debit":        ["debit", "dr", "debit_amount"],
     "credit":       ["credit", "cr", "credit_amount"],
+    "net_amount":   ["net_amount", "netamount", "signed_amount", "amount"],
 }
 
 
@@ -1268,7 +1271,11 @@ def _import_journal_rows(
                     continue
                 debit  = _parse_float(_get(row, m, "debit"))
                 credit = _parse_float(_get(row, m, "credit"))
-                if debit < 0 or credit < 0:           # negative in one column = the other side
+                if debit == 0.0 and credit == 0.0 and "net_amount" in m:
+                    # Xero-style single signed amount: positive = debit, negative = credit
+                    _net = _parse_float(_get(row, m, "net_amount"))
+                    debit, credit = (_net, 0.0) if _net >= 0 else (0.0, -_net)
+                elif debit < 0 or credit < 0:         # negative in one column = the other side
                     _net = debit - credit
                     debit, credit = (_net, 0.0) if _net >= 0 else (0.0, -_net)
                 if debit == 0.0 and credit == 0.0:
@@ -1348,10 +1355,10 @@ async def import_general_ledger(
     headers, rows = _read_csv(await file.read())
     m             = _map_headers(headers, GENERAL_LEDGER_ALIASES)
 
-    if "debit" not in m and "credit" not in m:
+    if "debit" not in m and "credit" not in m and "net_amount" not in m:
         raise HTTPException(
             400,
-            f"No Debit/Credit columns found.  Detected: {headers}."
+            f"No Debit/Credit or NetAmount column found.  Detected: {headers}."
         )
 
     return _import_journal_rows(db, cid, rows, m, entity="general_ledger")
@@ -1376,10 +1383,10 @@ async def import_journals(
     headers, rows = _read_csv(await file.read())
     m             = _map_headers(headers, JOURNAL_ALIASES)
 
-    if "debit" not in m and "credit" not in m:
+    if "debit" not in m and "credit" not in m and "net_amount" not in m:
         raise HTTPException(
             400,
-            f"No Debit/Credit columns found.  Detected: {headers}."
+            f"No Debit/Credit or NetAmount column found.  Detected: {headers}."
         )
 
     return _import_journal_rows(db, cid, rows, m, entity="journals")
