@@ -516,12 +516,13 @@ async def api_list_employees(auth=Depends(require_api_key)):
 @app.get("/v1/summary", tags=["Public API"])
 async def api_summary(auth=Depends(require_api_key)):
     company, _, db = auth
-    from payroll import _to_zar, _balance_zar, _received_zar, _received_net_zar, _po_cost_net, _stock_pl_cost, _bank_import_income
+    from payroll import _to_zar, _balance_zar, _received_zar, _received_net_zar, _po_cost_net, _stock_pl_cost, _bank_import_income, _gl_import_income, _gl_import_expenses
     from database import InvoiceStatus, PurchaseOrder, Payslip, DepreciationEntry
     paid_invs  = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial])).all()
     out_invs   = db.query(Invoice).filter(Invoice.company_id==company.id, Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
     total_revenue  = sum(_received_net_zar(i) for i in paid_invs)
     total_revenue += _bank_import_income(db, company.id)
+    total_revenue += _gl_import_income(db, company.id)
     # Expenses ex-VAT
     exp_rows = db.query(Expense).filter(Expense.company_id==company.id).all()
     total_expenses = sum(e.amount - (e.vat_amount or 0) for e in exp_rows)
@@ -541,6 +542,7 @@ async def api_summary(auth=Depends(require_api_key)):
         DepreciationEntry.company_id == company.id
     ).scalar() or 0
     total_expenses = total_expenses + total_depreciation
+    total_expenses = total_expenses + _gl_import_expenses(db, company.id)["total"]
     # Add payroll costs — consistent with /reports/dashboard
     # Sum ALL payslips for the company (including terminated employees) so that historical
     # payroll cost is never understated when headcount has changed.

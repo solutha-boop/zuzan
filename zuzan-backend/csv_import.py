@@ -896,7 +896,7 @@ def _infer_type_from_code(code: str) -> AccountType:
 
 
 def _find_or_create_account(
-    db, cid: int, code: str, name: str, atype: AccountType
+    db, cid: int, code: str, name: str, atype: AccountType, retype: bool = False
 ) -> Account:
     """Return an existing Account (by code, then by name) or create a new one.
 
@@ -920,11 +920,11 @@ def _find_or_create_account(
             Account.type == atype,
         ).first()
     if acct:
-        # If we now have a confident type classification (e.g. from the Xero
-        # 'Name' column) and it differs from what was stored, update it.
-        # This fixes accounts that were previously imported with wrong GAAP
-        # code-range inference and later re-imported after the fix.
-        if atype and acct.type != atype:
+        # Retype only when the caller has an authoritative classification (the Xero
+        # 'Name' column) AND the account is not a ZuZan system account (audit fix
+        # 2026-11-05: system accounts such as 2000/2100/3998/4000 were being
+        # retyped by Xero code-range inference, corrupting the balance sheet).
+        if retype and atype and acct.type != atype and not acct.is_system:
             acct.type = atype
         return acct
     acct = Account(
@@ -1397,13 +1397,12 @@ def _import_journal_rows(
             db.flush()
 
             for code, name, debit, credit, line_desc, xero_type in pending_lines:
-                # Priority: Xero 'Name' string → Xero code ranges → GAAP code ranges
-                atype = (
-                    _type_from_xero_name(xero_type)
-                    or _infer_type_from_xero_code(code)
-                    or _infer_type_from_code(code)
-                )
-                acct  = _find_or_create_account(db, cid, code, name, atype)
+                # Priority: Xero 'Name' type descriptor → GAAP code ranges (ZuZan's own
+                # chart). Xero code-range inference is NOT used here: it conflicts with
+                # ZuZan's GAAP codes (audit fix 2026-11-05).
+                _xt   = _type_from_xero_name(xero_type)
+                atype = _xt or _infer_type_from_code(code)
+                acct  = _find_or_create_account(db, cid, code, name, atype, retype=bool(_xt))
                 db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
                                    debit=debit, credit=credit, description=line_desc))
                 imported += 1
@@ -1463,10 +1462,29 @@ async def reclassify_gl_accounts(
     correct classification are updated.
     """
     cid = cu.company_id
-    accounts = db.query(Account).filter(Account.company_id == cid).all()
+    # Only accounts CREATED BY IMPORT are eligible (audit fix 2026-11-05): never
+    # system accounts, never codes in ZuZan's own default chart, and never an
+    # account that carries any non-import journal line (invoice/PO/payroll/manual).
+    from journal import DEFAULT_ACCOUNTS
+    protected_codes = {a["code"] for a in DEFAULT_ACCOUNTS}
+    native_ids = {r[0] for r in db.query(JournalLine.account_id)
+                  .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+                  .filter(JournalEntry.company_id == cid, JournalEntry.source != "import")
+                  .distinct().all()}
+    import_ids = {r[0] for r in db.query(JournalLine.account_id)
+                  .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+                  .filter(JournalEntry.company_id == cid, JournalEntry.source == "import")
+                  .distinct().all()}
+    accounts = db.query(Account).filter(
+        Account.company_id == cid, Account.is_system == False
+    ).all()
 
     fixed = []
     for acct in accounts:
+        if (acct.code or "").strip() in protected_codes:
+            continue
+        if acct.id in native_ids or acct.id not in import_ids:
+            continue
         correct = (
             _type_from_xero_name(acct.name)      # e.g. account named "Revenue"
             or _infer_type_from_xero_code(acct.code)
@@ -2016,7 +2034,7 @@ async def import_payroll_adjustments(
 @router.delete("/all")
 async def clear_all_imports(
     db: Session = Depends(get_db),
-    cu          = Depends(get_current_user),
+    cu          = Depends(require_role("owner", "admin", "accountant")),
 ):
     """
     Delete every journal entry (and its lines) that was created by any import
@@ -2033,7 +2051,13 @@ async def clear_all_imports(
     ).all()
 
     ids = [e.id for e in entries]
+    # Accounts touched by the import entries - the ONLY accounts eligible for cleanup
+    # (audit fix 2026-11-05: custom COA accounts the user created by hand and not yet
+    # used were previously deleted too).
+    touched_acct_ids = set()
     if ids:
+        touched_acct_ids = {r[0] for r in db.query(JournalLine.account_id)
+                            .filter(JournalLine.entry_id.in_(ids)).distinct().all()}
         db.query(JournalLine).filter(JournalLine.entry_id.in_(ids)).delete(synchronize_session=False)
         db.query(JournalEntry).filter(JournalEntry.id.in_(ids)).delete(synchronize_session=False)
         db.flush()
@@ -2044,7 +2068,8 @@ async def clear_all_imports(
     from database import JournalLine as JL
     orphan_accounts = (
         db.query(Account)
-        .filter(Account.company_id == cid, Account.is_system == False)
+        .filter(Account.company_id == cid, Account.is_system == False,
+                Account.id.in_(touched_acct_ids or {-1}))
         .outerjoin(JL, JL.account_id == Account.id)
         .filter(JL.id == None)
         .all()

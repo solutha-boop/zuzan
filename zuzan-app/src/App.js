@@ -6523,7 +6523,7 @@ function Reports({live = {}, user = null}) {
                 setReclassLoading(true);
                 setReclassResult(null);
                 try {
-                  const res = await api("/csv-import/reclassify-gl-accounts",{method:"POST"});
+                  const res = await api("/import/reclassify-gl-accounts",{method:"POST"});
                   setReclassResult(res);
                   if (res.fixed>0) {
                     // Reload trial balance to show corrected types
@@ -6750,6 +6750,9 @@ function Reports({live = {}, user = null}) {
           </div>
         )}
 
+        {journal.length >= 500 && (
+          <div style={{fontSize:12,color:C.inkMid,marginBottom:10}}>Showing the latest 500 entries for the selected date range — narrow the dates to see older entries.</div>
+        )}
         {journal.length === 0 && !jnlForm && (
           <div style={{textAlign:"center",padding:"40px 20px",color:C.inkMid}}>
             <div style={{fontSize:32,marginBottom:12}}>📒</div>

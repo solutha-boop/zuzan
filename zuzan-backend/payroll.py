@@ -156,6 +156,16 @@ def _bank_import_income(db: Session, company_id: int, date_from=None, date_to=No
     return float(total or 0)
 
 
+def _gl_import_cutover(db: Session, company_id: int):
+    """Date of the company's earliest native ZuZan invoice/expense, or None.
+    GL-imported (source 'import') P&L lines dated on/after this are ignored so a GL import
+    that overlaps native records is not double-counted (audit fix 2026-11-05)."""
+    d1 = db.query(func.min(Invoice.issue_date)).filter(Invoice.company_id == company_id).scalar()
+    d2 = db.query(func.min(Expense.expense_date)).filter(Expense.company_id == company_id).scalar()
+    ds = [d for d in (d1, d2) if d is not None]
+    return min(ds) if ds else None
+
+
 def _gl_import_income(db: Session, company_id: int, date_from=None, date_to=None) -> float:
     """
     Sum net revenue credits from GL-imported journal entries (source == 'import').
@@ -170,6 +180,10 @@ def _gl_import_income(db: Session, company_id: int, date_from=None, date_to=None
     ]
     if not rev_ids:
         return 0.0
+
+    cut = _gl_import_cutover(db, company_id)
+    if cut is not None and (date_to is None or cut < date_to):
+        date_to = cut
 
     eq = db.query(JournalEntry.id).filter(
         JournalEntry.company_id == company_id,
@@ -209,6 +223,10 @@ def _gl_import_expenses(
 
     exp_ids = [a.id for a in exp_accounts]
     exp_name = {a.id: a.name for a in exp_accounts}
+
+    cut = _gl_import_cutover(db, company_id)
+    if cut is not None and (date_to is None or cut < date_to):
+        date_to = cut
 
     eq = db.query(JournalEntry.id).filter(
         JournalEntry.company_id == company_id,
@@ -2477,6 +2495,7 @@ async def dashboard(
     total_revenue = sum(_received_net_zar(i) for i in paid_invoices)
     # Add bank-import income (posted as journal entries, not invoices)
     total_revenue += _bank_import_income(db, cid)
+    total_revenue += _gl_import_income(db, cid)
 
     outstanding_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
@@ -2505,6 +2524,7 @@ async def dashboard(
         DepreciationEntry.company_id == cid
     ).scalar() or 0
     total_expenses = total_expenses + total_depreciation
+    total_expenses = total_expenses + _gl_import_expenses(db, cid)["total"]
 
     employees = db.query(Employee).filter(
         Employee.company_id == cid,
