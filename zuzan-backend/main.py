@@ -612,19 +612,23 @@ def _build_company_context(company_id: int, db) -> str:
     """Fetch live company data and format it as a concise context block for the AI prompt."""
     try:
         from database import InvoiceStatus, Payslip
-        from payroll import _received_net_zar, _balance_zar
+        from payroll import _received_net_zar, _balance_zar, _gl_import_income, _gl_import_expenses
         import datetime as _dt
 
         now = _dt.datetime.utcnow()
         fy_start = _dt.datetime(now.year if now.month >= 3 else now.year - 1, 3, 1)
 
-        # Revenue (paid + partial, current FY)
+        # Revenue (paid + partial invoices, current FY)
         paid_invs = db.query(Invoice).filter(
             Invoice.company_id == company_id,
             Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
             Invoice.invoice_date >= fy_start,
         ).all()
-        total_revenue = sum(_received_net_zar(i) for i in paid_invs)
+        invoice_revenue = sum(_received_net_zar(i) for i in paid_invs)
+
+        # GL-imported revenue (source="import" journal entries, current FY)
+        gl_revenue = _gl_import_income(db, company_id, date_from=fy_start)
+        total_revenue = invoice_revenue + gl_revenue
 
         # Outstanding debtors (sent / overdue / partial)
         out_invs = db.query(Invoice).filter(
@@ -633,15 +637,21 @@ def _build_company_context(company_id: int, db) -> str:
         ).order_by(Invoice.due_date).all()
         total_outstanding = sum(_balance_zar(i) for i in out_invs)
 
-        # Expenses (current FY, excl. VAT)
+        # Expenses from manual expense records (current FY, excl. VAT)
         exps = db.query(Expense).filter(
             Expense.company_id == company_id,
             Expense.date >= fy_start,
         ).all()
-        total_expenses = sum(
+        manual_expenses = sum(
             (e.amount / 1.15 if getattr(e, "vat_inclusive", True) else e.amount)
             for e in exps
         )
+
+        # GL-imported expenses (source="import" journal entries, current FY)
+        gl_exp_data = _gl_import_expenses(db, company_id, date_from=fy_start)
+        gl_expenses = gl_exp_data["total"]
+        gl_exp_breakdown = gl_exp_data["breakdown"]
+        total_expenses = manual_expenses + gl_expenses
 
         # Employees
         emp_count = db.query(Employee).filter(
@@ -660,10 +670,39 @@ def _build_company_context(company_id: int, db) -> str:
             for i in out_invs[:5]
         )
 
+        # Data source note
+        if gl_revenue > 0 or gl_expenses > 0:
+            data_source = "GL import (Xero/CSV journal entries)"
+        elif invoice_revenue > 0 or manual_expenses > 0:
+            data_source = "invoices and expense records"
+        else:
+            data_source = "no transactions recorded yet"
+
         lines = [
             "--- LIVE BUSINESS DATA (current financial year, fetched now) ---",
+            f"Data source: {data_source}",
             f"Revenue collected (excl. VAT, FY to date): R{total_revenue:,.0f}",
+        ]
+        if gl_revenue > 0 and invoice_revenue > 0:
+            lines.append(f"  (of which GL-imported: R{gl_revenue:,.0f} | invoices: R{invoice_revenue:,.0f})")
+        elif gl_revenue > 0:
+            lines.append(f"  (from GL-imported journal entries)")
+
+        lines += [
             f"Total expenses (excl. VAT, FY to date):    R{total_expenses:,.0f}",
+        ]
+        if gl_expenses > 0 and manual_expenses > 0:
+            lines.append(f"  (of which GL-imported: R{gl_expenses:,.0f} | manual: R{manual_expenses:,.0f})")
+        elif gl_expenses > 0:
+            lines.append(f"  (from GL-imported journal entries)")
+
+        # Top GL expense accounts (up to 5)
+        if gl_exp_breakdown:
+            top5 = sorted(gl_exp_breakdown.items(), key=lambda x: x[1], reverse=True)[:5]
+            breakdown_lines = "\n".join(f"  - {name}: R{amt:,.0f}" for name, amt in top5)
+            lines.append(f"Top expense accounts (GL import):\n{breakdown_lines}")
+
+        lines += [
             f"Gross profit (FY to date):                 R{total_revenue - total_expenses:,.0f}",
             f"Outstanding debtor balance:                R{total_outstanding:,.0f}",
             f"Active employees:                          {emp_count}",
