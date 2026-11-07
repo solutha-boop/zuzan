@@ -19,7 +19,7 @@ def _setup(name):
 
 
 def _pay(user, inv, cum, status="paid"):
-    asyncio.run(CO.update_invoice(inv.id, CO.InvoiceUpdate(status=status, paid_date="2026-10-22", paid_amount_zar=cum), current_user=user, db=db))
+    asyncio.run(CO.update_invoice(inv.id, CO.InvoiceUpdate(status=status, paid_date=dt.date.today().isoformat(), paid_amount_zar=cum), current_user=user, db=db))
     db.expire_all()
     return db.query(Invoice).filter_by(id=inv.id).first()
 

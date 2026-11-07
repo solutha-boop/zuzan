@@ -15903,6 +15903,7 @@ function DataImport() {
     {id:"profit_loss",        label:"Income Statement",   icon:"📈"},
     {id:"general_ledger",     label:"General Ledger",     icon:"📒"},
     {id:"journals",           label:"Journals",           icon:"📓"},
+    {id:"fixed_assets",       label:"Fixed Assets",       icon:"🏗️"},
   ];
 
   // CSV templates — column headers users should use (or what Xero/QBO exports)
@@ -15918,6 +15919,7 @@ function DataImport() {
     profit_loss:        ["Type","Code","Account Name","Amount"],
     general_ledger:     ["Date","Reference","Description","Account Code","Account Name","Debit","Credit"],
     journals:           ["Date","Journal No","Narration","Account Code","Account Name","Debit","Credit"],
+    fixed_assets:       ["Asset Number","Asset Name","Category","Description","Location","Purchase Date","Cost","Residual Value","Useful Life Months","Depreciation Method","Depreciation Rate","Accumulated Depreciation","Status","SARS Category","Wear and Tear Rate"],
   };
 
   const REQUIRED = {
@@ -15932,6 +15934,7 @@ function DataImport() {
     profit_loss:        "Account Name*",
     general_ledger:     "Debit* or Credit*",
     journals:           "Debit* or Credit*",
+    fixed_assets:       "Asset Name*, Category*, Purchase Date*, Cost*",
   };
 
   // Xero / QBO aliases shown as hints
@@ -15947,6 +15950,7 @@ function DataImport() {
     profit_loss:        "Use Type column (Revenue/Expense) + Account Name + Amount. Xero/QBO P&L exports work directly.",
     general_ledger:     "Xero: Date, SourceNo, Account Code, Account, Description, Debit, Credit · QBO: Date, Ref No, Account, Description, Debit, Credit",
     journals:           "Xero: Date, Journal No, Narration, Account Code, Account, Debit, Credit · QBO: Date, Journal No, Description, Account, Debit, Credit",
+    fixed_assets:       "Xero Fixed Asset Manager export works directly. Useful Life accepts months or years (column header is detected automatically). Depreciation Method: straight_line or diminishing_balance (SL/DB also accepted). Depreciation Rate as % (e.g. 20 = 20%). Accumulated Depreciation carries forward existing depreciation. SARS Category maps to IN47 wear-and-tear schedule (optional). Existing assets are updated when Asset Number or Asset Name + Purchase Date match.",
   };
 
   function switchTab(id) {

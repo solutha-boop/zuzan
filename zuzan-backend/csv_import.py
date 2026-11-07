@@ -26,7 +26,7 @@ from datetime import datetime
 
 from database import (
     get_db, Customer, Supplier, Invoice, Expense, InvoiceStatus,
-    Account, AccountType, JournalEntry, JournalLine, Employee,
+    Account, AccountType, JournalEntry, JournalLine, Employee, FixedAsset,
 )
 from crypto import encrypt_field
 from auth import require_role, get_current_user
@@ -2080,3 +2080,238 @@ async def clear_all_imports(
 
     db.commit()
     return {"deleted_entries": len(ids), "deleted_accounts": len(orphan_ids)}
+
+
+# ── FIXED ASSETS IMPORT ───────────────────────────────────────────────────────
+
+FIXED_ASSET_ALIASES: dict[str, list[str]] = {
+    "asset_number":   ["asset_number", "asset_no", "asset no", "asset#", "fa_number",
+                       "fa number", "reference", "ref"],
+    "asset_name":     ["asset_name", "asset name", "name", "description", "asset",
+                       "item", "item name"],
+    "category":       ["category", "asset_type", "asset type", "type", "class",
+                       "asset_class", "asset class", "group"],
+    "description":    ["description", "notes", "details", "memo"],
+    "location":       ["location", "site", "department", "cost_centre", "cost centre"],
+    "purchase_date":  ["purchase_date", "purchase date", "date", "acquisition_date",
+                       "acquisition date", "date purchased", "date acquired",
+                       "purchasedate"],
+    "cost":           ["cost", "purchase_price", "purchase price", "original_cost",
+                       "original cost", "amount", "value", "cost_price"],
+    "residual_value": ["residual_value", "residual value", "scrap_value", "scrap value",
+                       "salvage_value", "salvage value", "residual"],
+    "useful_life_months": ["useful_life_months", "useful life months", "life_months",
+                           "life months", "months", "life (months)",
+                           "useful_life_years",  "useful life years", "life_years",
+                           "life years", "life (years)", "years"],
+    "depreciation_method": ["depreciation_method", "depreciation method", "method",
+                            "dep_method", "dep method"],
+    "depreciation_rate":   ["depreciation_rate", "depreciation rate", "rate",
+                            "dep_rate", "dep rate", "rate (%)"],
+    "accumulated_depreciation": ["accumulated_depreciation", "accumulated depreciation",
+                                 "accum_dep", "accum dep", "accumulated dep",
+                                 "depreciation to date", "dep to date"],
+    "status":         ["status", "asset_status", "asset status"],
+    "sars_category":  ["sars_category", "sars category", "sars_class", "wear_and_tear",
+                       "wear and tear category", "in47_category"],
+    "wear_and_tear_rate": ["wear_and_tear_rate", "wear and tear rate", "s11e_rate",
+                           "wear_tear_%", "wear_tear_pct"],
+}
+
+_DEPR_METHOD_MAP = {
+    "sl":                   "straight_line",
+    "straight line":        "straight_line",
+    "straight-line":        "straight_line",
+    "straight_line":        "straight_line",
+    "straightline":         "straight_line",
+    "db":                   "diminishing_balance",
+    "diminishing balance":  "diminishing_balance",
+    "diminishing_balance":  "diminishing_balance",
+    "reducing balance":     "diminishing_balance",
+    "reducing_balance":     "diminishing_balance",
+    "rb":                   "diminishing_balance",
+    "declining balance":    "diminishing_balance",
+}
+
+def _norm_depr_method(raw: str) -> str:
+    return _DEPR_METHOD_MAP.get(raw.strip().lower(), "straight_line")
+
+
+@router.post("/fixed_assets")
+async def import_fixed_assets(
+    file:    UploadFile = File(...),
+    db:      Session    = Depends(get_db),
+    cu                  = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Import fixed assets from a CSV or tab-separated file.
+
+    Accepts Xero Fixed Asset Manager exports and generic asset registers.
+    Existing assets are matched by asset_number (if supplied), then by
+    asset_name + purchase_date.  Matched records are updated; unmatched
+    records create new assets.
+
+    Key columns (case-insensitive, Xero aliases recognised automatically):
+      asset_name*, category*, purchase_date*, cost*,
+      useful_life_months (or useful_life_years),
+      residual_value, depreciation_method, depreciation_rate,
+      accumulated_depreciation, asset_number, description, location,
+      status, sars_category, wear_and_tear_rate
+    """
+    cid = cu.company_id
+    raw = await file.read()
+    text = raw.decode("utf-8-sig", errors="replace")
+
+    # Accept both tab-separated (Xero) and comma-separated
+    sample = text[:2000]
+    delimiter = "\t" if text.count("\t") > text.count(",") else ","
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    rows   = list(reader)
+
+    if not rows:
+        raise HTTPException(400, "File is empty")
+
+    headers = rows[0]
+    data    = rows[1:]
+    m       = _map_headers(headers, FIXED_ASSET_ALIASES)
+
+    if "asset_name" not in m and "category" not in m:
+        raise HTTPException(
+            400,
+            "Could not find required columns. Need at minimum: asset_name, "
+            "category, purchase_date, cost. Got: " + ", ".join(headers[:10])
+        )
+
+    imported = skipped = 0
+    errors: list[dict] = []
+
+    for row_i, row in enumerate(data, start=2):
+        if not any(c.strip() for c in row):
+            continue
+        try:
+            name     = _get(row, m, "asset_name").strip()
+            category = _get(row, m, "category").strip() or "General"
+            cost_raw = _get(row, m, "cost")
+            cost     = _parse_float(cost_raw)
+
+            if not name:
+                skipped += 1
+                errors.append({"row": row_i, "message": "Missing asset_name — row skipped"})
+                continue
+            if cost == 0.0 and cost_raw.strip():
+                skipped += 1
+                errors.append({"row": row_i, "message": f"Could not parse cost '{cost_raw}' — row skipped"})
+                continue
+
+            # Purchase date
+            purchase_date = _parse_date(_get(row, m, "purchase_date"))
+            if not purchase_date:
+                purchase_date = datetime.utcnow()
+
+            # Useful life — accept months or years column
+            life_raw = _get(row, m, "useful_life_months").strip()
+            life_months = 0
+            if life_raw:
+                try:
+                    val = float(life_raw.replace(",", ""))
+                    # If the header contained "year" interpret as years
+                    hdr_text = (headers[m["useful_life_months"]] if "useful_life_months" in m else "").lower()
+                    if "year" in hdr_text:
+                        life_months = max(1, int(round(val * 12)))
+                    else:
+                        life_months = max(1, int(round(val)))
+                except ValueError:
+                    pass
+            if life_months == 0:
+                life_months = 60  # default 5 years if not specified
+
+            residual    = _parse_float(_get(row, m, "residual_value")) if "residual_value" in m else 0.0
+            method      = _norm_depr_method(_get(row, m, "depreciation_method")) if "depreciation_method" in m else "straight_line"
+            rate_raw    = _get(row, m, "depreciation_rate")
+            depr_rate   = None
+            if rate_raw.strip():
+                try:
+                    r = float(rate_raw.replace(",", "").replace("%", ""))
+                    depr_rate = r / 100.0 if r > 1 else r  # normalise e.g. 20 → 0.20
+                except ValueError:
+                    pass
+
+            accum_dep   = _parse_float(_get(row, m, "accumulated_depreciation")) if "accumulated_depreciation" in m else 0.0
+            asset_no    = _get(row, m, "asset_number").strip() or None
+            description = _get(row, m, "description").strip() or None
+            location    = _get(row, m, "location").strip() or None
+            sars_cat    = _get(row, m, "sars_category").strip() or None
+            wt_raw      = _get(row, m, "wear_and_tear_rate")
+            wt_rate     = None
+            if wt_raw.strip():
+                try:
+                    w = float(wt_raw.replace(",", "").replace("%", ""))
+                    wt_rate = w / 100.0 if w > 1 else w
+                except ValueError:
+                    pass
+
+            status_raw  = _get(row, m, "status").strip().lower()
+            status      = status_raw if status_raw in ("active", "disposed", "written_off") else "active"
+
+            # Match existing asset: by asset_number, then name+date
+            existing = None
+            if asset_no:
+                existing = db.query(FixedAsset).filter(
+                    FixedAsset.company_id == cid,
+                    FixedAsset.asset_number == asset_no,
+                ).first()
+            if existing is None:
+                existing = db.query(FixedAsset).filter(
+                    FixedAsset.company_id == cid,
+                    func.lower(FixedAsset.asset_name) == name.lower(),
+                    FixedAsset.purchase_date == purchase_date,
+                ).first()
+
+            if existing:
+                # Update in place
+                existing.asset_name              = name
+                existing.category                = category
+                if description:  existing.description         = description
+                if location:     existing.location            = location
+                existing.cost                    = cost
+                existing.residual_value          = residual
+                existing.useful_life_months      = life_months
+                existing.depreciation_method     = method
+                if depr_rate is not None: existing.depreciation_rate = depr_rate
+                existing.accumulated_depreciation = accum_dep
+                existing.status                  = status
+                if sars_cat:    existing.sars_category       = sars_cat
+                if wt_rate is not None: existing.wear_and_tear_rate = wt_rate
+            else:
+                db.add(FixedAsset(
+                    company_id              = cid,
+                    asset_number            = asset_no,
+                    asset_name              = name,
+                    category                = category,
+                    description             = description,
+                    location                = location,
+                    purchase_date           = purchase_date,
+                    cost                    = cost,
+                    residual_value          = residual,
+                    useful_life_months      = life_months,
+                    depreciation_method     = method,
+                    depreciation_rate       = depr_rate,
+                    accumulated_depreciation = accum_dep,
+                    status                  = status,
+                    sars_category           = sars_cat,
+                    wear_and_tear_rate      = wt_rate,
+                ))
+            imported += 1
+
+        except Exception as e:
+            skipped += 1
+            errors.append({"row": row_i, "message": str(e)})
+
+    db.commit()
+    return {
+        "entity":     "fixed_assets",
+        "total_rows": len(data),
+        "imported":   imported,
+        "skipped":    skipped,
+        "errors":     errors[:50],
+    }
