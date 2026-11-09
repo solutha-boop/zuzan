@@ -13689,7 +13689,7 @@ function FixedAssets() {
               <div style={{fontSize:12,color:C.inkMid,marginBottom:4,fontWeight:600}}>SARS Category</div>
               <select value={editForm.sars_category||""} onChange={e=>setEditForm(v=>({...v,sars_category:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
                 <option value="">— None —</option>
-                {(cats||[]).map(c=><option key={c} value={c}>{c}</option>)}
+                {SARS_WT_CATS.map(c=><option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div style={{display:"flex",gap:12,marginTop:8}}>
