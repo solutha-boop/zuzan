@@ -50,6 +50,7 @@ SARS_WEAR_TEAR = {
                                                 "note": "40% / 20% / 20% / 20% over 4 tax years; not pro-rated"},
     "Manufacturing plant — used (s12C)":       {"years": 5,  "section": "12C", "schedule": [0.20] * 5,
                                                 "note": "20% a year over 5 tax years; not pro-rated"},
+    "Generators / UPS systems":                {"years": 5,  "section": "11(e)"},
     "Tools — hand tools":                      {"years": 3,  "section": "11(e)"},
     "Tools — power tools":                     {"years": 3,  "section": "11(e)"},
     # ── Buildings ────────────────────────────────────────────────────────────
