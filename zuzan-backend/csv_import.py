@@ -1448,6 +1448,7 @@ async def import_general_ledger(
 
 @router.post("/reclassify-gl-accounts")
 async def reclassify_gl_accounts(
+    dry_run: bool = False,
     db: Session = Depends(get_db),
     cu         = Depends(require_role("owner", "admin", "accountant")),
 ):
@@ -1460,6 +1461,13 @@ async def reclassify_gl_accounts(
 
     Safe to call multiple times — only accounts whose type differs from the
     correct classification are updated.
+
+    Safeguards (audit fix 2026-11-09): the Xero code-range inference is only applied
+    when the account's net import balance direction agrees with the proposed type
+    (revenue/liability/equity = net credit, asset/expense = net debit), so custom
+    3xxx/4xxx accounts that were correctly typed are not retyped to expense.
+    Name-based mapping (explicit Xero descriptor) is always trusted.
+    Pass ?dry_run=true to preview the changes without saving.
     """
     cid = cu.company_id
     # Only accounts CREATED BY IMPORT are eligible (audit fix 2026-11-05): never
@@ -1479,16 +1487,28 @@ async def reclassify_gl_accounts(
         Account.company_id == cid, Account.is_system == False
     ).all()
 
+    net_debit = {r[0]: float(r[1] or 0) for r in db.query(
+        JournalLine.account_id,
+        func.coalesce(func.sum(JournalLine.debit - JournalLine.credit), 0))
+        .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+        .filter(JournalEntry.company_id == cid, JournalEntry.source == "import")
+        .group_by(JournalLine.account_id).all()}
+    _debit_types = (AccountType.asset, AccountType.expense)
+
     fixed = []
     for acct in accounts:
         if (acct.code or "").strip() in protected_codes:
             continue
         if acct.id in native_ids or acct.id not in import_ids:
             continue
-        correct = (
-            _type_from_xero_name(acct.name)      # e.g. account named "Revenue"
-            or _infer_type_from_xero_code(acct.code)
-        )
+        correct = _type_from_xero_name(acct.name)      # explicit descriptor: always trusted
+        if not correct:
+            inferred = _infer_type_from_xero_code(acct.code)
+            bal = net_debit.get(acct.id, 0.0)
+            # Only trust the code range when the balance direction agrees (or is nil)
+            if inferred and (abs(bal) < 0.005
+                             or (bal > 0) == (inferred in _debit_types)):
+                correct = inferred
         if correct and acct.type != correct:
             fixed.append({
                 "code":     acct.code or "—",
@@ -1496,10 +1516,15 @@ async def reclassify_gl_accounts(
                 "old_type": acct.type.value,
                 "new_type": correct.value,
             })
-            acct.type = correct
+            if not dry_run:
+                acct.type = correct
 
-    db.commit()
+    if dry_run:
+        db.rollback()
+    else:
+        db.commit()
     return {
+        "dry_run":  dry_run,
         "fixed":    len(fixed),
         "accounts": fixed,
         "message":  (

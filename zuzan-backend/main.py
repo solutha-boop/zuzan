@@ -622,7 +622,7 @@ def _build_company_context(company_id: int, db) -> str:
         paid_invs = db.query(Invoice).filter(
             Invoice.company_id == company_id,
             Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
-            Invoice.invoice_date >= fy_start,
+            Invoice.issue_date >= fy_start,
         ).all()
         invoice_revenue = sum(_received_net_zar(i) for i in paid_invs)
 
@@ -640,12 +640,10 @@ def _build_company_context(company_id: int, db) -> str:
         # Expenses from manual expense records (current FY, excl. VAT)
         exps = db.query(Expense).filter(
             Expense.company_id == company_id,
-            Expense.date >= fy_start,
+            Expense.expense_date >= fy_start,
         ).all()
-        manual_expenses = sum(
-            (e.amount / 1.15 if getattr(e, "vat_inclusive", True) else e.amount)
-            for e in exps
-        )
+        # Net of VAT, same basis as the dashboard (amount - vat_amount)
+        manual_expenses = sum((e.amount or 0) - (e.vat_amount or 0) for e in exps)
 
         # GL-imported expenses (source="import" journal entries, current FY)
         gl_exp_data = _gl_import_expenses(db, company_id, date_from=fy_start)
@@ -660,9 +658,15 @@ def _build_company_context(company_id: int, db) -> str:
         ).count()
 
         # Last payroll total
-        last_payslips = db.query(Payslip).filter(Payslip.company_id == company_id).order_by(Payslip.id.desc()).limit(50).all()
-        last_payroll = sum(p.net_pay for p in last_payslips) if last_payslips else 0
-        last_payroll_period = last_payslips[0].period_label if last_payslips and hasattr(last_payslips[0], "period_label") else "last run"
+        # (Payslip has no company_id: join via Employee; use the most recent period only)
+        _co_slips = db.query(Payslip).join(Employee, Payslip.employee_id == Employee.id).filter(
+            Employee.company_id == company_id)
+        last_payroll_period = _co_slips.with_entities(_func.max(Payslip.period)).scalar()
+        if last_payroll_period:
+            last_payroll = float(_co_slips.filter(Payslip.period == last_payroll_period)
+                                 .with_entities(_func.coalesce(_func.sum(Payslip.net_pay), 0)).scalar() or 0)
+        else:
+            last_payroll, last_payroll_period = 0, "no payroll yet"
 
         # Top unpaid invoices (up to 5)
         top_debtors = "\n".join(
