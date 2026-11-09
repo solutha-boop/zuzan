@@ -6,6 +6,7 @@ Supported entity types:
   POST /import/suppliers  — vendor/supplier list
   POST /import/invoices   — invoice history
   POST /import/expenses   — expense / bill history
+  POST /import/payments   — payments received against existing invoices (?dry_run=true previews)
 
 Column detection is case-insensitive and recognises common Xero and
 QuickBooks export column names automatically.  Unknown column names are
@@ -581,6 +582,137 @@ async def import_invoices(
         "skipped":          0,
         "errors":           errors,
         "journal_backfill": {k: v for k, v in backfill.items() if k != "errors"},
+    }
+
+
+# ── PAYMENTS RECEIVED ─────────────────────────────────────────────────────────
+
+PAYMENT_ALIASES: dict[str, list[str]] = {
+    "invoice_number": ["invoice_number", "invoice_no", "invoice_num", "invoice", "invoice_#", "invoice_ref",
+                       "inv_no", "inv_number", "inv", "document_number", "doc_no", "reference_invoice"],
+    "amount":         ["amount", "amount_received", "payment", "payment_amount", "received", "amount_paid",
+                       "paid", "paid_amount", "credit", "total_received"],
+    "payment_date":   ["payment_date", "date_received", "received_date", "date_paid", "paid_date", "date",
+                       "transaction_date", "value_date", "payment_received_date"],
+}
+
+
+def _payment_already_posted(db, cid: int, invoice_id: int, when: datetime, amount: float) -> bool:
+    """True when this invoice already has a payment entry for the same day and the same bank debit (re-uploaded file)."""
+    day0 = datetime(when.year, when.month, when.day)
+    day1 = day0.replace(hour=23, minute=59, second=59)
+    rows = (db.query(JournalLine.debit)
+              .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+              .join(Account, JournalLine.account_id == Account.id)
+              .filter(JournalEntry.company_id == cid, JournalEntry.source == "invoice_payment",
+                      JournalEntry.source_id == invoice_id, Account.code == "1000",
+                      JournalEntry.date >= day0, JournalEntry.date <= day1).all())
+    return any(abs((d or 0) - amount) < 0.005 for (d,) in rows)
+
+
+@router.post("/payments")
+async def import_payments(
+    file:    UploadFile = File(...),
+    dry_run: bool       = False,
+    db:      Session    = Depends(get_db),
+    cu                  = Depends(require_role("owner", "admin", "accountant")),
+):
+    """Record payments received against EXISTING invoices from a CSV/Excel file.
+
+    Columns: Invoice Number, Amount (received), Payment Date (optional, defaults to today).
+    Each row is an amount received on that date - a row smaller than the balance is a part payment;
+    several rows for one invoice are added together. Every row goes through the same logic as the
+    'Record payment' button, so the invoice status and the ledger (Bank / Debtors) update identically.
+    Use dry_run=true to preview what would happen without changing anything.
+    """
+    from companies import update_invoice, InvoiceUpdate       # lazy: companies imports are heavy
+    cid           = cu.company_id
+    headers, rows = _read_csv(await file.read())
+    m             = _map_headers(headers, PAYMENT_ALIASES)
+    if "invoice_number" not in m or "amount" not in m:
+        raise HTTPException(
+            400,
+            f"Need an Invoice Number column and an Amount column. Detected columns: {headers}. "
+            "Expected e.g. 'Invoice Number', 'Amount', 'Payment Date'."
+        )
+    if len(rows) > 5000:
+        raise HTTPException(400, "A payments file can have at most 5000 rows. Split it and upload in parts.")
+
+    today = datetime.utcnow()
+    applied, errors, duplicates = [], [], 0
+    pending_paid: dict[int, float] = {}          # dry-run running totals per invoice (ZAR)
+
+    for i, row in enumerate(rows, start=2):
+        try:
+            inv_no = _get(row, m, "invoice_number")
+            raw_amt = _get(row, m, "amount")
+            if not inv_no and not raw_amt:
+                continue                                          # blank line
+            if not inv_no:
+                errors.append({"row": i, "message": "No invoice number - row skipped."}); continue
+            amt = round(_parse_float(raw_amt), 2)
+            if amt <= 0:
+                errors.append({"row": i, "message": f"Invoice {inv_no}: amount '{raw_amt}' must be greater than zero - row skipped."}); continue
+
+            raw_date = _get(row, m, "payment_date")
+            when = _parse_date(raw_date) if raw_date else today
+            if raw_date and when is None:
+                errors.append({"row": i, "message": f"Invoice {inv_no}: the date '{raw_date}' is not a recognised format - row skipped."}); continue
+            if when.date() > today.date():
+                errors.append({"row": i, "message": f"Invoice {inv_no}: payment date {when:%Y-%m-%d} is in the future - row skipped."}); continue
+
+            inv = db.query(Invoice).filter(Invoice.company_id == cid, Invoice.invoice_number == inv_no).first()
+            if not inv:
+                errors.append({"row": i, "message": f"Invoice {inv_no} was not found - row skipped. Import or create the invoice first."}); continue
+            if inv.status == InvoiceStatus.draft:
+                errors.append({"row": i, "message": f"Invoice {inv_no} is still a draft - issue it before recording a payment."}); continue
+            if inv.status == InvoiceStatus.written_off:
+                errors.append({"row": i, "message": f"Invoice {inv_no} was written off as a bad debt - use 'Record Recovery' instead."}); continue
+            if inv.currency and inv.currency != "ZAR":
+                errors.append({"row": i, "message": f"Invoice {inv_no} is in {inv.currency} - record foreign-currency payments on the invoice itself (the rand value received is needed)."}); continue
+
+            total_due = round(inv.total_amount or 0, 2)
+            already   = round(inv.paid_amount_zar or 0, 2) if inv.status in (InvoiceStatus.paid, InvoiceStatus.partial) else 0.0
+            if dry_run:
+                already = max(already, pending_paid.get(inv.id, 0.0))
+            balance   = round(total_due - already, 2)
+            if balance <= 0.005:
+                errors.append({"row": i, "message": f"Invoice {inv_no} is already paid in full - row skipped."}); continue
+            if _payment_already_posted(db, cid, inv.id, when, amt):
+                duplicates += 1
+                errors.append({"row": i, "message": f"Invoice {inv_no}: a payment of R{amt:,.2f} on {when:%Y-%m-%d} is already recorded - skipped (not recorded twice)."}); continue
+            if amt > balance + 0.01:
+                errors.append({"row": i, "message": f"Invoice {inv_no}: R{amt:,.2f} is more than the balance due (R{balance:,.2f}) - row skipped."}); continue
+
+            new_cum = round(min(already + amt, total_due), 2)
+            outcome = "paid in full" if new_cum + 0.005 >= total_due else "part payment"
+            if not dry_run:
+                await update_invoice(
+                    inv.id,
+                    InvoiceUpdate(status="paid", paid_date=when.strftime("%Y-%m-%d"), paid_amount_zar=new_cum),
+                    current_user=cu, db=db,
+                )
+            else:
+                pending_paid[inv.id] = new_cum
+            applied.append({"row": i, "invoice": inv_no, "client": inv.client_name, "amount": amt,
+                            "date": when.strftime("%Y-%m-%d"), "result": outcome, "balance_after": round(total_due - new_cum, 2)})
+        except HTTPException as he:
+            db.rollback()
+            errors.append({"row": i, "message": f"Invoice {inv_no}: {he.detail}"})
+        except Exception as e:
+            db.rollback()
+            errors.append({"row": i, "message": str(e)})
+
+    return {
+        "entity":     "payments",
+        "dry_run":    dry_run,
+        "total_rows": len(rows),
+        "imported":   len(applied),
+        "skipped":    len(errors),
+        "duplicates": duplicates,
+        "total_received": round(sum(a["amount"] for a in applied), 2),
+        "applied":    applied,
+        "errors":     errors,
     }
 
 

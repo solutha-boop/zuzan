@@ -15896,6 +15896,7 @@ function DataImport() {
     {id:"suppliers",          label:"Suppliers",          icon:"🏭"},
     {id:"invoices",           label:"Invoices",           icon:"🧾"},
     {id:"expenses",           label:"Expenses",           icon:"💳"},
+    {id:"payments",           label:"Payments Received",  icon:"💵"},
     {id:"employees",          label:"Employees",          icon:"🧑‍💼"},
     {id:"payroll_adjustments",label:"Payroll Adjustments",icon:"💰"},
     {id:"trial_balance",      label:"Trial Balance",      icon:"⚖️"},
@@ -15912,6 +15913,7 @@ function DataImport() {
     suppliers:          ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
     invoices:           ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
     expenses:           ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
+    payments:           ["Invoice Number","Amount","Payment Date"],
     employees:          ["Employee Number","First Name","Last Name","ID Number","Tax Number","Date of Birth","Appointment Date","Start Date","Address","Position","Department","Grade","Employment Type","Employment Category","Gross Salary","Hourly Rate","Bank Name","Account Number","Branch Code","Account Type","Pension Employee Pct","Pension Employer Pct","Pension Employee Fixed","Pension Employer Fixed","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Union Subscription","Advance Monthly Deduction","On Maternity Leave","Security Grade","Security Area","PSIRA Number","Shift Type","Pay Schedule","Special Allowance Type","PSSPF Exempt"],
     payroll_adjustments:["ID Number","Employee Number","First Name","Last Name","Gross Salary","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Position","Department","Grade"],
     trial_balance:      ["Code","Account Name","Type","Debit","Credit"],
@@ -15927,6 +15929,7 @@ function DataImport() {
     suppliers:          "Name*",
     invoices:           "Client Name*",
     expenses:           "Amount*",
+    payments:           "Invoice Number*, Amount*",
     employees:          "First Name*, Last Name*, Gross Salary*",
     payroll_adjustments:"ID Number* or Employee Number* or First+Last Name*",
     trial_balance:      "Account Name*",
@@ -15943,6 +15946,7 @@ function DataImport() {
     suppliers:          "Xero: Contact Name · QBO: Vendor",
     invoices:           "Xero: InvoiceNo, ContactName, InvoiceDate, Subtotal, TotalTax, Total, Status · QBO: Num, Customer, Date",
     expenses:           "Xero: Contact Name, Description, Subtotal, TotalTax, Date, Account · QBO: Vendor, Memo, Amount, Date",
+    payments:           "Records money received against invoices that are ALREADY in Zuzan, matched by Invoice Number. Each row is the amount received on that date (Payment Date optional, defaults to today) - less than the balance is a part payment, and several rows for one invoice add up. Rand invoices only. You see a preview first and nothing is recorded until you confirm.",
     employees:          "Required: First Name, Last Name, Gross Salary. Existing employees are UPDATED (matched by Employee Number, then ID Number, then First+Last Name) — new rows are created. Dates as YYYY-MM-DD. Employment Type: salaried or hourly. Employment Category: permanent/fixed_term/temp_labour/learnership. Account Type: Cheque/Savings/Transmission. Security officers: Security Grade A-E and Security Area (1_2 = Areas 1 & 2, 3 = Area 3) are both required - officers are placed on the security pay schedule automatically. Special Allowance Type: none, armed, armed_response, nkp, control_centre, canine or mobile_supervisor. Blank cells never overwrite existing values. On Maternity Leave: true/false. PSSPF Exempt: yes only if the officer is not a PSSPF member (pension columns are ignored for security officers). Only columns present in your file are applied — leave columns out to keep existing values unchanged.",
     payroll_adjustments:"Match employees by ID Number, Employee Number, or First+Last Name. Only columns present in the CSV are updated — partial CSVs are fine.",
     trial_balance:      "Xero: Account Code, Account, Debit, Credit · QBO: Account, Type, Debit Balance, Credit Balance",
@@ -15964,6 +15968,7 @@ function DataImport() {
     suppliers: ["Office World","ap@officeworld.co.za","010 000 0001","45 Park Rd, CPT","4670098765","ABSA","4098765432","632005","Cheque","30","Stationery supplier"],
     invoices:  ["INV-001","Motswedi Motors","accounts@motswedi.co.za","Consulting services","8695.65","1304.35","10000","ZAR","2026-09-01","2026-09-30","sent"],
     expenses:  ["Checkers","Office groceries","230","0","General Expenses","2026-09-05"],
+    payments:  ["INV-001","5000","2026-09-15"],
     payroll_adjustments: ["8001015009087","EMP001","Jane","Smith","27000","0.05","0.05","1600","1600","2","Senior Bookkeeper","Finance","B2"],
   };
 
@@ -16000,6 +16005,9 @@ function DataImport() {
     const norm = headers.map(h => h.trim().toLowerCase().replace(/[\s_-]+/g, ""));
     const has  = (...keys) => keys.some(k => norm.includes(k));
     if (has("firstname","first_name","firstname"))            return "employees";
+    // A payments file has an invoice number + an amount received but no client/customer name
+    if (has("invoicenumber","invoiceno","invoicenum","invoice","inv_no") && !has("clientname","client","contactname","customer","customername","name") &&
+        has("amount","amountreceived","paymentamount","payment","amountpaid","paymentdate","datereceived","datepaid")) return "payments";
     if (has("invoicenumber","invoiceno","inv_no"))            return "invoices";
     if (has("expensedate","expense_date"))                    return "expenses";
     if (has("idnumber","id_number","employeenumber","emp_no"))return "payroll_adjustments";
@@ -16063,13 +16071,13 @@ function DataImport() {
     reader.readAsText(f);
   }
 
-  async function handleImport() {
+  async function handleImport(forceReal) {
     if (!file) return;
     setImporting(true); setErr(null); setResult(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`${BASE_URL}/import/${tab}${HAS_ASAT ? `?as_at=${encodeURIComponent(asAt)}&replace=${replaceImp}` : ""}`, {
+      const r = await fetch(`${BASE_URL}/import/${tab}${HAS_ASAT ? `?as_at=${encodeURIComponent(asAt)}&replace=${replaceImp}` : (tab === "payments" && forceReal !== true ? "?dry_run=true" : "")}`, {
         method: "POST",
         headers: {Authorization: "Bearer " + token},
         body: fd,
@@ -16362,7 +16370,7 @@ function DataImport() {
           {/* Results */}
           {result && (
             <div style={{background:C.surface,border:`2px solid ${result.errors.filter(e=>!e.message.includes("already exists")).length ? "#C8401A" : "#28a745"}`,borderRadius:14,padding:"20px 24px"}}>
-              <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:16}}>✅ Import Complete</div>
+              <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:16}}>{result.dry_run ? "👀 Preview - nothing has been recorded yet" : "✅ Import Complete"}</div>
               <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20}}>
                 {[
                   {label:"Rows in file",        value:result.total_rows, color:C.inkMid},
@@ -16370,9 +16378,9 @@ function DataImport() {
                     {label:"Created (new)",  value:result.created,  color:"#28a745"},
                     {label:"Updated (existing)", value:result.updated||0, color:"#0072CE"},
                   ] : [
-                    {label:tab==="payroll_adjustments"?"Updated":"Imported", value:result.imported, color:"#28a745"},
+                    {label:tab==="payroll_adjustments"?"Updated":(tab==="payments"?(result.dry_run?"Will be recorded":"Payments recorded"):"Imported"), value:result.imported, color:"#28a745"},
                   ]),
-                  {label:tab==="payroll_adjustments"?"Not Found":"Skipped (duplicate)", value:result.skipped||0, color:C.inkMid},
+                  {label:tab==="payroll_adjustments"?"Not Found":(tab==="payments"?"Not recorded":"Skipped (duplicate)"), value:result.skipped||0, color:C.inkMid},
                   {label:"Errors",               value:result.errors.filter(e=>!e.message.includes("already exists")).length, color:"#C8401A"},
                 ].map(k => (
                   <div key={k.label} style={{flex:1,minWidth:110,background:C.bg,borderRadius:10,padding:"14px 16px",textAlign:"center"}}>
@@ -16381,6 +16389,40 @@ function DataImport() {
                   </div>
                 ))}
               </div>
+              {tab==="payments" && (result.applied||[]).length > 0 && (
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>
+                    {result.dry_run ? "These payments will be recorded" : "Recorded"} - total R{Number(result.total_received||0).toLocaleString("en-ZA",{minimumFractionDigits:2,maximumFractionDigits:2})}
+                  </div>
+                  <div style={{maxHeight:220,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                      <thead><tr style={{background:C.bg,position:"sticky",top:0}}>
+                        {["Invoice","Client","Date","Amount","Result","Balance after"].map(h=>(<th key={h} style={{padding:"6px 10px",textAlign:"left",color:C.inkMid,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>{h}</th>))}
+                      </tr></thead>
+                      <tbody>
+                        {result.applied.map((a,i)=>(
+                          <tr key={i} style={{borderBottom:`1px solid ${C.border}30`}}>
+                            <td style={{padding:"5px 10px",fontFamily:"monospace"}}>{a.invoice}</td>
+                            <td style={{padding:"5px 10px"}}>{a.client}</td>
+                            <td style={{padding:"5px 10px"}}>{a.date}</td>
+                            <td style={{padding:"5px 10px"}}>R{Number(a.amount).toLocaleString("en-ZA",{minimumFractionDigits:2})}</td>
+                            <td style={{padding:"5px 10px",color:a.result==="paid in full"?"#28a745":"#B7791F"}}>{a.result}</td>
+                            <td style={{padding:"5px 10px"}}>R{Number(a.balance_after).toLocaleString("en-ZA",{minimumFractionDigits:2})}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {tab==="payments" && result.dry_run && result.imported > 0 && (
+                <button onClick={()=>handleImport(true)} disabled={importing} style={{
+                  padding:"10px 24px",background:importing?"#ccc":"#28a745",color:"#fff",border:"none",borderRadius:10,
+                  fontSize:14,fontWeight:700,cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",marginRight:12,marginBottom:12,
+                }}>
+                  {importing ? "Recording…" : `Record ${result.imported} payment${result.imported===1?"":"s"}`}
+                </button>
+              )}
               {result.errors.length > 0 && (
                 <div style={{marginBottom:16}}>
                   <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Row notes ({result.errors.length})</div>
@@ -16429,7 +16471,7 @@ function DataImport() {
               of <strong style={{color:C.ink}}>{currentTab?.label}</strong> data from{" "}
               <strong style={{color:C.ink}}>{file?.name}</strong> into your books.
               <br/><br/>
-              Duplicates are skipped automatically. This action cannot be undone.
+              {tab==="payments" ? "You will see a preview first - nothing is recorded until you confirm on the next screen." : "Duplicates are skipped automatically. This action cannot be undone."}
             </p>
             <div style={{display:"flex",gap:12}}>
               <button
