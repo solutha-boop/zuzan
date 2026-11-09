@@ -155,8 +155,8 @@ function useLiveData() {
 }
 
 const PLANS = [
-  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Payroll add-on (in-app, no 3rd party)","Bank feed (all SA banks)","Double-entry general ledger","Trial balance & journal viewer","Basic reports","Email support"] },
-  { id:"professional", name:"Professional", monthly:699,  annual:6990,  usdMonthly:39, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Balance sheet reconciliation","Purchase orders & inventory","Fixed assets & depreciation","Budgeting","Advanced reports & VAT201","Priority support"] },
+  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Fixed assets & depreciation","Payroll add-on (in-app, no 3rd party)","Bank feed (all SA banks)","Double-entry general ledger","Trial balance & journal viewer","Basic reports","Email support"] },
+  { id:"professional", name:"Professional", monthly:699,  annual:6990,  usdMonthly:39, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Balance sheet reconciliation","Purchase orders & inventory","Budgeting","Advanced reports & VAT201","Priority support"] },
   { id:"business",     name:"Business",     monthly:1299, annual:12990, usdMonthly:72, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Budgeting vs actuals","Cash flow forecast","Department budgets","API access","Dedicated account manager"] },
 ];
 
@@ -16905,7 +16905,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
     {id:"creditors",  label:"Creditors",   icon:"📤", minPlan:"professional"},
     {id:"coa",        label:"Accounts",    icon:"📒"},
     {id:"inventory",    label:"Inventory",   icon:"📦", minPlan:"professional"},
-    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭", minPlan:"professional"},
+    {id:"fixed_assets",    label:"Fixed Assets", icon:"🏭", minPlan:"starter"},
     {id:"fin_statements",  label:"Annual AFS",   icon:"📑"},
     {id:"documents",       label:"Documents",    icon:"📁", minPlan:"business"},
     {id:"data_import",     label:"Import Data",  icon:"⬆️", minPlan:"starter"},
