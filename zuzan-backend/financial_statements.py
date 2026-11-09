@@ -115,7 +115,10 @@ def _wt_rate_pct(fa):
     Priority: explicit wear_and_tear_rate → sars_category (IN47 table in
     fixed_assets.py) → category-name heuristic → None."""
     if fa.wear_and_tear_rate:
-        return float(fa.wear_and_tear_rate)
+        r = float(fa.wear_and_tear_rate)
+        # Stored as decimal (0.20 = 20%) — convert to percentage to match the
+        # rest of this function which returns values like 20.0, 4.0, 33.33.
+        return r * 100.0 if r < 1.0 else r
     if fa.sars_category:
         try:
             from fixed_assets import SARS_WEAR_TEAR
