@@ -16976,7 +16976,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
     creditors:  canAccess(user,"professional") ? <Creditors  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     coa:        <ChartOfAccounts/>,
     inventory:       canAccess(user,"professional") ? <Inventory/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
-    fixed_assets:    canAccess(user,"professional") ? <FixedAssets/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    fixed_assets:    <FixedAssets/>,
     fin_statements:  <AfsPaymentGate/>,
     documents:       canAccess(user,"business") ? <DocumentRepository/> : <UpgradeWall requiredPlan="business" onNavigateSettings={()=>setTab("settings")}/>,
     data_import:     <DataImport/>,
