@@ -13379,6 +13379,8 @@ function FixedAssets() {
   const [disposing,    setDisposing]    = useState(null);
   const [saving,       setSaving]       = useState(false);
   const [runningDepr,  setRunningDepr]  = useState(false);
+  const [editingAsset, setEditingAsset] = useState(null); // asset being edited
+  const [editForm,     setEditForm]     = useState({});
   const [form, setForm] = useState({
     asset_name:"", category:"Motor Vehicles", description:"", location:"",
     purchase_date: new Date().toISOString().slice(0,10),
@@ -13441,6 +13443,29 @@ function FixedAssets() {
       })});
       setForm({asset_name:"",category:"Motor Vehicles",description:"",location:"",purchase_date:new Date().toISOString().slice(0,10),cost:"",residual_value:"0",useful_life_months:"60",depreciation_method:"straight_line",depreciation_rate:"0.20",sars_category:"",post_journal:true});
       setSection("register");
+      load();
+    } catch(e) { alert("Failed: " + e.message); }
+    setSaving(false);
+  };
+
+  const handleUpdate = async () => {
+    if (!editForm.asset_name || !editForm.cost) { alert("Asset name and cost are required."); return; }
+    setSaving(true);
+    try {
+      await api(`/fixed-assets/${editingAsset.id}`, {method:"PUT", body: JSON.stringify({
+        asset_name:          editForm.asset_name,
+        category:            editForm.category,
+        description:         editForm.description || null,
+        location:            editForm.location || null,
+        purchase_date:       editForm.purchase_date,
+        cost:                +editForm.cost,
+        residual_value:      +editForm.residual_value || 0,
+        useful_life_months:  +editForm.useful_life_months,
+        depreciation_method: editForm.depreciation_method,
+        depreciation_rate:   editForm.depreciation_method === "diminishing_balance" ? +editForm.depreciation_rate : null,
+        sars_category:       editForm.sars_category || null,
+      })});
+      setEditingAsset(null);
       load();
     } catch(e) { alert("Failed: " + e.message); }
     setSaving(false);
@@ -13551,7 +13576,8 @@ function FixedAssets() {
                       <td style={{padding:"12px 14px"}}>
                         <span style={{background:statusBg(a.status),color:statusColor(a.status),borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,textTransform:"capitalize"}}>{a.status}</span>
                       </td>
-                      <td style={{padding:"12px 14px"}}>
+                      <td style={{padding:"12px 14px",display:"flex",gap:6,alignItems:"center"}}>
+                        <button onClick={()=>{setEditingAsset(a);setEditForm({asset_name:a.asset_name,category:a.category,description:a.description||"",location:a.location||"",purchase_date:a.purchase_date?.slice(0,10)||"",cost:String(a.cost),residual_value:String(a.residual_value||0),useful_life_months:String(a.useful_life_months||60),depreciation_method:a.depreciation_method||"straight_line",depreciation_rate:String(a.depreciation_rate||0.20),sars_category:a.sars_category||""});}} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,whiteSpace:"nowrap"}}>Edit</button>
                         {a.status === "active" && (
                           <button onClick={()=>{setDisposing(a);setDispForm({disposal_date:new Date().toISOString().slice(0,10),disposal_proceeds:"0",disposal_notes:"",is_write_off:false});}} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,whiteSpace:"nowrap"}}>Dispose</button>
                         )}
@@ -13631,6 +13657,47 @@ function FixedAssets() {
             <button onClick={handleDispose} disabled={saving} style={{flex:1,background:C.red,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",opacity:saving?0.6:1}}>
               {saving ? "Processing..." : dispForm.is_write_off ? "Write Off Asset" : "Confirm Disposal"}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── EDIT ASSET MODAL ── */}
+      {editingAsset && (
+        <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setEditingAsset(null)}>
+          <div style={{background:C.card,borderRadius:16,padding:28,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 32px #0003"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontWeight:800,fontSize:17,marginBottom:20}}>Edit Asset — {editingAsset.asset_name}</div>
+            {[{l:"Asset Name",k:"asset_name",t:"text"},{l:"Description",k:"description",t:"text"},{l:"Location",k:"location",t:"text"},{l:"Purchase Date",k:"purchase_date",t:"date"},{l:"Cost (R)",k:"cost",t:"number"},{l:"Residual Value (R)",k:"residual_value",t:"number"},{l:"Useful Life (months)",k:"useful_life_months",t:"number"}].map(f=>(
+              <div key={f.k} style={{marginBottom:14}}>
+                <div style={{fontSize:12,color:C.inkMid,marginBottom:4,fontWeight:600}}>{f.l}</div>
+                <input type={f.t} value={editForm[f.k]||""} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            ))}
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:12,color:C.inkMid,marginBottom:4,fontWeight:600}}>Category</div>
+              <select value={editForm.category||""} onChange={e=>setEditForm(v=>({...v,category:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                {Object.keys(FA_USEFUL_LIVES).map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:12,color:C.inkMid,marginBottom:4,fontWeight:600}}>Depreciation Method</div>
+              <select value={editForm.depreciation_method||"straight_line"} onChange={e=>setEditForm(v=>({...v,depreciation_method:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="straight_line">Straight Line</option>
+                <option value="diminishing_balance">Diminishing Balance</option>
+              </select>
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:12,color:C.inkMid,marginBottom:4,fontWeight:600}}>SARS Category</div>
+              <select value={editForm.sars_category||""} onChange={e=>setEditForm(v=>({...v,sars_category:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}>
+                <option value="">— None —</option>
+                {(cats||[]).map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{display:"flex",gap:12,marginTop:8}}>
+              <button onClick={()=>setEditingAsset(null)} style={{flex:1,background:"transparent",color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              <button onClick={handleUpdate} disabled={saving} style={{flex:2,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
           </div>
         </div>
       )}
