@@ -40,7 +40,7 @@ ADMIN_EMAIL          = os.environ.get("ADMIN_EMAIL",  "dev@solutha.co.za")
 PLAN_PRICES = {
     "starter":      {"monthly": 399,  "annual": 3990},
     "professional": {"monthly": 699,  "annual": 6990},
-    "business":     {"monthly": 1299, "annual": 12990},
+    "business":     {"monthly": 999,  "annual": 9990},
 }
 
 PAYROLL_MIN_COST = 99  # minimum payroll add-on fee

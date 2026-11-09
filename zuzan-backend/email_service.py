@@ -49,8 +49,8 @@ PLAN_DETAILS = {
     },
     "business": {
         "name": "Business",
-        "price_monthly": 1299,
-        "price_annual":  12990,
+        "price_monthly": 999,
+        "price_annual":  9990,
         "features": [
             "20 users",
             "Unlimited Invoices",

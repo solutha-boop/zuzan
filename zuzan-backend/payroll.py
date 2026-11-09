@@ -2903,6 +2903,9 @@ async def reconciliation(
     db: Session = Depends(get_db)
 ):
     """Run all balance sheet reconciliation checks and return pass/warn/fail per rule."""
+    from plans import has_plan, plan_error
+    if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "professional"):
+        raise plan_error("professional", "The balance sheet reconciliation report")
     from datetime import timedelta
     cid = current_user.company_id
     now = datetime.utcnow()
@@ -3471,6 +3474,9 @@ async def cash_flow_13week(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    from plans import has_plan, plan_error
+    if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "business"):
+        raise plan_error("business", "The 13-week cash flow forecast")
     """Forward-looking 13-week rolling cash flow forecast.
 
     Pulls outstanding invoices (by due date), recurring invoice schedule,
@@ -4019,9 +4025,9 @@ async def ai_insights(
 ):
     """Generate AI-powered management insights for Business plan users."""
     co = db.query(Company).filter(Company.id == current_user.company_id).first()
-    plan = (co.plan.value if co and co.plan else "starter").lower()
-    if plan != "business":
-        raise HTTPException(status_code=403, detail="AI Insights are available on the Business plan only.")
+    from plans import has_plan, plan_error
+    if not has_plan(co, "business"):
+        raise plan_error("business", "AI Insights")
 
     import os as _os
     api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
@@ -4276,6 +4282,9 @@ async def creditors_aging(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    from plans import has_plan, plan_error
+    if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "professional"):
+        raise plan_error("professional", "The creditors book")
     """
     Creditors book with aging — outstanding purchase orders (received/partial) and
     unpaid on-credit expenses, grouped by vendor/supplier, aged from due date.
@@ -4768,7 +4777,7 @@ except ImportError:
     PLAN_PRICES = {
         "starter":      {"monthly": 399,  "annual": 3990},
         "professional": {"monthly": 699,  "annual": 6990},
-        "business":     {"monthly": 1299, "annual": 12990},
+        "business":     {"monthly": 999,  "annual": 9990},
     }
     PAYROLL_PER_EMP = 15.50
     PAYROLL_MIN     = 99.00

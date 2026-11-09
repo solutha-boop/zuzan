@@ -419,6 +419,10 @@ from xero_migrate import router as xero_migrate_router
 from quickbooks_migrate import router as qbo_migrate_router
 from benefits import router as benefits_router
 
+from plans import require_plan as _require_plan
+from fastapi import Depends as _PDepends
+_PRO = [_PDepends(_require_plan("professional", "This feature"))]
+_BIZ = [_PDepends(_require_plan("business", "This feature"))]
 app.include_router(auth_router,      prefix="/auth",      tags=["Auth"])
 app.include_router(companies_router, prefix="/companies", tags=["Companies"])
 app.include_router(coa_router,       prefix="/coa",       tags=["COA"])
@@ -430,13 +434,13 @@ app.include_router(payroll_router,   prefix="/payroll",   tags=["Payroll"])
 app.include_router(payments_router,  prefix="/payments",  tags=["Payments"])
 app.include_router(reports_router,   prefix="/reports",   tags=["Reports"])
 app.include_router(bank_router,      prefix="/bank",      tags=["Bank Import"])
-app.include_router(api_keys_router,  prefix="/api-keys",      tags=["API Keys"])
-app.include_router(inventory_router, prefix="/inventory",     tags=["Inventory"])
+app.include_router(api_keys_router,  prefix="/api-keys",      tags=["API Keys"], dependencies=_BIZ)
+app.include_router(inventory_router, prefix="/inventory",     tags=["Inventory"], dependencies=_PRO)
 app.include_router(customers_router, prefix="/customers",     tags=["Customers"])
 app.include_router(suppliers_router, prefix="/suppliers",     tags=["Suppliers"])
-app.include_router(po_router,        prefix="/purchase-orders", tags=["Purchase Orders"])
+app.include_router(po_router,        prefix="/purchase-orders", tags=["Purchase Orders"], dependencies=_PRO)
 app.include_router(quotes_router,    prefix="/quotes",          tags=["Quotes"])
-app.include_router(budgets_router,   prefix="/budgets",         tags=["Budgets"])
+app.include_router(budgets_router,   prefix="/budgets",         tags=["Budgets"], dependencies=_PRO)
 app.include_router(journal_router,   prefix="/journal",         tags=["Journal"])
 app.include_router(leave_router,        prefix="/leave",           tags=["Leave"])
 app.include_router(fixed_assets_router, prefix="/fixed-assets",    tags=["Fixed Assets"])
@@ -447,7 +451,7 @@ app.include_router(investec_router,      prefix="/banking/investec",     tags=["
 app.include_router(standardbank_router,  prefix="/banking/standardbank", tags=["Bank Feeds"])
 app.include_router(bank_interest_router, prefix="/banking",               tags=["Bank Feeds"])
 app.include_router(fin_stmts_router,     prefix="/financial-statements", tags=["Financial Statements"])
-app.include_router(documents_router,     prefix="/documents",            tags=["Documents"])
+app.include_router(documents_router,     prefix="/documents",            tags=["Documents"], dependencies=_BIZ)
 app.include_router(csv_import_router,    prefix="/import",               tags=["CSV Import"])
 app.include_router(integrations_router,  prefix="/integrations",          tags=["Integrations"])
 app.include_router(category_rules_router,                                tags=["Category Rules"])
@@ -801,7 +805,7 @@ def _keyword_fallback(msg: str, ctx: str) -> dict:
     if "document" in msg:
         return {"reply":"The Document Repository is under the Documents tab. Upload and organise contracts, licences, compliance certificates and other business documents."}
     if "plan" in msg or "upgrade" in msg or "subscription" in msg:
-        return {"reply":"ZuZan plans start at R399/month (Starter), R699/month (Professional) and R1,299/month (Business). Upgrade in Settings → Subscription. A 14-day free trial is included."}
+        return {"reply":"ZuZan plans start at R399/month (Starter), R699/month (Professional) and R999/month (Business). Starter includes 2 users and 20 invoices a month, Professional 5 users and 80 invoices, and Business 20 users and unlimited invoices. All prices exclude VAT. Upgrade in Settings → Subscription. A 14-day free trial is included."}
     if "setting" in msg or "company" in msg or "profile" in msg:
         return {"reply":"Company settings are under the Settings tab. Update your company name, VAT number, banking details, logo, and notification preferences there."}
     return {"reply":"I'm here to help with ZuZan. You can ask me about invoices, quotes, expenses, employees, payroll, VAT, reports, inventory, fixed assets, or SARS compliance. What do you need help with?"}
@@ -1099,7 +1103,7 @@ async def admin_mrr(db: Session = Depends(get_db_session), _=Depends(_check_admi
         for c in active_companies:
             plan_str  = str(c.plan.value) if c.plan else "starter"
             cycle_str = str(c.billing_cycle.value) if c.billing_cycle else "monthly"
-            prices = {"starter": 399, "professional": 699, "business": 1299}
+            prices = {"starter": 399, "professional": 699, "business": 999}
             monthly_price = prices.get(plan_str, 399)
             if cycle_str == "annual":
                 monthly_price = round(monthly_price * 10 / 12)  # 2-month discount

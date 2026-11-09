@@ -748,19 +748,8 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
     if not (data.cogs_amount and data.cogs_amount > 0):
         _require_stock(data.items_json, current_user.company_id, db)
     # Check plan invoice limits
-    company = db.query(Company).filter(Company.id == current_user.company_id).first()
-    limits = {"starter": 20, "professional": 50, "business": 999999}
-    limit = limits.get(company.plan, 20)
-
-    if not company.billing_exempt:
-        # Count this month's invoices
-        now = datetime.utcnow()
-        monthly_count = db.query(Invoice).filter(
-            Invoice.company_id == current_user.company_id,
-            Invoice.created_at >= datetime(now.year, now.month, 1)
-        ).count()
-        if monthly_count >= limit:
-            raise HTTPException(status_code=403, detail=f"Monthly invoice limit ({limit}) reached. Upgrade your plan.")
+    from plans import check_invoice_limit
+    check_invoice_limit(current_user.company_id, db)
 
     # Multi-line invoices: sum each line's own VAT instead of applying one flat
     # vat_applicable flag to the whole subtotal (audit fix 2026-09-06 — High).

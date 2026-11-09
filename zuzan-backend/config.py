@@ -8,7 +8,7 @@ Import from here; never redefine these in individual modules.
 PLAN_PRICES = {
     "starter":      {"monthly": 399,   "annual": 3990},
     "professional": {"monthly": 699,   "annual": 6990},
-    "business":     {"monthly": 1299,  "annual": 12990},
+    "business":     {"monthly": 999,   "annual": 9990},
 }
 
 # Payroll add-on pricing

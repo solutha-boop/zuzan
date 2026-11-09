@@ -240,6 +240,8 @@ def generate_due_recurring_invoices():
 def _generate_invoice_from_template(ri, db: Session, advance: bool = True) -> Invoice:
     """Create an Invoice from a RecurringInvoice template and (by default) advance next_run_date."""
     now = datetime.utcnow()
+    from plans import check_invoice_limit
+    check_invoice_limit(ri.company_id, db)          # recurring runs count against the plan's monthly invoice allowance
 
     # Compute next invoice number for this company
     from companies import next_invoice_number

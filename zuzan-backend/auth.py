@@ -28,7 +28,7 @@ except ImportError:
     PLAN_PRICES = {
         "starter":      {"monthly": 399,  "annual": 3990},
         "professional": {"monthly": 699,  "annual": 6990},
-        "business":     {"monthly": 1299, "annual": 12990},
+        "business":     {"monthly": 999,  "annual": 9990},
     }
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "zuzan-dev-key-change-in-production")
@@ -938,6 +938,11 @@ async def invite_member(
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="This email is already a member of your company.")
+    from plans import check_user_limit
+    # re-inviting the same address replaces its old invite, so it must not count twice
+    _same = db.query(InviteToken).filter(InviteToken.company_id == current_user.company_id, InviteToken.email == email,
+                                         InviteToken.used_at == None).count()
+    check_user_limit(current_user.company_id, db, adding=1 - min(_same, 1))
     _u = db.query(User).filter(func.lower(User.email) == email).first()
     if _u and db.query(CompanyMembership).filter(CompanyMembership.user_id == _u.id,
                                                  CompanyMembership.company_id == current_user.company_id).first() \

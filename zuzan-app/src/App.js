@@ -155,9 +155,9 @@ function useLiveData() {
 }
 
 const PLANS = [
-  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Fixed assets & depreciation","Payroll add-on (in-app, no 3rd party)","Bank feed (all SA banks)","Double-entry general ledger","Trial balance & journal viewer","Basic reports","Email support"] },
-  { id:"professional", name:"Professional", monthly:699,  annual:6990,  usdMonthly:39, users:5,  invoices:50,         color:C.accent, icon:"⚡", popular:true, features:["5 users","50 invoices/month","Everything in Starter","Balance sheet reconciliation","Purchase orders & inventory","Budgeting","Advanced reports & VAT201","Priority support"] },
-  { id:"business",     name:"Business",     monthly:1299, annual:12990, usdMonthly:72, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","Budgeting vs actuals","Cash flow forecast","Department budgets","API access","Dedicated account manager"] },
+  { id:"starter",      name:"Starter",      monthly:399,  annual:3990,  usdMonthly:22, users:2,  invoices:20,         color:C.blue,   icon:"🌱", features:["2 users","20 invoices/month","Invoicing & quotes","Expense tracking","Debtors ageing","Fixed assets & depreciation","VAT201 returns","Payroll add-on (in-app, no 3rd party)","Bank feed (all SA banks)","Double-entry general ledger","Trial balance & journal viewer","Basic reports","Email support"] },
+  { id:"professional", name:"Professional", monthly:699,  annual:6990,  usdMonthly:39, users:5,  invoices:80,         color:C.accent, icon:"⚡", popular:true, features:["5 users","80 invoices/month","Everything in Starter","Creditors ageing","Balance sheet reconciliation","Purchase orders & inventory","Budgeting (monthly, annual, department & cash flow)","Advanced reports","Priority support"] },
+  { id:"business",     name:"Business",     monthly:999,  annual:9990,  usdMonthly:55, users:20, invoices:"Unlimited", color:C.green,  icon:"🏢", features:["20 users","Unlimited invoices","Everything in Professional","13-week cash flow forecast","AI Insights","Document repository","API access","Dedicated account manager"] },
 ];
 
 const MOCK_INVOICES = [
@@ -6312,7 +6312,7 @@ function Reports({live = {}, user = null}) {
     setLoading(true);
     try {
       if (tab==="bs")    setBsData(await api(`/reports/balance-sheet`).catch(()=>null));
-      if (tab==="recon") setRecon(await api(`/reports/reconciliation`).catch(()=>null));
+      if (tab==="recon" && canAccess(user,"professional")) setRecon(await api(`/reports/reconciliation`).catch(()=>null));
       if (tab==="tb")    setTrialBal(await api(`/journal/trial-balance`).catch(()=>null));
       if (tab==="jnl") {
         setJournal(await api(`/journal/?limit=500&${dateParams}`).catch(()=>null));
@@ -6333,7 +6333,7 @@ function Reports({live = {}, user = null}) {
     {id:"pl",   label:"Income Statement"},
     {id:"bs",   label:"Balance Sheet"},
     {id:"cf",   label:"Cash Flow"},
-    {id:"recon",label:"Reconciliation"},
+    {id:"recon",label:canAccess(user,"professional") ? "Reconciliation" : "Reconciliation 🔒"},
     {id:"tb",   label:"Trial Balance"},
     {id:"jnl",  label:"Journal"},
     {id:"prov", label:"Provisional Tax"},
@@ -6373,7 +6373,7 @@ function Reports({live = {}, user = null}) {
           <span style={{fontSize:13,fontWeight:600,color:balanced?C.green:C.red}}>
             {balanced
               ? "Balance sheet is balanced — Assets = Liabilities + Equity"
-              : `Balance sheet imbalance of R ${Math.abs(bs.imbalance).toLocaleString("en-ZA",{minimumFractionDigits:2})} — check the Reconciliation tab for details`}
+              : `Balance sheet imbalance of R ${Math.abs(bs.imbalance).toLocaleString("en-ZA",{minimumFractionDigits:2})} ${canAccess(user,"professional") ? "— check the Reconciliation tab for details" : "— the Reconciliation report (Professional plan) shows where, or ask your accountant to review the journals"}`}
           </span>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:24}}>
@@ -7041,7 +7041,7 @@ function Reports({live = {}, user = null}) {
             {aiInsights && (
               <div>
                 <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>Period: {aiInsights.period}</div>
-                {(aiInsights.insights||"").split("\n").filter(l=>l.trim()).map((line,i)=>{
+                {(Array.isArray(aiInsights.insights) ? aiInsights.insights : String(aiInsights.insights||"").split("\n")).map(l=>String(l)).filter(l=>l.trim()).map((line,i)=>{
                   const match = line.match(/^\*\*(.+?)\*\*\s*(.*)/);
                   return (
                     <div key={i} style={{display:"flex",gap:12,padding:"12px 0",borderBottom:"1px solid "+C.border+"30"}}>
@@ -7425,7 +7425,7 @@ function Reports({live = {}, user = null}) {
           </div>
         )}
         {activeTab==="bs"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderBS()}</div>}
-        {activeTab==="recon"&& <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderReconciliation()}</div>}
+        {activeTab==="recon"&& (!canAccess(user,"professional") ? <UpgradeWall requiredPlan="professional" onNavigateSettings={undefined}/> : <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderReconciliation()}</div>)}
         {activeTab==="tb"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderTrialBalance()}</div>}
         {activeTab==="jnl"  && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderJournal()}</div>}
         {activeTab==="cf"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderCF()}</div>}
@@ -7440,7 +7440,7 @@ function Reports({live = {}, user = null}) {
 
 
 // ── BUDGETING ─────────────────────────────────────────────────────────────────
-function Budgeting({live = {}}) {
+function Budgeting({live = {}, user}) {
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const EXPENSE_CATS = ["Cost of Sales","Utilities","Telecoms","Office","Banking","Insurance","Tax","Equipment","Travel","Salaries","Rent","Marketing","Professional Fees","Other"];
   const INCOME_CATS  = ["Revenue"];
@@ -7994,7 +7994,7 @@ function Budgeting({live = {}}) {
           {id:"annual",      label:"Annual Plan"},
           {id:"cashflow",    label:"Cash Flow"},
           {id:"departments", label:"Departments"},
-          {id:"forecast",    label:"13-Week Forecast"},
+          {id:"forecast",    label:canAccess(user,"business") ? "13-Week Forecast" : "13-Week Forecast 🔒"},
         ].map(v=>(
           <button key={v.id} onClick={()=>setView(v.id)} style={{
             padding:"7px 14px",borderRadius:8,border:`1px solid ${view===v.id?C.accent:C.border}`,
@@ -8075,7 +8075,7 @@ function Budgeting({live = {}}) {
       {view==="annual"      && <AnnualView/>}
       {view==="cashflow"    && <CashFlowView/>}
       {view==="departments" && <DepartmentsView/>}
-      {view==="forecast"    && <ForecastView/>}
+      {view==="forecast"    && (canAccess(user,"business") ? <ForecastView/> : <UpgradeWall requiredPlan="business" onNavigateSettings={undefined}/>)}
     </div>
   );
 
@@ -11585,7 +11585,7 @@ function ClientPicker({companies, onSelect, onLogout, onNewCompany}) {
                 style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:"inherit",marginBottom:8,outline:"none"}}/>
               <label style={{display:"block",fontSize:11,fontWeight:600,color:"#888",marginBottom:4,textTransform:"uppercase",letterSpacing:0.5}}>Plan</label>
               <div style={{display:"flex",gap:6,marginBottom:8}}>
-                {[{v:"starter",l:"Starter",p:"R399"},{v:"professional",l:"Professional",p:"R699"},{v:"business",l:"Business",p:"R1 299"}].map(opt=>(
+                {[{v:"starter",l:"Starter",p:"R399"},{v:"professional",l:"Professional",p:"R699"},{v:"business",l:"Business",p:"R999"}].map(opt=>(
                   <button key={opt.v} type="button" onClick={()=>setNewPlan(opt.v)} style={{flex:1,padding:"8px 4px",border:`1.5px solid ${newPlan===opt.v?C.accent:C.border}`,borderRadius:8,background:newPlan===opt.v?C.accentLt:"transparent",color:newPlan===opt.v?C.accent:"#666",fontSize:12,fontWeight:newPlan===opt.v?700:500,cursor:"pointer",fontFamily:"inherit"}}>
                     <div>{opt.l}</div><div style={{fontSize:10,opacity:0.8}}>{opt.p}/mo</div>
                   </button>
@@ -14603,16 +14603,16 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
     expenses:   <div style={{padding:"16px 16px 100px"}}><Expenses   live={live}/></div>,
     payroll:    <div style={{padding:"16px 16px 100px"}}><Payroll    live={live} user={user}/></div>,
     quotes:     <div style={{padding:"16px 16px 100px"}}><Quotes     live={live} user={user} onNavigate={navigate} docTemplate={docTemplate}/></div>,
-    budgeting:  <div style={{padding:"16px 16px 100px"}}><Budgeting  live={live}/></div>,
+    budgeting:  canAccess(user,"professional") ? <div style={{padding:"16px 16px 100px"}}><Budgeting  live={live} user={user}/></div> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>navigate("settings")}/>,
     reports:    <div style={{padding:"16px 16px 100px"}}><Reports    live={live} user={user}/></div>,
-    inventory:       <div style={{padding:"16px 16px 100px"}}><Inventory/></div>,
+    inventory:       canAccess(user,"professional") ? <div style={{padding:"16px 16px 100px"}}><Inventory/></div> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>navigate("settings")}/>,
     fixed_assets:    <div style={{padding:"16px 16px 100px"}}><FixedAssets/></div>,
     customers:       <div style={{padding:"16px 16px 100px"}}><Customers/></div>,
     suppliers:       <div style={{padding:"16px 16px 100px"}}><Suppliers/></div>,
-    purchase_orders: <div style={{padding:"16px 16px 100px"}}><PurchaseOrders/></div>,
+    purchase_orders: canAccess(user,"professional") ? <div style={{padding:"16px 16px 100px"}}><PurchaseOrders/></div> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>navigate("settings")}/>,
     bankimport:      <div style={{padding:"16px 16px 100px"}}><BankImport live={live} onNavigate={navigate}/></div>,
     debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
-    creditors:  <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div>,
+    creditors:  canAccess(user,"professional") ? <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>navigate("settings")}/>,
     coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
     data_import: <div style={{padding:"16px 16px 100px"}}><DataImport/></div>,
     settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={onTemplateChange}/></div>,
@@ -16829,7 +16829,7 @@ function DocumentRepository() {
 // ── PLAN FEATURE GATING ───────────────────────────────────────────────────────
 const PLAN_LEVEL = { starter: 1, professional: 2, business: 3 };
 const PLAN_LABEL = { professional: "Professional", business: "Business" };
-const PLAN_PRICE = { professional: "R699/mo", business: "R1 299/mo" };
+const PLAN_PRICE = { professional: "R699/mo", business: "R999/mo" };
 
 function getPlanLevel(user) {
   const id = (user?.plan?.id || "starter").toLowerCase();
@@ -16968,7 +16968,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
     {id:"payroll",    label:"Payroll",     icon:"👥"},
     {id:"reports",    label:"Reports",     icon:"📊"},
     {id:"budgeting",  label:"Budgeting",   icon:"🎯", minPlan:"professional"},
-    {id:"debtors",    label:"Debtors",     icon:"📥", minPlan:"professional"},
+    {id:"debtors",    label:"Debtors",     icon:"📥", minPlan:"starter"},
     {id:"creditors",  label:"Creditors",   icon:"📤", minPlan:"professional"},
     {id:"coa",        label:"Accounts",    icon:"📒"},
     {id:"inventory",    label:"Inventory",   icon:"📦", minPlan:"professional"},
@@ -17038,8 +17038,8 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
           </button>
         </div>,
     reports:    <Reports    live={live} user={user}/>,
-    budgeting:  canAccess(user,"professional") ? <Budgeting  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
-    debtors:    canAccess(user,"professional") ? <Debtors    live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    budgeting:  canAccess(user,"professional") ? <Budgeting  live={live} user={user}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
+    debtors:    <Debtors    live={live}/>,
     creditors:  canAccess(user,"professional") ? <Creditors  live={live}/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,
     coa:        <ChartOfAccounts/>,
     inventory:       canAccess(user,"professional") ? <Inventory/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,

@@ -219,6 +219,8 @@ def test_po_paid_while_part_delivered_can_still_receive_the_rest():
 def test_creditors_report_shows_only_the_unpaid_part_after_a_second_delivery():
     import payroll as P
     co = company("po10", "general")
+    from database import PlanType
+    co.plan = PlanType.professional; db.commit()          # the creditors book is a Professional feature
     po = mk_po(co, [("Thing", 10, 100)], vat=False)
     recv(co, po, [4]); A(PO.pay_po(po["id"], U(co), db)); recv(co, po, [3])
     r = A(P.creditors_aging(current_user=U(co), db=db)) if hasattr(P, "creditors_aging") else None
