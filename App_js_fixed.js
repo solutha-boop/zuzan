@@ -13384,7 +13384,7 @@ function FixedAssets() {
   const [form, setForm] = useState({
     asset_name:"", category:"Motor Vehicles", description:"", location:"",
     purchase_date: new Date().toISOString().slice(0,10),
-    cost:"", residual_value:"0", useful_life_months:"60",
+    cost:"", residual_value:"0", useful_life_years:"5",
     depreciation_method:"straight_line", depreciation_rate:"0.20",
     sars_category:"",
     post_journal:true,
@@ -13435,13 +13435,13 @@ function FixedAssets() {
         purchase_date:       form.purchase_date,
         cost:                +form.cost,
         residual_value:      +form.residual_value || 0,
-        useful_life_months:  +form.useful_life_months,
+        useful_life_months:  Math.round(+form.useful_life_years * 12),
         depreciation_method: form.depreciation_method,
         depreciation_rate:   form.depreciation_method === "diminishing_balance" ? +form.depreciation_rate : null,
         sars_category:       form.sars_category || null,
         post_journal:        form.post_journal,
       })});
-      setForm({asset_name:"",category:"Motor Vehicles",description:"",location:"",purchase_date:new Date().toISOString().slice(0,10),cost:"",residual_value:"0",useful_life_months:"60",depreciation_method:"straight_line",depreciation_rate:"0.20",sars_category:"",post_journal:true});
+      setForm({asset_name:"",category:"Motor Vehicles",description:"",location:"",purchase_date:new Date().toISOString().slice(0,10),cost:"",residual_value:"0",useful_life_years:"5",depreciation_method:"straight_line",depreciation_rate:"0.20",sars_category:"",post_journal:true});
       setSection("register");
       load();
     } catch(e) { alert("Failed: " + e.message); }
@@ -13460,7 +13460,7 @@ function FixedAssets() {
         purchase_date:       editForm.purchase_date,
         cost:                +editForm.cost,
         residual_value:      +editForm.residual_value || 0,
-        useful_life_months:  +editForm.useful_life_months,
+        useful_life_months:  Math.round(+editForm.useful_life_years * 12),
         depreciation_method: editForm.depreciation_method,
         depreciation_rate:   editForm.depreciation_method === "diminishing_balance" ? +editForm.depreciation_rate : null,
         sars_category:       editForm.sars_category || null,
@@ -13570,14 +13570,14 @@ function FixedAssets() {
                       <td style={{padding:"12px 14px",color:C.gold,fontWeight:600}}>{fmt(a.accumulated_depreciation)}</td>
                       <td style={{padding:"12px 14px",fontWeight:700,color:C.accent}}>{fmt(a.carrying_value)}</td>
                       <td style={{padding:"12px 14px",fontSize:11,color:C.inkMid,whiteSpace:"nowrap"}}>
-                        {a.depreciation_method === "straight_line" ? `SL / ${a.useful_life_months}m` : `DB ${((a.depreciation_rate||0)*100).toFixed(0)}%`}
+                        {a.depreciation_method === "straight_line" ? `SL / ${a.useful_life_months%12===0 ? a.useful_life_months/12 : (a.useful_life_months/12).toFixed(1)}yr` : `DB ${((a.depreciation_rate||0)*100).toFixed(0)}%`}
                       </td>
                       <td style={{padding:"12px 14px",color:C.blue,fontWeight:600}}>{a.status==="active"?fmt(a.monthly_depreciation):"—"}</td>
                       <td style={{padding:"12px 14px"}}>
                         <span style={{background:statusBg(a.status),color:statusColor(a.status),borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,textTransform:"capitalize"}}>{a.status}</span>
                       </td>
                       <td style={{padding:"12px 14px",display:"flex",gap:6,alignItems:"center"}}>
-                        <button onClick={()=>{setEditingAsset(a);setEditForm({asset_name:a.asset_name,category:a.category,description:a.description||"",location:a.location||"",purchase_date:a.purchase_date?.slice(0,10)||"",cost:String(a.cost),residual_value:String(a.residual_value||0),useful_life_months:String(a.useful_life_months||60),depreciation_method:a.depreciation_method||"straight_line",depreciation_rate:String(a.depreciation_rate||0.20),sars_category:a.sars_category||""});}} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,whiteSpace:"nowrap"}}>Edit</button>
+                        <button onClick={()=>{const m=a.useful_life_months||60;setEditingAsset(a);setEditForm({asset_name:a.asset_name,category:a.category,description:a.description||"",location:a.location||"",purchase_date:a.purchase_date?.slice(0,10)||"",cost:String(a.cost),residual_value:String(a.residual_value||0),useful_life_years:String(m%12===0?m/12:+(m/12).toFixed(2)),depreciation_method:a.depreciation_method||"straight_line",depreciation_rate:String(a.depreciation_rate||0.20),sars_category:a.sars_category||""});}} style={{background:C.blueLt,color:C.blue,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,whiteSpace:"nowrap"}}>Edit</button>
                         {a.status === "active" && (
                           <button onClick={()=>{setDisposing(a);setDispForm({disposal_date:new Date().toISOString().slice(0,10),disposal_proceeds:"0",disposal_notes:"",is_write_off:false});}} style={{background:C.redLt,color:C.red,border:"none",borderRadius:6,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit",fontWeight:700,whiteSpace:"nowrap"}}>Dispose</button>
                         )}
@@ -13666,7 +13666,7 @@ function FixedAssets() {
         <div style={{position:"fixed",inset:0,background:"#00000060",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setEditingAsset(null)}>
           <div style={{background:C.card,borderRadius:16,padding:28,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 8px 32px #0003"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontWeight:800,fontSize:17,marginBottom:20}}>Edit Asset — {editingAsset.asset_name}</div>
-            {[{l:"Asset Name",k:"asset_name",t:"text"},{l:"Description",k:"description",t:"text"},{l:"Location",k:"location",t:"text"},{l:"Purchase Date",k:"purchase_date",t:"date"},{l:"Cost (R)",k:"cost",t:"number"},{l:"Residual Value (R)",k:"residual_value",t:"number"},{l:"Useful Life (months)",k:"useful_life_months",t:"number"}].map(f=>(
+            {[{l:"Asset Name",k:"asset_name",t:"text"},{l:"Description",k:"description",t:"text"},{l:"Location",k:"location",t:"text"},{l:"Purchase Date",k:"purchase_date",t:"date"},{l:"Cost (R)",k:"cost",t:"number"},{l:"Residual Value (R)",k:"residual_value",t:"number"},{l:"Useful Life (years)",k:"useful_life_years",t:"number"}].map(f=>(
               <div key={f.k} style={{marginBottom:14}}>
                 <div style={{fontSize:12,color:C.inkMid,marginBottom:4,fontWeight:600}}>{f.l}</div>
                 <input type={f.t} value={editForm[f.k]||""} onChange={e=>setEditForm(v=>({...v,[f.k]:e.target.value}))} style={{width:"100%",padding:"10px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none",boxSizing:"border-box"}}/>
@@ -13855,7 +13855,7 @@ function FixedAssets() {
             </div>
             <div>
               <label style={LBL}>Category</label>
-              <select value={form.category} onChange={e=>{const ul=FA_USEFUL_LIVES[e.target.value]||60;setForm(v=>({...v,category:e.target.value,useful_life_months:String(ul)}));}} style={INP}>
+              <select value={form.category} onChange={e=>{const ul=FA_USEFUL_LIVES[e.target.value]||60;setForm(v=>({...v,category:e.target.value,useful_life_years:String(ul%12===0?ul/12:+(ul/12).toFixed(2))}));}} style={INP}>
                 {FA_CATS.map(c=><option key={c}>{c}</option>)}
               </select>
             </div>
@@ -13896,8 +13896,8 @@ function FixedAssets() {
             </div>
             {form.depreciation_method === "straight_line" ? (
               <div>
-                <label style={LBL}>Useful Life (months)</label>
-                <input type="number" placeholder="60" value={form.useful_life_months} onChange={e=>setForm(v=>({...v,useful_life_months:e.target.value}))} style={INP}/>
+                <label style={LBL}>Useful Life (years)</label>
+                <input type="number" placeholder="5" value={form.useful_life_years} onChange={e=>setForm(v=>({...v,useful_life_years:e.target.value}))} style={INP}/>
               </div>
             ) : (
               <div>
@@ -13909,7 +13909,7 @@ function FixedAssets() {
               {form.cost && form.depreciation_method === "straight_line" && (
                 <div style={{background:C.accentLt,borderRadius:8,padding:"10px 12px",fontSize:12}}>
                   <div style={{color:C.inkMid}}>Monthly charge</div>
-                  <div style={{fontWeight:700,color:C.accent}}>{fmt((+form.cost - (+form.residual_value||0)) / Math.max(1,+form.useful_life_months))}</div>
+                  <div style={{fontWeight:700,color:C.accent}}>{fmt((+form.cost - (+form.residual_value||0)) / Math.max(1,+form.useful_life_years * 12))}</div>
                 </div>
               )}
             </div>
@@ -13930,7 +13930,7 @@ function FixedAssets() {
           {form.sars_category && form.cost && (() => {
             const tb = sarsCalcTaxBase(+form.cost, form.purchase_date, form.sars_category);
             if (!tb) return null;
-            const accountingCV  = Math.max(0, +form.cost - (((+form.cost - (+form.residual_value||0)) / Math.max(1,+form.useful_life_months)) * 0)); // at acquisition CV = cost
+            const accountingCV  = Math.max(0, +form.cost - (((+form.cost - (+form.residual_value||0)) / Math.max(1,+form.useful_life_years * 12)) * 0)); // at acquisition CV = cost
             const tempDiff = +form.cost - tb.taxBase; // at acquisition tax base lags after month 1
             const dtAmt    = Math.abs(tb.taxBase - +form.cost) * SA_CIT;
             const wt       = SARS_WT[form.sars_category];
