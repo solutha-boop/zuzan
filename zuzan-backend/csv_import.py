@@ -2243,32 +2243,55 @@ async def clear_all_imports(
 
 FIXED_ASSET_ALIASES: dict[str, list[str]] = {
     "asset_number":   ["asset_number", "asset_no", "asset no", "asset#", "fa_number",
-                       "fa number", "reference", "ref"],
-    "asset_name":     ["asset_name", "asset name", "name", "description", "asset",
-                       "item", "item name"],
+                       "fa number", "reference", "ref",
+                       # Xero CamelCase
+                       "assetnumber", "assetno"],
+    "asset_name":     ["asset_name", "asset name", "name", "asset",
+                       "item", "item name",
+                       # Xero CamelCase
+                       "assetname"],
     "category":       ["category", "asset_type", "asset type", "type", "class",
-                       "asset_class", "asset class", "group"],
+                       "asset_class", "asset class", "group",
+                       # Xero CamelCase
+                       "assettype", "assetclass"],
     "description":    ["description", "notes", "details", "memo"],
     "location":       ["location", "site", "department", "cost_centre", "cost centre"],
     "purchase_date":  ["purchase_date", "purchase date", "date", "acquisition_date",
                        "acquisition date", "date purchased", "date acquired",
+                       # Xero CamelCase
                        "purchasedate"],
     "cost":           ["cost", "purchase_price", "purchase price", "original_cost",
-                       "original cost", "amount", "value", "cost_price"],
+                       "original cost", "amount", "value", "cost_price",
+                       # Xero CamelCase
+                       "purchaseprice", "initialpurchaseprice", "assetvalue"],
     "residual_value": ["residual_value", "residual value", "scrap_value", "scrap value",
                        "salvage_value", "salvage value", "residual"],
     "useful_life_months": ["useful_life_months", "useful life months", "life_months",
-                           "life months", "months", "life (months)",
+                           "life months", "life (months)",
                            "useful_life_years",  "useful life years", "life_years",
-                           "life years", "life (years)", "years"],
+                           "life years", "life (years)",
+                           # NOTE: "months", "years" removed — too generic, match Xero "Rate" columns by mistake
+                           # Xero may export "Effective Life" in years
+                           "effective_life", "effectivelife",
+                           "asset_life", "assetlife", "asset life",
+                           "life_in_years", "life_in_months"],
     "depreciation_method": ["depreciation_method", "depreciation method", "method",
-                            "dep_method", "dep method"],
+                            "dep_method", "dep method",
+                            # Xero CamelCase
+                            "depreciationmethod"],
     "depreciation_rate":   ["depreciation_rate", "depreciation rate", "rate",
-                            "dep_rate", "dep rate", "rate (%)"],
+                            "dep_rate", "dep rate", "rate (%)",
+                            # Xero CamelCase
+                            "depreciationrate"],
     "accumulated_depreciation": ["accumulated_depreciation", "accumulated depreciation",
                                  "accum_dep", "accum dep", "accumulated dep",
-                                 "depreciation to date", "dep to date"],
-    "status":         ["status", "asset_status", "asset status"],
+                                 "depreciation to date", "dep to date",
+                                 # Xero CamelCase
+                                 "accumulateddepreciation", "openingdepreciation",
+                                 "ytddepreciation", "closingdepreciation"],
+    "status":         ["status", "asset_status", "asset status",
+                       # Xero CamelCase
+                       "assetstatus"],
     "sars_category":  ["sars_category", "sars category", "sars_class", "wear_and_tear",
                        "wear and tear category", "in47_category"],
     "wear_and_tear_rate": ["wear_and_tear_rate", "wear and tear rate", "s11e_rate",
@@ -2371,16 +2394,28 @@ async def import_fixed_assets(
             if life_raw:
                 try:
                     val = float(life_raw.replace(",", ""))
-                    # If the header contained "year" interpret as years
+                    # If the header contained "year" or "effective" interpret as years
                     hdr_text = (headers[m["useful_life_months"]] if "useful_life_months" in m else "").lower()
-                    if "year" in hdr_text:
+                    if "year" in hdr_text or "effective" in hdr_text or "life" in hdr_text:
                         life_months = max(1, int(round(val * 12)))
                     else:
                         life_months = max(1, int(round(val)))
                 except ValueError:
                     pass
+            # If still zero, try deriving from the depreciation rate on this row
+            # (Xero exports only Rate, not life — so 20% → 60m, 4% → 300m, 2% → 600m)
             if life_months == 0:
-                life_months = 60  # default 5 years if not specified
+                rate_raw_tmp = _get(row, m, "depreciation_rate")
+                if rate_raw_tmp.strip():
+                    try:
+                        r_tmp = float(rate_raw_tmp.replace(",", "").replace("%", ""))
+                        r_norm = r_tmp / 100.0 if r_tmp > 1 else r_tmp
+                        if r_norm > 0:
+                            life_months = max(1, int(round(1.0 / r_norm * 12)))
+                    except (ValueError, ZeroDivisionError):
+                        pass
+            if life_months == 0:
+                life_months = 60  # ultimate fallback: 5 years
 
             residual    = _parse_float(_get(row, m, "residual_value")) if "residual_value" in m else 0.0
             method      = _norm_depr_method(_get(row, m, "depreciation_method")) if "depreciation_method" in m else "straight_line"

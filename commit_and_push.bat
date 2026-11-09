@@ -41,13 +41,13 @@ git add clock.html
 git add netlify.toml
 git add commit_and_push.bat
 git add zuzan-backend/tests zuzan-backend/pytest.ini zuzan-backend/requirements-test.txt
-git add zuzan-backend/quotes.py zuzan-backend/financial_statements.py zuzan-backend/journal.py zuzan-backend/csv_import.py
+git add zuzan-backend/quotes.py zuzan-backend/financial_statements.py zuzan-backend/journal.py zuzan-backend/csv_import.py zuzan-backend/fixed_assets.py
 git add patch_backend.py
 git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=feat: AI bot GL import context, fixed assets import, Xero account type fix [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=fix: Xero fixed asset import aliases + derive useful_life from rate + generator SARS category [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
