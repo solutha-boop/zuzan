@@ -2389,8 +2389,11 @@ async def import_fixed_assets(
                 purchase_date = datetime.utcnow()
 
             # Useful life — accept months or years column
+            # life_explicit = True only when the CSV had an actual useful-life column.
+            # For updates we only overwrite if the value was explicitly in the CSV.
             life_raw = _get(row, m, "useful_life_months").strip()
-            life_months = 0
+            life_months  = 0
+            life_explicit = False
             if life_raw:
                 try:
                     val = float(life_raw.replace(",", ""))
@@ -2400,10 +2403,11 @@ async def import_fixed_assets(
                         life_months = max(1, int(round(val * 12)))
                     else:
                         life_months = max(1, int(round(val)))
+                    life_explicit = True
                 except ValueError:
                     pass
-            # If still zero, try deriving from the depreciation rate on this row
-            # (Xero exports only Rate, not life — so 20% → 60m, 4% → 300m, 2% → 600m)
+            # If still zero, derive from the depreciation rate — used ONLY for new assets.
+            # (For existing assets we preserve whatever accounting life is already stored.)
             if life_months == 0:
                 rate_raw_tmp = _get(row, m, "depreciation_rate")
                 if rate_raw_tmp.strip():
@@ -2467,7 +2471,10 @@ async def import_fixed_assets(
                 if location:     existing.location            = location
                 existing.cost                    = cost
                 existing.residual_value          = residual
-                existing.useful_life_months      = life_months
+                # Only overwrite accounting useful life when the CSV explicitly
+                # provided it — never when it was derived from rate or defaulted.
+                if life_explicit:
+                    existing.useful_life_months  = life_months
                 existing.depreciation_method     = method
                 if depr_rate is not None: existing.depreciation_rate = depr_rate
                 existing.accumulated_depreciation = accum_dep
