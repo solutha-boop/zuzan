@@ -15955,6 +15955,8 @@ function DataImport() {
   const [asAt, setAsAt] = useState(new Date().toISOString().slice(0,10));   // statements: date the balances are as at
   const [replaceImp, setReplaceImp] = useState(false);
   const HAS_ASAT = ["trial_balance","balance_sheet","profit_loss"].includes(tab);
+  const [faPreview,     setFaPreview]     = useState(null);  // fixed_assets preview result
+  const [faPreviewing,  setFaPreviewing]  = useState(false);
 
   const ITABS = [
     {id:"xero_wizard",        label:"Migrate from Xero",  icon:"🔀"},
@@ -15988,7 +15990,7 @@ function DataImport() {
     profit_loss:        ["Type","Code","Account Name","Amount"],
     general_ledger:     ["Date","Reference","Description","Account Code","Account Name","Debit","Credit"],
     journals:           ["Date","Journal No","Narration","Account Code","Account Name","Debit","Credit"],
-    fixed_assets:       ["Asset Number","Asset Name","Category","Description","Location","Purchase Date","Cost","Residual Value","Useful Life Months","Depreciation Method","Depreciation Rate","Accumulated Depreciation","Status","SARS Category","Wear and Tear Rate"],
+    fixed_assets:       ["Asset Number","Asset Name","Category","Description","Location","Purchase Date","Cost","Residual Value","Useful Life Years","Depreciation Method","Depreciation Rate","Accumulated Depreciation","Status","SARS Category","Wear and Tear Rate"],
   };
 
   const REQUIRED = {
@@ -16026,7 +16028,28 @@ function DataImport() {
 
   function switchTab(id) {
     setTab(id); setFile(null); setPreview(null); setResult(null); setErr(null);
+    setFaPreview(null);
     if (fileRef.current) fileRef.current.value = "";
+  }
+
+  async function handleFaPreview() {
+    if (!file) return;
+    setFaPreviewing(true); setErr(null); setFaPreview(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`${BASE_URL}/import/fixed_assets/preview`, {
+        method: "POST",
+        headers: {Authorization: "Bearer " + token},
+        body: fd,
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(typeof body.detail === "string" ? body.detail : "Preview failed");
+      }
+      setFaPreview(await r.json());
+    } catch(e) { setErr(e.message); }
+    finally   { setFaPreviewing(false); }
   }
 
   const SAMPLE_ROWS = {
@@ -16182,7 +16205,7 @@ function DataImport() {
   }
 
   function reset() {
-    setFile(null); setPreview(null); setResult(null); setErr(null);
+    setFile(null); setPreview(null); setResult(null); setErr(null); setFaPreview(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -16420,17 +16443,118 @@ function DataImport() {
                     </table>
                   </div>
                   <div style={{marginTop:16,display:"flex",gap:12,alignItems:"center"}}>
-                    <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
-                      padding:"10px 28px",background:importing?"#ccc":C.accent,color:"#fff",
-                      border:"none",borderRadius:10,fontSize:14,fontWeight:700,
-                      cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
-                    }}>
-                      {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
-                    </button>
+                    {tab === "fixed_assets" ? (
+                      <button onClick={handleFaPreview} disabled={faPreviewing} style={{
+                        padding:"10px 28px",background:faPreviewing?"#ccc":C.accent,color:"#fff",
+                        border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+                        cursor:faPreviewing?"not-allowed":"pointer",fontFamily:"inherit",
+                      }}>
+                        {faPreviewing ? "Analysing…" : `Preview ${preview.total.toLocaleString()} assets`}
+                      </button>
+                    ) : (
+                      <button onClick={()=>setShowConfirm(true)} disabled={importing} style={{
+                        padding:"10px 28px",background:importing?"#ccc":C.accent,color:"#fff",
+                        border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+                        cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",
+                      }}>
+                        {importing ? "Importing…" : `Import ${preview.total.toLocaleString()} rows`}
+                      </button>
+                    )}
                     {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Fixed Assets preview — column mapping + per-row warnings before confirm */}
+          {tab === "fixed_assets" && faPreview && !result && (
+            <div style={{marginBottom:16}}>
+              {/* Summary KPIs */}
+              <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+                {[
+                  {label:"New assets",    value:faPreview.creates,       color:"#28a745"},
+                  {label:"Updates",       value:faPreview.updates,       color:"#0072CE"},
+                  {label:"Skipped rows",  value:faPreview.skips,         color:C.inkMid},
+                  {label:"Warnings",      value:faPreview.warnings_total, color:faPreview.warnings_total>0?"#B7791F":"#28a745"},
+                ].map(k=>(
+                  <div key={k.label} style={{flex:1,minWidth:100,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
+                    <div style={{fontSize:24,fontWeight:800,color:k.color}}>{k.value}</div>
+                    <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>{k.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Column mapping */}
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:14}}>
+                <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:10}}>Column Mapping Detected</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  {Object.entries(faPreview.column_mapping).map(([field,col])=>(
+                    <div key={field} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 10px",fontSize:11}}>
+                      <span style={{color:C.inkMid}}>{field.replace(/_/g," ")} → </span>
+                      <span style={{fontWeight:700,color:C.ink}}>"{col}"</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Per-row preview */}
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px",marginBottom:14}}>
+                <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:10}}>
+                  Asset Preview {faPreview.warnings_total > 0 && <span style={{color:"#B7791F",fontSize:12,fontWeight:400}}>— {faPreview.warnings_total} warning{faPreview.warnings_total!==1?"s":""} highlighted below</span>}
+                </div>
+                <div style={{overflowX:"auto",borderRadius:8,border:`1px solid ${C.border}`}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead>
+                      <tr style={{background:C.bg}}>
+                        {["Row","Action","Asset Name","Category","Cost","Useful Life","Purchase Date","Warnings"].map(h=>(
+                          <th key={h} style={{padding:"7px 10px",textAlign:"left",color:C.inkMid,fontWeight:600,fontSize:11,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {faPreview.rows.map((r,i)=>(
+                        <tr key={i} style={{borderBottom:`1px solid ${C.border}30`,background:r.warnings?.length>0?"#fffbeb":r.action==="skip"?"#fff0ee":"transparent"}}>
+                          <td style={{padding:"6px 10px",color:C.inkMid,fontFamily:"monospace"}}>{r.row}</td>
+                          <td style={{padding:"6px 10px"}}>
+                            <span style={{fontWeight:700,color:r.action==="create"?"#28a745":r.action==="update"?"#0072CE":r.action==="skip"?"#C8401A":C.inkMid}}>
+                              {r.action}
+                            </span>
+                          </td>
+                          <td style={{padding:"6px 10px",fontWeight:600,color:C.ink,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.asset_name||<em style={{color:C.inkMid}}>{r.reason}</em>}</td>
+                          <td style={{padding:"6px 10px",color:C.inkMid}}>{r.category||"—"}</td>
+                          <td style={{padding:"6px 10px",fontFamily:"monospace"}}>{r.cost!=null?"R"+(+r.cost).toLocaleString("en-ZA",{minimumFractionDigits:2}):"—"}</td>
+                          <td style={{padding:"6px 10px",fontFamily:"monospace"}}>{r.useful_life_years!=null?`${r.useful_life_years}yr`:"—"}</td>
+                          <td style={{padding:"6px 10px",color:C.inkMid}}>{r.purchase_date||"—"}</td>
+                          <td style={{padding:"6px 10px",color:"#B7791F",fontSize:11,maxWidth:260}}>
+                            {(r.warnings||[]).join(" · ")||<span style={{color:C.inkMid}}>✓</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Confirm / cancel */}
+              <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                {faPreview.warnings_total > 0 && (
+                  <div style={{fontSize:12,color:"#B7791F",background:"#fffbeb",border:"1px solid #f59e0b",borderRadius:8,padding:"8px 14px",flex:1}}>
+                    ⚠ Review warnings above before confirming. If useful life or cost looks wrong, cancel and check the CSV columns.
+                  </div>
+                )}
+                <button onClick={()=>handleImport(true)} disabled={importing} style={{
+                  padding:"11px 28px",background:importing?"#ccc":C.accent,color:"#fff",
+                  border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+                  cursor:importing?"not-allowed":"pointer",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0,
+                }}>
+                  {importing ? "Importing…" : `Confirm — Import ${faPreview.creates + faPreview.updates} asset${(faPreview.creates+faPreview.updates)!==1?"s":""}`}
+                </button>
+                <button onClick={()=>setFaPreview(null)} style={{padding:"11px 20px",border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,cursor:"pointer",color:C.inkMid,background:"transparent",fontFamily:"inherit",flexShrink:0}}>
+                  Cancel
+                </button>
+                {err && <span style={{fontSize:12,color:"#C8401A"}}>{err}</span>}
+              </div>
             </div>
           )}
 

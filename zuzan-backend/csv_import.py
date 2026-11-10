@@ -2514,3 +2514,157 @@ async def import_fixed_assets(
         "skipped":    skipped,
         "errors":     errors[:50],
     }
+
+
+@router.post("/fixed_assets/preview")
+async def preview_fixed_assets(
+    file: UploadFile = File(...),
+    db:   Session    = Depends(get_db),
+    cu               = Depends(require_role("owner", "admin", "accountant")),
+):
+    """
+    Dry-run fixed assets import — returns what WOULD happen without touching the DB.
+
+    Returns:
+      column_mapping  — which CSV column was matched to each ZuZan field
+      creates / updates / skips / warnings_total  — summary counts
+      rows  — per-row preview: action, asset_name, cost, useful_life_years, warnings[]
+    """
+    cid = cu.company_id
+    raw = await file.read()
+    text = raw.decode("utf-8-sig", errors="replace")
+
+    delimiter = "\t" if text.count("\t") > text.count(",") else ","
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    rows   = list(reader)
+
+    if not rows:
+        raise HTTPException(400, "File is empty")
+
+    headers = rows[0]
+    data    = rows[1:]
+    m       = _map_headers(headers, FIXED_ASSET_ALIASES)
+
+    if "asset_name" not in m and "category" not in m:
+        raise HTTPException(
+            400,
+            "Could not find required columns (asset_name, category, purchase_date, cost). "
+            "Got: " + ", ".join(headers[:12]),
+        )
+
+    # Human-readable column mapping: ZuZan field → original CSV header
+    col_map = {field: headers[idx] for field, idx in m.items()}
+
+    preview_rows: list[dict] = []
+
+    for row_i, row in enumerate(data, start=2):
+        if not any(c.strip() for c in row):
+            continue
+
+        name     = _get(row, m, "asset_name").strip()
+        category = _get(row, m, "category").strip() or "General"
+        cost_raw = _get(row, m, "cost")
+        cost     = _parse_float(cost_raw)
+        warnings: list[str] = []
+
+        if not name:
+            preview_rows.append({"row": row_i, "action": "skip", "reason": "Missing asset name"})
+            continue
+        if cost == 0.0 and cost_raw.strip():
+            preview_rows.append({"row": row_i, "action": "skip", "asset_name": name,
+                                 "reason": f"Cannot parse cost: '{cost_raw}'"})
+            continue
+
+        purchase_date = _parse_date(_get(row, m, "purchase_date"))
+        purchase_date_str = purchase_date.strftime("%Y-%m-%d") if purchase_date else None
+
+        # Useful life
+        life_raw = _get(row, m, "useful_life_months").strip()
+        life_months  = 0
+        life_explicit = False
+        if life_raw:
+            try:
+                val      = float(life_raw.replace(",", ""))
+                hdr_text = (headers[m["useful_life_months"]] if "useful_life_months" in m else "").lower()
+                if "year" in hdr_text or "effective" in hdr_text or "life" in hdr_text:
+                    life_months = max(1, int(round(val * 12)))
+                else:
+                    life_months = max(1, int(round(val)))
+                life_explicit = True
+            except ValueError:
+                pass
+
+        if life_months == 0:
+            rate_raw_tmp = _get(row, m, "depreciation_rate")
+            if rate_raw_tmp.strip():
+                try:
+                    r_tmp  = float(rate_raw_tmp.replace(",", "").replace("%", ""))
+                    r_norm = r_tmp / 100.0 if r_tmp > 1 else r_tmp
+                    if r_norm > 0:
+                        life_months = max(1, int(round(1.0 / r_norm * 12)))
+                        warnings.append(f"Useful life derived from rate ({r_norm*100:.0f}% → {life_months}m / {life_months/12:.1f}yr)")
+                except (ValueError, ZeroDivisionError):
+                    pass
+
+        if life_months == 0:
+            life_months = 60
+            warnings.append("No useful life found — will default to 60m (5yr)")
+
+        # Sanity flags
+        if life_months > 480:
+            warnings.append(f"⚠ Useful life {life_months}m ({life_months/12:.1f}yr) looks wrong — check column mapping")
+        if cost > 10_000_000:
+            warnings.append(f"⚠ Cost R{cost:,.0f} unusually large — check column mapping")
+        if cost < 0:
+            warnings.append(f"⚠ Negative cost R{cost:,.0f}")
+
+        # Match existing
+        asset_no = _get(row, m, "asset_number").strip() or None
+        existing = None
+        if asset_no:
+            existing = db.query(FixedAsset).filter(
+                FixedAsset.company_id == cid,
+                FixedAsset.asset_number == asset_no,
+            ).first()
+        if existing is None and purchase_date:
+            existing = db.query(FixedAsset).filter(
+                FixedAsset.company_id == cid,
+                func.lower(FixedAsset.asset_name) == name.lower(),
+                FixedAsset.purchase_date == purchase_date,
+            ).first()
+
+        action = "update" if existing else "create"
+
+        if existing and life_explicit and existing.useful_life_months != life_months:
+            warnings.append(
+                f"Will overwrite useful life: {existing.useful_life_months}m "
+                f"({existing.useful_life_months/12:.1f}yr) → {life_months}m ({life_months/12:.1f}yr)"
+            )
+
+        preview_rows.append({
+            "row":               row_i,
+            "action":            action,
+            "asset_name":        name,
+            "category":          category,
+            "cost":              cost,
+            "useful_life_months": life_months,
+            "useful_life_years": round(life_months / 12, 2),
+            "life_explicit":     life_explicit,
+            "purchase_date":     purchase_date_str,
+            "warnings":          warnings,
+        })
+
+    creates  = sum(1 for r in preview_rows if r.get("action") == "create")
+    updates  = sum(1 for r in preview_rows if r.get("action") == "update")
+    skips    = sum(1 for r in preview_rows if r.get("action") == "skip")
+    warn_tot = sum(len(r.get("warnings", [])) for r in preview_rows)
+
+    return {
+        "column_mapping":  col_map,
+        "total_rows":      len(data),
+        "creates":         creates,
+        "updates":         updates,
+        "skips":           skips,
+        "warnings_total":  warn_tot,
+        "rows":            preview_rows,
+    }

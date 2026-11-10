@@ -357,7 +357,6 @@ def _not_example_emp():
     from sqlalchemy import or_
     return or_(Employee.notes.is_(None), Employee.notes != "[zuzan-example]")
 
-PAYROLL_PER_EMP = 34.00
 PAYROLL_MIN     = 99.00
 
 # ── Section 11F — Retirement fund deduction (effective 1 March 2026) ──────────
@@ -1138,7 +1137,7 @@ async def calculate_all(
         for key in totals:
             totals[key] = round(totals[key] + c.get(key, 0), 2)
 
-    zuzan_fee = max(PAYROLL_MIN, len(employees) * PAYROLL_PER_EMP)
+    zuzan_fee = calc_payroll_monthly(len(employees))
 
     return {
         "employees":      results,
@@ -4772,15 +4771,23 @@ BACKEND_URL          = _os.environ.get("BACKEND_URL", "https://zuzan-backend.onr
 FRONTEND_URL         = _os.environ.get("FRONTEND_URL", "https://zuzan.co.za")
 
 try:
-    from config import PLAN_PRICES, PAYROLL_PER_EMP, PAYROLL_MIN  # single source of truth — see config.py
+    from config import PLAN_PRICES, PAYROLL_MIN, calc_payroll_monthly  # single source of truth — see config.py
 except ImportError:
     PLAN_PRICES = {
         "starter":      {"monthly": 399,  "annual": 3990},
         "professional": {"monthly": 699,  "annual": 6990},
         "business":     {"monthly": 999,  "annual": 9990},
     }
-    PAYROLL_PER_EMP = 15.50
     PAYROLL_MIN     = 99.00
+
+    def calc_payroll_monthly(n):
+        n = int(n or 0)
+        if n <= 0:
+            return 0.0
+        c, r = 89.0, n - 1
+        t = min(r, 4); c += t * 19.0; r -= t
+        t = min(r, 5); c += t * 13.0; r -= t
+        return round(max(99.0, c + r * 10.5), 2)
 
 
 class PaymentInitRequest(BaseModel):
@@ -4805,7 +4812,7 @@ async def initiate_payment(
     db: Session = Depends(get_db)
 ):
     plan_price   = PLAN_PRICES.get(data.plan, {}).get(data.billing_cycle, 299)
-    payroll_cost = max(PAYROLL_MIN, data.employee_count * PAYROLL_PER_EMP) if data.payroll_enabled else 0
+    payroll_cost = calc_payroll_monthly(data.employee_count) if data.payroll_enabled else 0
     total        = round(plan_price + payroll_cost, 2)
 
     payment = Payment(
@@ -4929,7 +4936,7 @@ async def subscription_status(
     plan_str    = str(company.plan).split(".")[-1]
     billing_str = str(company.billing_cycle).split(".")[-1]
     plan_price  = PLAN_PRICES.get(plan_str, {}).get(billing_str, 299)
-    payroll_cost = max(PAYROLL_MIN, company.payroll_employees * PAYROLL_PER_EMP) if company.payroll_enabled else 0
+    payroll_cost = calc_payroll_monthly(company.payroll_employees) if company.payroll_enabled else 0
 
     return {
         "plan":              company.plan,

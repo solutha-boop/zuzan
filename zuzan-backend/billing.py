@@ -46,41 +46,7 @@ PLAN_PRICES = {
 PAYROLL_MIN_COST = 99  # minimum payroll add-on fee
 
 
-def calc_payroll_monthly(emp_count: int) -> float:
-    """Tiered payroll add-on pricing, competitive with SimplePay (simplepay.co.za/pricing).
-
-    SimplePay rates (verified 2026-09-19):
-        1 emp       → R89.50 base
-        2-5 emp     → R19.50 each
-        6-10 emp    → R13.60 each
-        11+ emp     → R11.00 each
-        e.g. 40 emp → R565.50/month
-
-    Zuzan is priced ~3-5 % below SimplePay at every tier so we remain the
-    lower-cost option at all headcounts. PAYROLL_MIN_COST (R99) applies for
-    very small headcounts where the flat base doesn't cover margin.
-
-    Comparison at key counts:
-        10  emp: Zuzan R230  vs SimplePay R235.50
-        20  emp: Zuzan R335  vs SimplePay R345.50
-        40  emp: Zuzan R545  vs SimplePay R565.50
-        50  emp: Zuzan R650  vs SimplePay R675.50
-    """
-    if emp_count <= 0:
-        return 0.0
-    cost = 89.00            # base (1 employee) — SimplePay: R89.50
-    remaining = emp_count - 1
-
-    tier2 = min(remaining, 4)   # employees 2-5: R19.00 each (SimplePay: R19.50)
-    cost += tier2 * 19.00
-    remaining -= tier2
-
-    tier3 = min(remaining, 5)   # employees 6-10: R13.00 each (SimplePay: R13.60)
-    cost += tier3 * 13.00
-    remaining -= tier3
-
-    cost += remaining * 10.50   # employees 11+:  R10.50 each (SimplePay: R11.00)
-    return round(max(PAYROLL_MIN_COST, cost), 2)
+from config import calc_payroll_monthly   # the single payroll price formula (tiered, R99 minimum) lives in config.py
 
 # ── Accountant multi-client fee structure ─────────────────────────────────────
 ACCOUNTANT_PLAN_DISCOUNT_PER_CLIENT = 20   # R20 off own plan per active client
