@@ -875,19 +875,30 @@ JOURNAL_ALIASES: dict[str, list[str]] = {
 
 def _guess_account_type(s: str):
     """Best-effort account type from free text ('Non-current liabilities', 'Trade and other receivables'...).
-    Returns None when nothing recognisable is in the text (the caller must not silently call it an asset)."""
+    Returns None when nothing recognisable is in the text (the caller must not silently call it an asset).
+    Handles QuickBooks account type strings such as 'Accounts Receivable (A/R)', 'Credit Card',
+    'Other Current Asset', 'Cost of Goods Sold', 'Long-Term Liabilities', etc."""
     v = (s or "").strip().lower()
     if not v:
         return None
+    # Strip parenthetical suffixes like "(A/R)" and "(A/P)" before exact matching
+    import re as _re
+    v_clean = _re.sub(r"\s*\([^)]*\)", "", v).strip()
+    t = _parse_account_type_exact(v_clean.replace(" ", "_"))
+    if t is not None:
+        return t
     t = _parse_account_type_exact(v.replace(" ", "_"))
     if t is not None:
         return t
     for words, typ in (
-        (("liabilit", "payable", "creditor", "loan", "overdraft", "provision", "deferred income"), AccountType.liability),
+        # Liabilities first — "credit card" and "accounts payable" must beat "card"/"account" asset hits
+        (("liabilit", "payable", "creditor", "loan", "overdraft", "provision", "deferred income",
+          "credit card", "creditcard", "long-term", "longterm"), AccountType.liability),
         (("equity", "capital", "retained", "reserve", "drawings", "share"), AccountType.equity),
         (("revenue", "income", "sales", "turnover", "fees earned"), AccountType.revenue),
         (("expense", "cost", "overhead", "salar", "wages", "depreciation", "interest paid"), AccountType.expense),
-        (("asset", "bank", "cash", "receivable", "debtor", "inventor", "stock", "prepaid", "equipment", "vehicle", "property", "investment"), AccountType.asset),
+        (("asset", "bank", "cash", "receivable", "debtor", "inventor", "stock", "prepaid",
+          "equipment", "vehicle", "property", "investment", "undeposited"), AccountType.asset),
     ):
         if any(w in v for w in words):
             return typ
@@ -920,13 +931,16 @@ def _signed_dr_cr(atype, bal: float):
 
 def _parse_account_type_exact(v: str):
     """Exact-token mapping (the original table); None if the token is not one of them."""
-    if v in ("asset", "assets", "current_asset", "current_assets", "fixed_asset",
-             "non_current_asset", "bank", "cash", "receivable", "accounts_receivable",
-             "trade_receivable", "other_asset"):
+    if v in ("asset", "assets", "current_asset", "current_assets", "fixed_asset", "fixed_assets",
+             "non_current_asset", "non_current_assets", "other_current_asset", "other_current_assets",
+             "bank", "cash", "receivable", "accounts_receivable", "trade_receivable",
+             "other_asset", "other_assets", "undeposited_funds"):    # QuickBooks account types
         return AccountType.asset
     if v in ("liability", "liabilities", "current_liability", "current_liabilities",
-             "long_term_liability", "accounts_payable", "trade_payable", "payable",
-             "other_liability"):
+             "long_term_liability", "long-term_liability", "long-term_liabilities",
+             "other_current_liability", "other_current_liabilities",
+             "accounts_payable", "trade_payable", "payable", "other_liability",
+             "credit_card"):                        # QuickBooks account type
         return AccountType.liability
     if v in ("equity", "owner_equity", "shareholders_equity", "capital",
              "retained_earnings", "retained_income", "owners_equity"):

@@ -47,7 +47,7 @@ git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=fix: fixed assets edit modal + SARS deferred tax rate bug + import preserves accounting life [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=feat: QB migration GL endpoint + account type fixes + useful life in years + FA preview [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
