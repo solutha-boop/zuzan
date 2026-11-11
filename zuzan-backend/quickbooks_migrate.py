@@ -74,6 +74,11 @@ async def import_qbo_opening_balances(file: UploadFile = File(...), as_at: Optio
     Special case: "Credit Card" with a debit balance is a bank account (asset), not a liability.
     """
     rows = await read_table(file)
+    # QB Trial Balance: the account name column has no header — read_table stores it under key "".
+    # Rename it to "name" so the pick() calls below find it.
+    for r in rows:
+        if "" in r and r[""] and not r.get("name") and not r.get("account"):
+            r["name"] = r[""]
     out = []
     warns = []
     fallback_count = 0
