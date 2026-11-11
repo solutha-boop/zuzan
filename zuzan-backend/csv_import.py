@@ -808,7 +808,8 @@ async def import_expenses(
 TRIAL_BALANCE_ALIASES: dict[str, list[str]] = {
     "code":    ["code", "account_code", "acc_code", "account_no", "account_number",
                 "number", "gl_code"],
-    "name":    ["name", "account_name", "account", "description", "gl_account"],
+    "name":    ["name", "account_name", "account", "description", "gl_account",
+                ""],         # QB Trial Balance: account name column has no header
     "type":    ["type", "account_type", "acc_type", "category", "classification"],
     "debit":   ["debit", "dr", "debit_balance", "debit_amount"],
     "credit":  ["credit", "cr", "credit_balance", "credit_amount"],

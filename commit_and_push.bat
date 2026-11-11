@@ -51,7 +51,7 @@ git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=fix: QB TB blank first-column header - rename empty key to name so opening balances import works [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=fix: QB TB blank first-column header - add empty alias to TRIAL_BALANCE_ALIASES name + quickbooks_migrate rename fix [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
