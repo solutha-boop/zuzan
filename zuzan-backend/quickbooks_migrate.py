@@ -21,7 +21,7 @@ from database import get_db
 from auth import require_role
 import csv_import as CI
 from xero_migrate import (read_table, pick, pick_containing, make_upload, result, merge, import_chart, run_documents,
-                          employee_rows, _ROLES, key)
+                          employee_rows, _ROLES, key, MAX_UPLOAD_BYTES)
 
 router = APIRouter()
 
@@ -85,7 +85,7 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
 
     QBO's GL has a multi-level structure:
       • Several report-header rows at the top (company name, date range, report title) — no data
-      • One row of column headers somewhere in the middle
+      • One row of column headers
       • Account-name rows: first column has the account name, all other columns are blank
       • Transaction rows: first column blank, then Date / Transaction Type / Num / Name / Memo / Split / Amount / Balance
       • Sub-total rows starting with "Total" — skipped
@@ -94,17 +94,32 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
     Amount sign convention in QBO: positive = increases the account's natural balance.
     ZuZan's import_general_ledger expects: positive = debit, negative = credit.
     So for credit-normal accounts (liability / equity / revenue) we negate the amount.
+    (If the export has separate Debit / Credit columns they are used as-is, no flipping.)
 
-    The endpoint normalises the multi-level data into flat rows and passes them to
-    CI.import_general_ledger which handles duplicate detection and journal posting.
+    Account type (and therefore the sign) is resolved in this order (audit fix 2026-11-11):
+      1. the account already in ZuZan's chart (the wizard imports the QBO Account List first) — matched by name,
+         and its code is passed through so the GL lines land on THAT account instead of a duplicate;
+      2. an account-type column in the export, if present;
+      3. the account name ("Accounts Receivable (A/R)", "Sales", "Credit Card"...) via csv_import._guess_account_type;
+      4. a leading GAAP-style code in the account name ("4000 Sales").
+    Accounts that cannot be classified are reported in the warnings instead of being silently treated as assets.
+
+    Each transaction's lines share Transaction Type + Num (+ date); when Num is blank the journal is keyed on
+    Transaction Type + date only, so same-type transactions of one day are posted as one balanced journal.
     """
+    from database import Account, AccountType
+
     content = await file.read()
     if not content or not content.strip():
         raise HTTPException(400, "The file is empty.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "The file is too large (limit 10 MB). Export one financial year at a time.")
 
     # ── Parse raw CSV ──────────────────────────────────────────────────────
     try:
         raw_headers, raw_rows = CI._read_csv(content)
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(400, "Could not read this file. Export the General Ledger as CSV from QuickBooks.")
 
@@ -112,8 +127,6 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
         raise HTTPException(400, "The file has no data rows.")
 
     # ── Locate the column-header row ───────────────────────────────────────
-    # QBO inserts report-title rows before the real header.  The real header
-    # contains "Date" and either "Amount" or "Debit".
     _hkey = lambda h: re.sub(r"[^a-z0-9]+", "", str(h or "").lower())
 
     def _is_data_header(row):
@@ -122,7 +135,7 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
 
     data_start = None
     col_headers = raw_headers
-    all_rows = [raw_headers] + raw_rows   # check headers row too
+    all_rows = [list(raw_headers)] + [list(r) for r in raw_rows]   # check the headers row too
 
     for i, row in enumerate(all_rows):
         if _is_data_header(row):
@@ -141,93 +154,133 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
         for n in names:
             k = _hkey(n)
             if k in hkeys:
-                v = row[hkeys.index(k)] if hkeys.index(k) < len(row) else ""
+                idx = hkeys.index(k)
+                v = row[idx] if idx < len(row) else ""
                 if v and str(v).strip():
                     return str(v).strip()
         return ""
 
-    # ── Walk rows, tracking current account name ───────────────────────────
-    # Credit-normal account types that need amount sign flip
-    _CREDIT_NORMAL_TYPES = {"accounts payable (a/p)", "accounts payable", "credit card",
-                            "other current liabilities", "long-term liabilities", "equity",
-                            "income", "other income", "sales"}
+    def _num(s):
+        s = str(s or "").replace(",", "").replace(" ", "").replace("R", "")
+        neg = s.startswith("(") and s.endswith(")")
+        s = s.strip("()")
+        if not s:
+            return None
+        try:
+            v = float(s)
+        except ValueError:
+            return None
+        return -v if neg else v
 
+    has_type_col = any(k in hkeys for k in ("accounttype", "type"))
+    has_dr_cr    = "debit" in hkeys or "credit" in hkeys
+    has_amount   = "amount" in hkeys
+
+    # ── ZuZan chart of accounts, by name (lower/trimmed) ───────────────────
+    cid = current_user.company_id
+    chart: dict[str, Account] = {}
+    for a in db.query(Account).filter(Account.company_id == cid).all():
+        k = (a.name or "").strip().lower()
+        if k and (k not in chart or (a.is_active and not chart[k].is_active)):
+            chart[k] = a
+
+    _DESCRIPTOR = {AccountType.asset: "Current Asset", AccountType.liability: "Current Liability",
+                   AccountType.equity: "Equity", AccountType.revenue: "Revenue", AccountType.expense: "Expense"}
+    _CREDIT_NORMAL = {AccountType.liability, AccountType.equity, AccountType.revenue}
+
+    def _resolve(acct_name: str, acct_type_text: str):
+        """-> (account_code_to_pass, type_descriptor_to_pass, AccountType or None)"""
+        nm = (acct_name or "").strip()
+        lead = re.match(r"^(\d{3,6})\s+(.+)$", nm)            # "4000 Sales"
+        bare = lead.group(2).strip() if lead else nm
+        for cand in (nm, bare):
+            a = chart.get(cand.lower())
+            if a is not None:
+                return a.code, "", a.type
+        t = None
+        if acct_type_text:
+            t = CI._type_from_xero_name(acct_type_text) or CI._guess_account_type(acct_type_text)
+        if t is None:
+            t = CI._guess_account_type(bare)
+        if t is None and lead:
+            t = CI._infer_type_from_code(lead.group(1))
+        return "", (_DESCRIPTOR[t] if t is not None else ""), t
+
+    # ── Walk rows, tracking the current account ────────────────────────────
     current_account_name = ""
-    current_account_type = ""  # QB's "type" is embedded in the account-name row for some exports
+    current = ("", "", None)
+    unresolved: set[str] = set()
     out_rows = []
 
     for row in actual_rows:
-        # Extend short rows
         while len(row) < len(hkeys):
-            row = list(row) + [""]
+            row = row + [""]
 
+        if not any(str(c).strip() for c in row):
+            continue
         first = str(row[0]).strip() if row else ""
         date_val = _col(row, "date")
 
-        # Skip blank rows
-        if not any(str(c).strip() for c in row):
+        if re.match(r"^total\b", first, re.I):                 # sub-total rows
             continue
 
-        # Skip total/subtotal rows
-        if re.match(r"^total\b", first, re.I):
-            continue
-
-        # Account-name row: first column has content, date column is blank
-        if first and not date_val:
-            # QBO sometimes includes the account code in the name: "1000 Checking" or "Checking"
+        if first and not date_val:                             # account-name row
             current_account_name = first
-            current_account_type = _col(row, "type", "accounttype")
+            current = _resolve(first, _col(row, "accounttype", "type") if has_type_col else "")
+            if current[2] is None:
+                unresolved.add(first)
             continue
 
-        # Transaction row: must have a date
-        if not date_val:
+        if not date_val or not current_account_name:
             continue
 
-        amount_str = _col(row, "amount")
-        if not amount_str:
+        code, descriptor, atype = current
+        if has_amount and _col(row, "amount"):
+            amount = _num(_col(row, "amount"))
+            if amount is None:
+                continue
+            # QBO positive = increases the account; ZuZan positive = debit
+            zuzan_net = -amount if atype in _CREDIT_NORMAL else amount
+        elif has_dr_cr:
+            dr = _num(_col(row, "debit")) or 0.0
+            cr = _num(_col(row, "credit")) or 0.0
+            zuzan_net = dr - cr
+        else:
+            continue
+        if abs(zuzan_net) < 0.005:
             continue
 
-        try:
-            amount = float(str(amount_str).replace(",", "").replace(" ", ""))
-        except ValueError:
-            continue
-
-        # Determine if this account is credit-normal so we can flip the sign
-        acct_type_key = current_account_type.strip().lower()
-        is_credit_normal = (
-            acct_type_key in _CREDIT_NORMAL_TYPES
-            or any(w in acct_type_key for w in ("liabilit", "equity", "income", "revenue", "sales", "credit card"))
-        )
-        # If the account name starts with a 4xxx / 2xxx / 3xxx code that's credit-normal by GAAP prefix:
-        m = re.match(r"^(\d)", current_account_name)
-        if m and not acct_type_key:
-            prefix = int(m.group(1))
-            is_credit_normal = prefix in (2, 3, 4)   # liability, equity, revenue
-
-        # QBO positive = increases account; ZuZan positive = debit
-        # For debit-normal (asset/expense): no change.  For credit-normal: negate.
-        zuzan_net = -amount if is_credit_normal else amount
+        ttype = _col(row, "transactiontype")
+        num   = _col(row, "num", "no")
+        ref   = (f"{ttype} {num}".strip() if num else (ttype or "QBO GL"))[:100]
 
         out_rows.append({
             "date":         date_val,
-            "reference":    _col(row, "num", "no", "transactiontype", "type") or _col(row, "transactiontype"),
-            "description":  _col(row, "memo", "memoodescription", "description", "name"),
+            "reference":    ref,
+            "description":  _col(row, "memodescription", "memo", "description", "name") or ttype,
             "account_name": current_account_name,
-            "account_code": "",        # QBO GL has no code column; _find_or_create_account matches by name
-            "net_amount":   str(zuzan_net),
+            "account_code": code,
+            "name":         descriptor,     # GL 'Name' column = account-type descriptor (sets type on NEW accounts)
+            "net_amount":   f"{zuzan_net:.2f}",
         })
 
     if not out_rows:
         raise HTTPException(400, "No transaction rows found. Make sure you exported the General Ledger "
                                  "(not the Transaction List) from QuickBooks.")
 
-    up = make_upload(["date", "reference", "description", "account_name", "account_code", "net_amount"], out_rows)
+    up = make_upload(["date", "reference", "description", "account_name", "account_code", "name", "net_amount"],
+                     out_rows)
     res = await CI.import_general_ledger(file=up, db=db, cu=current_user)
+
     warns = []
-    if not any(pick(r, "type", "accounttype") for r in actual_rows[:20]):
-        warns.append("No account-type column detected in this GL. Account types were inferred from account names and "
-                     "code prefixes. Use 'Fix Account Types' in Import Data → Accounts after importing if any accounts "
-                     "appear under the wrong section of the balance sheet.")
+    if unresolved:
+        shown = ", ".join(sorted(unresolved)[:10]) + (" …" if len(unresolved) > 10 else "")
+        warns.append(f"{len(unresolved)} account(s) could not be classified and were imported as assets: {shown}. "
+                     "Import the QuickBooks Account List first (step 1) or fix them with 'Fix Account Types' "
+                     "in Import Data → Accounts.")
+    if not has_type_col and not unresolved:
+        warns.append("No account-type column in this GL: account types were taken from your ZuZan chart of accounts "
+                     "and account names. Check the balance sheet after importing.")
     return result(res, warnings=warns)
 
 

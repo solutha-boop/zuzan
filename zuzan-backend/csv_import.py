@@ -891,6 +891,9 @@ def _guess_account_type(s: str):
     if t is not None:
         return t
     for words, typ in (
+        # Money the business is OWED is an asset even though it says "loan" (audit fix 2026-11-11:
+        # "Loan to director" / "Loans receivable" were classified as liabilities by the "loan" keyword)
+        (("loan to ", "loans to ", "loan receivable", "loans receivable", "receivable from"), AccountType.asset),
         # Liabilities first — "credit card" and "accounts payable" must beat "card"/"account" asset hits
         (("liabilit", "payable", "creditor", "loan", "overdraft", "provision", "deferred income",
           "credit card", "creditcard", "long-term", "longterm"), AccountType.liability),
@@ -2255,6 +2258,37 @@ async def clear_all_imports(
 
 # ── FIXED ASSETS IMPORT ───────────────────────────────────────────────────────
 
+def _parse_wt_rate_pct(raw: str):
+    """SARS wear-and-tear rate from a CSV cell -> PERCENT per annum (the unit stored in
+    FixedAsset.wear_and_tear_rate, e.g. 33.33). "20%", "20" and "0.20" all mean 20%; "1" / "100%" mean 100%.
+    Audit fix 2026-11-11: previously stored as a decimal, which the AFS had to guess back."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        w = float(s.replace(",", "").replace("%", "").strip())
+    except ValueError:
+        return None
+    if w <= 0:
+        return None
+    if "%" in s:
+        return round(w, 4)
+    return round(w * 100.0, 4) if w <= 1 else round(w, 4)
+
+
+def _life_header_is_years(hdr_text: str) -> bool:
+    """Is the useful-life column in YEARS (True) or MONTHS (False)?
+
+    Audit fix 2026-11-11: "month" is checked first. Previously any header containing "life" was read as years,
+    so "Useful Life Months" / "life (months)" / "life_in_months" values were multiplied by 12 (60 months -> 720).
+    Headers naming years, or Xero's "Effective Life" / a bare "Asset Life", are years.
+    """
+    h = (hdr_text or "").lower()
+    if "month" in h:
+        return False
+    return "year" in h or "effective" in h or "life" in h
+
+
 FIXED_ASSET_ALIASES: dict[str, list[str]] = {
     "asset_number":   ["asset_number", "asset_no", "asset no", "asset#", "fa_number",
                        "fa number", "reference", "ref",
@@ -2413,7 +2447,7 @@ async def import_fixed_assets(
                     val = float(life_raw.replace(",", ""))
                     # If the header contained "year" or "effective" interpret as years
                     hdr_text = (headers[m["useful_life_months"]] if "useful_life_months" in m else "").lower()
-                    if "year" in hdr_text or "effective" in hdr_text or "life" in hdr_text:
+                    if _life_header_is_years(hdr_text):
                         life_months = max(1, int(round(val * 12)))
                     else:
                         life_months = max(1, int(round(val)))
@@ -2454,11 +2488,7 @@ async def import_fixed_assets(
             wt_raw      = _get(row, m, "wear_and_tear_rate")
             wt_rate     = None
             if wt_raw.strip():
-                try:
-                    w = float(wt_raw.replace(",", "").replace("%", ""))
-                    wt_rate = w / 100.0 if w > 1 else w
-                except ValueError:
-                    pass
+                wt_rate = _parse_wt_rate_pct(wt_raw)
 
             status_raw  = _get(row, m, "status").strip().lower()
             status      = status_raw if status_raw in ("active", "disposed", "written_off") else "active"
@@ -2600,7 +2630,7 @@ async def preview_fixed_assets(
             try:
                 val      = float(life_raw.replace(",", ""))
                 hdr_text = (headers[m["useful_life_months"]] if "useful_life_months" in m else "").lower()
-                if "year" in hdr_text or "effective" in hdr_text or "life" in hdr_text:
+                if _life_header_is_years(hdr_text):
                     life_months = max(1, int(round(val * 12)))
                 else:
                     life_months = max(1, int(round(val)))

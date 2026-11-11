@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<!--
+  DRAFT — prepared 2026-11-11 by the automated audit (action item: POPIA / AI-context disclosure).
+  NOT LEGAL ADVICE. Have it reviewed by your attorney / Information Officer, fill in every [BRACKETED]
+  placeholder, then publish it at https://zuzan.co.za/privacy (the sign-up screen and landing page already
+  link there, but netlify.toml currently only publishes zuzan-landing.html, so that URL has no page behind it).
+  To publish: change the netlify build command to
+      mkdir -p _site/privacy && cp zuzan-landing.html _site/index.html && cp privacy.html _site/privacy/index.html
+  and add privacy.html to the `ignore` diff list.
+-->
+<html lang="en-ZA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZuZan Privacy Policy</title>
+<style>
+  :root { --bg:#FAF7F2; --ink:#1A1209; --mid:#6B5E4E; --accent:#C8401A; --border:#E8E0D5; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width:780px; margin:0 auto; padding:40px 16px 80px; }
+  h1 { font-family:Georgia, serif; font-size:2rem; margin:0 0 4px; }
+  h2 { font-family:Georgia, serif; font-size:1.25rem; margin:2rem 0 .5rem; border-top:1px solid var(--border); padding-top:1.25rem; }
+  p, li { color:var(--ink); } .meta { color:var(--mid); font-size:.9rem; }
+  table { width:100%; border-collapse:collapse; font-size:.92rem; margin:.5rem 0; }
+  th, td { text-align:left; vertical-align:top; padding:8px; border-bottom:1px solid var(--border); }
+  a { color:var(--accent); }
+  .draft { background:#fff3cd; border:1px solid #e0c060; padding:10px 14px; border-radius:8px; font-size:.9rem; }
+</style>
+</head>
+<body>
+<main>
+<p class="draft"><strong>Draft for review.</strong> Remove this notice once the policy has been approved.</p>
+<h1>Privacy Policy</h1>
+<p class="meta">Effective: [DATE] &middot; Applies to the ZuZan website (zuzan.co.za) and the ZuZan bookkeeping, invoicing and payroll application.</p>
+
+<h2>1. Who we are</h2>
+<p>ZuZan is operated by [COMPANY LEGAL NAME] (registration number [REG NO]), [PHYSICAL ADDRESS], South Africa ("ZuZan", "we", "us"). Our Information Officer is [NAME], who can be reached at [EMAIL] / [PHONE].</p>
+<p>We process personal information in line with the Protection of Personal Information Act 4 of 2013 (POPIA). For your own account details we are the <em>responsible party</em>. For the information you capture about your customers, suppliers and employees (invoices, supplier bank details, payroll records), <em>your business</em> is the responsible party and ZuZan acts as your <em>operator</em>, processing it only on your instructions to provide the service.</p>
+
+<h2>2. What we collect</h2>
+<ul>
+  <li><strong>Account information:</strong> names, email addresses, phone numbers, roles and login details of the people using a ZuZan company.</li>
+  <li><strong>Business records you capture or import:</strong> company details, VAT and tax numbers, invoices, quotes, expenses, purchase orders, journals, bank statements and bank-feed transactions, fixed assets, and the names and contact details of your customers and suppliers. Supplier bank account details are stored encrypted.</li>
+  <li><strong>Employee and payroll records:</strong> employee names, ID or passport numbers, tax numbers, bank details, salaries, deductions, leave and clock-in records, as needed to calculate PAYE, UIF and SDL and produce payslips and SARS submissions.</li>
+  <li><strong>Billing information:</strong> your plan and payment history. Card details are captured by our payment provider, not by ZuZan.</li>
+  <li><strong>Technical information:</strong> error reports and performance data from the app (IP address, browser type, the page where an error occurred). Session recording is switched off.</li>
+</ul>
+
+<h2>3. Why we use it</h2>
+<ul>
+  <li>To provide the service: keeping your books, producing reports, VAT, payroll and annual financial statements (performance of our contract with you).</li>
+  <li>To bill for subscriptions and send service emails such as invoices, payslips, password resets and reminders.</li>
+  <li>To keep the service secure and working, and to fix errors (our legitimate interest).</li>
+  <li>To meet legal obligations, for example tax and record-keeping laws.</li>
+</ul>
+<p>We do not sell personal information and do not use your business records for advertising.</p>
+
+<h2>4. AI assistant and AI insights</h2>
+<p>ZuZan offers an optional AI assistant and AI management insights. When you use them, we send your question together with a summary of your company's figures to our AI provider, Anthropic PBC (United States), so it can answer. The summary can include revenue, expenses and profit for the financial year to date, your outstanding debtor balance, the names and balances of your largest unpaid customer invoices, your number of employees and the total net pay of your last payroll. It does not include employee ID numbers, bank account details or passwords.</p>
+<p>Anthropic processes this information as our operator to generate the response. Under its commercial terms it does not use API inputs to train its models. If you do not want this information shared, do not use the AI features [or: ask an owner to switch them off under Settings].</p>
+
+<h2>5. Who we share it with (operators)</h2>
+<table>
+  <tr><th>Provider</th><th>Purpose</th><th>Location</th></tr>
+  <tr><td>Render</td><td>Application hosting</td><td>[REGION]</td></tr>
+  <tr><td>[DATABASE PROVIDER, e.g. Neon]</td><td>Database hosting</td><td>[REGION]</td></tr>
+  <tr><td>Netlify</td><td>Website and web-app hosting</td><td>Global CDN</td></tr>
+  <tr><td>PayFast</td><td>Subscription payments</td><td>South Africa</td></tr>
+  <tr><td>Resend</td><td>Sending emails (invoices, payslips, notifications)</td><td>[REGION]</td></tr>
+  <tr><td>Sentry</td><td>Error monitoring</td><td>Germany (EU)</td></tr>
+  <tr><td>Stitch / Salt Edge</td><td>Bank feeds, only if you connect a bank account</td><td>[REGION]</td></tr>
+  <tr><td>Anthropic</td><td>AI assistant and insights, only when used (see section 4)</td><td>United States</td></tr>
+</table>
+<p>We may also disclose information where the law requires it (for example to SARS or under a court order), or to your accountant if you invite them to your company.</p>
+
+<h2>6. Transfers outside South Africa</h2>
+<p>Some operators process information outside South Africa. We only use providers that are bound by written agreements and data-protection laws or contractual terms giving protection substantially similar to POPIA, as required by section 72 of POPIA.</p>
+
+<h2>7. How long we keep it</h2>
+<p>We keep business and payroll records for as long as your account is active and afterwards for the periods required by law. Generally that is at least five years under the Tax Administration Act and seven years under the Companies Act. When you close your account we delete or de-identify your information once those periods end, unless you ask us to export it to you first.</p>
+
+<h2>8. Security</h2>
+<p>Information is encrypted in transit (HTTPS). Sensitive fields such as bank details are encrypted at rest. Access is restricted by user role, and passwords are stored as one-way hashes. If we become aware of a security compromise affecting your personal information, we will notify you and the Information Regulator as POPIA requires.</p>
+
+<h2>9. Your rights</h2>
+<p>You may ask us what personal information we hold about you, ask us to correct or delete it, object to processing, and withdraw consent where processing is based on consent. Employees, customers and suppliers of a ZuZan customer should first contact that business, as the responsible party. We will help the business respond. Contact our Information Officer at [EMAIL]. If you are not satisfied, you may complain to the Information Regulator (South Africa): <a href="https://inforegulator.org.za" rel="noreferrer">inforegulator.org.za</a>.</p>
+
+<h2>10. Cookies and browser storage</h2>
+<p>The app stores your login token and display preferences in your browser so you stay signed in. We do not use advertising cookies.</p>
+
+<h2>11. Changes</h2>
+<p>We will post any changes on this page and, for material changes, notify account owners by email.</p>
+</main>
+</body>
+</html>

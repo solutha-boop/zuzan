@@ -232,3 +232,6 @@ __marimo__/
 zuzan.db.bak-*
 *.db.bak*
 .fuse_hidden*
+
+# Local scratch moved aside for deletion (never deploy)
+zuzan-backend/_to_delete/

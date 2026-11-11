@@ -43,11 +43,15 @@ git add commit_and_push.bat
 git add zuzan-backend/tests zuzan-backend/pytest.ini zuzan-backend/requirements-test.txt
 git add zuzan-backend/quotes.py zuzan-backend/financial_statements.py zuzan-backend/journal.py zuzan-backend/csv_import.py zuzan-backend/fixed_assets.py
 git add patch_backend.py
+git add zuzan-app/public/sw.js
+git add commit_and_push.ps1
+git add privacy.html
+git add zuzan-backend/find_default_password_accounts.py zuzan-backend/fix_credit_note_vat_account.py zuzan-backend/check_fixed_asset_useful_life.py
 git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=feat: QB migration GL endpoint + account type fixes + useful life in years + FA preview [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+if "%~1"=="" (set MSG=fix: audit 2026-11-10 items - FA useful-life months bug, QBO GL import, wear-and-tear rate unit, creditors error state [%STAMP%]) else (set MSG=%~1 [%STAMP%])
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===

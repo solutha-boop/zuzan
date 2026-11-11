@@ -116,9 +116,10 @@ def _wt_rate_pct(fa):
     fixed_assets.py) → category-name heuristic → None."""
     if fa.wear_and_tear_rate:
         r = float(fa.wear_and_tear_rate)
-        # Stored as decimal (0.20 = 20%) — convert to percentage to match the
-        # rest of this function which returns values like 20.0, 4.0, 33.33.
-        return r * 100.0 if r < 1.0 else r
+        # Stored as a PERCENTAGE p.a. (20.0, 33.33, 100.0) since the 2026-11-11 normalisation (database.py
+        # migration + csv_import._parse_wt_rate_pct). A value <= 1 can only be a legacy decimal row not yet
+        # migrated (0.20 = 20%, 1.0 = 100%); no SARS IN47 rate is 1% or below.
+        return r * 100.0 if r <= 1.0 else r
     if fa.sars_category:
         try:
             from fixed_assets import SARS_WEAR_TEAR

@@ -8477,15 +8477,19 @@ function Creditors({live = {}}) {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
   const [bucketFilter, setBucketFilter] = useState("all");
+  const [loadError, setLoadError] = useState(null);
+  // Sample vendors are only for demo sessions — a real account whose request fails (plan lock, network,
+  // server error) must see the error, never made-up creditors (audit fix 2026-11-11).
+  const isDemoSession = (() => { try { const t = localStorage.getItem("zuzan_token"); return !t || t.startsWith("demo_token"); } catch(e) { return true; } })();
 
   useEffect(() => {
-    api("/reports/creditors-aging").then(setData).catch(()=>null).finally(()=>setLoading(false));
+    api("/reports/creditors-aging").then(d=>{setData(d);setLoadError(null);}).catch(e=>setLoadError(e.message||"Could not load creditors")).finally(()=>setLoading(false));
   }, []);
 
   // Refresh when a PO is received or paid, or when an on-credit expense is paid
   useEffect(() => {
     if (live.purchaseOrders || live.expenses) {
-      api("/reports/creditors-aging").then(setData).catch(()=>null);
+      api("/reports/creditors-aging").then(d=>{setData(d);setLoadError(null);}).catch(()=>null);
     }
   }, [live.purchaseOrders, live.expenses]); // eslint-disable-line
 
@@ -8523,10 +8527,15 @@ function Creditors({live = {}}) {
           <h2 style={{fontFamily:"serif",fontSize:26,color:C.ink,margin:0}}>Creditors Book</h2>
           <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Accounts payable by vendor — as at {asAt}</p>
         </div>
-        {!data && <Badge label="Demo Mode" color={C.gold} bg={C.goldLt}/>}
+        {!data && isDemoSession && <Badge label="Demo Mode" color={C.gold} bg={C.goldLt}/>}
       </div>
       {loading && <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading creditors...</div>}
-      {!loading && (
+      {!loading && !data && !isDemoSession && (
+        <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:14,padding:28,textAlign:"center",color:C.inkMid,fontSize:13}}>
+          {loadError || "Could not load creditors."}
+        </div>
+      )}
+      {!loading && (data || isDemoSession) && (
         <div>
           {/* Summary cards — click to filter table */}
           <div style={{display:"flex",gap:12,marginBottom:24,flexWrap:"wrap"}}>

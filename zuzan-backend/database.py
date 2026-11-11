@@ -1585,6 +1585,10 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS ix_credit_notes_company ON credit_notes (company_id)",
             # ── Deferred tax: per-asset SARS wear-and-tear rate override (2026-07-14) ──
             "ALTER TABLE fixed_assets ADD COLUMN wear_and_tear_rate FLOAT",
+            # Normalise wear_and_tear_rate to PERCENT p.a. (audit fix 2026-11-11): the CSV import used to store a
+            # decimal (0.20 = 20%, and 1.0 for a 100% write-off). Idempotent: values > 1 are already percentages,
+            # and no SARS IN47 rate is 1% or below.
+            "UPDATE fixed_assets SET wear_and_tear_rate = wear_and_tear_rate * 100 WHERE wear_and_tear_rate > 0 AND wear_and_tear_rate <= 1",
             # ── Pension / Medical aid on employees + payslips (2026-07) ──────────
             "ALTER TABLE employees ADD COLUMN pension_fund_employee_pct FLOAT DEFAULT 0",
             "ALTER TABLE employees ADD COLUMN pension_fund_employer_pct FLOAT DEFAULT 0",

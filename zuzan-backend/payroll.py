@@ -3473,9 +3473,6 @@ async def cash_flow_13week(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from plans import has_plan, plan_error
-    if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "business"):
-        raise plan_error("business", "The 13-week cash flow forecast")
     """Forward-looking 13-week rolling cash flow forecast.
 
     Pulls outstanding invoices (by due date), recurring invoice schedule,
@@ -3488,6 +3485,9 @@ async def cash_flow_13week(
     were previously hard-coded to 0.0 — this endpoint now sources both from
     the same data the Creditors/VAT201 reports use.)
     """
+    from plans import has_plan, plan_error
+    if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "business"):
+        raise plan_error("business", "The 13-week cash flow forecast")
     from database import RecurringInvoice, Supplier as _Supplier
 
     cid   = current_user.company_id
@@ -4281,14 +4281,14 @@ async def creditors_aging(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from plans import has_plan, plan_error
-    if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "professional"):
-        raise plan_error("professional", "The creditors book")
     """
     Creditors book with aging — outstanding purchase orders (received/partial) and
     unpaid on-credit expenses, grouped by vendor/supplier, aged from due date.
     Fully paid POs and paid credit expenses are excluded.
     """
+    from plans import has_plan, plan_error
+    if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "professional"):
+        raise plan_error("professional", "The creditors book")
     from database import Supplier as SupplierModel, Expense as ExpenseModel, Account as _Account, JournalEntry as _JE, JournalLine as _JL
     from crypto import decrypt_field
     cid = current_user.company_id
