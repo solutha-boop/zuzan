@@ -216,13 +216,14 @@ def _gl_import_expenses(
     """
     exp_accounts = db.query(Account).filter(
         Account.company_id == company_id,
-        Account.type == AccountType.expense,
+        Account.type.in_([AccountType.expense, AccountType.cogs]),
     ).all()
     if not exp_accounts:
         return {"total": 0.0, "breakdown": {}}
 
-    exp_ids = [a.id for a in exp_accounts]
+    exp_ids  = [a.id for a in exp_accounts]
     exp_name = {a.id: a.name for a in exp_accounts}
+    cogs_ids = {a.id for a in exp_accounts if a.type == AccountType.cogs}
 
     cut = _gl_import_cutover(db, company_id)
     if cut is not None and (date_to is None or cut < date_to):
@@ -238,7 +239,7 @@ def _gl_import_expenses(
         eq = eq.filter(JournalEntry.date < date_to)
     entry_ids = [r[0] for r in eq.all()]
     if not entry_ids:
-        return {"total": 0.0, "breakdown": {}}
+        return {"total": 0.0, "cogs_total": 0.0, "breakdown": {}}
 
     rows = db.query(
         JournalLine.account_id,
@@ -250,13 +251,16 @@ def _gl_import_expenses(
 
     breakdown: dict = {}
     total = 0.0
+    cogs_total = 0.0
     for acct_id, net_debit in rows:
         amt = float(net_debit or 0)
         if amt:
             name = exp_name.get(acct_id, f"Account {acct_id}")
             breakdown[name] = round(breakdown.get(name, 0.0) + amt, 2)
             total += amt
-    return {"total": round(total, 2), "breakdown": breakdown}
+            if acct_id in cogs_ids:
+                cogs_total += amt
+    return {"total": round(total, 2), "cogs_total": round(cogs_total, 2), "breakdown": breakdown}
 
 
 # SA TAX TABLES — Multi-year for audit history
@@ -3889,6 +3893,9 @@ async def management_accounts(
         for acct_name, amt in gl_exp["breakdown"].items():
             expense_by_cat[acct_name] = round(expense_by_cat.get(acct_name, 0.0) + amt, 2)
 
+    # Total COGS = PO COGS + GL-imported cogs-typed accounts
+    total_cogs_period = round(po_cogs + gl_exp.get("cogs_total", 0.0), 2)
+
     active_employees = db.query(Employee).filter(
         Employee.company_id == cid,
         Employee.is_active == True,
@@ -3974,6 +3981,7 @@ async def management_accounts(
         "pl": {
             "revenue":              revenue,
             "po_cogs":              po_cogs,
+            "total_cogs":           total_cogs_period,
             "depreciation_amount":  round(period_depreciation, 2),
             "total_expenses":       total_expenses,
             "expense_breakdown":    expense_by_cat,

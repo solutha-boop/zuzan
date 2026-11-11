@@ -25,6 +25,7 @@ class AccountType(str, enum.Enum):
     liability = "liability"
     equity    = "equity"
     revenue   = "revenue"
+    cogs      = "cogs"      # Cost of Goods / Cost of Sales — debit-normal, sits between Revenue and Expenses in P&L
     expense   = "expense"
 
 class PlanType(str, enum.Enum):
@@ -1715,6 +1716,7 @@ def init_db():
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS supply_type VARCHAR",
             "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'partial'",
             "ALTER TYPE invoicestatus ADD VALUE IF NOT EXISTS 'written_off'",
+            "ALTER TYPE accounttype ADD VALUE IF NOT EXISTS 'cogs'",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS written_off_date TIMESTAMP",
             # One-off, idempotent: credit-note VAT used to be posted to 2200 (PAYE Payable) instead of 2100 (VAT Output).
             # Backfill: POs received before stock lines were tracked - take the stock portion from the ledger (idempotent).

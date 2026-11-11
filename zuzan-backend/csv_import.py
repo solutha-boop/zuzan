@@ -900,6 +900,9 @@ def _guess_account_type(s: str):
           "credit card", "creditcard", "long-term", "longterm"), AccountType.liability),
         (("equity", "capital", "retained", "reserve", "drawings", "share"), AccountType.equity),
         (("revenue", "income", "sales", "turnover", "fees earned"), AccountType.revenue),
+        # COGS must come before expense so "cost of sales" / "purchases" map to cogs, not expense
+        (("cost of sales", "cost of goods", "cost of good", "direct cost", "purchases",
+          "materials used", "opening stock", "closing stock"), AccountType.cogs),
         (("expense", "cost", "overhead", "salar", "wages", "depreciation", "interest paid"), AccountType.expense),
         (("asset", "bank", "cash", "receivable", "debtor", "inventor", "stock", "prepaid",
           "equipment", "vehicle", "property", "investment", "undeposited"), AccountType.asset),
@@ -952,9 +955,11 @@ def _parse_account_type_exact(v: str):
     if v in ("revenue", "income", "sales", "turnover", "other_income",
              "operating_revenue", "non_operating_income"):
         return AccountType.revenue
-    if v in ("expense", "expenses", "cost", "cost_of_sales", "cogs",
-             "cost_of_goods_sold", "overhead", "operating_expense",
-             "direct_cost", "admin", "other_expense"):
+    if v in ("cost_of_sales", "cogs", "cost_of_goods_sold", "direct_cost",
+             "direct_costs", "cost_of_goods", "cos"):
+        return AccountType.cogs
+    if v in ("expense", "expenses", "cost", "overhead", "operating_expense",
+             "admin", "other_expense"):
         return AccountType.expense
     return None
 
@@ -983,10 +988,13 @@ _XERO_TYPE_MAP: dict[str, AccountType] = {
     "sales":         AccountType.revenue,
     "other income":  AccountType.revenue,
     "income":        AccountType.revenue,
+    # P&L — COGS
+    "direct costs":        AccountType.cogs,
+    "cost of sales":       AccountType.cogs,
+    "cost of goods sold":  AccountType.cogs,
     # P&L — expense
     "expense":        AccountType.expense,
     "expenses":       AccountType.expense,
-    "direct costs":   AccountType.expense,
     "overhead":       AccountType.expense,
     "depreciation":   AccountType.expense,
 }
@@ -1015,7 +1023,7 @@ def _infer_type_from_xero_code(code: str) -> Optional[AccountType]:
     return {
         1: AccountType.asset,      # 1xx: bank accounts, current assets
         2: AccountType.revenue,    # 2xx: sales / revenue / other income
-        3: AccountType.expense,    # 3xx: direct costs / COGS
+        3: AccountType.cogs,       # 3xx: direct costs / COGS
         4: AccountType.expense,    # 4xx: operating expenses
         5: AccountType.expense,    # 5xx: other expenses (tax, interest, etc.)
         7: AccountType.asset,      # 7xx: fixed assets (buildings, equipment)

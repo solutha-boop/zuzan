@@ -247,8 +247,10 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
             chart[k] = a
 
     _DESCRIPTOR = {AccountType.asset: "Current Asset", AccountType.liability: "Current Liability",
-                   AccountType.equity: "Equity", AccountType.revenue: "Revenue", AccountType.expense: "Expense"}
+                   AccountType.equity: "Equity", AccountType.revenue: "Revenue",
+                   AccountType.cogs: "Cost of Sales", AccountType.expense: "Expense"}
     _CREDIT_NORMAL = {AccountType.liability, AccountType.equity, AccountType.revenue}
+    # cogs is debit-normal (same as expense) — not in _CREDIT_NORMAL
 
     def _resolve(acct_name: str, acct_type_text: str):
         """-> (account_code_to_pass, type_descriptor_to_pass, AccountType or None)"""

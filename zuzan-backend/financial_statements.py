@@ -215,6 +215,13 @@ def annual_financial_statements(
     ]
     total_revenue = sum(l["amount"] for l in revenue_lines)
 
+    # Cost of Sales accounts (AccountType.cogs — debit-normal, always COGS)
+    cogs_acct_rows = _acct_lines(db, cid, AccountType.cogs, start, end)
+    cogs_acct_lines = [
+        {"code": c, "name": n, "amount": _r(dr - cr)}
+        for c, n, dr, cr in cogs_acct_rows if _r(dr - cr) != 0
+    ]
+
     # Expenses (debit-normal accounts)
     exp_rows = _acct_lines(db, cid, AccountType.expense, start, end)
     expense_lines = [
@@ -258,7 +265,8 @@ def annual_financial_statements(
                 or "inventory adjust" in nm
                 or "stock adjust" in nm)
 
-    cogs_lines = [l for l in expense_lines if _is_cogs(l)]
+    # AccountType.cogs accounts always go into COGS; expense accounts are split by keyword/code
+    cogs_lines = cogs_acct_lines + [l for l in expense_lines if _is_cogs(l)]
     opex_lines = [l for l in expense_lines if not _is_cogs(l) and not _is_finance_cost(l)]
 
     total_cogs    = sum(l["amount"] for l in cogs_lines)
@@ -324,11 +332,13 @@ def annual_financial_statements(
     ]
 
     # Retained earnings = all-time cumulative net profit not yet closed to equity accounts
-    all_rev = _acct_lines(db, cid, AccountType.revenue, date_to=end)
-    all_exp = _acct_lines(db, cid, AccountType.expense, date_to=end)
-    cum_revenue  = sum(cr - dr for _, _, dr, cr in all_rev)
-    cum_expenses = sum(dr - cr for _, _, dr, cr in all_exp)
-    retained_earnings = _r(cum_revenue - cum_expenses)
+    all_rev  = _acct_lines(db, cid, AccountType.revenue, date_to=end)
+    all_cogs = _acct_lines(db, cid, AccountType.cogs,    date_to=end)
+    all_exp  = _acct_lines(db, cid, AccountType.expense, date_to=end)
+    cum_revenue   = sum(cr - dr for _, _, dr, cr in all_rev)
+    cum_cogs      = sum(dr - cr for _, _, dr, cr in all_cogs)
+    cum_expenses  = sum(dr - cr for _, _, dr, cr in all_exp)
+    retained_earnings = _r(cum_revenue - cum_cogs - cum_expenses)
 
     # Deferred tax presentation (audit implementation 2026-07-14): the closing
     # balance is a computed AFS line — not a journal posting — with the matching
@@ -388,9 +398,11 @@ def annual_financial_statements(
 
     # Opening retained earnings (all-time cumulative P&L up to start)
     open_rev             = _acct_lines(db, cid, AccountType.revenue, date_to=before_start)
+    open_cogs_rows       = _acct_lines(db, cid, AccountType.cogs,    date_to=before_start)
     open_exp             = _acct_lines(db, cid, AccountType.expense, date_to=before_start)
     opening_retained     = _r(
         sum(cr - dr for _, _, dr, cr in open_rev) -
+        sum(dr - cr for _, _, dr, cr in open_cogs_rows) -
         sum(dr - cr for _, _, dr, cr in open_exp)
     )
     # Match the balance-sheet presentation: opening retained earnings carry the

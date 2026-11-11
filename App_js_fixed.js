@@ -6981,11 +6981,16 @@ function Reports({live = {}, user = null}) {
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20}}>
             <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>Profit and Loss</div>
             <ReportRow label="Revenue"              value={pl.revenue}         bold color={C.green}/>
-            <ReportRow label="Operating Expenses"  value={-pl.total_expenses} indent/>
+            {pl.total_cogs > 0 && <>
+              <ReportRow label="Less: Cost of Sales" value={-pl.total_cogs}   indent/>
+              <ReportRow label="Gross Profit"        value={pl.revenue - pl.total_cogs} bold border color={C.green}/>
+              <ReportRow label="Less: Operating Expenses" value={-(pl.total_expenses - pl.total_cogs)} indent/>
+            </>}
+            {!(pl.total_cogs > 0) && <ReportRow label="Operating Expenses"  value={-pl.total_expenses} indent/>}
             <ReportRow label="Operating Profit"    value={pl.gross_profit}    bold border/>
-            <ReportRow label="Payroll Cost"        value={-pl.payroll_cost}   indent/>
+            <ReportRow label="Less: Payroll Cost"  value={-pl.payroll_cost}   indent/>
             <ReportRow label="Net Profit Before Tax" value={pl.ebit}          bold border color={pl.ebit>=0?C.ink:C.red}/>
-            <ReportRow label="Tax Provision 27%"   value={-pl.tax_provision}  indent/>
+            <ReportRow label="Less: Tax Provision 27%" value={-pl.tax_provision} indent/>
             <ReportRow label="Net Profit After Tax" value={pl.net_profit}     bold border large color={pl.net_profit>=0?C.accent:C.red}/>
           </div>
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:20}}>
