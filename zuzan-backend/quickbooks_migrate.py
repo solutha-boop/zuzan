@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import get_db, AccountType
 from auth import require_role
 import csv_import as CI
 from xero_migrate import (read_table, pick, pick_containing, make_upload, result, merge, import_chart, run_documents,
@@ -62,19 +62,76 @@ async def import_qbo_accounts(file: UploadFile = File(...), current_user=Depends
 @router.post("/opening-balances")
 async def import_qbo_opening_balances(file: UploadFile = File(...), as_at: Optional[str] = None, replace: bool = False,
                                       current_user=Depends(require_role(*_ROLES)), db: Session = Depends(get_db)):
+    """
+    QuickBooks Trial Balance export.
+
+    QBO's Trial Balance has no 'Type' column — account type is inferred in this order:
+      1. Explicit type column (if present)
+      2. Keyword matching on the account name (asset, liability, revenue, expense keywords)
+      3. Debit/Credit side: debit-only → 'asset'; credit-only → 'income'
+      4. Final fallback: 'asset' (safe default — user can fix with Fix Account Types)
+
+    Special case: "Credit Card" with a debit balance is a bank account (asset), not a liability.
+    """
     rows = await read_table(file)
     out = []
+    warns = []
+    fallback_count = 0
+
     for r in rows:
         name = pick(r, "account", "accountname", "name", "fullname")
         if not name or key(name) in ("total", "totals", "grandtotal"):
             continue
-        debit, credit = pick_containing(r, ("debit",)), pick_containing(r, ("credit",))
-        out.append({"code": pick(r, "number", "accountnumber", "code"), "name": name, "type": pick(r, "type", "accounttype"),
-                    "debit": debit, "credit": credit, "balance": "" if (debit or credit) else pick(r, "balance", "amount")})
+
+        debit  = pick_containing(r, ("debit",))
+        credit = pick_containing(r, ("credit",))
+
+        # 1. Explicit type column
+        type_val = pick(r, "type", "accounttype")
+
+        if not type_val:
+            # 2. Keyword inference from name
+            inferred = CI._guess_account_type(name)
+
+            # Special case: "Credit Card" with a debit balance is a QB bank/asset account
+            if key(name) == "creditcard" and debit and not credit:
+                inferred = AccountType.asset
+
+            if inferred is not None:
+                type_val = inferred.value
+            else:
+                # 3. Debit/credit side fallback
+                if debit and not credit:
+                    type_val = "asset"
+                    fallback_count += 1
+                elif credit and not debit:
+                    type_val = "income"
+                    fallback_count += 1
+                else:
+                    type_val = "asset"   # 4. Final safe default
+                    fallback_count += 1
+
+        out.append({
+            "code":    pick(r, "number", "accountnumber", "code"),
+            "name":    name,
+            "type":    type_val,
+            "debit":   debit,
+            "credit":  credit,
+            "balance": "" if (debit or credit) else pick(r, "balance", "amount"),
+        })
+
     if not out:
-        raise HTTPException(400, "No account lines found. Export the Trial Balance from QuickBooks (Reports > Trial Balance).")
+        raise HTTPException(400, "No account lines found. Export the Trial Balance from QuickBooks (Reports → Trial Balance).")
+
+    if fallback_count:
+        warns.append(
+            f"{fallback_count} account(s) had no recognisable account type and were assigned a default. "
+            "Use Import Data → Accounts → Fix Account Types after import to reclassify any that look wrong."
+        )
+
     up = make_upload(["code", "name", "type", "debit", "credit", "balance"], out)
-    return result(await CI.import_trial_balance(file=up, as_at=as_at, replace=replace, db=db, cu=current_user))
+    return result(await CI.import_trial_balance(file=up, as_at=as_at, replace=replace, db=db, cu=current_user),
+                  warnings=warns)
 
 
 @router.post("/general-ledger")
