@@ -928,10 +928,10 @@ def _resolve_type(type_text: str, code: str):
 
 
 def _signed_dr_cr(atype, bal: float):
-    """(debit, credit) for a signed closing balance: debit-normal types (asset/expense) post a positive
+    """(debit, credit) for a signed closing balance: debit-normal types (asset/cogs/expense) post a positive
     balance as a debit and a negative one (accumulated depreciation, overdrawn bank) as a credit;
     credit-normal types the other way round."""
-    if atype in (AccountType.asset, AccountType.expense):
+    if atype in (AccountType.asset, AccountType.cogs, AccountType.expense):
         return (bal, 0.0) if bal >= 0 else (0.0, -bal)
     return (0.0, bal) if bal >= 0 else (-bal, 0.0)
 
@@ -1415,7 +1415,7 @@ async def import_profit_loss(
                 continue
 
             atype = _resolve_type(tp, code)
-            if atype not in (AccountType.revenue, AccountType.expense):
+            if atype not in (AccountType.revenue, AccountType.cogs, AccountType.expense):
                 raise ValueError(f"Cannot tell whether '{name}' is income or an expense (Type '{tp}') - row not imported.")
             acct  = _find_or_create_account(db, cid, code, name, atype)
 
@@ -1651,7 +1651,7 @@ async def reclassify_gl_accounts(
         .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
         .filter(JournalEntry.company_id == cid, JournalEntry.source == "import")
         .group_by(JournalLine.account_id).all()}
-    _debit_types = (AccountType.asset, AccountType.expense)
+    _debit_types = (AccountType.asset, AccountType.cogs, AccountType.expense)
 
     fixed = []
     for acct in accounts:

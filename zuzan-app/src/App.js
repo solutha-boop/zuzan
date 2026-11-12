@@ -6488,8 +6488,9 @@ function Reports({live = {}, user = null}) {
   };
   const renderTrialBalance = () => {
     if (!trialBal) return <div style={{color:C.inkMid,fontSize:13,padding:20}}>Loading trial balance…</div>;
-    const TYPE_COLOR = {asset:C.blue,liability:C.red,equity:C.green,revenue:C.green,expense:"#c17d00"};
-    const TYPE_ORDER = ["asset","liability","equity","revenue","expense"];
+    const TYPE_COLOR = {asset:C.blue,liability:C.red,equity:C.green,revenue:C.green,cogs:"#b45309",expense:"#c17d00"};
+    const TYPE_ORDER = ["asset","liability","equity","revenue","cogs","expense"];
+    const TYPE_LABEL = {asset:"Assets",liability:"Liabilities",equity:"Equity",revenue:"Revenue",cogs:"Cost of Sales",expense:"Expenses"};
     const grouped = TYPE_ORDER.reduce((acc,t)=>({...acc,[t]:trialBal.accounts.filter(a=>a.type===t)}),[]);
     return (
       <div>
@@ -6559,7 +6560,7 @@ function Reports({live = {}, user = null}) {
               return [
                 <tr key={`hdr-${type}`}>
                   <td colSpan={5} style={{padding:"8px 12px",fontWeight:700,fontSize:11,color:TYPE_COLOR[type]||C.ink,background:`${TYPE_COLOR[type]}15`,textTransform:"uppercase",letterSpacing:0.5,border:`1px solid ${C.border}`}}>
-                    {type.charAt(0).toUpperCase()+type.slice(1)}s
+                    {TYPE_LABEL[type] || (type.charAt(0).toUpperCase()+type.slice(1))}
                   </td>
                 </tr>,
                 ...rows.map(row=>(

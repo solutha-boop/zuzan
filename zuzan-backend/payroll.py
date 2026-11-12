@@ -219,7 +219,7 @@ def _gl_import_expenses(
         Account.type.in_([AccountType.expense, AccountType.cogs]),
     ).all()
     if not exp_accounts:
-        return {"total": 0.0, "breakdown": {}}
+        return {"total": 0.0, "cogs_total": 0.0, "breakdown": {}}
 
     exp_ids  = [a.id for a in exp_accounts]
     exp_name = {a.id: a.name for a in exp_accounts}
@@ -2834,7 +2834,8 @@ async def balance_sheet(
     # overstated equity by the imported net profit (its revenue credits were
     # counted via the type-based query below while the 3998 offset was ignored).
     rev_accounts = db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.revenue).all()
-    exp_accounts = db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.expense).all()
+    # cogs-typed accounts (imported Cost of Sales) are P&L too - omitting them unbalanced the sheet (audit 2026-11-11)
+    exp_accounts = db.query(Account).filter(Account.company_id==cid, Account.type.in_([AccountType.expense, AccountType.cogs])).all()
     cum_revenue  = sum(journal_engine.account_balance(a, db) for a in rev_accounts)
     cum_expenses = sum(journal_engine.account_balance(a, db) for a in exp_accounts)
     owner_equity_3000          = 0.0
@@ -3972,8 +3973,12 @@ async def management_accounts(
         ).scalar() or 0
         exp = round(exp + trend_depr, 2)
         # GL-imported expenses for this trend month
-        exp = round(exp + _gl_import_expenses(db, cid, start, end)["total"], 2)
-        trend.append({"month": start.strftime("%b"), "revenue": rev, "expenses": exp, "gross_profit": round(rev - exp, 2), "profit": round(rev - exp, 2)})
+        _gl_m = _gl_import_expenses(db, cid, start, end)
+        exp = round(exp + _gl_m["total"], 2)
+        # cogs = PO/stock cost + GL-imported cogs accounts (subset of exp). gross_profit keeps the app-wide
+        # meaning (revenue - expenses, excl. payroll) used by the dashboard chart and P&L "Operating Profit".
+        cogs_m = round(po_c + _gl_m.get("cogs_total", 0.0), 2)
+        trend.append({"month": start.strftime("%b"), "revenue": rev, "cogs": cogs_m, "expenses": exp, "gross_profit": round(rev - exp, 2), "profit": round(rev - exp, 2)})
 
     return {
         "period":       period_label,

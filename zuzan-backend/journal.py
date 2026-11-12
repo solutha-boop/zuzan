@@ -1528,13 +1528,13 @@ def process_pending_reversals(company_id: int, db: Session) -> list[int]:
 def account_balance(account: Account, db: Session) -> float:
     """
     Normal balance convention:
-      Assets & Expenses:           balance = debits − credits  (debit-normal)
+      Assets, Cost of Sales (cogs) & Expenses: balance = debits − credits  (debit-normal)
       Liabilities, Equity, Revenue: balance = credits − debits  (credit-normal)
     """
     lines = db.query(JournalLine).filter(JournalLine.account_id == account.id).all()
     total_dr = sum(l.debit  for l in lines)
     total_cr = sum(l.credit for l in lines)
-    if account.type in (AccountType.asset, AccountType.expense):
+    if account.type in (AccountType.asset, AccountType.cogs, AccountType.expense):
         return round(total_dr - total_cr, 2)
     else:
         return round(total_cr - total_dr, 2)
