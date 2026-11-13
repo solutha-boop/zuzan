@@ -138,8 +138,11 @@ def classify_account_type(type_text: str, code: str):
           "accountsreceivable", "receivable"), AccountType.asset),
         (("liabilit", "payable", "creditcard", "currliab", "termliab"), AccountType.liability),
         (("equity", "retained"), AccountType.equity),
+        # Cost of Sales first: 'costofsales' contains 'sales' and used to be typed as revenue. Same cogs type the
+        # CSV import gives these names (audit 2026-11-12).
+        (("directcost", "costofgoods", "costofsales", "cogs"), AccountType.cogs),
         (("revenue", "sales", "income"), AccountType.revenue),
-        (("directcost", "costofgoods", "costofsales", "cogs", "overhead", "expense", "depreciat", "cost"), AccountType.expense),
+        (("overhead", "expense", "depreciat", "cost"), AccountType.expense),
     )
     for words, typ in table:
         if any(w in t for w in words):

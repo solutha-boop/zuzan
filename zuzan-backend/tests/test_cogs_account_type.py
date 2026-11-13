@@ -71,3 +71,24 @@ def test_gl_import_expenses_empty_shape_has_cogs_total():
     co, _ = _cu("cogsC")
     out = P._gl_import_expenses(db, co.id)
     assert "cogs_total" in out
+
+
+# ── audit 2026-11-12 low items ──────────────────────────────────────────────
+def test_xero_migrate_types_cost_of_sales_as_cogs_not_revenue():
+    import xero_migrate as X
+    for text in ("Direct Costs", "Cost of Sales", "Cost of Goods Sold", "COGS"):
+        assert X.classify_account_type(text, "310") == AccountType.cogs, text
+    assert X.classify_account_type("Sales", "200") == AccountType.revenue
+    assert X.classify_account_type("Other Income", "260") == AccountType.revenue
+    assert X.classify_account_type("Overhead", "400") == AccountType.expense
+    assert X.classify_account_type("Expense", "400") == AccountType.expense
+
+
+def test_custom_coa_cost_of_sales_account_syncs_as_cogs():
+    from database import CompanyAccount
+    co, cu = _cu("cogsD")
+    db.add(CompanyAccount(company_id=co.id, code="5077", name="Packaging", group="Cost of Sales"))
+    db.add(CompanyAccount(company_id=co.id, code="6077", name="Sundry", group="Expenses"))
+    db.commit()
+    assert J.expense_account(co.id, "5077 - Packaging", db).type == AccountType.cogs
+    assert J.expense_account(co.id, "6077 - Sundry", db).type == AccountType.expense

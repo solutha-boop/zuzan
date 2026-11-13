@@ -186,7 +186,7 @@ _COA_GROUP_TO_ACCOUNT_TYPE = {
     "Liabilities":   AccountType.liability,
     "Equity":        AccountType.equity,
     "Income":        AccountType.revenue,
-    "Cost of Sales": AccountType.expense,
+    "Cost of Sales": AccountType.cogs,      # same type imports give Cost of Sales accounts (audit 2026-11-12)
     "Expenses":      AccountType.expense,
 }
 
