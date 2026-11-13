@@ -44,7 +44,7 @@ def patch_auth():
         print(f"  [auth] replaced {count} subscription_status return(s)")
 
     # Always rewrite to refresh mtime so git detects the file as changed
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(src)
     print(f"  [auth] written")
 
@@ -63,7 +63,7 @@ def patch_main():
         src = src.replace(old, new)
         print("  [main] disabled subscription gate middleware")
 
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(src)
     print("  [main] written")
 
@@ -74,7 +74,7 @@ def patch_payroll():
         src = f.read()
     # Fix model string (2026-08-01)
     src = src.replace('model="claude-haiku-4-5",', 'model="claude-haiku-4-5-20251001",')
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(src)
     print("  [payroll] model string fixed + written")
 
@@ -94,7 +94,7 @@ def patch_companies():
         )
         print("  [companies] added plan + billing_cycle to CompanyUpdate")
     # Always rewrite to refresh mtime
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(src)
     print("  [companies] written")
 
@@ -123,7 +123,7 @@ def patch_billing():
         "    merchant_key = (decrypt_field(co.payfast_merchant_key) if co.payfast_merchant_key else None) or PAYFAST_MERCHANT_KEY\n"
         "    passphrase   = (decrypt_field(co.payfast_passphrase)   if co.payfast_passphrase   else None) or PAYFAST_PASSPHRASE",
     )
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(src)
     print("  [billing] adhoc_charge NameError + afs_initiate decrypt fixed + written")
 
@@ -147,7 +147,7 @@ def patch_main_billing_loop():
     if old in src:
         src = src.replace(old, new)
         print("  [main] added run_monthly_charges to daily loop")
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(src)
     print("  [main] written")
 
