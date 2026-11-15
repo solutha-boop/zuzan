@@ -37,6 +37,7 @@ git add zuzan-backend/quickbooks_migrate.py
 git add zuzan-backend/benefits.py
 git add zuzan-backend/security.py
 git add zuzan-backend/journal_check.py
+git add zuzan-backend/practice_mcp.py
 git add clock.html
 git add netlify.toml
 git add commit_and_push.bat
@@ -51,7 +52,10 @@ git diff --cached --stat
 
 echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
-if "%~1"=="" (set MSG=feat: add cogs account type - Revenue/COS/Gross Profit P&L structure across AFS + management accounts [%STAMP%]) else (set MSG=%~1 [%STAMP%])
+rem Quoted set + no parenthesised block: ( ) and ^& in the message can no longer break the script
+set "MSG=%~1"
+if not defined MSG set "MSG=feat: read-only practice MCP connector for Claude agents (/mcp)"
+set "MSG=%MSG% [%STAMP%]"
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 
 echo === Pushing ===
