@@ -7289,7 +7289,7 @@ function Reports({live = {}, user = null}) {
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
           <div>
             <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Provisional Tax (IRP6)</h2>
-            <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Corporate tax @ 27% — Tax year {p?p.tax_year:now.getFullYear()+"/"+(now.getFullYear()+1)}</p>
+            <p style={{fontSize:12,color:C.inkMid,marginTop:3}}>Corporate tax @ 27% — Financial year {p?p.tax_year:now.getFullYear()+"/"+(now.getFullYear()+1)}{p&&p.months_elapsed?` · ${p.months_elapsed} month(s) to date`:""}</p>
           </div>
           <a href="https://efiling.sars.gov.za" target="_blank" rel="noreferrer" style={{background:C.accent,color:"#fff",padding:"8px 16px",borderRadius:8,fontSize:12,fontWeight:700,textDecoration:"none"}}>Submit IRP6 on eFiling</a>
         </div>
@@ -7302,12 +7302,22 @@ function Reports({live = {}, user = null}) {
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
           <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24}}>
             <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:16}}>YTD Income Statement</div>
-            <ReportRow label="Revenue (invoiced + paid)"  value={ytd.revenue}       bold color={C.green}/>
-            <ReportRow label="Less: Operating Expenses"   value={-ytd.expenses}     indent/>
+            <ReportRow label="Revenue"                    value={ytd.revenue}       bold color={C.green}/>
+            <ReportRow label="Less: Cost of Sales and Expenses" value={-ytd.expenses} indent/>
             <ReportRow label="Less: Payroll Cost"         value={-ytd.payroll_cost} indent/>
             <ReportRow label="YTD Taxable Income"         value={taxable} bold border color={taxable>=0?C.ink:C.red}/>
             <ReportRow label="Annualised Taxable Income"  value={ann.taxable_income} bold color={C.inkMid}/>
             <ReportRow label="Estimated Annual Tax (27%)" value={estTax} bold border large color={C.accent}/>
+            {p && p.annualised && p.annualised.sbc_estimated_tax !== undefined &&
+              <ReportRow label="If a small business corporation" value={p.annualised.sbc_estimated_tax} indent color={C.inkMid}/>}
+            {p && p.prior_year && p.prior_year.has_data && <>
+              <ReportRow label="Last year's taxable income" value={p.prior_year.taxable_income} color={C.inkMid}/>
+              <ReportRow label="80% of last year" value={p.prior_year.eighty_percent_threshold} indent color={p.prior_year.estimate_below_80_percent?C.red:C.inkMid}/>
+              {p.prior_year.estimate_below_80_percent &&
+                <div style={{marginTop:8,padding:"8px 12px",background:C.redLt,borderRadius:8,fontSize:12,color:C.red}}>
+                  Estimate is below 80% of last year. If taxable income ends above R1m, SARS charges a 20% penalty on an estimate under 80% of actual.
+                </div>}
+            </>}
           </div>
           <div>
             <div style={{background:C.surface,border:"2px solid "+C.accent,borderRadius:16,padding:24,marginBottom:12}}>
@@ -7322,6 +7332,12 @@ function Reports({live = {}, user = null}) {
               <div style={{fontSize:12,color:C.inkMid}}>Balance of estimated annual tax</div>
               <div style={{marginTop:12,padding:"8px 12px",background:C.goldLt,borderRadius:8,fontSize:12,fontWeight:700,color:C.gold}}>Due: {irp6.second_due}</div>
             </div>
+            {irp6.third_due && (
+              <div style={{background:C.surface,border:"1px dashed "+C.border,borderRadius:16,padding:16,marginTop:12}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Third payment (voluntary top-up)</div>
+                <div style={{fontSize:12,color:C.inkMid}}>Pays any shortfall once the actual result is known, to avoid interest. Due: <strong>{irp6.third_due}</strong></div>
+              </div>
+            )}
           </div>
         </div>
         {notes.length > 0 && (

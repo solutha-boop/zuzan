@@ -3366,63 +3366,94 @@ def _vat_net_for_month(db: Session, cid: int, year: int, month: int) -> float:
     return round(output_vat - (input_vat + po_input_vat), 2)
 
 
-def _annual_tax_estimate(db: Session, cid: int, as_of: _date) -> float:
-    """Estimated annual CIT liability from a trailing-12-month run rate.
-
-    (revenue - expenses - payroll cost) x SA_CIT_RATE, floored at 0. Mirrors
-    the revenue/expense/payroll methodology used by /reports/management
-    (paid invoices + bank-import income; ex-VAT expenses + delivered PO COGS
-    + period depreciation; Payslip.total_cost), just over a rolling 365-day
-    window instead of a calendar period. This is a forecasting estimate only
-    — not a substitute for the company's own IRP6 "basic amount" / actual
-    estimate computation filed with SARS.
-    """
-    from fixed_assets import SA_CIT_RATE as _CIT_RATE
-
-    hist_start = datetime.combine(as_of - timedelta(days=365), datetime.min.time())
-    hist_end   = datetime.combine(as_of, datetime.min.time())
-
+def _period_pl(db: Session, cid: int, start: datetime, end: datetime) -> dict:
+    """Revenue, expenses (incl. cost of sales and depreciation) and payroll for [start, end), on the same basis as
+    /reports/management: paid invoices + bank-import income + GL-imported revenue; ex-VAT expenses + delivered PO
+    COGS + stock cost + depreciation + GL-imported expenses; Payslip.total_cost by payslip period (2026-11-15:
+    provisional tax ignored GL-imported books entirely)."""
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
-        Invoice.paid_date >= hist_start,
-        Invoice.paid_date < hist_end,
+        Invoice.paid_date >= start, Invoice.paid_date < end,
     ).all()
-    revenue = round(sum(_received_net_zar(i) for i in paid_invoices), 2)
-    revenue = round(revenue + _bank_import_income(db, cid, hist_start, hist_end), 2)
+    revenue = sum(_received_net_zar(i) for i in paid_invoices)
+    revenue += _bank_import_income(db, cid, start, end)
+    revenue += _gl_import_income(db, cid, start, end)
 
     expenses = db.query(Expense).filter(
         Expense.company_id == cid,
-        Expense.expense_date >= hist_start,
-        Expense.expense_date < hist_end,
+        Expense.expense_date >= start, Expense.expense_date < end,
     ).all()
-    total_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
-
+    total_expenses = sum(e.amount - (e.vat_amount or 0) for e in expenses)
     po_items = db.query(PurchaseOrder).filter(
         PurchaseOrder.company_id == cid,
         PurchaseOrder.status.in_(["received", "partial", "paid"]),
-        PurchaseOrder.received_date >= hist_start,
-        PurchaseOrder.received_date < hist_end,
+        PurchaseOrder.received_date >= start, PurchaseOrder.received_date < end,
     ).all()
-    total_expenses = round(total_expenses + sum(_po_cost_net(po) for po in po_items) + _stock_pl_cost(db, cid, hist_start, hist_end), 2)
-
-    from_period = hist_start.strftime("%Y-%m")
-    to_period   = hist_end.strftime("%Y-%m")
-    period_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
+    total_expenses += sum(_po_cost_net(po) for po in po_items) + _stock_pl_cost(db, cid, start, end)
+    last = end - timedelta(days=1)
+    from_period, to_period = start.strftime("%Y-%m"), last.strftime("%Y-%m")
+    total_expenses += db.query(func.sum(DepreciationEntry.amount)).filter(
         DepreciationEntry.company_id == cid,
-        DepreciationEntry.period >= from_period,
-        DepreciationEntry.period <= to_period,
+        DepreciationEntry.period >= from_period, DepreciationEntry.period <= to_period,
     ).scalar() or 0
-    total_expenses = round(total_expenses + period_depreciation, 2)
+    total_expenses += _gl_import_expenses(db, cid, start, end)["total"]
 
     payroll_cost = db.query(func.sum(Payslip.total_cost)).join(Employee).filter(
         Employee.company_id == cid,
-        Payslip.generated_at >= hist_start,
-        Payslip.generated_at < hist_end,
+        Payslip.period >= from_period, Payslip.period <= to_period,
     ).scalar() or 0
+    revenue, total_expenses, payroll_cost = round(revenue, 2), round(total_expenses, 2), round(payroll_cost, 2)
+    return {"revenue": revenue, "expenses": total_expenses, "payroll_cost": payroll_cost,
+            "taxable_income": round(revenue - total_expenses - payroll_cost, 2)}
 
-    ebit = round(revenue - total_expenses - payroll_cost, 2)
-    return round(max(0.0, ebit * _CIT_RATE), 2)
+
+def _company_fy_end(company, year: int) -> _date:
+    """Last day of the company's financial year that ends in `year` (Company.financial_year_end "MM-DD",
+    default 28/29 February)."""
+    fye_str = (getattr(company, "financial_year_end", None) or "02-28")
+    try:
+        m, d = (int(x) for x in fye_str.split("-"))
+    except (ValueError, AttributeError):
+        m, d = 2, 28
+    if m == 2 and d in (28, 29):
+        return _date(year, 2, _calendar.monthrange(year, 2)[1])
+    return _date(year, m, min(d, _calendar.monthrange(year, m)[1]))
+
+
+def _company_fy(company, on: _date):
+    """(start, end) dates of the company's financial year that contains `on`."""
+    end = _company_fy_end(company, on.year)
+    if end < on:
+        end = _company_fy_end(company, on.year + 1)
+    start = _company_fy_end(company, end.year - 1) + timedelta(days=1)
+    return start, end
+
+
+# Small business corporation tax table (years of assessment ending 31 Mar 2024 onwards; unchanged since)
+_SBC_BRACKETS = [(95_750, 0.0, 0.0), (365_000, 0.0, 0.07), (550_000, 18_848.0, 0.21), (None, 57_698.0, 0.27)]
+
+
+def _sbc_tax(taxable: float) -> float:
+    if taxable <= 0:
+        return 0.0
+    prev = 0.0
+    for top, base, rate in _SBC_BRACKETS:
+        if top is None or taxable <= top:
+            floor = prev if rate else 0.0
+            return round(base + (taxable - floor) * rate, 2) if rate else 0.0
+        prev = top
+    return 0.0
+
+
+def _annual_tax_estimate(db: Session, cid: int, as_of: _date) -> float:
+    """Estimated annual CIT liability from a trailing-12-month run rate: taxable income from _period_pl over the
+    365 days before `as_of` x SA_CIT_RATE, floored at 0. A forecasting estimate only, not the company's IRP6."""
+    from fixed_assets import SA_CIT_RATE as _CIT_RATE
+    hist_start = datetime.combine(as_of - timedelta(days=365), datetime.min.time())
+    hist_end   = datetime.combine(as_of, datetime.min.time())
+    pl = _period_pl(db, cid, hist_start, hist_end)
+    return round(max(0.0, pl["taxable_income"] * _CIT_RATE), 2)
 
 
 def _add_months(d: _date, n: int) -> _date:
@@ -4146,111 +4177,88 @@ async def provisional_tax(
     db: Session = Depends(get_db)
 ):
     """
-    Calculates provisional tax (IRP6) for the company.
-    SA corporate tax rate: 27% of taxable income.
-    Provisional tax is paid in two installments per tax year.
-    First payment: 6 months into the tax year.
-    Second payment: last day of the tax year.
+    Provisional tax (IRP6) estimate for the company's CURRENT financial year (Company.financial_year_end).
+
+    Rewritten 2026-11-15: the year to date started on 1 January while the due dates assumed a March year, the
+    company's own year-end was ignored, GL-imported books were left out, and there was no third payment or
+    prior-year comparison.
+      - Year to date = start of the financial year to today; annualised over completed months (min. 1).
+      - Tax at the 27% company rate, with the small business corporation (SBC) figure alongside.
+      - 1st payment: last day of month 6 (50%); 2nd: last day of the year (balance); 3rd (voluntary top-up):
+        6 months after year-end for a February year-end, otherwise 7 months.
+      - Prior financial year's taxable income for the 80% test (s 89quat: if actual taxable income is over
+        R1m, an estimate below 80% of it attracts a 20% penalty).
     """
+    from fixed_assets import SA_CIT_RATE as CORP_TAX_RATE
     cid = current_user.company_id
-    now = datetime.utcnow()
-    from fixed_assets import SA_CIT_RATE as CORP_TAX_RATE   # single source for the CIT rate (27%)
+    company = db.query(Company).filter(Company.id == cid).first()
+    today = _date.today()
+    fy_start, fy_end = _company_fy(company, today)
+    start_dt = datetime.combine(fy_start, datetime.min.time())
+    to_dt    = datetime.combine(today + timedelta(days=1), datetime.min.time())
+    ytd = _period_pl(db, cid, start_dt, to_dt)
 
-    # Get all revenue and expenses for the current calendar year (YTD)
-    year_start = datetime(now.year, 1, 1)
+    # completed months of the financial year (the current month counts once past its middle)
+    months_elapsed = (today.year - fy_start.year) * 12 + (today.month - fy_start.month) + (1 if today.day >= 15 else 0)
+    months_elapsed = max(1, min(12, months_elapsed))
+    annual_taxable_income = round(ytd["taxable_income"] / months_elapsed * 12, 2)
+    estimated_annual_tax  = round(max(0.0, annual_taxable_income * CORP_TAX_RATE), 2)
+    sbc_tax               = _sbc_tax(annual_taxable_income)
 
-    paid_invoices = db.query(Invoice).filter(
-        Invoice.company_id == cid,
-        Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
-        Invoice.paid_date >= year_start
-    ).all()
-    ytd_revenue = round(sum(_received_net_zar(i) for i in paid_invoices), 2)
-    # Add bank-import income (journal entries, not invoices) — avoids double-counting
-    ytd_revenue = round(ytd_revenue + _bank_import_income(db, cid, year_start), 2)
+    prev_start, prev_end = _company_fy(company, fy_start - timedelta(days=1))
+    prev = _period_pl(db, cid, datetime.combine(prev_start, datetime.min.time()),
+                      datetime.combine(prev_end + timedelta(days=1), datetime.min.time()))
+    prev_taxable = prev["taxable_income"]
+    has_prev = any(abs(prev[k]) >= 0.005 for k in ("revenue", "expenses", "payroll_cost"))
+    below_80 = bool(has_prev and prev_taxable > 1_000_000 and annual_taxable_income < 0.8 * prev_taxable)
 
-    expenses = db.query(Expense).filter(
-        Expense.company_id == cid,
-        Expense.expense_date >= year_start
-    ).all()
-    # Ex-VAT expenses — consistent with dashboard/management endpoints
-    ytd_expenses = round(sum(e.amount - (e.vat_amount or 0) for e in expenses), 2)
-
-    # Add PO COGS (received/partial/paid POs) — ex-VAT, delivered value only
-    # (audit fix 2026-07-10): full (total − VAT) overstated YTD expenses for
-    # partially delivered POs, understating taxable income and both IRP6
-    # installments. _po_delivered_net matches dashboard//v1/summary/management.
-    po_cogs_ytd = _stock_pl_cost(db, cid, year_start) + sum(
-        _po_cost_net(po)
-        for po in db.query(PurchaseOrder).filter(
-            PurchaseOrder.company_id == cid,
-            PurchaseOrder.status.in_(["received", "partial", "paid"]),
-            PurchaseOrder.received_date >= year_start,
-        ).all()
-    )
-    ytd_expenses = round(ytd_expenses + po_cogs_ytd, 2)
-
-    # Add YTD depreciation (DepreciationEntry records for periods in this year)
-    year_start_period = f"{now.year}-01"
-    year_end_period   = f"{now.year}-12"
-    ytd_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
-        DepreciationEntry.company_id == cid,
-        DepreciationEntry.period >= year_start_period,
-        DepreciationEntry.period <= year_end_period,
-    ).scalar() or 0
-    ytd_expenses = round(ytd_expenses + ytd_depreciation, 2)
-
-    payslips = db.query(Payslip).join(Employee).filter(
-        Employee.company_id == cid,
-        Payslip.generated_at >= year_start
-    ).all()
-    ytd_payroll = round(sum(p.total_cost for p in payslips), 2)
-
-    # YTD taxable income
-    ytd_taxable_income = round(ytd_revenue - ytd_expenses - ytd_payroll, 2)
-
-    # Annualise based on months elapsed
-    months_elapsed = now.month
-    annual_taxable_income = round((ytd_taxable_income / months_elapsed * 12) if months_elapsed > 0 else 0, 2)
-
-    # Corporate tax on estimated annual income
-    estimated_annual_tax = round(max(0, annual_taxable_income * CORP_TAX_RATE), 2)
-
-    # Provisional tax payments
-    # First IRP6: 50% of estimated annual tax — due last day of month 6 of tax year
-    # Second IRP6: balance (50%) — due last day of tax year (assume Feb year-end = 28 Feb)
     first_payment  = round(estimated_annual_tax / 2, 2)
     second_payment = round(estimated_annual_tax - first_payment, 2)
+    first_due  = _add_months(fy_start, 6) - timedelta(days=1)
+    second_due = fy_end
+    third_due  = _add_months(fy_end + timedelta(days=1), 6 if fy_end.month == 2 else 7) - timedelta(days=1)
+    fmt = lambda d: d.strftime("%d %B %Y")
 
-    # Due dates (assuming 28 Feb financial year-end — standard for SA companies)
-    first_due  = datetime(now.year, 8, 31).strftime("%d %B %Y")   # 31 Aug
-    second_due = datetime(now.year + 1, 2, 28).strftime("%d %B %Y")  # 28 Feb next year
+    notes = [
+        f"Financial year {fy_start.strftime('%d %b %Y')} - {fy_end.strftime('%d %b %Y')}: year to date covers "
+        f"{months_elapsed} month(s), annualised to 12. Update the estimate as actual figures come in.",
+        "Taxable income here is accounting profit (before tax adjustments such as wear-and-tear, "
+        "non-deductible expenses and assessed losses) - adjust before filing.",
+        f"If the company qualifies as a small business corporation, tax on this estimate is R{sbc_tax:,.2f} "
+        f"instead of R{estimated_annual_tax:,.2f}.",
+        f"The third (voluntary) payment, due {fmt(third_due)}, tops up any shortfall once the year's actual "
+        "result is known and avoids interest.",
+    ]
+    if has_prev:
+        notes.append(f"Previous financial year taxable income in ZuZan: R{prev_taxable:,.2f}.")
+    if below_80:
+        notes.append("Warning: this estimate is below 80% of last year's taxable income. If actual taxable income "
+                     "exceeds R1m and the estimate is below 80% of it, SARS charges a 20% penalty - check the estimate.")
+    notes.append("Submit IRP6 via SARS eFiling before the due dates to avoid penalties.")
 
     return {
-        "tax_year":                 f"{now.year}/{now.year + 1}",
-        "corp_tax_rate_pct":        27,
-        "months_elapsed":           months_elapsed,
-        "ytd": {
-            "revenue":              ytd_revenue,
-            "expenses":             ytd_expenses,
-            "payroll_cost":         ytd_payroll,
-            "taxable_income":       ytd_taxable_income,
-        },
+        "tax_year":           f"{fy_start.strftime('%b %Y')} - {fy_end.strftime('%b %Y')}",
+        "financial_year":     {"start": fy_start.isoformat(), "end": fy_end.isoformat()},
+        "corp_tax_rate_pct":  round(CORP_TAX_RATE * 100),
+        "months_elapsed":     months_elapsed,
+        "ytd":                ytd,
         "annualised": {
-            "taxable_income":       annual_taxable_income,
-            "estimated_tax":        estimated_annual_tax,
+            "taxable_income": annual_taxable_income,
+            "estimated_tax":  estimated_annual_tax,
+            "sbc_estimated_tax": sbc_tax,
+        },
+        "prior_year": {
+            "start": prev_start.isoformat(), "end": prev_end.isoformat(),
+            "taxable_income": prev_taxable, "has_data": has_prev,
+            "eighty_percent_threshold": round(0.8 * prev_taxable, 2) if has_prev else None,
+            "estimate_below_80_percent": below_80,
         },
         "irp6": {
-            "first_payment":        first_payment,
-            "first_due":            first_due,
-            "second_payment":       second_payment,
-            "second_due":           second_due,
+            "first_payment":  first_payment,  "first_due":  fmt(first_due),
+            "second_payment": second_payment, "second_due": fmt(second_due),
+            "third_due":      fmt(third_due),
         },
-        "notes": [
-            "Based on annualised YTD figures — update when actual year-end figures are known.",
-            "Small Business Corporations (SBC) qualify for reduced tax rates — consult your accountant.",
-            "Submit IRP6 via SARS eFiling before due dates to avoid penalties.",
-            "Turnover tax may apply if annual turnover is below R1,000,000.",
-        ]
+        "notes": notes,
     }
 
 
