@@ -6264,6 +6264,7 @@ function Reports({live = {}, user = null}) {
   const [reclassLoading, setReclassLoading] = useState(false);
   const [reclassResult,  setReclassResult]  = useState(null); // null | {fixed, message}
   const [reclassSource,  setReclassSource]  = useState("");   // "xero" | "quickbooks" | "csv": each has its own rules
+  const [editAcct,       setEditAcct]       = useState(null);  // {code,name,type,is_system,saving,error} while editing a ledger account
 
   // ── Date range ──────────────────────────────────────────────────
   const now = new Date();
@@ -6574,7 +6575,39 @@ function Reports({live = {}, user = null}) {
                 ...rows.map(row=>(
                   <tr key={row.code}>
                     <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,color:C.inkMid,fontFamily:"monospace",fontSize:12}}>{row.code}</td>
-                    <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,color:C.ink}}>{row.name}</td>
+                    <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,color:C.ink}}>
+                      {editAcct && editAcct.code===row.code ? (
+                        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                          <input value={editAcct.name} disabled={editAcct.is_system} onChange={e=>setEditAcct({...editAcct,name:e.target.value})}
+                            style={{flex:"1 1 160px",border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 8px",fontSize:12,fontFamily:"inherit"}}/>
+                          <select value={editAcct.type} onChange={e=>setEditAcct({...editAcct,type:e.target.value})}
+                            style={{border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 6px",fontSize:12,fontFamily:"inherit"}}>
+                            {(editAcct.is_system ? ["expense","cogs"] : ["asset","liability","equity","revenue","cogs","expense"]).map(t=>
+                              <option key={t} value={t}>{t==="cogs" ? "cost of sales" : t}</option>)}
+                          </select>
+                          <button disabled={editAcct.saving} onClick={async()=>{
+                              setEditAcct({...editAcct,saving:true,error:null});
+                              try {
+                                await api(`/journal/accounts/by-code/${encodeURIComponent(row.code)}`,{method:"PUT",headers:{"Content-Type":"application/json"},
+                                  body:JSON.stringify({name:editAcct.is_system?undefined:editAcct.name,type:editAcct.type})});
+                                setEditAcct(null);
+                                setTrialBal(await api("/journal/trial-balance"));
+                              } catch(e) { setEditAcct({...editAcct,saving:false,error:e.message}); }
+                            }}
+                            style={{background:C.accent,color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                            {editAcct.saving ? "Saving…" : "Save"}
+                          </button>
+                          <button onClick={()=>setEditAcct(null)} style={{background:"none",border:"none",color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                          {editAcct.is_system && <span style={{fontSize:11,color:C.inkMid}}>ZuZan account: only expense ↔ cost of sales</span>}
+                          {editAcct.error && <span style={{fontSize:11,color:C.red}}>{editAcct.error}</span>}
+                        </div>
+                      ) : (
+                        <span>{row.name}
+                          <button title="Rename or change the account type" onClick={()=>setEditAcct({code:row.code,name:row.name,type:row.type,is_system:!!row.is_system})}
+                            style={{marginLeft:8,background:"none",border:"none",color:C.inkMid,fontSize:11,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>edit</button>
+                        </span>
+                      )}
+                    </td>
                     <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,textAlign:"right",color:C.ink}}>{row.total_debits?`R ${row.total_debits.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
                     <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,textAlign:"right",color:C.ink}}>{row.total_credits?`R ${row.total_credits.toLocaleString("en-ZA",{minimumFractionDigits:2})}`:"—"}</td>
                     <td style={{padding:"8px 12px",border:`1px solid ${C.border}`,textAlign:"right",fontWeight:600,color:row.balance>=0?C.ink:C.red}}>R {Math.abs(row.balance).toLocaleString("en-ZA",{minimumFractionDigits:2})}</td>
@@ -7350,7 +7383,13 @@ function Reports({live = {}, user = null}) {
               // Use management accounts data (loaded alongside this tab) for full breakdown
               const pl = mgmt ? mgmt.pl : null;
               const plRev     = pl ? pl.revenue          : totalRevenue;
-              const plCogs    = pl ? (pl.po_cogs || 0)   : 0;
+              // Cost of sales = PO/stock cost + ledger accounts typed cost of sales (2026-11-15: imported books
+              // showed no cost of sales, so the statement went straight from revenue to gross profit)
+              const plCogs    = pl ? (pl.total_cogs ?? pl.po_cogs ?? 0) : 0;
+              const cogsEntries = Object.entries((pl && pl.cogs_breakdown) || (plCogs ? {"Cost of sales": plCogs} : {}))
+                .filter(([,v]) => Math.abs(v) >= 0.005).sort(([a],[b]) => a.localeCompare(b));
+              const revEntries  = Object.entries((pl && pl.revenue_breakdown) || {})
+                .filter(([,v]) => Math.abs(v) >= 0.005).sort(([a],[b]) => a.localeCompare(b));
               // True gross profit = revenue minus cost of sales only
               const plTrueGP  = Math.round((plRev - plCogs)*100)/100;
               // Operating expenses = all non-COGS expenses (incl. depreciation)
@@ -7374,8 +7413,10 @@ function Reports({live = {}, user = null}) {
                       <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>{pl ? `For the period: ${mgmt.period}` : `As at ${period}`}</div>
                     </div>
                     <ExcelBtn filename="income-statement.csv" data={[
-                      {Item:"Revenue",Amount:plRev},
-                      {Item:"Cost of Sales",Amount:-plCogs},
+                      ...revEntries.map(([k,v])=>({Item:k,Amount:v})),
+                      {Item:"Total Revenue",Amount:plRev},
+                      ...cogsEntries.map(([k,v])=>({Item:k,Amount:-v})),
+                      {Item:"Total Cost of Sales",Amount:-plCogs},
                       {Item:"Gross Profit",Amount:plTrueGP},
                       ...opExEntries.map(([k,v])=>({Item:k,Amount:-v})),
                       {Item:"Total Operating Expenses",Amount:-plTotalOpEx},
@@ -7387,14 +7428,22 @@ function Reports({live = {}, user = null}) {
                     ]}/>
                   </div>
 
-                  {/* Revenue */}
-                  <ReportRow label="Revenue" value={plRev} bold color={C.green}/>
+                  {/* Revenue, by account when there is more than one source */}
+                  {revEntries.length > 1 ? (
+                    <>
+                      <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",padding:"4px 0 4px"}}>Revenue</div>
+                      {revEntries.map(([k,v]) => <ReportRow key={k} label={k} value={v} indent/>)}
+                      <ReportRow label="Total Revenue" value={plRev} bold color={C.green}/>
+                    </>
+                  ) : (
+                    <ReportRow label="Revenue" value={plRev} bold color={C.green}/>
+                  )}
 
                   {/* Cost of Sales — separate section above gross profit */}
-                  {plCogs > 0 && (
+                  {Math.abs(plCogs) >= 0.005 && (
                     <>
                       <div style={{fontSize:11,fontWeight:700,color:C.inkMid,letterSpacing:0.5,textTransform:"uppercase",padding:"12px 0 4px",borderTop:"1px solid "+C.border+"50"}}>Cost of Sales</div>
-                      <ReportRow label="Purchase Orders (received)" value={-plCogs} indent color={C.red}/>
+                      {cogsEntries.map(([k,v]) => <ReportRow key={k} label={k} value={-v} indent color={C.red}/>)}
                       <ReportRow label="Total Cost of Sales" value={-plCogs} bold/>
                     </>
                   )}

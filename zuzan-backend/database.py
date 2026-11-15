@@ -1816,6 +1816,11 @@ def init_db():
             )""",
             "CREATE INDEX IF NOT EXISTS ix_employee_benefits_employee ON employee_benefits (employee_id)",
             "ALTER TABLE payslips ADD COLUMN IF NOT EXISTS benefit_contributions_json TEXT",
+            # 2026-11-15: a replaced opening-balance import was reversed with TODAY's date, so the old balances
+            # stayed in their own year. Date each such reversal like the entry it reverses (idempotent).
+            """UPDATE journal_entries SET date = (SELECT o.date FROM journal_entries o
+                                                  WHERE o.id = journal_entries.is_reversal_of)
+               WHERE source = 'import_reversal' AND is_reversal_of IS NOT NULL AND reference LIKE 'REV-OB-%'""",
         ]:
             try:
                 conn.execute(text(sql))

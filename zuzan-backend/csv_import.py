@@ -1144,7 +1144,9 @@ def _guard_reimport(db, cid: int, reference: str, replace: bool) -> None:
                                  "the earlier import and post this file instead.")
     import journal as journal_engine
     for e in live:
-        journal_engine.reverse_entry_by_id(e.id, db, reason=f"Replaced by a new {reference} import")
+        # Dated like the entry it reverses, so the replaced import nets out in its own period, not today's
+        # (audit fix 2026-11-15: a replaced 28 Feb 2026 opening balance stayed in FY2026 until November).
+        journal_engine.reverse_entry_by_id(e.id, db, reason=f"Replaced by a new {reference} import", same_date=True)
 
 
 def _add_ob_offset(db, entry_id: int, acct_id: int, ob_offset: float) -> None:

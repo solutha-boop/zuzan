@@ -16,7 +16,7 @@ from database import (
     Invoice, Expense, Payslip, Employee, PurchaseOrder, Company, InvoiceStatus,
     FixedAsset, DepreciationEntry,
 )
-from auth import get_current_user, User
+from auth import get_current_user, require_role, log_action, User
 
 router = APIRouter()
 
@@ -1401,7 +1401,7 @@ def backfill_company(company_id: int, db: Session) -> dict:
 
 # ── REVERSAL HELPER ──────────────────────────────────────────────────────────
 
-def _post_reversal_for_entry(entry: JournalEntry, db: Session, reason: str = None) -> JournalEntry:
+def _post_reversal_for_entry(entry: JournalEntry, db: Session, reason: str = None, date=None) -> JournalEntry:
     """
     Post a single reversal entry that mirrors `entry` with debits/credits swapped.
     Sets `is_reversal_of` on the new entry so the pair can be linked in the UI.
@@ -1409,7 +1409,7 @@ def _post_reversal_for_entry(entry: JournalEntry, db: Session, reason: str = Non
     """
     rev = JournalEntry(
         company_id    = entry.company_id,
-        date          = datetime.utcnow(),
+        date          = date or datetime.utcnow(),   # date=entry.date nets a replaced import out in its own period
         description   = reason or f"Reversal — {entry.description}",
         reference     = f"REV-{entry.reference or entry.id}",
         source        = f"{entry.source}_reversal",
@@ -1464,7 +1464,7 @@ def reverse_journal_entries(
     return count
 
 
-def reverse_entry_by_id(entry_id: int, db: Session, reason: str = None) -> JournalEntry:
+def reverse_entry_by_id(entry_id: int, db: Session, reason: str = None, same_date: bool = False) -> JournalEntry:
     """
     Post a reversal for a single JournalEntry identified by its primary key.
     Raises ValueError if the entry is not found or has already been reversed.
@@ -1477,7 +1477,7 @@ def reverse_entry_by_id(entry_id: int, db: Session, reason: str = None) -> Journ
     ).first()
     if already:
         raise ValueError(f"JournalEntry {entry_id} has already been reversed (reversal entry: {already.id})")
-    return _post_reversal_for_entry(entry, db, reason=reason)
+    return _post_reversal_for_entry(entry, db, reason=reason, date=entry.date if same_date else None)
 
 
 def process_pending_reversals(company_id: int, db: Session) -> list[int]:
@@ -1640,6 +1640,7 @@ async def trial_balance(
             "code":    acct.code,
             "name":    acct.name,
             "type":    acct.type.value,
+            "is_system": bool(acct.is_system),
             "total_debits":  dr,
             "total_credits": cr,
             "balance": bal,
@@ -1670,6 +1671,49 @@ async def list_accounts(
         {"id": a.id, "code": a.code, "name": a.name, "type": a.type.value, "is_system": a.is_system}
         for a in accounts
     ]
+
+
+class LedgerAccountUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+
+
+@router.put("/accounts/by-code/{code}")
+async def update_ledger_account(
+    code: str,
+    data: LedgerAccountUpdate,
+    current_user: User = Depends(require_role("owner", "admin", "accountant")),
+    db: Session = Depends(get_db),
+):
+    """Rename a ledger account or change its type (2026-11-15). Imports cannot correct an account that already
+    exists, so this is how an accountant fixes one (e.g. Okwendalo 5010 'Purchases' typed expense -> cost of sales).
+    ZuZan's own system accounts keep their name, and their type may only move between expense and cost of
+    sales: anything else would break the postings ZuZan makes to them."""
+    acct = db.query(Account).filter(Account.company_id == current_user.company_id, Account.code == code).first()
+    if not acct:
+        raise HTTPException(404, "Account not found.")
+    changed = {}
+    if data.name is not None and data.name.strip() and data.name.strip() != acct.name:
+        if acct.is_system:
+            raise HTTPException(400, "ZuZan's own accounts keep their name.")
+        changed["name"] = [acct.name, data.name.strip()]
+        acct.name = data.name.strip()
+    if data.type:
+        try:
+            new_type = AccountType(data.type.strip().lower())
+        except ValueError:
+            raise HTTPException(400, "Type must be asset, liability, equity, revenue, cogs or expense.")
+        if new_type != acct.type:
+            if acct.is_system and {new_type, acct.type} != {AccountType.expense, AccountType.cogs}:
+                raise HTTPException(400, "A ZuZan system account can only move between expense and cost of sales.")
+            changed["type"] = [acct.type.value, new_type.value]
+            acct.type = new_type
+    db.commit()          # before the audit row: log_action rolls the session back if it cannot write
+    if changed:
+        log_action(db, current_user.company_id, current_user, "ledger_account_update",
+                   target_type="account", target_id=acct.id, detail=f"Account {code}: {changed}")
+    return {"code": acct.code, "name": acct.name, "type": acct.type.value, "is_system": acct.is_system,
+            "changed": changed}
 
 
 class ManualEntryLine(BaseModel):

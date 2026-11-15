@@ -54,7 +54,7 @@ echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
 rem Quoted set + no parenthesised block: ( ) and ^& in the message can no longer break the script
 set "MSG=%~1"
-if not defined MSG set "MSG=fix: imports use their own source rules - Fix Account Types asks Xero/QuickBooks/other (Xero 2xx no longer retypes 4-digit liabilities as revenue); trial balance import skips Total lines"
+if not defined MSG set "MSG=fix: income statement shows revenue, cost of sales and gross profit from the ledger; replaced imports reversed on their own date and left out of the P&L; accountants can rename and retype ledger accounts on the trial balance"
 set "MSG=%MSG% [%STAMP%]"
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 

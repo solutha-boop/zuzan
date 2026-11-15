@@ -166,25 +166,12 @@ def _gl_import_cutover(db: Session, company_id: int):
     return min(ds) if ds else None
 
 
-def _gl_import_income(db: Session, company_id: int, date_from=None, date_to=None) -> float:
-    """
-    Sum net revenue credits from GL-imported journal entries (source == 'import').
-    Mirrors _bank_import_income — intentionally separate to avoid double-counting.
-    Revenue accounts created by GL import (e.g. "Sales") are captured here.
-    """
-    rev_ids = [
-        a.id for a in db.query(Account).filter(
-            Account.company_id == company_id,
-            Account.type == AccountType.revenue,
-        ).all()
-    ]
-    if not rev_ids:
-        return 0.0
-
-    cut = _gl_import_cutover(db, company_id)
-    if cut is not None and (date_to is None or cut < date_to):
-        date_to = cut
-
+def _live_import_entry_ids(db: Session, company_id: int, date_from=None, date_to=None) -> list:
+    """Ids of GL/opening-balance import entries (source 'import') in the range that have NOT been reversed.
+    A replaced opening balance is reversed (source 'import_reversal'); counting the original without its
+    reversal kept replaced imports in the P&L for ever (audit fix 2026-11-15, Okwendalo)."""
+    reversed_ids = {r[0] for r in db.query(JournalEntry.is_reversal_of).filter(
+        JournalEntry.company_id == company_id, JournalEntry.is_reversal_of.isnot(None)).all()}
     eq = db.query(JournalEntry.id).filter(
         JournalEntry.company_id == company_id,
         JournalEntry.source == "import",
@@ -193,17 +180,47 @@ def _gl_import_income(db: Session, company_id: int, date_from=None, date_to=None
         eq = eq.filter(JournalEntry.date >= date_from)
     if date_to:
         eq = eq.filter(JournalEntry.date < date_to)
-    entry_ids = [r[0] for r in eq.all()]
-    if not entry_ids:
-        return 0.0
+    return [r[0] for r in eq.all() if r[0] not in reversed_ids]
 
-    total = db.query(
-        func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0)
+
+def _gl_import_income_detail(db: Session, company_id: int, date_from=None, date_to=None) -> dict:
+    """GL-imported revenue in the range: {"total": float, "breakdown": {account name: amount}}."""
+    rev_accts = db.query(Account).filter(
+        Account.company_id == company_id,
+        Account.type == AccountType.revenue,
+    ).all()
+    if not rev_accts:
+        return {"total": 0.0, "breakdown": {}}
+    cut = _gl_import_cutover(db, company_id)
+    if cut is not None and (date_to is None or cut < date_to):
+        date_to = cut
+    entry_ids = _live_import_entry_ids(db, company_id, date_from, date_to)
+    if not entry_ids:
+        return {"total": 0.0, "breakdown": {}}
+    names = {a.id: a.name for a in rev_accts}
+    rows = db.query(
+        JournalLine.account_id,
+        func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0),
     ).filter(
         JournalLine.entry_id.in_(entry_ids),
-        JournalLine.account_id.in_(rev_ids),
-    ).scalar()
-    return float(total or 0)
+        JournalLine.account_id.in_(list(names)),
+    ).group_by(JournalLine.account_id).all()
+    breakdown, total = {}, 0.0
+    for acct_id, amt in rows:
+        amt = float(amt or 0)
+        if amt:
+            n = names.get(acct_id, f"Account {acct_id}")
+            breakdown[n] = round(breakdown.get(n, 0.0) + amt, 2)
+            total += amt
+    return {"total": round(total, 2), "breakdown": breakdown}
+
+
+def _gl_import_income(db: Session, company_id: int, date_from=None, date_to=None) -> float:
+    """
+    Sum net revenue credits from GL-imported journal entries (source == 'import', not reversed).
+    Mirrors _bank_import_income — intentionally separate to avoid double-counting.
+    """
+    return _gl_import_income_detail(db, company_id, date_from, date_to)["total"]
 
 
 def _gl_import_expenses(
@@ -219,7 +236,7 @@ def _gl_import_expenses(
         Account.type.in_([AccountType.expense, AccountType.cogs]),
     ).all()
     if not exp_accounts:
-        return {"total": 0.0, "cogs_total": 0.0, "breakdown": {}}
+        return {"total": 0.0, "cogs_total": 0.0, "breakdown": {}, "cogs_breakdown": {}}
 
     exp_ids  = [a.id for a in exp_accounts]
     exp_name = {a.id: a.name for a in exp_accounts}
@@ -229,17 +246,9 @@ def _gl_import_expenses(
     if cut is not None and (date_to is None or cut < date_to):
         date_to = cut
 
-    eq = db.query(JournalEntry.id).filter(
-        JournalEntry.company_id == company_id,
-        JournalEntry.source == "import",
-    )
-    if date_from:
-        eq = eq.filter(JournalEntry.date >= date_from)
-    if date_to:
-        eq = eq.filter(JournalEntry.date < date_to)
-    entry_ids = [r[0] for r in eq.all()]
+    entry_ids = _live_import_entry_ids(db, company_id, date_from, date_to)
     if not entry_ids:
-        return {"total": 0.0, "cogs_total": 0.0, "breakdown": {}}
+        return {"total": 0.0, "cogs_total": 0.0, "breakdown": {}, "cogs_breakdown": {}}
 
     rows = db.query(
         JournalLine.account_id,
@@ -250,17 +259,22 @@ def _gl_import_expenses(
     ).group_by(JournalLine.account_id).all()
 
     breakdown: dict = {}
+    cogs_breakdown: dict = {}
     total = 0.0
     cogs_total = 0.0
     for acct_id, net_debit in rows:
         amt = float(net_debit or 0)
         if amt:
             name = exp_name.get(acct_id, f"Account {acct_id}")
-            breakdown[name] = round(breakdown.get(name, 0.0) + amt, 2)
             total += amt
             if acct_id in cogs_ids:
                 cogs_total += amt
-    return {"total": round(total, 2), "cogs_total": round(cogs_total, 2), "breakdown": breakdown}
+                cogs_breakdown[name] = round(cogs_breakdown.get(name, 0.0) + amt, 2)
+            else:
+                breakdown[name] = round(breakdown.get(name, 0.0) + amt, 2)
+    # breakdown = operating expenses only; cost-of-sales accounts are in cogs_breakdown (2026-11-15)
+    return {"total": round(total, 2), "cogs_total": round(cogs_total, 2), "breakdown": breakdown,
+            "cogs_breakdown": cogs_breakdown}
 
 
 # SA TAX TABLES — Multi-year for audit history
@@ -3845,7 +3859,12 @@ async def management_accounts(
     # Add bank-import income in the same date range
     revenue = round(revenue + _bank_import_income(db, cid, period_start, period_end), 2)
     # Add GL-imported revenue (source == 'import') in the same date range
-    revenue = round(revenue + _gl_import_income(db, cid, period_start, period_end), 2)
+    _gl_rev = _gl_import_income_detail(db, cid, period_start, period_end)
+    _other_rev = revenue
+    revenue = round(revenue + _gl_rev["total"], 2)
+    revenue_breakdown = dict(_gl_rev["breakdown"])
+    if abs(_other_rev) >= 0.005:
+        revenue_breakdown["Invoices and other income"] = round(_other_rev, 2)
 
     # COALESCE expense_date → created_at so expenses with NULL date are still captured
     _eff_exp = func.coalesce(Expense.expense_date, Expense.created_at)
@@ -3896,6 +3915,9 @@ async def management_accounts(
 
     # Total COGS = PO COGS + GL-imported cogs-typed accounts
     total_cogs_period = round(po_cogs + gl_exp.get("cogs_total", 0.0), 2)
+    cogs_breakdown = dict(gl_exp.get("cogs_breakdown", {}))
+    if po_cogs:
+        cogs_breakdown["Purchase orders and stock (received)"] = po_cogs
 
     active_employees = db.query(Employee).filter(
         Employee.company_id == cid,
@@ -3990,6 +4012,8 @@ async def management_accounts(
             "depreciation_amount":  round(period_depreciation, 2),
             "total_expenses":       total_expenses,
             "expense_breakdown":    expense_by_cat,
+            "revenue_breakdown":    revenue_breakdown,
+            "cogs_breakdown":       cogs_breakdown,
             "gross_profit":         gross_profit,
             "payroll_cost":         total_payroll_cost,
             "ebit":                 ebit,
