@@ -6409,7 +6409,9 @@ function Reports({live = {}, user = null}) {
             <ReportRow label="Retained Income" value={bs.equity.retained_income} color={C.green}/>
             {(bs.equity.opening_balance_equity||0) !== 0 && <ReportRow label="Opening Balance Equity (imported)" value={bs.equity.opening_balance_equity} color={C.green}/>}
             {(bs.equity.imported_retained_earnings||0) !== 0 && <ReportRow label="Retained Earnings (imported)" value={bs.equity.imported_retained_earnings} color={C.green}/>}
-            {(bs.equity.other_equity||0) !== 0 && <ReportRow label="Other Equity" value={bs.equity.other_equity} color={C.green}/>}
+            {(bs.equity.other_equity_lines && bs.equity.other_equity_lines.length)
+              ? bs.equity.other_equity_lines.map(l => <ReportRow key={l.code} label={l.name} value={l.amount} color={C.green}/>)
+              : ((bs.equity.other_equity||0) !== 0 && <ReportRow label="Other Equity" value={bs.equity.other_equity} color={C.green}/>)}
             <ReportRow label="Total Equity"    value={bs.equity.total} bold color={C.green}/>
             <div style={{height:12}}/>
             <ReportRow label="Total Liabilities and Equity" value={bs.total_liabilities_and_equity} bold border large color={balanced?C.ink:C.red}/>

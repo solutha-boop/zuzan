@@ -2856,7 +2856,8 @@ async def balance_sheet(
     opening_balance_equity     = 0.0  # 3999 — offset from trial-balance / balance-sheet imports
     imported_retained_earnings = 0.0  # 3998 — offset from P&L imports
     other_equity               = 0.0  # any other equity account (imported code schemes)
-    for a in db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.equity).all():
+    other_equity_lines         = []   # the same accounts one by one, so share capital is not netted away (2026-11-15)
+    for a in db.query(Account).filter(Account.company_id==cid, Account.type==AccountType.equity).order_by(Account.code).all():
         b = journal_engine.account_balance(a, db)
         if a.code == "3000":
             owner_equity_3000 += b
@@ -2866,6 +2867,8 @@ async def balance_sheet(
             imported_retained_earnings += b
         else:
             other_equity += b
+            if abs(b) >= 0.005:
+                other_equity_lines.append({"code": a.code, "name": a.name, "amount": round(b, 2)})
     opening_balance_equity     = round(opening_balance_equity, 2)
     imported_retained_earnings = round(imported_retained_earnings, 2)
     other_equity               = round(other_equity, 2)
@@ -2909,6 +2912,7 @@ async def balance_sheet(
             "opening_balance_equity":     opening_balance_equity,
             "imported_retained_earnings": imported_retained_earnings,
             "other_equity":               other_equity,
+            "other_equity_lines":         other_equity_lines,
             "total":                      total_equity,
         },
         "total_liabilities_and_equity": total_liabilities_and_equity,
