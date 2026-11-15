@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
-import csv, io
+import csv, io, re
 from datetime import datetime
 
 from database import (
@@ -1014,12 +1014,12 @@ def _infer_type_from_xero_code(code: str) -> Optional[AccountType]:
     7xx for Fixed Assets, 8xx for Liabilities, 9xx for Equity.
     Returns None if code is empty or the prefix is not in Xero's standard ranges.
     """
-    if not code or not code.strip():
+    # Only Xero-shaped codes (exactly 3 digits). A 4-digit code such as 2010 is a GAAP / QuickBooks / ZuZan
+    # code where 2 means liability, not revenue (audit fix 2026-11-15, Okwendalo).
+    c = str(code or "").strip()
+    if not re.fullmatch(r"\d{3}", c):
         return None
-    try:
-        prefix = int(str(code).strip()[0])
-    except (ValueError, IndexError):
-        return None
+    prefix = int(c[0])
     return {
         1: AccountType.asset,      # 1xx: bank accounts, current assets
         2: AccountType.revenue,    # 2xx: sales / revenue / other income
@@ -1162,6 +1162,20 @@ def _add_ob_offset(db, entry_id: int, acct_id: int, ob_offset: float) -> None:
 
 # ── TRIAL BALANCE ─────────────────────────────────────────────────────────────
 
+_TOTAL_LINE = re.compile(r"^\s*(grand\s*)?totals?\b", re.I)
+
+
+def _is_report_total(name: str, code: str) -> bool:
+    """A report's 'Total' / 'TOTALS' / 'Grand total' line, not an account. A real account always has a numeric
+    code or no total-word name (audit fix 2026-11-15: Okwendalo's TOTALS row was imported as an account with
+    R155m on each side)."""
+    n = (name or "").strip()
+    if not _TOTAL_LINE.match(n):
+        return False
+    c = (code or "").strip()
+    return not c or not c.replace("/", "").replace(".", "").isdigit()
+
+
 @router.post("/trial_balance")
 async def import_trial_balance(
     file: UploadFile = File(...),
@@ -1204,6 +1218,7 @@ async def import_trial_balance(
     db.flush()
 
     imported, skipped, errors = 0, 0, []
+    total_lines = 0
     ob_offset = 0.0
 
     for i, row in enumerate(rows, start=2):
@@ -1213,6 +1228,10 @@ async def import_trial_balance(
                 continue
 
             code   = _get(row, m, "code")
+            if _is_report_total(name, code):
+                skipped += 1
+                total_lines += 1
+                continue
             debit  = _parse_float(_get(row, m, "debit"))
             credit = _parse_float(_get(row, m, "credit"))
             bal    = _parse_float(_get(row, m, "balance"))
@@ -1248,6 +1267,8 @@ async def import_trial_balance(
     res = {"entity": "trial_balance", "total_rows": len(rows),
            "imported": imported, "skipped": skipped, "errors": errors,
            "balancing_to_opening_equity": out_of_balance}
+    if total_lines:
+        res["total_lines_skipped"] = total_lines
     if abs(out_of_balance) >= 0.01:
         res["warning"] = (f"The file does not balance (debits and credits differ by R{abs(out_of_balance):,.2f}). The difference was "
                           "posted to Opening Balance Equity (3999) - check the file for missing or mis-signed rows.")
@@ -1604,8 +1625,61 @@ async def import_general_ledger(
 
 # ── RECLASSIFY EXISTING GL ACCOUNTS ──────────────────────────────────────────
 
+_RECLASSIFY_SOURCES = ("xero", "quickbooks", "csv")
+
+
+def _infer_type_from_qbo_code(code: str) -> Optional[AccountType]:
+    """QuickBooks account numbering (numbers are optional in QBO; when used they follow these ranges).
+    Only plain numeric codes of 4+ digits: a code that is really a truncated name is ignored."""
+    c = str(code or "").strip()
+    if not re.fullmatch(r"\d{4,}", c):
+        return None
+    return {
+        1: AccountType.asset, 2: AccountType.liability, 3: AccountType.equity, 4: AccountType.revenue,
+        5: AccountType.cogs, 6: AccountType.expense, 7: AccountType.expense, 8: AccountType.expense,
+        9: AccountType.expense,
+    }.get(int(c[0]))
+
+
+def _infer_type_from_zuzan_code(code: str) -> Optional[AccountType]:
+    """ZuZan's own chart: same ranges as _infer_type_from_code, but None (not 'asset') when there is no
+    numeric code, so a name-only account is never retyped by guesswork."""
+    c = str(code or "").strip()
+    if not re.fullmatch(r"\d{3,}", c):
+        return None
+    return _infer_type_from_code(c)
+
+
+def _reclassify_type(src: str, acct, bal: float, debit_types) -> Optional[AccountType]:
+    """The type the reclassify tool would give `acct`, using only the rules of the system the books came from."""
+    def agrees(t):        # code ranges are trusted only when the imported balance sits on the expected side
+        if t is None:
+            return False
+        # Expense <-> cost of sales is a judgement about the business, not a classification error: leave it
+        # (e.g. QuickBooks 5xxx is cost of sales, but a client's own 5240 Insurance is an expense).
+        if {t, acct.type} <= {AccountType.expense, AccountType.cogs}:
+            return False
+        return abs(bal) < 0.005 or (bal > 0) == (t in debit_types)
+
+    if src == "xero":
+        named = _type_from_xero_name(acct.name)          # explicit Xero type descriptor: always trusted
+        if named:
+            return named
+        t = _infer_type_from_xero_code(acct.code)
+        return t if agrees(t) else None
+    if src == "quickbooks":
+        t = _infer_type_from_qbo_code(acct.code)
+        if agrees(t):
+            return t
+        t = _guess_account_type(acct.name)               # QBO type words in the name ('Credit Card', 'A/R' ...)
+        return t if agrees(t) else None
+    t = _infer_type_from_zuzan_code(acct.code)           # csv / ZuZan chart
+    return t if agrees(t) else None
+
+
 @router.post("/reclassify-gl-accounts")
 async def reclassify_gl_accounts(
+    source: Optional[str] = None,
     dry_run: bool = False,
     db: Session = Depends(get_db),
     cu         = Depends(require_role("owner", "admin", "accountant")),
@@ -1626,7 +1700,18 @@ async def reclassify_gl_accounts(
     3xxx/4xxx accounts that were correctly typed are not retyped to expense.
     Name-based mapping (explicit Xero descriptor) is always trusted.
     Pass ?dry_run=true to preview the changes without saving.
+
+    ?source= says which system the books came from, and each has its own rules (2026-11-15). Nothing is
+    assumed to be Xero any more:
+      xero        Xero type names, then Xero's 3-digit code ranges (2xx = revenue, 8xx = liability ...).
+      quickbooks  QuickBooks numbering (1 asset, 2 liability, 3 equity, 4 income, 5 cost of sales, 6-9 expense),
+                  then QuickBooks account-type words in the name.
+      csv         ZuZan's own code ranges (1 asset, 2 liability, 3 equity, 4 revenue, 5-9 expense).
+    Every code-range rule still needs the account's imported balance to sit on the side the new type expects.
     """
+    src = (source or "").strip().lower()
+    if src not in _RECLASSIFY_SOURCES:
+        raise HTTPException(400, "Say where the books came from: source=xero, source=quickbooks or source=csv.")
     cid = cu.company_id
     # Only accounts CREATED BY IMPORT are eligible (audit fix 2026-11-05): never
     # system accounts, never codes in ZuZan's own default chart, and never an
@@ -1659,14 +1744,8 @@ async def reclassify_gl_accounts(
             continue
         if acct.id in native_ids or acct.id not in import_ids:
             continue
-        correct = _type_from_xero_name(acct.name)      # explicit descriptor: always trusted
-        if not correct:
-            inferred = _infer_type_from_xero_code(acct.code)
-            bal = net_debit.get(acct.id, 0.0)
-            # Only trust the code range when the balance direction agrees (or is nil)
-            if inferred and (abs(bal) < 0.005
-                             or (bal > 0) == (inferred in _debit_types)):
-                correct = inferred
+        bal = net_debit.get(acct.id, 0.0)
+        correct = _reclassify_type(src, acct, bal, _debit_types)
         if correct and acct.type != correct:
             fixed.append({
                 "code":     acct.code or "—",

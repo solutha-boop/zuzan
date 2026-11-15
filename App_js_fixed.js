@@ -6263,6 +6263,7 @@ function Reports({live = {}, user = null}) {
   const [aiError,       setAiError]       = useState(null);
   const [reclassLoading, setReclassLoading] = useState(false);
   const [reclassResult,  setReclassResult]  = useState(null); // null | {fixed, message}
+  const [reclassSource,  setReclassSource]  = useState("");   // "xero" | "quickbooks" | "csv": each has its own rules
 
   // ── Date range ──────────────────────────────────────────────────
   const now = new Date();
@@ -6509,22 +6510,29 @@ function Reports({live = {}, user = null}) {
         {/* ── Fix Account Types (Xero reclassify) ─────────────────────────── */}
         <div style={{marginBottom:16,padding:"12px 16px",background:"#fffbeb",border:"1px solid #f59e0b",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
           <div>
-            <div style={{fontSize:13,fontWeight:700,color:"#92400e"}}>⚠️ Imported from Xero?</div>
-            <div style={{fontSize:12,color:"#78350f",marginTop:2}}>If accounts appear under the wrong section (e.g. expenses under Revenues), click <strong>Fix Account Types</strong> to reclassify them using Xero's chart-of-accounts codes.</div>
+            <div style={{fontSize:13,fontWeight:700,color:"#92400e"}}>⚠️ Accounts under the wrong section after an import?</div>
+            <div style={{fontSize:12,color:"#78350f",marginTop:2}}>Choose where the books came from, then click <strong>Fix Account Types</strong>. Each system has its own numbering, so only that system's rules are used.</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+            <select value={reclassSource} onChange={e=>{setReclassSource(e.target.value);setReclassResult(null);}}
+              style={{border:"1px solid #f59e0b",borderRadius:8,padding:"7px 10px",fontSize:12,fontFamily:"inherit",background:"#fff"}}>
+              <option value="">Books came from…</option>
+              <option value="xero">Xero</option>
+              <option value="quickbooks">QuickBooks</option>
+              <option value="csv">Other / spreadsheet (ZuZan codes)</option>
+            </select>
             {reclassResult && (
               <span style={{fontSize:12,color:reclassResult.fixed>0?C.green:C.inkMid,fontWeight:600}}>
                 {reclassResult.fixed>0 ? `✅ ${reclassResult.fixed} account(s) reclassified — refresh to see updated figures` : "✅ All accounts already correctly classified"}
               </span>
             )}
             <button
-              disabled={reclassLoading}
+              disabled={reclassLoading||!reclassSource}
               onClick={async()=>{
                 setReclassLoading(true);
                 setReclassResult(null);
                 try {
-                  const res = await api("/import/reclassify-gl-accounts",{method:"POST"});
+                  const res = await api(`/import/reclassify-gl-accounts?source=${reclassSource}`,{method:"POST"});
                   setReclassResult(res);
                   if (res.fixed>0) {
                     // Reload trial balance to show corrected types
@@ -6537,7 +6545,7 @@ function Reports({live = {}, user = null}) {
                   setReclassLoading(false);
                 }
               }}
-              style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:reclassLoading?"not-allowed":"pointer",fontFamily:"inherit",opacity:reclassLoading?0.6:1,whiteSpace:"nowrap"}}
+              style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:(reclassLoading||!reclassSource)?"not-allowed":"pointer",fontFamily:"inherit",opacity:(reclassLoading||!reclassSource)?0.6:1,whiteSpace:"nowrap"}}
             >
               {reclassLoading ? "Fixing…" : "Fix Account Types"}
             </button>
