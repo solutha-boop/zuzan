@@ -54,7 +54,7 @@ echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
 rem Quoted set + no parenthesised block: ( ) and ^& in the message can no longer break the script
 set "MSG=%~1"
-if not defined MSG set "MSG=feat: read-only practice MCP connector for Claude agents (/mcp)"
+if not defined MSG set "MSG=feat: accountants can edit client company profile (not billing or bank); practice connector adds trial balance, chart of accounts and account activity"
 set "MSG=%MSG% [%STAMP%]"
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 

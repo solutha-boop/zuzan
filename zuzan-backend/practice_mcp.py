@@ -129,6 +129,16 @@ TOOLS = [
     {"name": "reconciliation_checks",
      "description": "Balance-sheet reconciliation checks for a client (pass/warn/fail per rule). Needs the client on the Professional plan.",
      "inputSchema": {"type": "object", "properties": dict(_CID), "required": ["company_id"], "additionalProperties": False}},
+
+    {"name": "trial_balance",
+     "description": "Trial balance for a client from ZuZan's general ledger: every account with movements (code, name, type, total debits, total credits, balance) and whether it balances.",
+     "inputSchema": {"type": "object", "properties": dict(_CID), "required": ["company_id"], "additionalProperties": False}},
+    {"name": "chart_of_accounts",
+     "description": "A client's chart of accounts in ZuZan: code, name, type and whether it is a system account.",
+     "inputSchema": {"type": "object", "properties": dict(_CID), "required": ["company_id"], "additionalProperties": False}},
+    {"name": "account_activity",
+     "description": "Journal lines posted to one account of a client (newest first): date, reference, description, source, debit, credit. Use it to see what an imported balance is made of.",
+     "inputSchema": {"type": "object", "properties": {**_CID, "account_code": {"type": "string", "description": "Account code from trial_balance or chart_of_accounts."}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": ["company_id", "account_code"], "additionalProperties": False}},
 ]
 
 
@@ -155,6 +165,30 @@ def _payroll_status(db, company_id, period):
         return round(sum((getattr(s, attr, 0) or 0) for s in slips), 2)
     return {"period": period, "payroll_run": bool(slips), "payslips": len(slips), "active_employees": active,
             "gross_total": tot("gross_salary"), "net_total": tot("net_pay"), "paye_total": tot("paye")}
+
+
+async def _tb(db, u):
+    import journal as J
+    return await _call(J.trial_balance, current_user=u, db=db)
+
+
+async def _coa(db, u):
+    import journal as J
+    return await _call(J.list_accounts, current_user=u, db=db)
+
+
+def _activity(db, company_id, code, limit):
+    from database import Account, JournalLine, JournalEntry
+    acct = db.query(Account).filter(Account.company_id == company_id, Account.code == str(code)).first()
+    if not acct:
+        raise ValueError(f"No account with code {code} for this client: call chart_of_accounts.")
+    rows = (db.query(JournalLine, JournalEntry).join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+            .filter(JournalLine.account_id == acct.id, JournalEntry.company_id == company_id)
+            .order_by(JournalEntry.date.desc(), JournalEntry.id.desc()).limit(limit).all())
+    return {"account": {"code": acct.code, "name": acct.name, "type": acct.type.value},
+            "lines": [{"date": str(e.date)[:10], "reference": e.reference, "description": l.description or e.description,
+                       "source": e.source, "debit": round(l.debit or 0, 2), "credit": round(l.credit or 0, 2)} for l, e in rows],
+            "shown": len(rows)}
 
 
 async def _recon(db, u):
@@ -209,6 +243,13 @@ async def _run_tool(name: str, args: dict) -> Any:
             return _payroll_status(db, cid, _period(args.get("period"), this_month))
         if name == "reconciliation_checks":
             return await _recon(db, u)
+        if name == "trial_balance":
+            return await _tb(db, u)
+        if name == "chart_of_accounts":
+            return await _coa(db, u)
+        if name == "account_activity":
+            limit = int(args.get("limit") or 100)
+            return _activity(db, cid, args.get("account_code"), max(1, min(limit, 500)))
         if name == "client_snapshot":
             snap = {"company_id": cid, "name": co.name, "as_of": today.isoformat(),
                     "debtors_aging": await _safe(_debtors(db, u)),

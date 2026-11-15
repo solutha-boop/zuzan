@@ -85,6 +85,14 @@ class CompanyUpdate(BaseModel):
 
 _MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
 
+# Fields an accountant (practice) member may not change on a client company - see update_company.
+_ACCOUNTANT_BLOCKED_FIELDS = {
+    "plan", "billing_cycle", "subscription_status", "billing_exempt", "afs_enabled",
+    "payroll_enabled", "payroll_employees",
+    "payfast_merchant_id", "payfast_merchant_key", "payfast_passphrase",
+    "bank_name", "bank_account", "bank_branch", "branch_code",
+}
+
 
 def _masked(v):
     """Secrets are never sent back in full: the form shows a mask and the server ignores a mask that comes back unchanged."""
@@ -147,9 +155,16 @@ async def get_company(current_user: User = Depends(get_current_user), db: Sessio
 
 
 @router.put("/me")
-async def update_company(data: CompanyUpdate, current_user: User = Depends(require_role("owner", "admin")), db: Session = Depends(get_db)):
+async def update_company(data: CompanyUpdate, current_user: User = Depends(require_role("owner", "admin", "accountant")), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    not_saved = []
     for field, value in data.dict(exclude_none=True).items():
+        # An accountant (practice user) may maintain the client's profile - name, registration, VAT, SARS refs,
+        # address, year-end - but not its subscription, payroll add-on, payment gateway or bank details.
+        if current_user.role == "accountant" and field in _ACCOUNTANT_BLOCKED_FIELDS:
+            if not (isinstance(value, str) and value.startswith(_MASK)):
+                not_saved.append(field)
+            continue
         # Only ZuZan itself (admin console / PayFast confirmation) may grant partner status or paid add-ons.
         # These used to be writable here, so any owner could send {"billing_exempt": true} and stop paying.
         if field in ("billing_exempt", "afs_enabled"):
@@ -210,7 +225,11 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(requi
         else:
             setattr(company, field, value)
     db.commit()
-    return _company_dict(company, current_user.role)
+    out = _company_dict(company, current_user.role)
+    if not_saved:
+        out["not_saved"] = not_saved
+        out["not_saved_reason"] = "Only the client's owner or admin can change subscription, payroll add-on, PayFast or bank details."
+    return out
 
 
 from security import Throttle as _Throttle

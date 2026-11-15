@@ -83,3 +83,21 @@ def test_reports_are_read_only_and_never_switch_the_users_home_company(setup):
     assert bad["isError"] is True
     db.expire_all()
     assert db.query(User).filter_by(id=setup["user"].id).first().company_id == setup["prac"].id
+
+
+def test_trial_balance_chart_and_account_activity(setup):
+    import json
+    c = TestClient(main.app)
+    co = setup["c2"]
+    emp(co, "E9", 15000)
+    run(co)
+    tb = json.loads(call(c, "trial_balance", company_id=co.id)["content"][0]["text"])
+    assert tb["balanced"] is True and tb["accounts"]
+    coa = json.loads(call(c, "chart_of_accounts", company_id=co.id)["content"][0]["text"])
+    assert any(a["code"] == tb["accounts"][0]["code"] for a in coa)
+    act = json.loads(call(c, "account_activity", company_id=co.id, account_code=tb["accounts"][0]["code"])["content"][0]["text"])
+    assert act["account"]["code"] == tb["accounts"][0]["code"] and act["shown"] >= 1
+    missing = call(c, "account_activity", company_id=co.id, account_code="ZZZ")
+    assert missing["isError"] is True
+    other = call(c, "trial_balance", company_id=setup["other"].id)
+    assert other["isError"] is True
