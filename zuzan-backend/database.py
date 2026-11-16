@@ -701,6 +701,27 @@ class CompanyMembership(Base):
     __table_args__ = (UniqueConstraint("user_id", "company_id", name="uq_company_membership_user_company"),)
 
 
+class ManagementReport(Base):
+    """Monthly management report for a company (2026-11-15). One row per company per month: the accountant reviews
+    the figures, edits the commentary and sends the PDF to the client's management. `data_json` freezes the figures
+    as they were sent, so a later correction does not silently change what management received."""
+    __tablename__ = "management_reports"
+    id           = Column(Integer, primary_key=True, index=True)
+    company_id   = Column(Integer, ForeignKey("companies.id"), index=True, nullable=False)
+    period       = Column(String, nullable=False)          # "YYYY-MM"
+    status       = Column(String, default="draft")         # draft | sent
+    commentary   = Column(Text, nullable=True)
+    commentary_source = Column(String, nullable=True)      # ai | edited | manual
+    recipients   = Column(Text, nullable=True)             # comma-separated email addresses
+    data_json    = Column(Text, nullable=True)             # figures as sent
+    created_by   = Column(Integer, nullable=True)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+    updated_at   = Column(DateTime, default=datetime.utcnow)
+    sent_at      = Column(DateTime, nullable=True)
+    sent_by      = Column(Integer, nullable=True)
+    sent_to      = Column(Text, nullable=True)
+
+
 class AuditLog(Base):
     """Immutable record of every mutation in a company."""
     __tablename__ = "audit_log"

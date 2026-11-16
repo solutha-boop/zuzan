@@ -6212,6 +6212,144 @@ function Payroll({live = {}, user = {}}) {
   );
 }
 // REPORTS
+// ── Monthly management report (2026-11-15): figures for the month, AI-drafted commentary you edit, PDF,
+// approve and send to the client's management. Nothing is sent without the accountant pressing Send.
+function MonthlyReportPanel() {
+  const prevMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth()-1); return d.toISOString().slice(0,7); };
+  const [period, setPeriod]         = useState(prevMonth());
+  const [data, setData]             = useState(null);
+  const [history, setHistory]       = useState([]);
+  const [commentary, setCommentary] = useState("");
+  const [recipients, setRecipients] = useState("");
+  const [dirty, setDirty]           = useState(false);
+  const [busy, setBusy]             = useState("");
+  const [msg, setMsg]               = useState(null);   // {ok:bool, text}
+  const money = v => { const n = Math.round(v||0); if (!n) return "–"; const s = "R " + Math.abs(n).toLocaleString("en-ZA"); return n<0 ? `(${s})` : s; };
+  const pct = v => v===null || v===undefined ? "" : `${v.toFixed(1)}%`;
+
+  const load = async (p=period) => {
+    setBusy("load"); setMsg(null);
+    try {
+      const d = await api(`/management-report/${p}`);
+      setData(d); setCommentary(d.report.commentary||""); setRecipients(d.report.recipients||""); setDirty(false);
+      api("/management-report").then(setHistory).catch(()=>null);
+    } catch(e) { setData(null); setMsg({ok:false,text:e.message}); }
+    setBusy("");
+  };
+  useEffect(() => { load(period); }, [period]);
+
+  const save = async () => {
+    const r = await api(`/management-report/${period}`, {method:"PUT", body:JSON.stringify({commentary, recipients})});
+    setData(d => d ? {...d, report:r} : d); setDirty(false); return r;
+  };
+  const run = async (name, fn) => {
+    setBusy(name); setMsg(null);
+    try { await fn(); } catch(e) { setMsg({ok:false,text:e.message}); }
+    setBusy("");
+  };
+  const draftAI = () => run("ai", async () => {
+    if (commentary.trim() && !window.confirm("Replace the current commentary with a new draft?")) return;
+    if (dirty) await save();
+    const r = await api(`/management-report/${period}/draft-commentary`, {method:"POST"});
+    setCommentary(r.commentary); setData(d => d ? {...d, report:r} : d); setDirty(false);
+    setMsg({ok:true, text: r.commentary_source==="ai" ? "Commentary drafted from the figures. Read and edit it before sending." : "AI is not configured on the server, so a plain summary was drafted. Edit it before sending."});
+  });
+  const saveClick = () => run("save", async () => { await save(); setMsg({ok:true,text:"Saved."}); });
+  const pdf = () => run("pdf", async () => {
+    if (dirty) await save();
+    const resp = await fetch(`${BASE_URL}/management-report/${period}/pdf`, {headers:{Authorization:`Bearer ${localStorage.getItem("zuzan_token")}`}});
+    if (!resp.ok) { let t = await resp.text().catch(()=>""); try { t = JSON.parse(t).detail || t; } catch(e) {} throw new Error(t || `PDF failed (${resp.status})`); }
+    const blob = await resp.blob(); const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = `management_report_${period}.pdf`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  });
+  const send = () => run("send", async () => {
+    if (dirty) await save();
+    const to = recipients.split(/[,;\s]+/).filter(Boolean);
+    if (!to.length) throw new Error("Add at least one recipient.");
+    if (!window.confirm(`Send the ${data?.figures?.period_label||period} management report to:\n${to.join("\n")}?`)) return;
+    const r = await api(`/management-report/${period}/send`, {method:"POST", body:JSON.stringify({recipients})});
+    setMsg({ok:true, text:`Sent to ${r.sent_to}.` + (r.failed && r.failed.length ? ` Could not send to ${r.failed.join(", ")}.` : "")});
+    await load(period);
+  });
+  const reopen = () => run("reopen", async () => { await api(`/management-report/${period}/reopen`, {method:"POST"}); await load(period); });
+
+  const f = data && data.figures, rep = data && data.report;
+  const sent = rep && rep.status === "sent";
+  const inc = f && f.income_statement;
+  const btn = (bg, disabled) => ({background:bg, color:"#fff", border:"none", borderRadius:8, padding:"8px 14px", fontSize:12, fontWeight:700, cursor:disabled?"not-allowed":"pointer", opacity:disabled?0.6:1, fontFamily:"inherit"});
+  const th = {padding:"6px 10px",fontSize:11,color:C.inkMid,textAlign:"right",fontWeight:600,borderBottom:`1px solid ${C.border}`};
+  const td = {padding:"6px 10px",fontSize:13,textAlign:"right",color:C.ink};
+
+  return (
+    <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:24}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12,marginBottom:16}}>
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>Monthly management report</h2>
+          <p style={{fontSize:12,color:C.inkMid,marginTop:4}}>Check the figures, edit the commentary, then send the PDF to management after month-end close.</p>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <input type="month" value={period} onChange={e=>e.target.value && setPeriod(e.target.value)}
+            style={{border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit"}}/>
+          {rep && <span style={{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,background:sent?C.greenLt:C.goldLt,color:sent?C.green:C.gold}}>
+            {sent ? `Sent ${rep.sent_at ? new Date(rep.sent_at+"Z").toLocaleDateString("en-ZA") : ""}` : (rep.status==="new" ? "Not started" : "Draft")}</span>}
+        </div>
+      </div>
+
+      {msg && <div style={{marginBottom:12,padding:"8px 12px",borderRadius:8,fontSize:12,background:msg.ok?C.greenLt:C.redLt,color:msg.ok?C.green:C.red}}>{msg.text}</div>}
+      {busy==="load" && !data && <div style={{padding:30,textAlign:"center",color:C.inkMid,fontSize:13}}>Loading…</div>}
+
+      {f && <>
+        {!f.has_activity && <div style={{marginBottom:12,padding:"8px 12px",borderRadius:8,fontSize:12,background:C.goldLt,color:C.gold}}>No transactions for this month or the year to date yet. Check that the books are written up before preparing the report.</div>}
+        {(!f.balance_sheet.balanced || !f.cash_flow.month.reconciles) && <div style={{marginBottom:12,padding:"8px 12px",borderRadius:8,fontSize:12,background:C.redLt,color:C.red}}>
+          {!f.balance_sheet.balanced && "The balance sheet does not balance. "}{!f.cash_flow.month.reconciles && "The cash flow does not reconcile to the bank balances. "}Check the trial balance before sending.</div>}
+        {sent && <div style={{marginBottom:12,padding:"8px 12px",borderRadius:8,fontSize:12,background:C.bg,color:C.inkMid}}>
+          Sent to {rep.sent_to}. The figures below are as sent. Reopen to correct and send again.</div>}
+
+        <div style={{overflowX:"auto",marginBottom:18}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead><tr><th style={{...th,textAlign:"left"}}></th><th style={th}>{f.period_label}</th><th style={th}>{f.comparatives.month_py}</th><th style={th}>Year to date</th><th style={th}>Last year to date</th></tr></thead>
+            <tbody>
+              {[["Revenue","total_revenue"],["Cost of sales","total_cogs"],["Gross profit","gross_profit"],["Operating expenses","total_opex"],["Finance costs","total_finance_costs"],["Net profit before tax","net_profit_before_tax"]].map(([l,k])=>(
+                <tr key={k}><td style={{...td,textAlign:"left",fontWeight:["gross_profit","net_profit_before_tax"].includes(k)?700:400}}>{l}</td>
+                  {["month","month_py","ytd","ytd_py"].map(c=><td key={c} style={{...td,fontWeight:["gross_profit","net_profit_before_tax"].includes(k)?700:400}}>{money(inc[k][c])}</td>)}</tr>))}
+              <tr><td style={{...td,textAlign:"left",color:C.inkMid}}>Gross margin</td>{["month","month_py","ytd","ytd_py"].map(c=><td key={c} style={{...td,color:C.inkMid}}>{pct(inc.gross_margin_pct[c])}</td>)}</tr>
+              <tr><td style={{...td,textAlign:"left",color:C.inkMid}}>Cash at month-end</td><td style={td}>{money(f.cash_flow.month.closing_cash)}</td><td colSpan={3}></td></tr>
+            </tbody>
+          </table>
+          <div style={{fontSize:11,color:C.inkMid,marginTop:6}}>Year to date: {f.financial_year.label}. The PDF adds the full income statement, balance sheet and cash flow.</div>
+        </div>
+
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:6}}>Commentary {rep && rep.commentary_source==="ai" && !dirty && <span style={{fontWeight:400,color:C.inkMid}}>(AI draft, not yet edited)</span>}</div>
+        <textarea value={commentary} disabled={sent} onChange={e=>{setCommentary(e.target.value); setDirty(true);}} rows={10}
+          placeholder="Draft it with AI from the figures, or write it yourself."
+          style={{width:"100%",boxSizing:"border-box",border:`1px solid ${C.border}`,borderRadius:8,padding:10,fontSize:13,lineHeight:1.5,fontFamily:"inherit",resize:"vertical",marginBottom:12}}/>
+
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:6}}>Send to (management email addresses, separated by commas)</div>
+        <input value={recipients} disabled={sent} onChange={e=>{setRecipients(e.target.value); setDirty(true);}}
+          placeholder="ceo@client.co.za, finance@client.co.za"
+          style={{width:"100%",boxSizing:"border-box",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,fontFamily:"inherit",marginBottom:14}}/>
+
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {!sent && <button onClick={draftAI} disabled={!!busy || !f.has_activity} style={btn(C.blue, !!busy || !f.has_activity)}>{busy==="ai"?"Drafting…":"Draft commentary with AI"}</button>}
+          {!sent && <button onClick={saveClick} disabled={!!busy || !dirty} style={btn(C.inkMid, !!busy || !dirty)}>{busy==="save"?"Saving…":"Save"}</button>}
+          <button onClick={pdf} disabled={!!busy} style={btn(C.ink, !!busy)}>{busy==="pdf"?"Preparing…":"Download PDF"}</button>
+          {!sent && <button onClick={send} disabled={!!busy || !commentary.trim() || !recipients.trim()} style={btn(C.accent, !!busy || !commentary.trim() || !recipients.trim())}>{busy==="send"?"Sending…":"Approve and send"}</button>}
+          {sent && <button onClick={reopen} disabled={!!busy} style={btn(C.gold, !!busy)}>Reopen to correct</button>}
+        </div>
+      </>}
+
+      {history.length > 0 && <div style={{marginTop:24,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8}}>Earlier reports</div>
+        {history.map(h=>(
+          <div key={h.period} onClick={()=>setPeriod(h.period)} style={{display:"flex",justifyContent:"space-between",padding:"6px 4px",fontSize:12,cursor:"pointer",color:h.period===period?C.accent:C.ink,borderBottom:`1px solid ${C.border}50`}}>
+            <span>{h.period}</span><span style={{color:C.inkMid}}>{h.status==="sent" ? `Sent ${h.sent_at ? new Date(h.sent_at+"Z").toLocaleDateString("en-ZA") : ""} to ${h.sent_to||""}` : "Draft"}</span>
+          </div>))}
+      </div>}
+    </div>
+  );
+}
+
 function ReportRow({label,value,bold,border,large,indent,color}) {
   const isNeg = value < 0;
   const displayVal = isNeg ? "("+fmt(Math.abs(value))+")" : fmt(value);
@@ -6332,6 +6470,7 @@ function Reports({live = {}, user = null}) {
   useEffect(() => { loadTab(activeTab, true); }, [dateFrom, dateTo]);
   const RTABS = [
     {id:"mgmt", label:"Management Pack"},
+    {id:"mreport", label:"Monthly Report"},
     {id:"pl",   label:"Income Statement"},
     {id:"bs",   label:"Balance Sheet"},
     {id:"cf",   label:"Cash Flow"},
@@ -7510,6 +7649,7 @@ function Reports({live = {}, user = null}) {
         {activeTab==="tb"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderTrialBalance()}</div>}
         {activeTab==="jnl"  && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderJournal()}</div>}
         {activeTab==="cf"   && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderCF()}</div>}
+        {activeTab==="mreport" && <MonthlyReportPanel/>}
         {activeTab==="mgmt" && <div>{loading ? <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:40,textAlign:"center",color:C.inkMid}}>Loading...</div> : renderMgmt()}</div>}
         {/* EMP201/IRP5 moved to Payroll component */}
         {activeTab==="prov" && <div style={{background:C.surface,border:"1px solid "+C.border,borderRadius:16,padding:28}}>{loading ? <div style={{textAlign:"center",padding:40,color:C.inkMid}}>Loading...</div> : renderProvTax()}</div>}

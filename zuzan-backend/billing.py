@@ -17,6 +17,7 @@ from email_service import (
     send_trial_expired_email,
     send_subscription_active_email,
     send_overdue_invoice_reminder,
+    send_upcoming_invoice_reminder,
     send_payment_failed_email,
     send_add_payment_method_email,
 )
@@ -928,6 +929,70 @@ def send_overdue_reminders():
             logger.info(f"Overdue reminders: {sent} sent")
     except Exception as e:
         logger.error(f"Overdue reminder job failed: {e}")
+    finally:
+        db.close()
+
+
+# ── Background: upcoming-due invoice reminders (3 days and 1 day before due) ──
+UPCOMING_REMINDER_DAYS = (3, 1)
+
+def send_upcoming_due_reminders():
+    """
+    Run daily. Emails the customer 3 days and 1 day before an unpaid invoice's due date.
+    Respects the company's overdue_reminders_enabled switch (same setting as the overdue reminders).
+    Matches on calendar dates, so each invoice gets at most one email per milestone per daily run.
+    """
+    db = SessionLocal()
+    try:
+        from database import Invoice, InvoiceStatus, Company
+        today = datetime.utcnow().date()
+
+        companies = db.query(Company).filter(
+            Company.subscription_status.in_([
+                SubscriptionStatus.trial,
+                SubscriptionStatus.active,
+            ])
+        ).all()
+
+        sent = 0
+        for co in companies:
+            if not getattr(co, "overdue_reminders_enabled", True):
+                continue
+
+            open_invoices = db.query(Invoice).filter(
+                Invoice.company_id == co.id,
+                Invoice.status == InvoiceStatus.sent,
+                Invoice.due_date != None,
+                Invoice.client_email != None,
+            ).all()
+
+            for inv in open_invoices:
+                if not inv.client_email or not inv.due_date:
+                    continue
+                days_until_due = (inv.due_date.date() - today).days
+                if days_until_due not in UPCOMING_REMINDER_DAYS:
+                    continue
+
+                portal_url = f"{FRONTEND_URL}/portal/{inv.portal_token}" if inv.portal_token else None
+                try:
+                    send_upcoming_invoice_reminder(
+                        client_email=inv.client_email,
+                        client_name=inv.client_name,
+                        company_name=co.name,
+                        invoice_number=inv.invoice_number,
+                        amount=inv.total_amount,
+                        days_until_due=days_until_due,
+                        due_date_str=inv.due_date.strftime("%d %b %Y"),
+                        portal_url=portal_url,
+                    )
+                    sent += 1
+                except Exception as ex:
+                    logger.warning(f"Upcoming-due reminder failed for inv {inv.id}: {ex}")
+
+        if sent:
+            logger.info(f"Upcoming-due reminders: {sent} sent")
+    except Exception as ex:
+        logger.error(f"Upcoming-due reminder job failed: {ex}")
     finally:
         db.close()
 

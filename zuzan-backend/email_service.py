@@ -753,6 +753,63 @@ def send_overdue_invoice_reminder(
     )
 
 
+# ── 9b. Upcoming-due invoice reminder (to client) ─────────────────────────────
+def send_upcoming_invoice_reminder(
+    client_email: str,
+    client_name: str,
+    company_name: str,
+    invoice_number: str,
+    amount: float,
+    days_until_due: int,
+    due_date_str: str,
+    portal_url: str = None,
+):
+    when = "tomorrow" if days_until_due == 1 else f"in {days_until_due} days"
+    pay_btn = _btn("View &amp; Pay Invoice", portal_url) if portal_url else ""
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 4px;">Invoice Due {when.capitalize()}</h2>
+      <p style="color:#888;margin:0 0 24px;font-size:13px;">From <strong>{company_name}</strong></p>
+
+      <p style="color:#555;margin:0 0 16px;">Dear <strong>{(client_name or "Customer")}</strong>,</p>
+      <p style="color:#555;margin:0 0 24px;line-height:1.7;">
+        This is a friendly reminder that invoice <strong>{invoice_number}</strong> from
+        <strong>{company_name}</strong> is due <strong>{when}</strong> ({due_date_str}).
+      </p>
+
+      <div style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Invoice</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{invoice_number}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Amount Due</td>
+            <td style="padding:6px 0;font-weight:700;font-size:18px;color:#C8401A;text-align:right;">R{amount:,.2f}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Due Date</td>
+            <td style="padding:6px 0;font-weight:700;color:#1a1a1a;text-align:right;">{due_date_str}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p style="color:#555;margin:0 0 24px;font-size:13px;">
+        If you have already made payment, please disregard this notice.
+      </p>
+
+      {pay_btn}
+
+      <p style="color:#aaa;font-size:11px;margin:20px 0 0;">
+        If you have any queries, please reply to this email or contact {company_name} directly.
+      </p>
+    """
+    send_email(
+        client_email,
+        f"Reminder: Invoice {invoice_number} from {company_name} is due {when}",
+        _wrap(body, client_email, transactional=True),
+    )
+
+
 def send_invoice_email(
     client_email: str,
     client_name: str,

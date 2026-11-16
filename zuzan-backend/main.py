@@ -419,6 +419,7 @@ from xero_migrate import router as xero_migrate_router
 from quickbooks_migrate import router as qbo_migrate_router
 from benefits import router as benefits_router
 from practice_mcp import router as practice_mcp_router
+from management_report import router as management_report_router
 
 from plans import require_plan as _require_plan
 from fastapi import Depends as _PDepends
@@ -466,6 +467,7 @@ app.include_router(xero_migrate_router,    prefix="/xero",                 tags=
 app.include_router(qbo_migrate_router,     prefix="/qbo",                  tags=["QuickBooks Migration"])
 app.include_router(benefits_router,        prefix="/benefits",              tags=["Benefits"])
 app.include_router(practice_mcp_router,                                     tags=["Practice MCP"])   # read-only Claude connector, see practice_mcp.py
+app.include_router(management_report_router, prefix="/management-report",   tags=["Management Report"])
 
 
 @app.get("/")
