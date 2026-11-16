@@ -454,17 +454,9 @@ def _pf_adhoc_signature(data: dict, passphrase: str = "") -> str:
     param_str = "&".join(f"{k}={quote_plus(str(v))}" for k, v in params.items())
     return hashlib.md5(param_str.encode()).hexdigest()
 
-def adhoc_charge(company: "Company", db: Session) -> dict:
-    """
-    Charge a company's stored PayFast token for their current plan amount.
-    Returns {"ok": True} on success or raises on failure.
-    Locks the account and logs if the charge fails.
-    """
-    from email_service import send_payment_failed_email
-
-    if not company.payfast_token:
-        raise ValueError(f"Company {company.id} has no PayFast token")
-
+def subscription_amount(company: "Company", db: Session):
+    """The amount a company's next PayFast charge will be: (amount, plan, cycle). Single source for the charge itself
+    and for the renewal-notice emails, so what we announce is exactly what we bill."""
     plan  = company.plan.value          if company.plan          else "starter"
     cycle = company.billing_cycle.value if company.billing_cycle else "monthly"
     base_amount = PLAN_PRICES.get(plan, PLAN_PRICES["starter"])[cycle]
@@ -496,7 +488,21 @@ def adhoc_charge(company: "Company", db: Session) -> dict:
     except Exception:
         pass
 
-    amount = base_amount + payroll_cost + client_cost
+    return base_amount + payroll_cost + client_cost, plan, cycle
+
+
+def adhoc_charge(company: "Company", db: Session) -> dict:
+    """
+    Charge a company's stored PayFast token for their current plan amount.
+    Returns {"ok": True} on success or raises on failure.
+    Locks the account and logs if the charge fails.
+    """
+    from email_service import send_payment_failed_email
+
+    if not company.payfast_token:
+        raise ValueError(f"Company {company.id} has no PayFast token")
+
+    amount, plan, cycle = subscription_amount(company, db)
     ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
     pf_id  = PAYFAST_MERCHANT_ID
@@ -993,6 +999,70 @@ def send_upcoming_due_reminders():
             logger.info(f"Upcoming-due reminders: {sent} sent")
     except Exception as ex:
         logger.error(f"Upcoming-due reminder job failed: {ex}")
+    finally:
+        db.close()
+
+
+# ── Background: subscription renewal notices (3 days and 1 day before the PayFast charge) ──
+def send_renewal_notices():
+    """
+    Run daily. Emails each active subscriber's owner 3 days and 1 day before the automatic PayFast charge.
+    The 3-day notice goes out when 1-3 days remain, the 1-day notice when 0-1 day remains. Each is sent once per
+    billing date (renewal_notice_3d_for / renewal_notice_1d_for hold the next_billing_date they were sent for), so a
+    restart or a drifting daily loop can neither skip nor repeat a notice.
+    """
+    from email_service import send_renewal_notice_email
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        companies = db.query(Company).filter(
+            Company.subscription_status == SubscriptionStatus.active,
+            Company.payfast_token != None,
+            Company.next_billing_date != None,
+            Company.next_billing_date > now,
+            Company.next_billing_date <= now + timedelta(days=3),
+            Company.parent_company_id == None,   # client companies are charged via the parent
+        ).all()
+
+        sent = 0
+        for co in companies:
+            if getattr(co, "billing_exempt", False):
+                continue
+            remaining = co.next_billing_date - now
+            if remaining > timedelta(days=1):
+                days_until, marker = 3, "renewal_notice_3d_for"
+            else:
+                days_until, marker = 1, "renewal_notice_1d_for"
+            if getattr(co, marker, None) == co.next_billing_date:
+                continue
+
+            owner = db.query(User).filter(User.company_id == co.id, User.role == "owner").first()
+            if not owner or not owner.email:
+                continue
+            try:
+                amount, plan, cycle = subscription_amount(co, db)
+                send_renewal_notice_email(
+                    first_name=owner.first_name,
+                    email=owner.email,
+                    company_name=co.name,
+                    plan=plan.title(),
+                    billing_cycle=cycle,
+                    amount=amount,
+                    billing_date_str=co.next_billing_date.strftime("%d %b %Y"),
+                    days_until=days_until,
+                    subscribe_url=f"{FRONTEND_URL}/settings?tab=subscription",
+                )
+                setattr(co, marker, co.next_billing_date)
+                db.commit()
+                sent += 1
+            except Exception as e:
+                db.rollback()
+                logger.warning(f"Renewal notice failed for company {co.id}: {e}")
+
+        if sent:
+            logger.info(f"Renewal notices: {sent} sent")
+    except Exception as e:
+        logger.error(f"Renewal notice job failed: {e}")
     finally:
         db.close()
 

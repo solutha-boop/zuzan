@@ -98,6 +98,8 @@ class Company(Base):
     trial_warning_sent_at=Column(DateTime,nullable=True)    # When 3-day warning email was sent
     trial_expiry_email_sent_at=Column(DateTime,nullable=True) # When "trial ended" email was sent
     overdue_reminders_enabled=Column(Boolean,default=True)  # Whether auto overdue reminders fire
+    renewal_notice_3d_for=Column(DateTime,nullable=True)    # next_billing_date the 3-day renewal notice was sent for
+    renewal_notice_1d_for=Column(DateTime,nullable=True)    # next_billing_date the 1-day renewal notice was sent for
     parent_company_id=Column(Integer,ForeignKey("companies.id"),nullable=True)  # Set for accountant-managed clients
     kiosk_token=Column(String,nullable=True,index=True)   # public clocking-kiosk link token (clocking.py)
     kiosk_token_created_at=Column(DateTime,nullable=True)
@@ -1708,6 +1710,8 @@ def init_db():
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS invoice_template_html TEXT",
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS billing_exempt BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE companies ADD COLUMN IF NOT EXISTS financial_year_end VARCHAR",
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS renewal_notice_3d_for TIMESTAMP",
+            "ALTER TABLE companies ADD COLUMN IF NOT EXISTS renewal_notice_1d_for TIMESTAMP",
             # ── Multi-line items + travel reference fields on invoices (2026-08) ─
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS items_json TEXT",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tour_ref VARCHAR",

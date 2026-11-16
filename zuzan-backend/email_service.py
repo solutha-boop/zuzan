@@ -620,6 +620,62 @@ def send_trial_warning_email(
     )
 
 
+# ── Subscription renewal notice (3 days / 1 day before the PayFast charge) ────
+def send_renewal_notice_email(
+    first_name: str,
+    email: str,
+    company_name: str,
+    plan: str,
+    billing_cycle: str,
+    amount: float,
+    billing_date_str: str,
+    days_until: int,
+    subscribe_url: str,
+):
+    when = "tomorrow" if days_until == 1 else f"in {days_until} days"
+    body = f"""
+      <h2 style="color:#1a1a1a;margin:0 0 12px;">Your ZuZan subscription renews {when}</h2>
+      <p style="color:#555;line-height:1.7;margin:0 0 24px;">
+        Hi {first_name}, this is a heads-up that your ZuZan subscription for <strong>{company_name}</strong>
+        will renew automatically on <strong>{billing_date_str}</strong>. No action is needed.
+      </p>
+
+      <div style="background:#F8F8F6;border:1px solid #E5E5E0;border-radius:10px;padding:18px 20px;margin-bottom:24px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Plan</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{plan} ({billing_cycle})</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Renewal date</td>
+            <td style="padding:6px 0;font-weight:600;color:#1a1a1a;text-align:right;">{billing_date_str}</td>
+          </tr>
+          <tr>
+            <td style="padding:6px 0;color:#555;font-size:13px;">Amount to be charged</td>
+            <td style="padding:6px 0;font-weight:700;font-size:18px;color:#C8401A;text-align:right;">R{amount:,.2f}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p style="color:#555;line-height:1.7;margin:0 0 24px;font-size:13px;">
+        The amount will be collected from the card you saved with PayFast. To avoid any interruption, please make sure
+        your card is valid and has sufficient funds. You can review your plan or payment details at any time.
+      </p>
+
+      {_btn("Manage Subscription", subscribe_url)}
+
+      <p style="color:#aaa;font-size:12px;text-align:center;">
+        Questions? Email us at <a href="mailto:{SUPPORT_EMAIL}" style="color:#C8401A;">{SUPPORT_EMAIL}</a>
+      </p>
+    """
+    send_email(
+        email,
+        f"Your ZuZan subscription renews {when} (R{amount:,.2f})",
+        _wrap(body, email, transactional=True),
+        from_email=FROM_SUPPORT_EMAIL,
+    )
+
+
 # ── 7. Trial expired ───────────────────────────────────────────────────────────
 def send_trial_expired_email(
     first_name: str,

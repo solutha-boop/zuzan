@@ -92,9 +92,11 @@ async def lifespan(app: FastAPI):
         logger.warning(f"PO received_date backfill failed (non-fatal): {e}")
     # Run trial expiry checks and overdue invoice reminders
     try:
-        from billing import check_trial_expirations, send_overdue_reminders, run_monthly_charges
+        from billing import check_trial_expirations, send_overdue_reminders, send_upcoming_due_reminders, send_renewal_notices, run_monthly_charges
         check_trial_expirations()
         send_overdue_reminders()
+        send_upcoming_due_reminders()
+        send_renewal_notices()
         run_monthly_charges()
         logger.info("Billing checks complete")
     except Exception as e:
@@ -182,9 +184,11 @@ async def lifespan(app: FastAPI):
         while True:
             await _asyncio.sleep(24 * 60 * 60)
             try:
-                from billing import check_trial_expirations, send_overdue_reminders, run_monthly_charges
+                from billing import check_trial_expirations, send_overdue_reminders, send_upcoming_due_reminders, send_renewal_notices, run_monthly_charges
                 check_trial_expirations()
                 send_overdue_reminders()
+                send_upcoming_due_reminders()
+                send_renewal_notices()
                 run_monthly_charges()
                 logger.info("Daily billing checks complete")
             except Exception as e:
