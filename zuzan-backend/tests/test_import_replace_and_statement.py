@@ -63,3 +63,18 @@ def test_system_account_only_moves_between_expense_and_cost_of_sales():
         _upd(cu, "5000", type="asset")
     with pytest.raises(HTTPException):
         _upd(cu, "5000", name="Fuel purchases")
+
+def test_ar_ap_control_checks_net_out_a_replaced_opening_balance(monkeypatch):
+    """Rules 6/7 left out imported 1100/2000 lines but not their reversal, so replacing an opening balance
+    false-failed both control checks by the replaced amount (audit 2026-11-16)."""
+    import plans
+    monkeypatch.setattr(plans, "has_plan", lambda *a, **k: True)
+    co, cu = _cu("rpE")
+    _tb(cu, "Code,Account Name,Type,Debit,Credit\n1100,Debtors,asset,700,\n2000,Creditors,liability,,300\n"
+            "1010,Bank,asset,100,\n3999,Opening Balance Equity,equity,,500\n", "2026-02-28")
+    _tb(cu, "Code,Account Name,Type,Debit,Credit\n1100,Debtors,asset,400,\n2000,Creditors,liability,,200\n"
+            "1010,Bank,asset,100,\n3999,Opening Balance Equity,equity,,300\n", "2026-02-28", replace=True)
+    r = asyncio.run(P.reconciliation(current_user=cu, db=db))
+    rules = {c["rule"]: c for c in r["checks"]} if isinstance(r, dict) else {c["rule"]: c for c in r}
+    assert rules["AR Control Account (1100)"]["status"] == "pass"
+    assert rules["AP Control Account (2000)"]["status"] == "pass"

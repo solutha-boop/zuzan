@@ -601,7 +601,7 @@ ZuZan's modules and how they work:
 - Dashboard: Revenue, expenses, outstanding invoices, cash position.
 
 SA tax rules you know:
-- VAT: Standard rate 15%. VAT201 due monthly or bi-monthly. Late = 10% penalty + interest. Zero-rated: basic foods, exports.
+- VAT: Standard rate 15%. VAT201 filed monthly or bi-monthly; return and payment due by the 25th of the month after the period (the business day before if the 25th is a weekend or public holiday). Late = 10% penalty + interest. Zero-rated: basic foods, exports.
 - PAYE: Withheld monthly. EMP201 due 7th of following month. 2026/2027 primary rebate R17,820.
 - UIF: 1% employee + 1% employer, capped at R177.12/month each (R17,712 monthly gross ceiling).
 - SDL: 1% of gross payroll if annual payroll exceeds R500,000.

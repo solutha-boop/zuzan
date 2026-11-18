@@ -13478,7 +13478,7 @@ function AIAssistant({tab}) {
       let reply = "I'm not connected to the AI service right now. Please try again later.";
       if(lower.includes("paye") && lower.includes("35000")) reply = "For R35,000/month gross: Annual income R420,000. PAYE ≈ R4,673/month after the R17,235 primary rebate. Check the Payroll tab for exact figures.";
       else if(lower.includes("emp201")) reply = "EMP201 is due by the 7th of each month following the payroll period. You can download the EMP201 from the Payroll tab after running payroll.";
-      else if(lower.includes("vat")) reply = "The standard VAT rate in South Africa is 15%. Some items are zero-rated (basic foods, exports). VAT201 is due monthly or bi-monthly depending on your registration.";
+      else if(lower.includes("vat")) reply = "The standard VAT rate in South Africa is 15%. Some items are zero-rated (basic foods, exports). VAT201 is filed monthly or bi-monthly depending on your registration, and is due by the 25th of the month after the period (the business day before if the 25th is a weekend or public holiday).";
       else if(lower.includes("fuel") || lower.includes("petrol")) reply = "Fuel should be categorised to account 6510 - Fuel and Oil under Expenses. If the vehicle is used partly for business and partly private, only the business portion is deductible.";
       else if(lower.includes("bad debt")) reply = "Record a bad debt by creating an expense to account 7300 - Bad Debts Written Off, matching it against the outstanding invoice. This reduces your debtors and is tax deductible.";
       else if(lower.includes("uif")) reply = "UIF is 1% employee + 1% employer, capped at R17,712/month gross. Both amounts are calculated automatically in the Payroll tab.";

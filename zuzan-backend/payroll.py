@@ -3058,7 +3058,8 @@ async def reconciliation(
             .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
             .filter(
                 JournalEntry.company_id == cid,
-                JournalEntry.source == "import",
+                # a replaced opening balance is reversed as "import_reversal": net it out too (audit fix 2026-11-17)
+                JournalEntry.source.in_(["import", "import_reversal"]),
                 JournalLine.account_id == ar_acct.id,
             ).scalar() or 0, 2)
         ar_import_note = (
@@ -3134,7 +3135,7 @@ async def reconciliation(
             .join(_JE, JournalLine.entry_id == _JE.id)
             .filter(
                 _JE.company_id == cid,
-                _JE.source == "import",
+                _JE.source.in_(["import", "import_reversal"]),   # replaced imports net out (audit fix 2026-11-17)
                 JournalLine.account_id == ap_acct.id,
             ).scalar() or 0, 2)
         ap_import_note = (
@@ -3430,15 +3431,32 @@ def _company_fy(company, on: _date):
     return start, end
 
 
-# Small business corporation tax table (years of assessment ending 31 Mar 2024 onwards; unchanged since)
-_SBC_BRACKETS = [(95_750, 0.0, 0.0), (365_000, 0.0, 0.07), (550_000, 18_848.0, 0.21), (None, 57_698.0, 0.27)]
+# Small business corporation tax tables, keyed by the first year-of-assessment END date they apply to (SARS).
+# Newest first. Add the next table after each Budget (audit fix 2026-11-17: only the 2025/26 table was here).
+_SBC_TABLES = [
+    # years of assessment ending 1 Apr 2026 - 31 Mar 2027 (Budget 25 Feb 2026)
+    (_date(2026, 4, 1), [(99_000, 0.0, 0.0), (365_000, 0.0, 0.07), (550_000, 18_620.0, 0.21), (None, 57_470.0, 0.27)]),
+    # years of assessment ending 1 Apr 2023 - 31 Mar 2026
+    (_date(2023, 4, 1), [(95_750, 0.0, 0.0), (365_000, 0.0, 0.07), (550_000, 18_848.0, 0.21), (None, 57_698.0, 0.27)]),
+]
+_SBC_BRACKETS = _SBC_TABLES[0][1]   # current table (kept for callers that do not pass a year)
 
 
-def _sbc_tax(taxable: float) -> float:
+def _sbc_brackets_for(year_end: _date = None):
+    """The SBC table for a year of assessment ending on `year_end` (default: the current table)."""
+    if year_end is None:
+        return _SBC_BRACKETS
+    for from_date, table in _SBC_TABLES:
+        if year_end >= from_date:
+            return table
+    return _SBC_TABLES[-1][1]
+
+
+def _sbc_tax(taxable: float, year_end: _date = None) -> float:
     if taxable <= 0:
         return 0.0
     prev = 0.0
-    for top, base, rate in _SBC_BRACKETS:
+    for top, base, rate in _sbc_brackets_for(year_end):
         if top is None or taxable <= top:
             floor = prev if rate else 0.0
             return round(base + (taxable - floor) * rate, 2) if rate else 0.0
@@ -3649,7 +3667,8 @@ async def cash_flow_13week(
             creditor_due.append((due_date, exp.amount))
 
     # ── Projected VAT201 payments due in the window ────────────────────────
-    # SARS due date: 25th of the month following the end of each VAT period.
+    # SARS due date: 25th of the month following the end of each VAT period (earlier business day when the
+    # 25th is a weekend or public holiday) - same rule as /reports/vat201 via _vat_due_day (2026-11-17).
     vat_due = []  # [(due_date: date, amount: float), ...]
     seen_periods = set()
     probe = week_start.replace(day=1)
@@ -3657,7 +3676,7 @@ async def cash_flow_13week(
         period_year, period_month = probe.year, probe.month
         due_month = period_month + 1 if period_month < 12 else 1
         due_year  = period_year if period_month < 12 else period_year + 1
-        candidate_due = _date(due_year, due_month, 25)
+        candidate_due = _vat_due_day(due_year, due_month)
         if week_start <= candidate_due <= window_end and (period_year, period_month) not in seen_periods:
             seen_periods.add((period_year, period_month))
             vat_net = _vat_net_for_month(db, cid, period_year, period_month)
@@ -3706,7 +3725,7 @@ async def cash_flow_13week(
         # Creditor (PO + on-credit expense) payments due this week
         creditor_payments = round(sum(a for d, a in creditor_due if w_start <= d <= w_end), 2)
 
-        # Projected VAT201 payment due this week (0.0 if no 25th falls in it,
+        # Projected VAT201 payment due this week (0.0 if no VAT due date falls in it,
         # or if the projected period is a net refund rather than a liability)
         vat_payment = round(sum(a for d, a in vat_due if w_start <= d <= w_end), 2)
 
@@ -4185,8 +4204,9 @@ async def provisional_tax(
       - Year to date = start of the financial year to today; annualised over completed months (min. 1).
       - Tax at the 27% company rate, with the small business corporation (SBC) figure alongside.
       - 1st payment: last day of month 6 (50%); 2nd: last day of the year (balance); 3rd (voluntary top-up):
-        6 months after year-end for a February year-end, otherwise 7 months.
-      - Prior financial year's taxable income for the 80% test (s 89quat: if actual taxable income is over
+        7 months after year-end for a February year-end (30 September), otherwise 6 months (SARS; audit fix
+        2026-11-17 - the two were swapped).
+      - Prior financial year's taxable income for the 80% test (Fourth Schedule para 20: if actual taxable income is over
         R1m, an estimate below 80% of it attracts a 20% penalty).
     """
     from fixed_assets import SA_CIT_RATE as CORP_TAX_RATE
@@ -4203,7 +4223,7 @@ async def provisional_tax(
     months_elapsed = max(1, min(12, months_elapsed))
     annual_taxable_income = round(ytd["taxable_income"] / months_elapsed * 12, 2)
     estimated_annual_tax  = round(max(0.0, annual_taxable_income * CORP_TAX_RATE), 2)
-    sbc_tax               = _sbc_tax(annual_taxable_income)
+    sbc_tax               = _sbc_tax(annual_taxable_income, fy_end)
 
     prev_start, prev_end = _company_fy(company, fy_start - timedelta(days=1))
     prev = _period_pl(db, cid, datetime.combine(prev_start, datetime.min.time()),
@@ -4216,7 +4236,7 @@ async def provisional_tax(
     second_payment = round(estimated_annual_tax - first_payment, 2)
     first_due  = _add_months(fy_start, 6) - timedelta(days=1)
     second_due = fy_end
-    third_due  = _add_months(fy_end + timedelta(days=1), 6 if fy_end.month == 2 else 7) - timedelta(days=1)
+    third_due  = _add_months(fy_end + timedelta(days=1), 7 if fy_end.month == 2 else 6) - timedelta(days=1)
     fmt = lambda d: d.strftime("%d %B %Y")
 
     notes = [
@@ -4506,8 +4526,8 @@ async def creditors_aging(
     }
 
 
-def _vat_due_date(y: int, m: int) -> str:
-    """VAT201 submitted online is due on the 25th of the month AFTER the tax period (y/m = that month).
+def _vat_due_day(y: int, m: int) -> _date:
+    """VAT201 is due on the 25th of the month AFTER the tax period (y/m = that month), every month.
     If the 25th is a weekend or public holiday, the last business day before it applies."""
     try:
         from clocking import _sa_holidays
@@ -4517,7 +4537,11 @@ def _vat_due_date(y: int, m: int) -> str:
     d = _date(y, m, 25)
     while d.weekday() >= 5 or d in hol:
         d -= timedelta(days=1)
-    return d.strftime("%d %B %Y")
+    return d
+
+
+def _vat_due_date(y: int, m: int) -> str:
+    return _vat_due_day(y, m).strftime("%d %B %Y")
 
 
 @reports_router.get("/vat201")
