@@ -67,3 +67,12 @@
 7. (Owner, carried) Run `check_fixed_asset_useful_life.py` dry run in prod.
 
 Standing reminders: replace the provisional 2027/2028 `TAX_YEARS` and add the 2027/28 SBC table after Budget Feb 2027; IFRS for SMEs 3rd ed. / IFRS 18 checklist Jan–Feb 2027.
+
+---
+## Fixes applied (18 Nov 2026, on request: older Low items)
+- The 17-Nov fixes were committed in b04467a (18 Nov 06:40), so Housekeeping item 1 is done.
+- **Low 3 (fixed), revenue basis:** `/reports/management` now returns `revenue_basis: "cash"` and `revenue_basis_note` (payroll.py). The Management Pack shows "Revenue on a cash-received basis (paid invoices); unpaid invoices are under Debtors" next to the period, in both App_js_fixed.js and zuzan-app/src/App.js. The monthly management report PDF note now says it is prepared "on the accrual basis: revenue is recognised when invoiced, whether or not it has been paid" (management_report.py).
+- **Low 4 (fixed):** practice_mcp.py has a new `_vat_registered(co)` helper. It treats a missing or NULL VAT status as not registered, and is used in list_clients, vat201 and client_snapshot. New test `test_vat_status_unknown_counts_as_not_registered`. `tests/test_practice_mcp.py` (6) and `tests/test_management_report.py` pass.
+- **Low 5–7 (not done, owner actions):** the production GL reclassify run, the POPIA legal review with Netlify publish, and the production dry run of `check_fixed_asset_useful_life.py` all need production access or a lawyer.
+- Still open: Low 2, the offline PAYE example at App_js_fixed.js:13479.
+- None of today's changes are committed yet.

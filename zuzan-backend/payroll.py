@@ -4059,6 +4059,12 @@ async def management_accounts(
     return {
         "period":       period_label,
         "generated_at": now.isoformat(),
+        # Revenue basis (audit 2026-11-18): invoices count when paid; the monthly management report PDF and the AFS
+        # use the ledger (invoiced). Shown in the Management Pack so the two are not confused.
+        "revenue_basis": "cash",
+        "revenue_basis_note": "Revenue = invoice payments received in the period, plus imported and bank-import income. "
+                              "Unpaid invoices are not included (see Debtors). The monthly management report and "
+                              "annual financial statements show revenue when invoiced.",
         "pl": {
             "revenue":              revenue,
             "po_cogs":              po_cogs,

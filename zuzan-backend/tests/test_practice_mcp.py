@@ -101,3 +101,21 @@ def test_trial_balance_chart_and_account_activity(setup):
     assert missing["isError"] is True
     other = call(c, "trial_balance", company_id=setup["other"].id)
     assert other["isError"] is True
+
+
+def test_vat_status_unknown_counts_as_not_registered():
+    """Audit fix 2026-11-18: a missing or NULL vat_registered must not be treated as a VAT vendor."""
+    import practice_mcp
+
+    class NoAttr:
+        pass
+
+    class NullVat:
+        vat_registered = None
+
+    class Vendor:
+        vat_registered = True
+
+    assert practice_mcp._vat_registered(NoAttr()) is False
+    assert practice_mcp._vat_registered(NullVat()) is False
+    assert practice_mcp._vat_registered(Vendor()) is True

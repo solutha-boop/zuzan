@@ -196,6 +196,12 @@ async def _recon(db, u):
     return await _call(P.reconciliation, current_user=u, db=db)
 
 
+def _vat_registered(co) -> bool:
+    """VAT status for the connector. Missing or NULL counts as not registered (audit fix 2026-11-18): never
+    present VAT201 figures for a company whose VAT status is unknown."""
+    return bool(getattr(co, "vat_registered", False))
+
+
 async def _safe(coro_or_value):
     try:
         if inspect.isawaitable(coro_or_value):
@@ -214,7 +220,7 @@ async def _run_tool(name: str, args: dict) -> Any:
             raise ValueError("The practice user is not configured or not active (PRACTICE_MCP_USER_EMAIL).")
         clients = _clients(db, user)
         if name == "list_clients":
-            return [{"company_id": cid, "name": co.name, "vat_registered": bool(getattr(co, "vat_registered", True)), "role": role}
+            return [{"company_id": cid, "name": co.name, "vat_registered": _vat_registered(co), "role": role}
                     for cid, (co, role) in sorted(clients.items(), key=lambda kv: kv[1][0].name.lower())]
 
         try:
@@ -231,7 +237,7 @@ async def _run_tool(name: str, args: dict) -> Any:
         if name == "debtors_aging":
             return await _debtors(db, u)
         if name == "vat201":
-            if not getattr(co, "vat_registered", True):
+            if not _vat_registered(co):
                 return {"note": f"{co.name} is not VAT registered in ZuZan."}
             months = int(args.get("months") or 1)
             if months not in (1, 2):
@@ -257,7 +263,7 @@ async def _run_tool(name: str, args: dict) -> Any:
                     "payroll_last_month": _payroll_status(db, cid, _prev_month(today)),
                     "payroll_this_month": _payroll_status(db, cid, this_month),
                     "reconciliation": await _safe(_recon(db, u))}
-            if getattr(co, "vat_registered", True):
+            if _vat_registered(co):
                 snap["vat201_this_month"] = await _safe(_vat(db, u, this_month, 1))
                 snap["vat201_last_month"] = await _safe(_vat(db, u, _prev_month(today), 1))
             else:

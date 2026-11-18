@@ -7088,7 +7088,7 @@ function Reports({live = {}, user = null}) {
     const expBreakdown = pl.expense_breakdown || {};
     return (
       <div>
-        {m && <div style={{fontSize:11,color:C.inkMid,marginBottom:10,fontWeight:500}}>Period: {m.period}</div>}
+        {m && <div style={{fontSize:11,color:C.inkMid,marginBottom:10,fontWeight:500}}>Period: {m.period}{m.revenue_basis==="cash" && <span title={m.revenue_basis_note||""} style={{fontWeight:400}}> · Revenue on a cash-received basis (paid invoices); unpaid invoices are under Debtors</span>}</div>}
         <div style={{display:"flex",gap:12,marginBottom:mgmtDrill?12:20,flexWrap:"wrap"}}>
           <KPI label="Revenue"     value={fmt(kpis.revenue)}      color={C.green}                           icon="💰" active={mgmtDrill?.type==="revenue"}     onClick={()=>openMgmtDrill("revenue")}     sub={"Gross margin "+kpis.gross_margin_pct+"%"}/>
           <KPI label="Net Profit"  value={fmt(kpis.net_profit)}   color={kpis.net_profit>=0?C.accent:C.red} icon="📊" active={mgmtDrill?.type==="profit"}      onClick={()=>openMgmtDrill("profit")}      sub={"Net margin "+kpis.net_margin_pct+"%"}/>

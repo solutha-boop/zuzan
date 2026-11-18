@@ -523,7 +523,8 @@ def render_pdf(f: dict, commentary: str, prepared_by: str = "") -> bytes:
     bold.append(len(data)); data.append(["Cash at end", money(cf["month"]["closing_cash"]), money(cf["ytd"]["closing_cash"])])
     story.append(KeepTogether([Paragraph("Cash flow (Rand)", st_h), table(data, [100 * mm, 37 * mm, 37 * mm], bold_rows=bold)]))
 
-    note = ("Unaudited management accounts prepared from the general ledger. Figures may change once month-end and "
+    note = ("Unaudited management accounts prepared from the general ledger on the accrual basis: revenue is "
+            "recognised when invoiced, whether or not it has been paid. Figures may change once month-end and "
             "year-end adjustments are finalised. Net profit is before income tax.")
     if prepared_by:
         note = f"Prepared by {escape(prepared_by)}. " + note
