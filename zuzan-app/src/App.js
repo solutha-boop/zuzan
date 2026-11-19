@@ -611,43 +611,8 @@ const BANK_FORMATS = {
   tymebank:     {name:"TymeBank",      logo:"🩵", skipRows:1, dateCol:0, amtCol:2,  descCol:1},
 };
 
-function autoCategory(desc, type) {
-  const d = desc.toLowerCase();
-  if (type === "credit") {
-    // Income category auto-detection
-    if (d.includes("interest")) return "Interest Income";
-    if (d.includes("refund") || d.includes("reversal")) return "Other Income";
-    if (d.includes("rental") || d.includes("rent receive")) return "Rental Income";
-    return "Sales Revenue";  // default income account
-  }
-  // Expense category auto-detection
-  if (d.includes("interest")) return "Interest Income";
-  if (d.includes("eskom") || d.includes("electric") || d.includes("water")) return "Utilities";
-  if (d.includes("telkom") || d.includes("vodacom") || d.includes("mtn") || d.includes("fibre")) return "Telecoms";
-  if (d.includes("sars") || d.includes("tax") || d.includes("vat")) return "Tax";
-  if (d.includes("salary") || d.includes("payroll") || d.includes("wages")) return "Salaries";
-  if (d.includes("rent") || d.includes("lease")) return "Rent";
-  if (d.includes("bank") || d.includes("charge") || d.includes("fee")) return "Banking";
-  if (d.includes("insurance") || d.includes("assurance")) return "Insurance";
-  if (d.includes("fuel") || d.includes("petrol") || d.includes("shell") || d.includes("engen")) return "Travel";
-  if (d.includes("office") || d.includes("stationery")) return "Office";
-  if (d.includes("advertis") || d.includes("google") || d.includes("facebook")) return "Marketing";
-  if (d.includes("attorney") || d.includes("accountant") || d.includes("audit")) return "Professional Fees";
-  return "Other";
-}
-
-// Checks company-learned rules first, then falls back to built-in patterns.
-// `rules` is the array fetched from /category-rules/ (sorted by match_count desc).
-function smartCategory(desc, type, rules) {
-  if (rules && rules.length) {
-    const d = desc.toLowerCase();
-    const match = rules.find(r =>
-      (r.txn_type === "any" || r.txn_type === type) && d.includes(r.keyword)
-    );
-    if (match) return match.category;
-  }
-  return autoCategory(desc, type);
-}
+// Bank-line allocation suggestions now come from the backend (/allocation/suggest — allocation.py),
+// replacing the old in-browser keyword guesses (autoCategory / smartCategory).
 
 function parseCSVLine(line) {
   const result = [];
@@ -9448,6 +9413,299 @@ function BankFeeds() {
   );
 }
 
+// ── SMART ALLOCATION (bank lines → chart of accounts) ─────────────────────────
+// Suggestions come from /allocation/suggest (allocation.py): green = ZuZan is sure,
+// amber = a suggestion to confirm with one tap, red = ZuZan needs the client.
+// Learning happens server-side when the import is posted.
+const PLAIN_LABELS = {
+  "1212":"Bought a vehicle", "1213":"Bought computer equipment", "1214":"Bought furniture or equipment",
+  "1100":"Customer paid what they owed", "2110":"Paid a supplier we owed",
+  "2121":"PAYE paid to SARS", "2122":"UIF paid to SARS", "2123":"SDL paid to SARS",
+  "2124":"VAT paid to SARS", "2125":"VAT paid to SARS", "2126":"Income tax paid to SARS", "2127":"Provisional tax paid to SARS",
+  "2150":"Short-term loan", "2160":"Director's loan", "2210":"Loan repayment", "2220":"Bond repayment",
+  "3110":"Owner put money in", "3300":"Dividends paid", "3400":"Owner took money out",
+  "4110":"Sold goods", "4120":"Sold a service", "4130":"Consulting work", "4140":"Commission earned",
+  "4150":"Rent received", "4160":"Subscriptions received", "4210":"Interest received", "4220":"Supplier discount", "4230":"Government grant",
+  "5010":"Stock to sell", "5020":"Delivery of stock", "5030":"Import duties", "5040":"Workers who make the product", "5050":"Raw materials",
+  "6110":"Staff wages", "6140":"Medical aid", "6150":"Pension / provident fund",
+  "6210":"Office rent", "6220":"Electricity & water", "6230":"Rates & taxes", "6240":"Cleaning", "6250":"Security", "6260":"Repairs",
+  "6310":"Stationery & office supplies", "6320":"Printing", "6340":"Subscriptions", "6350":"Software & apps",
+  "6360":"Bank fees", "6370":"Small things / sundries", "6410":"Landline phone", "6420":"Cellphone", "6430":"Internet / fibre",
+  "6510":"Fuel for the car", "6520":"Car service & repairs", "6530":"Car insurance", "6540":"Toll fees",
+  "6560":"Flights", "6570":"Hotels & accommodation", "6610":"Advertising", "6620":"Online advertising", "6630":"Website",
+  "6640":"Logo & design", "6660":"Entertaining clients", "6710":"Accountant", "6720":"Lawyer", "6730":"Consultants", "6740":"IT support",
+  "6750":"CIPC fees", "6810":"Business insurance", "6820":"Professional indemnity insurance", "6930":"SARS penalties & interest",
+  "7200":"Interest paid", "7300":"Bad debt written off", "7600":"Donations",
+};
+const accCode = a => (a || "").split(" - ")[0];
+const accName = a => { const i = (a || "").indexOf(" - "); return i >= 0 ? a.slice(i + 3) : (a || ""); };
+const plainLabel = a => PLAIN_LABELS[accCode(a)] || accName(a);
+const vatOf = amt => Math.round((amt / 115) * 15 * 100) / 100;
+const CONF = {
+  green: {label:"Done",            color:C.green, bg:C.greenLt, dot:"🟢"},
+  amber: {label:"Please check",    color:C.gold,  bg:C.goldLt,  dot:"🟡"},
+  red:   {label:"Needs you",       color:C.red,   bg:C.redLt,   dot:"🔴"},
+};
+const CREDIT_GROUPS = ["Income","Equity","Liabilities","Assets"];
+
+function AccountPicker({type, accounts, onPick, onCancel}) {
+  const [q, setQ] = useState("");
+  const groups = type === "credit" ? CREDIT_GROUPS : COA_GROUPS;
+  const pool = accounts.filter(a => a.type === "Detail" && groups.includes(a.group));
+  const ql = q.trim().toLowerCase();
+  const hits = ql ? pool.filter(a => `${a.code} ${a.name} ${PLAIN_LABELS[a.code] || ""} ${a.description || ""}`.toLowerCase().includes(ql)).slice(0, 8) : [];
+  return (
+    <div style={{marginTop:14,background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:14}}>
+      <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Type what it was… e.g. fuel, rent, loan"
+        style={{width:"100%",boxSizing:"border-box",padding:"12px 14px",fontSize:15,border:`1px solid ${C.border}`,borderRadius:10,fontFamily:"inherit",outline:"none"}}/>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:10}}>
+        {hits.map(a => (
+          <button key={a.code} onClick={() => onPick(`${a.code} - ${a.name}`)}
+            style={{padding:"10px 14px",borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,cursor:"pointer",fontFamily:"inherit",textAlign:"left"}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.ink}}>{PLAIN_LABELS[a.code] || a.name}</div>
+            <div style={{fontSize:10,color:C.inkDim}}>{a.code} · {a.name}</div>
+          </button>
+        ))}
+        {ql && !hits.length && <div style={{fontSize:12,color:C.inkMid}}>Nothing found — try another word, or pick from the full list below.</div>}
+      </div>
+      <div style={{display:"flex",gap:8,marginTop:10,alignItems:"center"}}>
+        <select value="" onChange={e => e.target.value && onPick(e.target.value)}
+          style={{flex:1,padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.surface,color:C.ink}}>
+          <option value="">Full list of accounts…</option>
+          {groups.map(g => (
+            <optgroup key={g} label={g}>
+              {pool.filter(a => a.group === g).map(a => <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>)}
+            </optgroup>
+          ))}
+        </select>
+        <button onClick={onCancel} style={{padding:"8px 14px",border:`1px solid ${C.border}`,borderRadius:8,background:"transparent",color:C.inkMid,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function AllocationReview({txns, setTxns, selected, setSelected, accounts, summary, loading, error, importing, onBack, onImport}) {
+  const [mode, setMode]       = useState("cards");      // cards | list
+  const [filter, setFilter]   = useState("todo");       // todo | red | amber | green | all
+  const [picking, setPicking] = useState(false);
+  const [split, setSplit]     = useState(null);         // {amount, accountA, accountB}
+  const [similar, setSimilar] = useState(null);         // {account, hasVat, ids:[...], merchant}
+  const [skipped, setSkipped] = useState(new Set());
+
+  const lines   = txns.filter(t => selected.has(t.id));
+  const isDone  = t => t.confirmed && t.category;
+  const todo    = lines.filter(t => !isDone(t));
+  const order   = {red:0, amber:1, green:2};
+  const queue   = [...todo].sort((a, b) => (order[a.conf] ?? 0) - (order[b.conf] ?? 0));
+  const current = queue.find(t => !skipped.has(t.id)) || null;
+  const doneN   = lines.length - todo.length;
+
+  const setLine = (id, patch) => setTxns(prev => prev.map(t => t.id === id ? {...t, ...patch} : t));
+  const choose = (t, account, hasVat) => {
+    const vat = hasVat === undefined ? !!t.hasVat : hasVat;
+    setLine(t.id, {category:account, confirmed:true, hasVat:vat, vatAmount: vat ? vatOf(t.amount) : 0});
+    setPicking(false); setSplit(null);
+    // "Do the same for these N similar ones?" — same merchant, a similar amount (so a R32 drink at
+    // Engen isn't swept up with the R850 fuel), and not already answered by the client.
+    const ids = lines.filter(o => o.id !== t.id && o.groupKey && o.groupKey === t.groupKey && !isDone(o)
+                                 && o.amount <= t.amount * 3 && o.amount >= t.amount / 3).map(o => o.id);
+    if (ids.length) setSimilar({account, hasVat:vat, ids, merchant:t.merchant || t.description});
+  };
+  const applySimilar = () => {
+    const ids = new Set(similar.ids);
+    setTxns(prev => prev.map(t => ids.has(t.id) ? {...t, category:similar.account, confirmed:true, hasVat:similar.hasVat, vatAmount: similar.hasVat ? vatOf(t.amount) : 0} : t));
+    setSimilar(null);
+  };
+  const acceptAllAmber = () => setTxns(prev => prev.map(t => selected.has(t.id) && !t.confirmed && t.category && t.conf !== "red" ? {...t, confirmed:true} : t));
+  const doSplit = t => {
+    const a = Math.round(parseFloat(split.amount || 0) * 100) / 100;
+    if (!(a > 0 && a < t.amount) || !split.accountA || !split.accountB) return;
+    const b = Math.round((t.amount - a) * 100) / 100;
+    const childId = `${t.id}-s${Date.now()}`;
+    setTxns(prev => {
+      const i = prev.findIndex(x => x.id === t.id);
+      const first  = {...t, amount:a, category:split.accountA, confirmed:true, vatAmount: t.hasVat ? vatOf(a) : 0};
+      const second = {...t, id:childId, amount:b, category:split.accountB, confirmed:true, vatAmount: t.hasVat ? vatOf(b) : 0};
+      return [...prev.slice(0, i), first, second, ...prev.slice(i + 1)];
+    });
+    setSelected(prev => { const n = new Set(prev); n.add(childId); return n; });
+    setSplit(null);
+  };
+
+  const big = {padding:"16px 18px",borderRadius:14,cursor:"pointer",fontFamily:"inherit",textAlign:"left",minWidth:180};
+  const chip = (id, label, n, col) => (
+    <button key={id} onClick={() => setFilter(id)} style={{padding:"7px 14px",borderRadius:20,border:`1px solid ${filter===id?col:C.border}`,background:filter===id?`${col}18`:"transparent",color:filter===id?col:C.inkMid,fontSize:12,fontWeight:filter===id?700:400,cursor:"pointer",fontFamily:"inherit"}}>{label} ({n})</button>
+  );
+
+  const unallocated = lines.filter(t => !t.category).length;
+  const listRows = lines.filter(t => filter === "all" ? true : filter === "todo" ? !isDone(t) : filter === "green" ? isDone(t) : (!isDone(t) && t.conf === filter));
+
+  return (
+    <div>
+      {/* Score banner */}
+      <div style={{background:C.ink,borderRadius:16,padding:"18px 24px",marginBottom:16,color:"#fff"}}>
+        {loading ? <div style={{fontSize:15}}>ZuZan is sorting your transactions…</div> : <>
+          <div style={{fontSize:20,fontWeight:700}}>
+            {summary && summary.total ? <>ZuZan sorted {summary.green} of {summary.total} automatically{summary.total ? ` (${summary.auto_rate}%)` : ""}</> : "Let's sort your transactions"}
+          </div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,0.65)",marginTop:4}}>
+            {todo.length ? `${todo.length} left for you — most are just one tap.` : "All done! Every transaction has an account."}
+          </div>
+          <div style={{height:8,background:"rgba(255,255,255,0.15)",borderRadius:8,marginTop:12,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${lines.length ? Math.round(100*doneN/lines.length) : 0}%`,background:"#86efac",borderRadius:8,transition:"width .3s"}}/>
+          </div>
+        </>}
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        <button onClick={() => setMode("cards")} style={{padding:"8px 16px",borderRadius:10,border:`1px solid ${mode==="cards"?C.accent:C.border}`,background:mode==="cards"?C.accentLt:"transparent",color:mode==="cards"?C.accent:C.inkMid,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>One at a time</button>
+        <button onClick={() => setMode("list")} style={{padding:"8px 16px",borderRadius:10,border:`1px solid ${mode==="list"?C.accent:C.border}`,background:mode==="list"?C.accentLt:"transparent",color:mode==="list"?C.accent:C.inkMid,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>List view</button>
+        {todo.some(t => t.category && t.conf !== "red") && (
+          <button onClick={acceptAllAmber} style={{marginLeft:"auto",padding:"8px 16px",borderRadius:10,border:`1px solid ${C.green}`,background:C.greenLt,color:C.green,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ Accept all of ZuZan's suggestions</button>
+        )}
+      </div>
+
+      {/* "Do the same for similar ones?" */}
+      {similar && (
+        <div style={{background:C.greenLt,border:`1px solid ${C.green}50`,borderRadius:14,padding:"14px 18px",marginBottom:14,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+          <div style={{flex:1,fontSize:14,color:C.ink}}>Do the same for the other <strong>{similar.ids.length}</strong> {similar.merchant} transaction{similar.ids.length===1?"":"s"}? → <strong>{plainLabel(similar.account)}</strong></div>
+          <button onClick={applySimilar} style={{padding:"10px 20px",border:"none",borderRadius:10,background:C.green,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Yes, all of them</button>
+          <button onClick={() => setSimilar(null)} style={{padding:"10px 16px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>No</button>
+        </div>
+      )}
+
+      {mode === "cards" && !loading && (current ? (() => {
+        const t = current;
+        const cf = CONF[t.conf] || CONF.red;
+        const options = [t.category, ...(t.alts || [])].filter((a, i, arr) => a && arr.indexOf(a) === i).slice(0, 3);
+        return (
+          <div style={{background:C.surface,border:`2px solid ${cf.color}40`,borderRadius:20,padding:28,marginBottom:16}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+              <div>
+                <div style={{fontSize:12,color:cf.color,fontWeight:700,marginBottom:6}}>{cf.dot} {cf.label}</div>
+                <div style={{fontSize:24,fontWeight:800,color:C.ink}}>{t.merchant || t.description}</div>
+                <div style={{fontSize:11,color:C.inkDim,marginTop:4,fontFamily:"monospace"}}>{t.date} · {t.description}</div>
+              </div>
+              <div style={{fontSize:28,fontWeight:800,color:t.type==="debit"?C.red:C.green,whiteSpace:"nowrap"}}>{t.type==="debit"?"−":"+"}{fmt(t.amount)}</div>
+            </div>
+            <div style={{fontSize:16,fontWeight:700,color:C.ink,margin:"22px 0 6px"}}>{t.type === "debit" ? "What was this money spent on?" : "What was this money for?"}</div>
+            {t.reason && <div style={{fontSize:12,color:C.inkMid,marginBottom:14}}>{t.reason}</div>}
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              {options.map((a, i) => (
+                <button key={a} onClick={() => choose(t, a)} style={{...big,border:`2px solid ${i===0?C.accent:C.border}`,background:i===0?C.accentLt:C.bg}}>
+                  <div style={{fontSize:17,fontWeight:800,color:C.ink}}>{plainLabel(a)}</div>
+                  <div style={{fontSize:10,color:C.inkDim,marginTop:3}}>{accCode(a)} · {accName(a)}</div>
+                </button>
+              ))}
+              {options.length > 0 && <button onClick={() => { setPicking(true); setSplit(null); }} style={{...big,border:`2px dashed ${C.border}`,background:"transparent"}}>
+                <div style={{fontSize:17,fontWeight:800,color:C.inkMid}}>Something else…</div>
+                <div style={{fontSize:10,color:C.inkDim,marginTop:3}}>Search all accounts</div>
+              </button>}
+            </div>
+            {(picking || !options.length) && <AccountPicker key={t.id} type={t.type} accounts={accounts} onPick={a => choose(t, a)} onCancel={() => setPicking(false)}/>}
+            {split && (
+              <div style={{marginTop:14,background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,padding:14,fontSize:13}}>
+                <div style={{fontWeight:700,marginBottom:8}}>Split {fmt(t.amount)} into two parts</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <input type="number" step="0.01" value={split.amount} onChange={e => setSplit({...split, amount:e.target.value})} placeholder="Amount of part 1"
+                    style={{width:130,padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit"}}/>
+                  <select value={split.accountA} onChange={e => setSplit({...split, accountA:e.target.value})} style={{padding:"8px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:12}}>
+                    <option value="">Part 1 was…</option>
+                    {accounts.filter(a => a.type==="Detail" && (t.type==="credit" ? CREDIT_GROUPS : COA_GROUPS).includes(a.group)).map(a => <option key={a.code} value={`${a.code} - ${a.name}`}>{PLAIN_LABELS[a.code] || a.name} ({a.code})</option>)}
+                  </select>
+                  <span style={{color:C.inkMid}}>and the other {fmt(Math.max(0, t.amount - (parseFloat(split.amount) || 0)))} was</span>
+                  <select value={split.accountB} onChange={e => setSplit({...split, accountB:e.target.value})} style={{padding:"8px",border:`1px solid ${C.border}`,borderRadius:8,fontFamily:"inherit",fontSize:12}}>
+                    <option value="">Part 2 was…</option>
+                    {accounts.filter(a => a.type==="Detail" && (t.type==="credit" ? CREDIT_GROUPS : COA_GROUPS).includes(a.group)).map(a => <option key={a.code} value={`${a.code} - ${a.name}`}>{PLAIN_LABELS[a.code] || a.name} ({a.code})</option>)}
+                  </select>
+                  <button onClick={() => doSplit(t)} style={{padding:"8px 16px",border:"none",borderRadius:8,background:C.accent,color:"#fff",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Split</button>
+                  <button onClick={() => setSplit(null)} style={{padding:"8px 12px",border:`1px solid ${C.border}`,borderRadius:8,background:"transparent",color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                </div>
+              </div>
+            )}
+            <div style={{display:"flex",gap:16,marginTop:18,alignItems:"center",flexWrap:"wrap",fontSize:12,color:C.inkMid}}>
+              <label style={{display:"flex",gap:6,alignItems:"center",cursor:"pointer"}}>
+                <input type="checkbox" checked={!!t.hasVat} onChange={e => setLine(t.id, {hasVat:e.target.checked, vatAmount:e.target.checked ? vatOf(t.amount) : 0})} style={{width:16,height:16}}/>
+                Includes VAT {t.hasVat ? `(${fmt(t.vatAmount || vatOf(t.amount))})` : ""}
+              </label>
+              <button onClick={() => { setSplit({amount:"", accountA:t.category || "", accountB:""}); setPicking(false); }} style={{background:"none",border:"none",color:C.blue,cursor:"pointer",fontSize:12,fontFamily:"inherit",textDecoration:"underline"}}>Split into two (e.g. fuel + a cold drink)</button>
+              <button onClick={() => setSkipped(prev => new Set(prev).add(t.id))} style={{background:"none",border:"none",color:C.inkMid,cursor:"pointer",fontSize:12,fontFamily:"inherit",textDecoration:"underline",marginLeft:"auto"}}>Skip for now</button>
+            </div>
+          </div>
+        );
+      })() : (
+        <div style={{background:C.greenLt,border:`1px solid ${C.green}40`,borderRadius:20,padding:32,textAlign:"center",marginBottom:16}}>
+          <div style={{fontSize:44}}>🎉</div>
+          <div style={{fontSize:18,fontWeight:800,color:C.ink,marginTop:8}}>{todo.length ? `${todo.length} skipped — answer them in List view, or import the rest.` : "Everything is sorted!"}</div>
+          {todo.length > 0 && <button onClick={() => setSkipped(new Set())} style={{marginTop:12,padding:"8px 18px",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface,color:C.ink,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Show skipped again</button>}
+        </div>
+      ))}
+
+      {mode === "list" && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:18,marginBottom:16}}>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+            {chip("todo","To do",todo.length,C.accent)}
+            {chip("red","Needs you",todo.filter(t=>t.conf==="red").length,C.red)}
+            {chip("amber","Please check",todo.filter(t=>t.conf==="amber").length,C.gold)}
+            {chip("green","Done",doneN,C.green)}
+            {chip("all","All",lines.length,C.inkMid)}
+          </div>
+          <div style={{overflowX:"auto",maxHeight:520,overflowY:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead style={{position:"sticky",top:0,background:C.bg}}><tr>
+                {["","Date","Description","Amount","Account","VAT",""].map((h,i) => <th key={i} style={{padding:"9px 10px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:600,textTransform:"uppercase"}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {listRows.map(t => {
+                  const cf = isDone(t) ? CONF.green : (CONF[t.conf] || CONF.red);
+                  const groups = t.type === "credit" ? CREDIT_GROUPS : COA_GROUPS;
+                  return (
+                    <tr key={t.id} style={{borderBottom:`1px solid ${C.border}40`}}>
+                      <td style={{padding:"8px 10px"}} title={t.reason || ""}>{cf.dot}</td>
+                      <td style={{padding:"8px 10px",color:C.inkMid,fontFamily:"monospace",fontSize:11,whiteSpace:"nowrap"}}>{t.date}</td>
+                      <td style={{padding:"8px 10px",color:C.ink,maxWidth:260}}><div style={{fontWeight:600}}>{t.merchant || t.description}</div><div style={{fontSize:10,color:C.inkDim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.description}</div></td>
+                      <td style={{padding:"8px 10px",fontWeight:700,color:t.type==="debit"?C.red:C.green,whiteSpace:"nowrap"}}>{t.type==="debit"?"−":"+"}{fmt(t.amount)}</td>
+                      <td style={{padding:"8px 10px"}}>
+                        <select value={t.category || ""} onChange={e => e.target.value && choose(t, e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,minWidth:220,maxWidth:"100%"}}>
+                          <option value="">— What was this? —</option>
+                          {t.category && !accounts.some(a => `${a.code} - ${a.name}` === t.category) && <option value={t.category}>{t.category}</option>}
+                          {groups.map(g => (
+                            <optgroup key={g} label={g}>
+                              {accounts.filter(a => a.group === g && a.type === "Detail").map(a => <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}{PLAIN_LABELS[a.code] ? ` (${PLAIN_LABELS[a.code]})` : ""}</option>)}
+                            </optgroup>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{padding:"8px 10px",textAlign:"center"}}>
+                        <input type="checkbox" checked={!!t.hasVat} title="Includes VAT at 15%" onChange={e => setLine(t.id, {hasVat:e.target.checked, vatAmount:e.target.checked ? vatOf(t.amount) : 0})} style={{width:15,height:15,cursor:"pointer"}}/>
+                      </td>
+                      <td style={{padding:"8px 10px"}}>
+                        {!isDone(t) && t.category && <button onClick={() => choose(t, t.category)} style={{padding:"4px 10px",border:`1px solid ${C.green}`,borderRadius:6,background:C.greenLt,color:C.green,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>✓ OK</button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {error && <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.red}}>Warning: {error}</div>}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 20px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <div style={{fontSize:13,color:C.inkMid}}>
+          {lines.length - unallocated} of {lines.length} transactions ready to import
+          {unallocated > 0 && <span style={{color:C.gold}}> · {unallocated} without an account will be left out (you can import them later)</span>}
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={onBack} style={{padding:"11px 20px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
+          <button onClick={onImport} disabled={importing || loading || !(lines.length - unallocated)} style={{padding:"11px 24px",border:"none",borderRadius:10,background:(importing||loading)?C.inkDim:C.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:importing?"wait":"pointer",fontFamily:"inherit"}}>{importing ? "Importing..." : "Import to ZuZan"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── BANK IMPORT ───────────────────────────────────────────────────────────────
 function BankImport({live = {}, onNavigate}) {
   const [step, setStep] = useState("select");
@@ -9460,31 +9718,58 @@ function BankImport({live = {}, onNavigate}) {
   const [result, setResult] = useState(null);
   const [search, setSearch] = useState("");
   const [filterType, setFilter] = useState("all");
-  const [companyRules, setCompanyRules] = useState([]);
+  const [suggestSummary, setSuggestSummary] = useState(null);
+  const [suggesting, setSuggesting] = useState(false);
   const fileRef = useRef(null);
 
-  // Fetch learned category rules from the backend on mount
+  // The client's live chart of accounts: DEFAULT_COA + custom accounts, minus deleted ones
+  const [coaAccounts, setCoaAccounts] = useState(DEFAULT_COA);
   useEffect(() => {
     const token = localStorage.getItem("zuzan_token");
     if (!token || token.startsWith("demo_")) return;
-    fetch(`${BASE_URL}/category-rules/`, {
-      headers: {"Authorization": `Bearer ${token}`}
-    }).then(r => r.ok ? r.json() : []).then(data => {
-      if (Array.isArray(data)) setCompanyRules(data);
+    api("/coa/").then(rows => {
+      if (!rows || !rows.length) return;
+      const deletedCodes = new Set(rows.filter(r => r.is_deleted).map(r => r.code));
+      const defaultCodes = new Set(DEFAULT_COA.map(a => a.code));
+      const additions = rows.filter(r => !r.is_deleted && !defaultCodes.has(r.code));
+      setCoaAccounts([...DEFAULT_COA.filter(a => !deletedCodes.has(a.code)), ...additions].sort((a, b) => a.code.localeCompare(b.code)));
     }).catch(() => {});
   }, []);
 
-  // Re-apply learned rules to parsed transactions when rules load after the file
-  useEffect(() => {
-    if (!companyRules.length || !txns.length) return;
-    setTxns(prev => prev.map(t => {
-      const d = t.description.toLowerCase();
-      const match = companyRules.find(r =>
-        (r.txn_type === "any" || r.txn_type === t.type) && d.includes(r.keyword)
-      );
-      return match ? {...t, category: match.category} : t;
-    }));
-  }, [companyRules]); // eslint-disable-line
+  // Ask ZuZan's allocation engine (allocation.py) what each line is — learned memory,
+  // SA merchant dictionary, then AI — and mark each line green / amber / red.
+  const runSuggest = async parsed => {
+    const token = localStorage.getItem("zuzan_token");
+    if (!token || token.startsWith("demo_")) {
+      setTxns(parsed.map(t => ({...t, conf:"red", reason:"Demo mode — pick an account.", alts:[], confirmed:false})));
+      setSuggestSummary({green:0, amber:0, red:parsed.length, total:parsed.length, auto_rate:0});
+      return;
+    }
+    setSuggesting(true);
+    try {
+      const accounts = coaAccounts.filter(a => a.type === "Detail").map(a => `${a.code} - ${a.name}`);
+      const res = await api("/allocation/suggest", {method:"POST", body: JSON.stringify({
+        transactions: parsed.map(t => ({id:String(t.id), description:t.description, amount:t.amount, type:t.type})),
+        accounts,
+      })});
+      const byId = {};
+      (res.suggestions || []).forEach(s => { byId[s.id] = s; });
+      setTxns(parsed.map(t => {
+        const s = byId[String(t.id)];
+        if (!s) return {...t, conf:"red", alts:[], confirmed:false};
+        return {...t, category:s.account || "", conf:s.confidence, reason:s.reason, alts:s.alternatives || [],
+                groupKey:s.group_key, merchant:s.merchant, source:s.source, confirmed:s.confidence === "green",
+                hasVat:!!s.has_vat, vatAmount:s.has_vat ? Math.round((t.amount / 115) * 15 * 100) / 100 : 0};
+      }));
+      setSuggestSummary(res.summary || null);
+    } catch (e) {
+      // Suggestions are a convenience — if they fail the client can still allocate by hand.
+      setTxns(parsed.map(t => ({...t, conf:"red", reason:"", alts:[], confirmed:false})));
+      setSuggestSummary(null);
+    } finally {
+      setSuggesting(false);
+    }
+  };
 
   const processFile = f => {
     if (!bank) { setError("Please select your bank first."); return; }
@@ -9553,46 +9838,23 @@ function BankImport({live = {}, onNavigate}) {
             }
             const desc = (r[descCol] || "").trim() || "Unknown";
             return {id:i+1, date:parseDt(r[dateCol]), description:desc, amount:amt, type,
-                    category:smartCategory(desc, type, companyRules), hasVat:false, vatAmount:0};
+                    category:"", hasVat:false, vatAmount:0, conf:"red", alts:[], confirmed:false};
           })
           .filter(t => t && t.amount > 0);
         if (!parsed.length) { setError("No transactions found. Check you selected the correct bank."); return; }
         setTxns(parsed);
         setSelected(new Set(parsed.map(t => t.id)));  // pre-select all (expenses + income)
         setStep("preview");
+        runSuggest(parsed);
       } catch(err) { setError("Could not read file. Check it is a valid CSV bank statement."); }
     };
     reader.readAsText(f);
   };
 
   const toggleRow = id => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const updateCat = (id, cat) => {
-    const txn = txns.find(t => t.id === id);
-    setTxns(prev => prev.map(t => t.id === id ? {...t, category: cat} : t));
-    // Persist the correction as a learned rule so future imports auto-apply it
-    if (txn && cat) {
-      const token = localStorage.getItem("zuzan_token");
-      if (token && !token.startsWith("demo_")) {
-        fetch(`${BASE_URL}/category-rules/`, {
-          method: "POST",
-          headers: {"Content-Type": "application/json", "Authorization": `Bearer ${token}`},
-          body: JSON.stringify({
-            keyword: txn.description.toLowerCase().trim().slice(0, 100),
-            category: cat,
-            txn_type: txn.type,
-          }),
-        }).then(r => r.ok ? r.json() : null).then(rule => {
-          if (rule && rule.id) {
-            setCompanyRules(prev => {
-              const idx = prev.findIndex(r => r.id === rule.id);
-              if (idx >= 0) { const u = [...prev]; u[idx] = rule; return u; }
-              return [rule, ...prev];
-            });
-          }
-        }).catch(() => {});
-      }
-    }
-  };
+  // Learning now happens server-side when the import is posted (allocation.learn_many),
+  // so a correction only has to update the line here.
+  const updateCat = (id, cat) => setTxns(prev => prev.map(t => t.id === id ? {...t, category: cat, confirmed: !!cat} : t));
   const filtered = txns.filter(t => t.description.toLowerCase().includes(search.toLowerCase()) && (filterType === "all" || t.type === filterType));
   const selectedTxns = txns.filter(t => selected.has(t.id));
   const totalDebits = selectedTxns.filter(t => t.type === "debit").reduce((s,t) => s + t.amount, 0);
@@ -9604,7 +9866,7 @@ function BankImport({live = {}, onNavigate}) {
       const token = localStorage.getItem("zuzan_token");
       const payload = {
         bank,
-        transactions: selectedTxns.map(t => ({
+        transactions: selectedTxns.filter(t => t.category).map(t => ({
           date:        t.date,
           description: t.description,
           amount:      t.amount,
@@ -9652,7 +9914,7 @@ function BankImport({live = {}, onNavigate}) {
     }
   };
 
-  const reset = () => { setStep("select"); setTxns([]); setBank(null); setFileName(""); setSelected(new Set()); setResult(null); setError(""); };
+  const reset = () => { setStep("select"); setTxns([]); setBank(null); setFileName(""); setSelected(new Set()); setResult(null); setError(""); setSuggestSummary(null); };
 
   // Reload live data and navigate when import completes
   useEffect(() => {
@@ -9759,7 +10021,7 @@ function BankImport({live = {}, onNavigate}) {
                         <option value="">-- Select Account --</option>
                         {COA_GROUPS.map(group => (
                           <optgroup key={group} label={group}>
-                            {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
+                            {coaAccounts.filter(a => a.group === group && a.type === "Detail").map(a => (
                               <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
                             ))}
                           </optgroup>
@@ -9781,92 +10043,15 @@ function BankImport({live = {}, onNavigate}) {
           </div>
           <div style={{display:"flex",gap:10}}>
             <button onClick={() => setStep("select")} style={{padding:"11px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-            <button onClick={() => setStep("categorise")} style={{flex:1,padding:"11px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Review Categories ({selected.size} transactions)</button>
+            <button onClick={() => setStep("categorise")} style={{flex:1,padding:"11px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{suggesting ? "ZuZan is sorting…" : `Sort transactions (${selected.size})`}</button>
           </div>
         </div>
       )}
-      {step === "categorise" && (() => {
-        const debits  = selectedTxns.filter(t => t.type === "debit");
-        const credits = selectedTxns.filter(t => t.type === "credit");
-        const totalCredits = credits.reduce((s,t) => s + t.amount, 0);
-        const TH = h => <th key={h} style={{padding:"10px 14px",textAlign:"left",fontSize:10,color:C.inkMid,fontWeight:600,letterSpacing:0.5,textTransform:"uppercase"}}>{h}</th>;
-        const vatToggle = t => e => setTxns(prev => prev.map(tx => tx.id === t.id ? {...tx, hasVat:e.target.checked, vatAmount:e.target.checked ? Math.round((t.amount/1.15)*0.15*100)/100 : 0} : tx));
-        const renderRow = (t, isDebit) => (
-          <tr key={t.id} style={{borderBottom:`1px solid ${C.border}20`}}>
-            <td style={{padding:"10px 14px",color:C.inkMid,fontSize:11,fontFamily:"monospace"}}>{t.date}</td>
-            <td style={{padding:"10px 14px",color:C.ink}}>{t.description}</td>
-            <td style={{padding:"10px 14px",fontWeight:700,color:isDebit?C.red:C.green}}>{isDebit?"-":"+"}  {fmt(t.amount)}</td>
-            <td style={{padding:"10px 14px"}}>
-              <select value={t.category} onChange={e => updateCat(t.id,e.target.value)} style={{padding:"5px 8px",border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,fontFamily:"inherit",background:C.bg,color:C.ink,minWidth:220,maxWidth:"100%"}}>
-                <option value="">-- Select Account --</option>
-                {isDebit ? (
-                  COA_GROUPS.map(group => (
-                    <optgroup key={group} label={group}>
-                      {DEFAULT_COA.filter(a => a.group === group && a.type === "Detail").map(a => (
-                        <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
-                      ))}
-                    </optgroup>
-                  ))
-                ) : (
-                  <optgroup label="Revenue">
-                    {DEFAULT_COA.filter(a => a.group === "Revenue" && a.type === "Detail").map(a => (
-                      <option key={a.code} value={`${a.code} - ${a.name}`}>{a.code} - {a.name}</option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </td>
-            <td style={{padding:"10px 14px",textAlign:"center"}}>
-              <input type="checkbox" checked={t.hasVat||false} title="Includes VAT at 15%" onChange={vatToggle(t)} style={{cursor:"pointer",width:16,height:16}}/>
-            </td>
-            <td style={{padding:"10px 14px",fontSize:11,color:t.hasVat?C.accent:C.inkDim,fontWeight:t.hasVat?700:400}}>
-              {t.hasVat ? fmt(t.vatAmount||0) : "-"}
-            </td>
-          </tr>
-        );
-        return (
-          <div>
-            {/* EXPENSES section */}
-            {debits.length > 0 && (
-              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:12}}>📤 Expenses ({debits.length})</div>
-                <div style={{overflowX:"auto"}}>
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                    <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Account","VAT","VAT Amt"].map(TH)}</tr></thead>
-                    <tbody>{debits.map(t => renderRow(t, true))}</tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-            {/* INCOME section */}
-            {credits.length > 0 && (
-              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:16}}>
-                <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:6}}>📥 Income ({credits.length})</div>
-                <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>Posted as DR Bank / CR Revenue — select the income account for each.</div>
-                <div style={{overflowX:"auto"}}>
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                    <thead><tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>{["Date","Description","Amount","Income Account","VAT","VAT Amt"].map(TH)}</tr></thead>
-                    <tbody>{credits.map(t => renderRow(t, false))}</tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-            {error && <div style={{background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.red}}>Warning: {error}</div>}
-            <div style={{background:C.ink,borderRadius:14,padding:"18px 24px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div>
-                <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",marginBottom:4}}>IMPORT SUMMARY</div>
-                <div style={{fontSize:14,color:"#fff",fontWeight:600}}>
-                  {debits.length > 0 && <span>{debits.length} expenses {fmt(totalDebits)}</span>}
-                  {debits.length > 0 && credits.length > 0 && <span style={{color:"rgba(255,255,255,0.4)"}}> · </span>}
-                  {credits.length > 0 && <span style={{color:C.greenLt||"#86efac"}}>{credits.length} income {fmt(totalCredits)}</span>}
-                </div>
-              </div>
-              <button onClick={handleImport} disabled={importing} style={{background:importing?C.inkDim:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontSize:13,fontWeight:700,cursor:importing?"wait":"pointer",fontFamily:"inherit"}}>{importing ? "Importing..." : "Import to ZuZan"}</button>
-            </div>
-            <button onClick={() => setStep("preview")} style={{padding:"10px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Back</button>
-          </div>
-        );
-      })()}
+      {step === "categorise" && (
+        <AllocationReview txns={txns} setTxns={setTxns} selected={selected} setSelected={setSelected}
+          accounts={coaAccounts} summary={suggestSummary} loading={suggesting} error={error}
+          importing={importing} onBack={() => setStep("preview")} onImport={handleImport}/>
+      )}
       {step === "done" && (
         <div style={{textAlign:"center",maxWidth:520,margin:"40px auto"}}>
           <div style={{fontSize:64,marginBottom:16}}>🎉</div>
@@ -9874,12 +10059,15 @@ function BankImport({live = {}, onNavigate}) {
           <p style={{color:C.inkMid,fontSize:14,lineHeight:1.7,marginBottom:28}}>
             {result && result.expenses_created > 0 && <span>Imported <strong style={{color:C.ink}}>{result.expenses_created} expenses</strong> ({fmt(totalDebits)}). </span>}
             {result && result.credits_recorded > 0 && <span>Recorded <strong style={{color:C.green}}>{result.credits_recorded} income entries</strong> to your P&amp;L. </span>}
+            {result && result.transfers_recorded > 0 && <span>Posted <strong style={{color:C.ink}}>{result.transfers_recorded} loan, owner or SARS payment{result.transfers_recorded===1?"":"s"}</strong> to the balance sheet. </span>}
             {result && result.credits_matched_to_invoices > 0 && <span>Matched <strong style={{color:C.green}}>{result.credits_matched_to_invoices} receipts</strong> to open invoices and marked them paid. </span>}
             {result && result.credits_skipped > 0 && <span style={{color:C.gold}}>{result.credits_skipped} entries skipped as already imported. </span>}
             {result && result.ignored > 0 && <span style={{color:C.gold}}>{result.ignored} line(s) ignored (zero or negative amount). </span>}
             {result && result.possible_invoice_matches && result.possible_invoice_matches.length > 0 && <span style={{display:"block",color:C.gold,marginTop:8}}>⚠ {result.possible_invoice_matches.map(m=>`${m.description} (${fmt(m.amount)}) has the same amount as open invoice ${m.possible_invoices.join(", ")}`).join("; ")}. These were posted as NEW income - if they are invoice payments, the revenue is now counted twice: reverse the income entry and mark the invoice paid instead.</span>}
-            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0 && !(result.credits_matched_to_invoices>0))) && <span>Nothing new was imported (all transactions already exist).</span>}
+            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0 && !(result.credits_matched_to_invoices>0) && !(result.transfers_recorded>0))) && <span>Nothing new was imported (all transactions already exist).</span>}
+            {result && result.failed && result.failed.length > 0 && <span style={{display:"block",color:C.red,marginTop:8}}>{result.failed.length} line(s) could not be posted: {result.failed.map(f => f.description).join(", ")}.</span>}
           </p>
+          {result && result.learned > 0 && <div style={{background:C.greenLt,borderRadius:12,padding:"12px 16px",marginBottom:20,fontSize:13,color:C.green}}>🧠 ZuZan learned from {result.learned} transaction{result.learned===1?"":"s"} — next time these will be sorted for you.</div>}
           <div style={{display:"flex",gap:10,justifyContent:"center"}}>
             <button onClick={reset} style={{padding:"11px 22px",border:`1px solid ${C.border}`,borderRadius:10,background:"transparent",color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Upload Another</button>
             <button onClick={() => { if (typeof onNavigate === "function") onNavigate("expenses"); }} style={{padding:"11px 24px",border:"none",borderRadius:10,background:C.accent,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>View Expenses</button>

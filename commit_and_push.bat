@@ -38,6 +38,7 @@ git add zuzan-backend/benefits.py
 git add zuzan-backend/security.py
 git add zuzan-backend/journal_check.py
 git add zuzan-backend/practice_mcp.py
+git add zuzan-backend/allocation.py
 git add zuzan-backend/management_report.py
 git add clock.html
 git add netlify.toml
@@ -55,7 +56,7 @@ echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
 rem Quoted set + no parenthesised block: ( ) and ^& in the message can no longer break the script
 set "MSG=%~1"
-if not defined MSG set "MSG=fix: income statement shows revenue, cost of sales and gross profit from the ledger; replaced imports reversed on their own date and left out of the P&L; accountants can rename and retype ledger accounts on the trial balance; balance sheet lists each equity account (share capital no longer netted into Other Equity); provisional tax uses the company financial year and imported books, adds SBC, 3rd payment and 80%% test; monthly management report (PDF, AI-drafted commentary, approve and send)"
+if not defined MSG set "MSG=feat: smart bank allocation - merchant fingerprinting, learned allocation memory, traffic-light review, balance-sheet postings"
 set "MSG=%MSG% [%STAMP%]"
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 

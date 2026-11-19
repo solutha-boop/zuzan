@@ -413,6 +413,7 @@ from documents import router as documents_router
 from csv_import import router as csv_import_router
 from integrations import router as integrations_router
 from category_rules import router as category_rules_router
+from allocation import router as allocation_router
 from analytics import router as analytics_router
 from billing import billing_router
 from recurring_invoices import recurring_router
@@ -461,6 +462,7 @@ app.include_router(documents_router,     prefix="/documents",            tags=["
 app.include_router(csv_import_router,    prefix="/import",               tags=["CSV Import"])
 app.include_router(integrations_router,  prefix="/integrations",          tags=["Integrations"])
 app.include_router(category_rules_router,                                tags=["Category Rules"])
+app.include_router(allocation_router,                                    tags=["Bank Allocation"])
 app.include_router(analytics_router,                                     tags=["Analytics"])
 app.include_router(billing_router,         prefix="/billing",            tags=["Billing"])
 app.include_router(recurring_router,       prefix="/recurring-invoices", tags=["Recurring Invoices"])
@@ -975,7 +977,7 @@ async def admin_clear_company_data(company_id: int, request: Request, db: Sessio
     from database import (
         Customer, Supplier, PurchaseOrder, Employee, Payslip, LeaveRequest, LeaveBalance,
         InventoryItem, Budget, FixedAsset, DepreciationEntry,
-        CompanyDocument, CategoryRule, CompanyAccount, ServiceItem, ClockEvent,
+        CompanyDocument, CategoryRule, AllocationMemory, CompanyAccount, ServiceItem, ClockEvent,
         StitchTransaction, SaltEdgeTransaction, AbsaTransaction, NedbankTransaction,
         InvestecTransaction, StandardBankTransaction,
     )
@@ -1015,6 +1017,7 @@ async def admin_clear_company_data(company_id: int, request: Request, db: Sessio
     _del(db, FixedAsset, company_id)
     _del(db, CompanyDocument, company_id)
     _del(db, CategoryRule, company_id)
+    _del(db, AllocationMemory, company_id)
     _del(db, ClockEvent, company_id)
     db.commit()
     logger.info(f"Admin wiped ALL data for company {co.id} ({co.name})")

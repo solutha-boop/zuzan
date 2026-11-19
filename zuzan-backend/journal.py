@@ -278,12 +278,16 @@ def expense_account(company_id: int, category: str, db: Session) -> Account:
             name = rest.strip() or None
     if code is None:
         code = CATEGORY_TO_CODE.get(cat, "5900")
+    else:
+        code, name = COA_LEDGER_ALIAS.get(code, (code, name))
     acct = db.query(Account).filter(Account.company_id==company_id, Account.code==code).first()
     if not acct:
         acct = _sync_custom_account(company_id, code, db)
     if not acct and name:
+        # Type follows the code range (2026-11-19): "5010 - Purchases" is Cost of Sales, a
+        # 1xxx-3xxx pick is a balance-sheet account — previously everything became an expense.
         acct = Account(company_id=company_id, code=code, name=name,
-                        type=AccountType.expense, is_system=False)
+                        type=account_type_for_code(code), is_system=False)
         db.add(acct)
         db.commit()
         db.refresh(acct)
@@ -292,8 +296,78 @@ def expense_account(company_id: int, category: str, db: Session) -> Account:
     return acct
 
 
+# Frontend picker (DEFAULT_COA in App_js_fixed.js) balance-sheet codes -> the ledger account
+# that actually carries that balance (journal.py DEFAULT_ACCOUNTS). Without this a bank line
+# allocated to "2121 - PAYE Payable" lands in a new 2121 account while payroll credits PAYE to
+# 2200, so the liability never clears; and "2210 - Long-term Loan" / "2220 - Mortgage Bond"
+# collide with the ledger's 2210 UIF Payable / 2220 SDL Payable (moved to free codes 2410/2420).
+COA_LEDGER_ALIAS = {
+    "1110": ("1000", "Bank / Cash"), "1111": ("1000", "Bank / Cash"), "1112": ("1000", "Bank / Cash"),
+    "1130": ("1200", "Inventory at Cost"), "1150": ("1300", "VAT Input (Recoverable)"),
+    "2110": ("2000", "Accounts Payable"),
+    "2121": ("2200", "PAYE Payable"), "2122": ("2210", "UIF Payable"), "2123": ("2220", "SDL Payable"),
+    "2124": ("2100", "VAT Output (Payable to SARS)"), "2125": ("2100", "VAT Output (Payable to SARS)"),
+    "2210": ("2410", "Long-term Loan"), "2220": ("2420", "Mortgage Bond"),
+    "3200": ("3000", "Retained Income"),
+}
+
+
+def account_type_for_code(code: str) -> AccountType:
+    """Account type implied by an SA-standard code range (matches the DEFAULT_COA groups)."""
+    c = (code or "").strip()
+    if c[:1] == "1": return AccountType.asset
+    if c[:1] == "2": return AccountType.liability
+    if c[:1] == "3": return AccountType.equity
+    if c[:1] == "4": return AccountType.revenue
+    if c.isdigit() and 5000 <= int(c) < 5100: return AccountType.cogs
+    return AccountType.expense
+
+
+def _split_allocation(category):
+    """'6510 - Fuel and Oil' -> ('6510', 'Fuel and Oil'); anything else -> (None, None)."""
+    cat = (category or "").strip()
+    if " - " in cat:
+        prefix, rest = cat.split(" - ", 1)
+        if prefix.strip().isdigit():
+            return prefix.strip(), (rest.strip() or None)
+    return None, None
+
+
+def is_balance_sheet_allocation(category) -> bool:
+    """True when a bank line was allocated to an asset / liability / equity account (code 1xxx-3xxx)."""
+    code, _ = _split_allocation(category)
+    return bool(code) and code[:1] in ("1", "2", "3")
+
+
+def allocation_account(company_id: int, category: str, db: Session):
+    """Resolve a '{code} - {name}' allocation from ANY chart-of-accounts group to a ledger
+    Account, creating it (with the type its code range implies) the first time it's used.
+    Returns None when the category isn't in '{code} - {name}' form."""
+    code, name = _split_allocation(category)
+    if not code:
+        return None
+    code, name = COA_LEDGER_ALIAS.get(code, (code, name))
+    acct = db.query(Account).filter(Account.company_id == company_id, Account.code == code).first()
+    if not acct:
+        acct = _sync_custom_account(company_id, code, db)
+    if not acct and name:
+        acct = Account(company_id=company_id, code=code, name=name,
+                       type=account_type_for_code(code), is_system=False)
+        db.add(acct)
+        db.flush()
+    return acct
+
+
 def revenue_account(company_id: int, category: str, db: Session) -> Account:
-    """Resolve income category → revenue account, falling back to Sales Revenue (4000)."""
+    """Resolve income category → revenue account, falling back to Sales Revenue (4000).
+
+    2026-11-19: also accepts the "{code} - {name}" value the bank-import Income Account
+    picker sends (e.g. "4210 - Interest Income"), which previously never matched
+    INCOME_TO_CODE so every allocated receipt silently landed in 4000 Sales Revenue."""
+    if _split_allocation(category)[0]:
+        acct = allocation_account(company_id, category, db)
+        if acct is not None:
+            return acct
     code = INCOME_TO_CODE.get(category or "", "4000")
     acct = db.query(Account).filter(Account.company_id==company_id, Account.code==code).first()
     if not acct:
@@ -621,6 +695,43 @@ def post_bank_income(company_id: int, txn, db: Session) -> JournalEntry:
     if vat > 0 and vat_out:
         lines.append(_line(entry.id, vat_out, credit=vat, description="VAT output"))
 
+    _assert_balanced(lines)
+    for l in lines:
+        db.add(l)
+    return entry
+
+
+def post_bank_transfer(company_id: int, txn, db: Session):
+    """
+    Bank line allocated to a balance-sheet account — a loan repayment, owner's drawings,
+    capital introduced, a SARS / PAYE payment, an asset bought (2026-11-19). No P&L, no VAT:
+      money out (debit):  DR allocated account / CR Bank (1000)
+      money in  (credit): DR Bank (1000)       / CR allocated account
+    Returns None (nothing posted) when the line is allocated to the bank account itself —
+    a transfer between the company's own accounts nets to zero in the single bank ledger.
+    """
+    from datetime import date as _date
+    total = round(float(txn.amount or 0), 2)
+    acct  = allocation_account(company_id, txn.category, db)
+    bank  = get_account(company_id, "1000", db)
+    if acct is None:
+        raise ValueError(f"Unrecognised balance-sheet allocation {txn.category!r}")
+    if acct.id == bank.id or total <= 0:
+        return None
+    try:
+        txn_date = _date.fromisoformat(txn.date)
+    except Exception:
+        txn_date = datetime.utcnow().date()
+    out = txn.type == "debit"
+    entry = _make_entry(company_id, txn_date,
+        f"Bank {'payment' if out else 'receipt'} — {txn.description}",
+        "BANKBS", "bank_import_transfer", None, db)
+    if out:
+        lines = [_line(entry.id, acct, debit=total, description=txn.category),
+                 _line(entry.id, bank, credit=total, description="Money paid out")]
+    else:
+        lines = [_line(entry.id, bank, debit=total, description="Money received"),
+                 _line(entry.id, acct, credit=total, description=txn.category)]
     _assert_balanced(lines)
     for l in lines:
         db.add(l)

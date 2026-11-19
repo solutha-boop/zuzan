@@ -299,7 +299,7 @@ _CATEGORY_JOURNAL_SOURCES = {
     "sales":          ["invoice", "invoice_payment", "invoice_cogs", "credit_note"],
     "expenses":       ["expense", "expense_payment"],
     "employees":      ["payroll"],
-    "banking":        ["bank_import_income"],
+    "banking":        ["bank_import_income", "bank_import_transfer"],
     "suppliers":      ["purchase_order", "po_payment"],
     "budgets_assets": ["fixed_asset", "depreciation", "asset_disposal"],
     "inventory":      ["stock_adjustment"],
@@ -2270,11 +2270,38 @@ async def import_bank_statement(
 
     journal_engine.init_accounts(current_user.company_id, db)   # once, outside the per-line SAVEPOINTs (it commits)
     failed = []            # lines that could not be posted (rolled back individually via SAVEPOINT)
+    posted_lines = []      # lines actually booked -> taught to the allocation memory (allocation.py)
+    transfers_recorded = 0
+    transfers_skipped  = 0
     for txn in data.transactions:
         try:
           with db.begin_nested():   # SAVEPOINT: one bad line must not discard or corrupt the rest of the import
               if txn.type not in ("debit", "credit") or not (txn.amount and txn.amount > 0):
                   ignored += 1          # zero/negative amounts or unknown type are never posted
+                  continue
+              if journal_engine.is_balance_sheet_allocation(txn.category):
+                  # Allocated to an asset / liability / equity account (loan, drawings, SARS, capital,
+                  # an asset bought): a straight bank journal — not an Expense, not income, no VAT.
+                  from database import JournalEntry, JournalLine
+                  from datetime import date as _date
+                  dup_q = db.query(JournalEntry.id).join(
+                      JournalLine, JournalLine.entry_id == JournalEntry.id
+                  ).filter(
+                      JournalEntry.company_id  == current_user.company_id,
+                      JournalEntry.source      == "bank_import_transfer",
+                      JournalEntry.description == f"Bank {'payment' if txn.type == 'debit' else 'receipt'} — {txn.description}",
+                      JournalLine.debit        == round(float(txn.amount or 0), 2),
+                  )
+                  try:
+                      dup_q = dup_q.filter(JournalEntry.date == _date.fromisoformat(txn.date))
+                  except Exception:
+                      pass
+                  if dup_q.first():
+                      transfers_skipped += 1
+                      continue
+                  journal_engine.post_bank_transfer(current_user.company_id, txn, db)
+                  transfers_recorded += 1
+                  posted_lines.append(txn)
                   continue
               if txn.type == "debit":
                   # Check for duplicate — same vendor, amount and date.
@@ -2327,6 +2354,7 @@ async def import_bank_statement(
                       logger.error(f"Journal post failed for bank import expense: {je}")
                       raise RuntimeError(f"journal entry failed: {je}")
                   expenses_created += 1
+                  posted_lines.append(txn)
 
               elif txn.type == "credit":
                   # Duplicate check (audit fix 2026-07-04): credits previously had NO dedupe,
@@ -2395,6 +2423,7 @@ async def import_bank_statement(
                               logger.error(f"Journal post failed for bank-matched invoice payment: {je}")
                               raise RuntimeError(f"journal entry failed: {je}")
                           credits_matched += 1
+                          posted_lines.append(txn)
                           continue
                       if _open:
                           possible_matches.append({"description": txn.description, "amount": _amt, "date": txn.date,
@@ -2404,6 +2433,7 @@ async def import_bank_statement(
                   try:
                       journal_engine.post_bank_income(current_user.company_id, txn, db)
                       credits_recorded += 1
+                      posted_lines.append(txn)
                   except Exception as je:
                       logger.error(f"Journal post failed for bank import income: {je}")
                       raise RuntimeError(f"journal entry failed: {je}")
@@ -2413,9 +2443,23 @@ async def import_bank_statement(
 
     db.commit()
 
+    # Teach the allocation memory what was actually booked, so the next statement is sorted
+    # automatically (allocation.py). Best-effort: learning must never fail an import.
+    learned = 0
+    try:
+        import allocation as _alloc
+        learned = _alloc.learn_many(db, current_user.company_id, posted_lines)
+        db.commit()
+    except Exception as _lerr:
+        db.rollback()
+        logger.warning(f"Allocation learning skipped after bank import: {_lerr}")
+
     return {
         "status":           "success",
         "bank":             data.bank,
+        "learned":          learned,
+        "transfers_recorded": transfers_recorded,
+        "transfers_skipped":  transfers_skipped,
         "expenses_created": expenses_created,
         "expenses_skipped": expenses_skipped,
         "credits_recorded": credits_recorded,
@@ -2427,6 +2471,7 @@ async def import_bank_statement(
         "total_processed":  len(data.transactions),
         "message":          (f"Imported {expenses_created} expenses and {credits_recorded} income entries; "
                              f"{credits_matched} receipts matched to open invoices and marked paid"
+                             + (f"; {transfers_recorded} balance-sheet payment(s)/receipt(s) posted" if transfers_recorded else "")
                              + (f"; {len(possible_matches)} receipt(s) have the same amount as an open invoice but the client is not named - check they are not invoice payments recorded twice (they were posted as new income)" if possible_matches else "")
                              + (f"; {ignored} line(s) ignored (zero/negative amount)" if ignored else "")
                              + (f"; {len(failed)} line(s) could NOT be posted and were skipped - nothing partial was saved for them; fix and re-import (duplicates are skipped automatically)" if failed else "") + "."),

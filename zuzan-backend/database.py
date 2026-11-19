@@ -1088,6 +1088,33 @@ class StandardBankTransaction(Base):
     bank_account            = relationship("StandardBankBankAccount", back_populates="transactions")
     company                 = relationship("Company", foreign_keys=[company_id])
 
+class AllocationMemory(Base):
+    """What a company has taught ZuZan about allocating bank lines (allocation.py).
+
+    One row per (merchant key, account): how many times the client allocated that
+    merchant to that account, the spread of amounts (so a mixed merchant like a
+    fuel station can be tie-broken by amount: R850 = fuel, R32 = cold drink) and
+    how often VAT was ticked. key_level "full" = the cleaned narrative
+    ("engen quickshop sandton"), "merchant" = the merchant key ("engen").
+    """
+    __tablename__ = "allocation_memory"
+    __table_args__ = (UniqueConstraint("company_id", "key_level", "key", "txn_type", "account",
+                                       name="uq_allocation_memory"),)
+    id          = Column(Integer, primary_key=True, index=True)
+    company_id  = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
+    key_level   = Column(String(10), nullable=False)          # "full" | "merchant"
+    key         = Column(String(120), nullable=False)
+    txn_type    = Column(String(10), nullable=False)          # "debit" | "credit"
+    account     = Column(String(160), nullable=False)         # "{code} - {name}" exactly as allocated
+    count       = Column(Integer, default=0)                  # confirmations
+    amount_n    = Column(Integer, default=0)                  # confirmations that carried an amount
+    log_sum     = Column(Float, default=0.0)                  # sum of ln(amount) -> typical amount
+    amount_min  = Column(Float, nullable=True)
+    amount_max  = Column(Float, nullable=True)
+    vat_yes     = Column(Integer, default=0)                  # confirmations with VAT ticked
+    updated_at  = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class CategoryRule(Base):
     """Learned categorisation rules for bank CSV imports."""
     __tablename__ = "category_rules"
