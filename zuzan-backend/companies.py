@@ -15,7 +15,7 @@ from database import (
     Quote, CreditNote, RecurringInvoice, Payment,
     JournalEntry, JournalLine, InventoryItem, Budget,
     FixedAsset, DepreciationEntry, LeaveRequest, LeaveBalance,
-    EmployeeGarnishee, ClockEvent, CompanyDocument,
+    EmployeeGarnishee, EmployeeBenefit, ClockEvent, CompanyDocument,
     StitchConnection, StitchBankAccount, StitchTransaction,
     SaltEdgeConnection, SaltEdgeBankAccount, SaltEdgeTransaction,
     AbsaConnection, AbsaBankAccount, AbsaTransaction,
@@ -434,6 +434,9 @@ async def clear_company_data(
         if emp_ids:
             db.query(EmployeeGarnishee).filter(
                 EmployeeGarnishee.employee_id.in_(emp_ids)
+            ).delete(synchronize_session=False)
+            db.query(EmployeeBenefit).filter(
+                EmployeeBenefit.employee_id.in_(emp_ids)
             ).delete(synchronize_session=False)
             db.query(LeaveRequest).filter(
                 LeaveRequest.employee_id.in_(emp_ids)
