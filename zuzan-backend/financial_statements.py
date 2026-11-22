@@ -136,6 +136,60 @@ def _wt_rate_pct(fa):
     return None
 
 
+def _is_income_tax_account(code, name) -> bool:
+    """Ledger expense accounts holding a booked income tax charge (not VAT, PAYE or deferred tax)."""
+    nm = (name or "").lower()
+    if "deferred" in nm:
+        return False
+    return (str(code) == "6910" or "income tax" in nm or "company tax" in nm
+            or "corporate tax" in nm or "normal tax" in nm or nm.strip() == "taxation")
+
+
+def income_tax_reasonability(profit_before_tax: float, posted: float, has_posted: bool,
+                             rate: float = None) -> dict:
+    """Reasonability check of posted income tax against the 27% estimate (2026-11-22).
+
+    - nothing posted                  -> charge the estimate (status "estimate")
+    - posted within tolerance         -> keep the posted figure ("posted")
+    - posted below / above the estimate -> charge the estimate and show the difference as a
+      computed year-end adjustment ("under_posted" / "over_posted") with a review message.
+    Tolerance is the larger of R5,000 and 5% of the estimate. A lower posted figure can be
+    legitimate (assessed loss brought forward, exempt income), so the message asks rather
+    than assumes an error.
+    """
+    rate = _CIT_RATE if rate is None else rate
+    pbt = _r(profit_before_tax or 0.0)
+    posted = _r(posted or 0.0)
+    expected = _r(max(0.0, pbt * rate))
+    tolerance = _r(max(5000.0, expected * 0.05))
+    pct = round(posted / expected * 100, 1) if expected > 0.005 else None
+    if not has_posted or abs(posted) < 0.005:
+        status, tax = "estimate", expected
+        msg = (f"No income tax posted; the statements carry the {round(rate*100)}% estimate of "
+               f"R{expected:,.2f} on profit before tax of R{pbt:,.2f}.") if expected else \
+              "No taxable profit for the period; no income tax charged."
+    elif abs(posted - expected) <= tolerance:
+        status, tax = "posted", posted
+        msg = (f"Income tax posted R{posted:,.2f} is in line with the {round(rate*100)}% estimate "
+               f"of R{expected:,.2f}; the posted figure is used.")
+    elif posted < expected:
+        status, tax = "under_posted", expected
+        msg = (f"Income tax posted R{posted:,.2f} is {pct}% of the {round(rate*100)}% estimate of "
+               f"R{expected:,.2f} on profit before tax of R{pbt:,.2f}. The statements use the estimate; "
+               f"post the year-end adjustment of R{expected - posted:,.2f}, or check for an assessed "
+               f"loss brought forward or exempt income.")
+    else:
+        status, tax = "over_posted", expected
+        msg = (f"Income tax posted R{posted:,.2f} is more than the {round(rate*100)}% estimate of "
+               f"R{expected:,.2f} on profit before tax of R{pbt:,.2f}. The statements use the estimate; "
+               f"check whether the posting includes prior-year tax, penalties or provisional payments "
+               f"and reverse R{posted - expected:,.2f} if not.")
+    return {"profit_before_tax": pbt, "rate_pct": round(rate * 100, 2), "expected": expected,
+            "posted": posted, "tolerance": tolerance, "posted_pct_of_expected": pct,
+            "status": status, "tax_expense": _r(tax), "adjustment": _r(tax - posted),
+            "needs_review": status in ("under_posted", "over_posted"), "message": msg}
+
+
 def _months_between(d1, d2) -> int:
     return max(0, (d2.year - d1.year) * 12 + (d2.month - d1.month))
 
@@ -229,6 +283,14 @@ def annual_financial_statements(
         for c, n, dr, cr in exp_rows if _r(dr - cr) != 0
     ]
 
+    # Income tax already posted to the ledger (2026-11-22). Companies migrated from
+    # QuickBooks/Xero often carry a booked tax charge. It is not an operating expense:
+    # take it out of opex so profit before tax is not reduced by it, then test it
+    # against the 27% estimate below instead of charging tax twice.
+    tax_posted_lines = [l for l in expense_lines if _is_income_tax_account(l["code"], l["name"])]
+    expense_lines    = [l for l in expense_lines if not _is_income_tax_account(l["code"], l["name"])]
+    tax_posted       = _r(sum(l["amount"] for l in tax_posted_lines))
+
     # Finance costs (audit fix 2026-07-13): interest lines are presented below
     # EBIT, not inside opex. Matches account 6700 plus any imported account whose
     # name indicates interest/finance charges.
@@ -286,7 +348,12 @@ def annual_financial_statements(
     # SA corporate tax (_CIT_RATE) — on profit before tax, i.e. after finance costs
     # (audit fix 2026-07-13; previously taxed EBIT with finance_costs stubbed 0.0)
     profit_before_tax = _r(ebit - finance_costs)
-    tax_expense = _r(max(0.0, profit_before_tax * _CIT_RATE))
+    tax_check   = income_tax_reasonability(profit_before_tax, tax_posted, bool(tax_posted_lines))
+    tax_expense = tax_check["tax_expense"]
+    # Part of the charge not in the ledger (all of it when nothing was posted). Only this
+    # computed part is carried as an extra liability and taken out of retained earnings;
+    # the posted part is already in both through the ledger.
+    tax_adjustment = tax_check["adjustment"]
     net_profit  = _r(profit_before_tax - tax_expense)
 
     # Deferred tax from fixed-asset temporary differences (audit implementation
@@ -356,7 +423,15 @@ def annual_financial_statements(
         current_liabilities       = [l for l in current_liabilities if l["code"] != "2127"]
         total_current_liabilities = _r(total_current_liabilities - _prov_bal)
         total_liabilities         = _r(total_liabilities - _prov_bal)
-    _tax_net = _r(tax_expense + _prov_bal)       # _prov_bal is negative once provisional tax has been paid
+    # A posted Income Tax Payable (2126) joins the same single line, so a booked charge,
+    # the computed year-end adjustment and provisional payments net to one figure.
+    _itp = next((l for l in current_liabilities if l["code"] == "2126"), None)
+    _itp_bal = _itp["amount"] if _itp else 0.0
+    if _itp:
+        current_liabilities       = [l for l in current_liabilities if l["code"] != "2126"]
+        total_current_liabilities = _r(total_current_liabilities - _itp_bal)
+        total_liabilities         = _r(total_liabilities - _itp_bal)
+    _tax_net = _r(tax_adjustment + _itp_bal + _prov_bal)   # _prov_bal is negative once provisional tax has been paid
     if _tax_net > 0.005:
         current_liabilities = current_liabilities + [
             {"code": "2400", "name": "Income Tax Payable (estimate, net of provisional payments)" if _prov else "Income Tax Payable (estimate)",
@@ -370,7 +445,7 @@ def annual_financial_statements(
         ]
         total_current_assets = _r(total_current_assets - _tax_net)
         total_assets         = _r(total_assets - _tax_net)
-    retained_earnings = _r(retained_earnings - tax_expense)
+    retained_earnings = _r(retained_earnings - tax_adjustment)
 
     if dt_closing > 0.005:
         non_current_liabilities = non_current_liabilities + [
@@ -451,7 +526,7 @@ def annual_financial_statements(
     _oca = lambda c: c < "1500" and c not in ("1000", "1100", "1200")
     _ocl = lambda c: c < "2500" and c != "2000"
     change_other_assets = _r(-(_sum_assets(asset_rows, _oca) - _sum_assets(_a_start, _oca)))
-    change_other_liabs  = _r(_sum_liabs(liab_rows, _ocl) - _sum_liabs(_l_start, _ocl) + tax_expense)  # + tax accrued, unpaid
+    change_other_liabs  = _r(_sum_liabs(liab_rows, _ocl) - _sum_liabs(_l_start, _ocl) + tax_adjustment)  # + computed tax not in the ledger (posted tax moves 2126 itself)
     # Gains/losses on disposal are not operating cash - the proceeds are shown under investing
     disposal_gl = _r(sum((fa.disposal_gain_loss or 0) for fa in db.query(FixedAsset).filter(
         FixedAsset.company_id == cid, FixedAsset.disposal_date >= start, FixedAsset.disposal_date <= end).all()))
@@ -692,6 +767,10 @@ def annual_financial_statements(
         "effective_rate_pct": round(total_tax / profit_before_tax * 100, 1) if profit_before_tax > 0 else 0.0,
         "deferred_tax_opening_balance": dt_opening,
         "deferred_tax_closing_balance": dt_closing,
+        "posted_tax":        tax_posted,
+        "expected_tax":      tax_check["expected"],
+        "year_end_adjustment": tax_adjustment,
+        "check":             tax_check,
     }
 
     return {
@@ -722,6 +801,9 @@ def annual_financial_statements(
             "finance_costs":   finance_costs,
             "profit_before_tax": profit_before_tax,
             "tax_expense":     tax_expense,
+            "tax_posted":      tax_posted,
+            "tax_adjustment":  tax_adjustment,
+            "tax_check":       tax_check,
             "tax_rate_pct":    round(_CIT_RATE * 100, 2),
             "net_profit":      net_profit,
         },

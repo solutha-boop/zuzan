@@ -189,8 +189,11 @@ def _income_statement(periods: dict) -> dict:
 
     revenue, rev_t = section(lambda k: k[0] == "revenue")
     cogs, cogs_t = section(lambda k: k[0] == "cogs")
-    opex, opex_t = section(lambda k: k[0] == "expense" and not _is_finance_cost(k[1], k[2]))
-    finance, fin_t = section(lambda k: k[0] == "expense" and _is_finance_cost(k[1], k[2]))
+    # Booked income tax is not an operating expense: the report is before tax (2026-11-22)
+    _tax = lambda k: k[0] == "expense" and FS._is_income_tax_account(k[1], k[2])
+    opex, opex_t = section(lambda k: k[0] == "expense" and not _is_finance_cost(k[1], k[2]) and not _tax(k))
+    finance, fin_t = section(lambda k: k[0] == "expense" and _is_finance_cost(k[1], k[2]) and not _tax(k))
+    income_tax, tax_t = section(_tax)
     gp = {c: round(rev_t[c] - cogs_t[c], 2) for c in cols}
     op = {c: round(gp[c] - opex_t[c], 2) for c in cols}
     npbt = {c: round(op[c] - fin_t[c], 2) for c in cols}
@@ -204,6 +207,9 @@ def _income_statement(periods: dict) -> dict:
         "operating_profit": op,
         "finance_costs": finance, "total_finance_costs": fin_t,
         "net_profit_before_tax": npbt, "net_margin_pct": {c: pct(npbt[c], rev_t[c]) for c in cols},
+        "income_tax_posted": income_tax, "total_income_tax_posted": tax_t,
+        # Reasonability of tax booked year to date against 27% of profit before tax
+        "tax_check": FS.income_tax_reasonability(npbt["ytd"], tax_t["ytd"], bool(income_tax)) if "ytd" in cols else None,
     }
 
 
@@ -250,6 +256,9 @@ def _cash_flow(db, cid, start: datetime, end_excl: datetime, net_profit: float, 
         buckets[b] += -delta if atype == AccountType.asset else delta
     depreciation = round(sum(v for k, v in pl.items() if k[0] in ("expense", "cogs") and _is_dep(k[2])), 2)
     buckets["investing"] -= depreciation          # accumulated depreciation moved: that part is non-cash
+    # Booked income tax is excluded from profit before tax, so charge it against the tax
+    # liability movement here: the tax line then shows tax actually paid.
+    buckets["tax"] -= sum(v for k, v in pl.items() if k[0] == "expense" and FS._is_income_tax_account(k[1], k[2]))
     b = {k: round(v, 2) for k, v in buckets.items()}
     operating = round(net_profit + depreciation + b["receivables"] + b["inventory"] + b["vat"] + b["payables"] + b["tax"], 2)
     net = round(operating + b["investing"] + b["financing"], 2)
@@ -325,6 +334,9 @@ def _summary_for_ai(f: dict) -> str:
         v = inc[key]
         L.append(f"{label}: month {_r0(v['month'])} (same month last year {_r0(v['month_py'])}, {_chg(v['month'], v['month_py'])}); "
                  f"YTD {_r0(v['ytd'])} (last year YTD {_r0(v['ytd_py'])}, {_chg(v['ytd'], v['ytd_py'])})")
+    tc = inc.get("tax_check")
+    if tc and (tc["status"] != "estimate" or tc["expected"] > 0):
+        L.append(f"Income tax (year to date, not in the figures above): {tc['message']}")
     gm, nm = inc["gross_margin_pct"], inc["net_margin_pct"]
     L.append(f"Gross margin: month {gm['month']}% vs {gm['month_py']}%; YTD {gm['ytd']}% vs {gm['ytd_py']}%")
     L.append(f"Net margin: month {nm['month']}%; YTD {nm['ytd']}%")
@@ -352,6 +364,7 @@ def _template_commentary(f: dict) -> str:
         f"and {gm['ytd'] if gm['ytd'] is not None else 'n/a'}% for the year to date.",
         f"Net profit before tax was {_r0(np_['month'])} for the month and {_r0(np_['ytd'])} for the year to date "
         f"(last year to date: {_r0(np_['ytd_py'])}).",
+        *([inc["tax_check"]["message"]] if inc.get("tax_check") and inc["tax_check"]["needs_review"] else []),
         f"Cash moved from {_r0(cf['month']['opening_cash'])} to {_r0(cf['month']['closing_cash'])} during the month; "
         f"operating activities generated {_r0(cf['month']['operating'])}.",
     ]
