@@ -56,7 +56,7 @@ echo === Committing ===
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set STAMP=%%I
 rem Quoted set + no parenthesised block: ( ) and ^& in the message can no longer break the script
 set "MSG=%~1"
-if not defined MSG set "MSG=fix: dashboard Financial year to date button fetches fresh data; dashboard defaults to financial year from the Management Pack engine; imported ledger lines no longer dropped; reports default to financial year"
+if not defined MSG set "MSG=fix: imports refresh the app data so imported expenses show immediately; expense template Amount is incl VAT and Xero Subtotal gets VAT added back; dashboard FY button fetches fresh data"
 set "MSG=%MSG% [%STAMP%]"
 git -c user.email="dev@solutha.co.za" -c user.name="ZuZan Dev" commit -m "%MSG%" --allow-empty
 

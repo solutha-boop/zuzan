@@ -66,3 +66,16 @@ def test_expense_import_skips_rows_already_in_the_books_but_keeps_genuine_repeat
     r2 = asyncio.run(CI.import_expenses(file=_up(csv), db=db, cu=cu))
     assert r2["imported"] == 0
     assert db.query(Expense).filter_by(company_id=co.id).count() == 3
+
+
+def test_expense_import_template_and_xero_subtotal_store_vat_inclusive_amounts():
+    """ZuZan keeps expenses VAT-inclusive. The template's 'Amount (incl VAT)' is stored as-is; Xero's Subtotal is
+    excl VAT, so the VAT is added back (it used to be stored as the amount and the VAT deducted a second time)."""
+    co = company("csvexp2", "general"); cu = types.SimpleNamespace(company_id=co.id, id=1, role="owner")
+    tpl = "Vendor,Description,Amount (incl VAT),VAT Amount,Category,Expense Date\nCheckers,Groceries,230,30,General Expenses,2026-09-05\n"
+    assert asyncio.run(CI.import_expenses(file=_up(tpl), db=db, cu=cu))["imported"] == 1
+    xero = "Contact Name,Description,Subtotal,TotalTax,Date,Account\nOffice World,Paper,200,30,2026-09-06,Stationery\n"
+    assert asyncio.run(CI.import_expenses(file=_up(xero), db=db, cu=cu))["imported"] == 1
+    got = {e.vendor: (e.amount, e.vat_amount) for e in db.query(Expense).filter_by(company_id=co.id)}
+    assert got["Checkers"] == (230, 30)
+    assert got["Office World"] == (230, 30)

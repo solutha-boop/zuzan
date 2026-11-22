@@ -15080,7 +15080,7 @@ function MobileApp({user, onLogout, onUserUpdate, live, docTemplate, onTemplateC
     debtors:    <div style={{padding:"16px 16px 100px"}}><Debtors    live={live}/></div>,
     creditors:  canAccess(user,"professional") ? <div style={{padding:"16px 16px 100px"}}><Creditors  live={live}/></div> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>navigate("settings")}/>,
     coa:        <div style={{padding:"16px 16px 100px"}}><ChartOfAccounts/></div>,
-    data_import: <div style={{padding:"16px 16px 100px"}}><DataImport/></div>,
+    data_import: <div style={{padding:"16px 16px 100px"}}><DataImport live={live}/></div>,
     settings:   <div style={{padding:"16px 16px 100px"}}><AppSettings user={user} onLogout={onLogout} onUserUpdate={onUserUpdate} docTemplate={docTemplate} onTemplateChange={onTemplateChange}/></div>,
   };
 
@@ -16414,7 +16414,7 @@ function QuickBooksMigrationWizard() {
   );
 }
 
-function DataImport() {
+function DataImport({live = {}}) {
   const isMobile = useIsMobile();
   const token = localStorage.getItem("zuzan_token");
   const [tab,       setTab]       = useState("customers");
@@ -16454,7 +16454,7 @@ function DataImport() {
     customers:          ["Name","Email","Phone","Address","VAT Number","Payment Terms","Notes"],
     suppliers:          ["Name","Email","Phone","Address","VAT Number","Bank Name","Account Number","Branch Code","Account Type","Payment Terms","Notes"],
     invoices:           ["Invoice Number","Client Name","Client Email","Description","Amount","VAT Amount","Total Amount","Currency","Issue Date","Due Date","Status"],
-    expenses:           ["Vendor","Description","Amount","VAT Amount","Category","Expense Date"],
+    expenses:           ["Vendor","Description","Amount (incl VAT)","VAT Amount","Category","Expense Date"],
     payments:           ["Invoice Number","Amount","Payment Date"],
     employees:          ["Employee Number","First Name","Last Name","ID Number","Tax Number","Date of Birth","Appointment Date","Start Date","Address","Position","Department","Grade","Employment Type","Employment Category","Gross Salary","Hourly Rate","Bank Name","Account Number","Branch Code","Account Type","Pension Employee Pct","Pension Employer Pct","Pension Employee Fixed","Pension Employer Fixed","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Union Subscription","Advance Monthly Deduction","On Maternity Leave","Security Grade","Security Area","PSIRA Number","Shift Type","Pay Schedule","Special Allowance Type","PSSPF Exempt"],
     payroll_adjustments:["ID Number","Employee Number","First Name","Last Name","Gross Salary","Pension Employee Pct","Pension Employer Pct","Medical Aid Employee","Medical Aid Employer","Medical Aid Dependants","Position","Department","Grade"],
@@ -16470,7 +16470,7 @@ function DataImport() {
     customers:          "Name*",
     suppliers:          "Name*",
     invoices:           "Client Name*",
-    expenses:           "Amount*",
+    expenses:           "Amount (incl VAT)* — the total actually paid",
     payments:           "Invoice Number*, Amount*",
     employees:          "First Name*, Last Name*, Gross Salary*",
     payroll_adjustments:"ID Number* or Employee Number* or First+Last Name*",
@@ -16530,7 +16530,7 @@ function DataImport() {
     customers: ["ABC Trading (Pty) Ltd","accounts@abc.co.za","011 000 0000","123 Main St, JHB","4670123456","30","VIP client"],
     suppliers: ["Office World","ap@officeworld.co.za","010 000 0001","45 Park Rd, CPT","4670098765","ABSA","4098765432","632005","Cheque","30","Stationery supplier"],
     invoices:  ["INV-001","Motswedi Motors","accounts@motswedi.co.za","Consulting services","8695.65","1304.35","10000","ZAR","2026-09-01","2026-09-30","sent"],
-    expenses:  ["Checkers","Office groceries","230","0","General Expenses","2026-09-05"],
+    expenses:  ["Checkers","Office groceries","230","30","General Expenses","2026-09-05"],
     payments:  ["INV-001","5000","2026-09-15"],
     payroll_adjustments: ["8001015009087","EMP001","Jane","Smith","27000","0.05","0.05","1600","1600","2","Senior Bookkeeper","Finance","B2"],
   };
@@ -16660,6 +16660,10 @@ function DataImport() {
       // loaded at startup — reload so the updated employee list is picked up immediately.
       if ((tab === "employees" || tab === "payroll_adjustments") && (data.imported || 0) > 0) {
         setTimeout(() => window.location.reload(), 2500);
+      } else if (!data.dry_run && ((data.imported || 0) > 0 || (data.created || 0) > 0) && typeof live.reload === "function") {
+        // 2026-11-22: Expenses, Invoices, the Dashboard etc. show the data loaded when the app opened.
+        // Without this refresh an import "did nothing" until the page was reloaded (Solid Matter, expenses).
+        live.reload();
       }
     } catch(e) { setErr(e.message); }
     finally   { setImporting(false); }
@@ -17648,7 +17652,7 @@ function ZuZanApp({user, onLogout, onUserUpdate, onBackToPractice}) {
     fixed_assets:    <FixedAssets/>,
     fin_statements:  <AfsPaymentGate/>,
     documents:       canAccess(user,"business") ? <DocumentRepository/> : <UpgradeWall requiredPlan="business" onNavigateSettings={()=>setTab("settings")}/>,
-    data_import:     <DataImport/>,
+    data_import:     <DataImport live={live}/>,
     customers:       <Customers/>,
     suppliers:       <Suppliers/>,
     purchase_orders: canAccess(user,"professional") ? <PurchaseOrders/> : <UpgradeWall requiredPlan="professional" onNavigateSettings={()=>setTab("settings")}/>,

@@ -110,8 +110,13 @@ EXPENSE_ALIASES: dict[str, list[str]] = {
                       "merchant", "paid_to", "from", "account"],
     "description":   ["description", "memo", "notes", "details",
                       "line_description", "narration", "particulars"],
-    "amount":        ["amount", "subtotal", "net_amount", "excl_vat", "net",
-                      "excl", "line_amount"],
+    # ZuZan stores an expense VAT-INCLUSIVE (net = amount - vat_amount everywhere). Xero's Subtotal and other
+    # "excl" columns are VAT-EXCLUSIVE, so they are read separately and the VAT added back (2026-11-22) —
+    # mapping them straight onto "amount" took the VAT off twice.
+    "amount":        ["amount", "amount_(incl_vat)", "amount_incl_vat", "amount_incl", "total",
+                      "total_amount", "gross", "gross_amount", "amount_including_vat"],
+    "amount_excl":   ["subtotal", "net_amount", "excl_vat", "net", "excl", "line_amount",
+                      "amount_(excl_vat)", "amount_excl_vat", "amount_excl"],
     "vat_amount":    ["vat_amount", "vat", "tax", "tax_amount", "totaltax",
                       "total_tax", "gst"],
     "category":      ["category", "account", "account_name", "expense_type",
@@ -728,7 +733,7 @@ async def import_expenses(
     headers, rows = _read_csv(await file.read())
     m             = _map_headers(headers, EXPENSE_ALIASES)
 
-    if "vendor" not in m and "description" not in m and "amount" not in m:
+    if "vendor" not in m and "description" not in m and "amount" not in m and "amount_excl" not in m:
         raise HTTPException(
             400,
             f"Could not detect any recognisable columns. Detected: {headers}. "
@@ -751,6 +756,10 @@ async def import_expenses(
                 or "Imported"
             )
             amount = _parse_float(_get(row, m, "amount"))
+            _vat_pre = _parse_float(_get(row, m, "vat_amount"))
+            if amount == 0.0 and "amount_excl" in m:
+                _excl = _parse_float(_get(row, m, "amount_excl"))
+                amount = round(_excl + _vat_pre, 2) if _excl else 0.0
             if amount == 0.0:
                 errors.append({"row": i, "message": "Skipped — amount is zero or missing"})
                 continue
