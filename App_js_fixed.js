@@ -716,8 +716,38 @@ function CIPCBanner({cipc, poDupWarning}) {
 }
 
 function Dashboard({live = {}}) {
-  const d = live.dashboard;
-  const revenueData = live.trend || REVENUE_DATA;
+  // Period: defaults to the company's financial year to date (what /reports/dashboard returns with no dates).
+  // Other periods are fetched on demand. Figures come from the same engine as Reports → Management Pack.
+  const [dashPeriod, setDashPeriod] = useState("fy");
+  const [dashOverride, setDashOverride] = useState(null);
+  const [dashLoading, setDashLoading] = useState(false);
+  const base = live.dashboard;
+  const d = (dashPeriod !== "fy" && dashOverride) ? dashOverride : base;
+  const isoDay = x => { const z = new Date(x); return `${z.getFullYear()}-${String(z.getMonth()+1).padStart(2,"0")}-${String(z.getDate()).padStart(2,"0")}`; };
+  const dashPeriods = (() => {
+    const today = new Date();
+    const fyS = base && base.fy_start ? new Date(base.fy_start + "T00:00:00") : new Date(today.getMonth() >= 2 ? today.getFullYear() : today.getFullYear()-1, 2, 1);
+    const lastFyE = new Date(fyS.getFullYear(), fyS.getMonth(), fyS.getDate() - 1);
+    const lastFyS = new Date(fyS.getFullYear() - 1, fyS.getMonth(), fyS.getDate());
+    return {
+      month:  {label:"This month",               from:isoDay(new Date(today.getFullYear(), today.getMonth(), 1)), to:isoDay(today)},
+      fy:     {label:"Financial year to date",   from:isoDay(fyS), to:isoDay(today)},
+      lastfy: {label:"Last financial year",      from:isoDay(lastFyS), to:isoDay(lastFyE)},
+      all:    {label:"All time",                 from:"2000-01-01", to:isoDay(today)},
+    };
+  })();
+  const pickDashPeriod = async key => {
+    setDashPeriod(key);
+    if (key === "fy") { setDashOverride(null); return; }
+    const p = dashPeriods[key];
+    setDashLoading(true);
+    try { setDashOverride(await api(`/reports/dashboard?date_from=${p.from}&date_to=${p.to}`)); }
+    catch (e) { setDashOverride(null); }
+    finally { setDashLoading(false); }
+  };
+  const periodFrom = (d && d.date_from) || dashPeriods[dashPeriod].from;
+  const periodTo   = (d && d.date_to)   || dashPeriods[dashPeriod].to;
+  const revenueData = (d && d.trend && d.trend.length) ? d.trend : (live.trend || REVENUE_DATA);
   const isLive = live.connected;
   const [drill, setDrill] = useState(null); // {type, title, rows, cols, total, color}
   const [drillLoading, setDrillLoading] = useState(false);
@@ -729,45 +759,21 @@ function Dashboard({live = {}}) {
     try {
       if (type === "revenue") {
         // Same rows the Revenue card adds up (fully AND part paid invoices + bank-import income); VAT shown separately
-        const det = await api(`/reports/management/revenue-detail?date_from=2000-01-01&date_to=${new Date().toISOString().slice(0,10)}`);
+        const det = await api(`/reports/management/revenue-detail?date_from=${periodFrom}&date_to=${periodTo}`);
         const rows = (det.rows||[]).map(r => [r.invoice_number, r.client, r.status==="partial" ? "Part paid" : "Paid",
           fmt(r.received_zar), fmt(r.vat_zar), fmt(r.revenue_zar), r.paid_date ? new Date(r.paid_date).toLocaleDateString("en-ZA") : "—"]);
         if (det.bank_import_income) rows.push(["Bank import","Income posted from bank statements","","","",fmt(det.bank_import_income),""]);
-        setDrill({type, title:"Revenue — cash received, excluding VAT", color:C.green, total: det.total,
+        // Imported ledger / manual-journal income, by account (the Management Pack adds these to revenue too)
+        Object.entries((d && d.revenue_breakdown) || {}).filter(([k]) => k !== "Invoices and other income")
+          .forEach(([k, v]) => rows.push(["Ledger", k, "", "", "", fmt(v), ""]));
+        setDrill({type, title:`Revenue — ${d ? d.period : ""} (excl. VAT)`, color:C.green, total: d ? d.total_revenue : det.total,
           cols:["Invoice","Client","Status","Received","VAT","Revenue","Paid Date"], rows});
       } else if (type === "expenses") {
-        const [exps, deprSchedule, allPOs] = await Promise.all([
-          api("/expenses"),
-          api("/fixed-assets/schedule").catch(()=>[]),
-          api("/purchase-orders/").catch(()=>[]),
-        ]);
-        // Expense rows — VAT-exclusive
-        const expRows = exps.map(e=>({
-          _date: new Date(e.expense_date||e.created_at||0),
-          cols: [e.description||"—", e.category||"—", fmt((e.amount||0)-(e.vat_amount||0)),
-            e.expense_date ? new Date(e.expense_date).toLocaleDateString("en-ZA") : "—"],
-          amount: (e.amount||0)-(e.vat_amount||0),
-        }));
-        // Depreciation rows — one row per DepreciationEntry
-        const deprRows = (deprSchedule||[]).map(d=>({
-          _date: new Date(d.period+"-01"),
-          cols: [`${d.asset_name} — Depreciation`, "Depreciation (IAS 16)", fmt(d.amount||0),
-            d.period ? new Date(d.period+"-01").toLocaleDateString("en-ZA",{year:"numeric",month:"short"}) : "—"],
-          amount: d.amount||0,
-        }));
-        // PO COGS rows — received/partial/paid purchase orders (ex-VAT, matching backend)
-        const poRows = (allPOs||[]).filter(po=>["received","partial","paid"].includes(po.status)).map(po=>({
-          _date: new Date(po.received_date||po.created_at||0),
-          cols: [po.description||po.po_number||"Purchase Order", "Cost of Sales (POs)",
-            fmt((po.total_amount||0)-(po.vat_amount||0)),
-            po.received_date ? new Date(po.received_date).toLocaleDateString("en-ZA") : "—"],
-          amount: (po.total_amount||0)-(po.vat_amount||0),
-        }));
-        const allRows = [...expRows, ...deprRows, ...poRows].sort((a,b)=>b._date-a._date);
-        setDrill({type, title:"Expenses — All Time (excl. VAT, incl. Depreciation & PO COGS)", color:C.red,
-          total: allRows.reduce((s,r)=>s+r.amount,0),
-          cols:["Description","Category","Amount (excl. VAT)","Date"],
-          rows: allRows.map(r=>r.cols)});
+        const rows = Object.entries((d && d.expense_breakdown) || {}).sort((a, b) => b[1] - a[1]);
+        setDrill({type, title:`Expenses — ${d ? d.period : ""} (excl. VAT, incl. depreciation & cost of sales)`, color:C.red,
+          total: d ? d.total_expenses : rows.reduce((s, r) => s + r[1], 0),
+          cols:["Account / category","Amount (excl. VAT)"],
+          rows: rows.map(([k, v]) => [k, fmt(v)])});
       } else if (type === "outstanding") {
         const invs = await api("/invoices");
         const rows = invs.filter(i => ["sent","overdue","partial"].includes(i.status))
@@ -813,33 +819,17 @@ function Dashboard({live = {}}) {
             [netVat>=0?"Net VAT payable to SARS":"Net VAT refund due from SARS", fmt(Math.abs(netVat))],
           ]});
       } else if (type === "profit") {
-        const [exps, allPOs, deprSchedule, emps] = await Promise.all([
-          api("/expenses"),
-          api("/purchase-orders/").catch(()=>[]),
-          api("/fixed-assets/schedule").catch(()=>[]),
-          api("/employees").catch(()=>[]),
-        ]);
-        const rdet = await api(`/reports/management/revenue-detail?date_from=2000-01-01&date_to=${new Date().toISOString().slice(0,10)}`).catch(()=>null);
-        const rev  = rdet ? rdet.total : 0;   // same figure as the Revenue card: cash received excluding VAT
-        const exp  = exps.reduce((s,e)=>s+((e.amount||0)-(e.vat_amount||0)),0);
-        const poCogs = (allPOs||[])
-          .filter(po=>["received","partial","paid"].includes(po.status))
-          .reduce((s,po)=>s+((po.total_amount||0)-(po.vat_amount||0)),0);
-        const depr = (deprSchedule||[]).reduce((s,d)=>s+(d.amount||0),0);
-        // audit fix 2026-09-16 — see [[project_nbcpss_208hr_bug]]
-        const payrollCost = (emps||[]).filter(e=>e.is_active!==false)
-          .reduce((s,e)=>s+calcPayroll(e.gross_salary, null, 0,0,0,null, 0,0,0,0,0,0,0, {isSecurity: !!e.security_grade}).totalCost,0);
-        const netProfit = rev - exp - poCogs - depr - payrollCost;
-        setDrill({type, title:"Net Profit Breakdown — All Time", color:C.accent,
-          total: netProfit,
+        const rev = d ? d.total_revenue : 0, exp = d ? d.total_expenses : 0, pay = d ? d.total_payroll : 0;
+        const before = d ? d.net_profit : rev - exp - pay, tax = d ? (d.tax_provision || 0) : 0;
+        setDrill({type, title:`Net Profit — ${d ? d.period : ""}`, color:C.accent, total: before - tax,
           cols:["Category","Amount"],
           rows:[
-            ["Revenue (cash received, excl. VAT)", fmt(rev)],
-            ["Expenses (excl. VAT)",             `- ${fmt(exp)}`],
-            ["Cost of Sales — POs (excl. VAT)",  `- ${fmt(poCogs)}`],
-            ["Depreciation (IAS 16)",            `- ${fmt(depr)}`],
-            ["Payroll (employer total cost)",    `- ${fmt(payrollCost)}`],
-            ["Net Profit",                        fmt(netProfit)],
+            ["Revenue (excl. VAT)",                       fmt(rev)],
+            ["Expenses incl. cost of sales & depreciation", `- ${fmt(exp)}`],
+            ["Payroll (employer cost, from payslips)",     `- ${fmt(pay)}`],
+            ["Net profit before tax",                      fmt(before)],
+            ["Tax provision (27%)",                        `- ${fmt(tax)}`],
+            ["Net profit after tax",                       fmt(before - tax)],
           ]});
       }
     } catch(e) { setDrill(null); }
@@ -849,6 +839,10 @@ function Dashboard({live = {}}) {
   // Build expense pie from live expenses grouped by category, or fall back to placeholder
   const PIE_COLORS = [C.red, C.blue, C.green, C.accent, C.gold, "#8b5cf6", "#06b6d4", "#f97316"];
   const expensePieData = (() => {
+    if (d && d.expense_breakdown && Object.keys(d.expense_breakdown).length) {
+      const entries = Object.entries(d.expense_breakdown).filter(([,v]) => v > 0).sort((a,b) => b[1]-a[1]);
+      if (entries.length) return entries.slice(0, 8).map(([name, value], i) => ({name, value, color: PIE_COLORS[i % PIE_COLORS.length]}));
+    }
     const liveExps = live.expenses;
     if (!liveExps || liveExps.length === 0) return EXPENSE_PIE;
     const grouped = {};
@@ -880,10 +874,18 @@ function Dashboard({live = {}}) {
   return (
     <div>
       <CIPCBanner cipc={d?.cipc} poDupWarning={d?.po_duplicate_warning}/>
+      {d?.import_overlap_warning && <div style={{background:C.goldLt,border:`1px solid ${C.gold}50`,borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:12,color:C.ink}}>⚠ {d.import_overlap_warning}</div>}
       <div style={{marginBottom:24,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div>
           <h1 style={{fontFamily:"serif",fontSize:28,color:C.ink,margin:"0 0 4px"}}>{(()=>{const h=new Date().getHours();return h<12?"Good morning":h<17?"Good afternoon":"Good evening";})()}</h1>
-          <p style={{color:C.inkMid,fontSize:13}}>Financial overview - {d ? d.period : new Date().toLocaleDateString("en-ZA",{month:"long",year:"numeric"})}</p>
+          <p style={{color:C.inkMid,fontSize:13}}>Financial overview - {d ? d.period : dashPeriods[dashPeriod].label}</p>
+          <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+            {Object.entries(dashPeriods).map(([k, p]) => (
+              <button key={k} onClick={() => pickDashPeriod(k)} disabled={dashLoading}
+                style={{padding:"5px 12px",borderRadius:16,border:`1px solid ${dashPeriod===k?C.accent:C.border}`,background:dashPeriod===k?C.accentLt:"transparent",color:dashPeriod===k?C.accent:C.inkMid,fontSize:11,fontWeight:dashPeriod===k?700:400,cursor:"pointer",fontFamily:"inherit"}}>{p.label}</button>
+            ))}
+            {dashLoading && <span style={{fontSize:11,color:C.inkMid,alignSelf:"center"}}>Loading…</span>}
+          </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:20,background:isLive?C.greenLt:C.goldLt,border:`1px solid ${isLive?C.green:C.gold}`}}>
           <div style={{width:6,height:6,borderRadius:"50%",background:isLive?C.green:C.gold}}/>
@@ -891,9 +893,9 @@ function Dashboard({live = {}}) {
         </div>
       </div>
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label="Revenue" value={fmt(totalRevenue)} sub="All paid invoices" color={C.green} icon="💰" onClick={()=>openDrill("revenue")}/>
-        <KPI label="Expenses" value={fmt(totalExpenses)} sub="Excl. VAT, all time" color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
-        <KPI label="Net Profit" value={fmt(profit)} sub="After all costs &amp; 27% tax" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
+        <KPI label="Revenue" value={fmt(totalRevenue)} sub="Received + imported, excl. VAT" color={C.green} icon="💰" onClick={()=>openDrill("revenue")}/>
+        <KPI label="Expenses" value={fmt(totalExpenses)} sub={`Excl. VAT · ${dashPeriods[dashPeriod].label.toLowerCase()}`} color={C.red} icon="📤" onClick={()=>openDrill("expenses")}/>
+        <KPI label="Net Profit" value={fmt(profit)} sub="After all costs & 27% tax" color={C.accent} icon="📊" onClick={()=>openDrill("profit")}/>
         <KPI label="Outstanding" value={fmt(outstanding)} sub="Pending invoices" color={C.gold} icon="⏳" onClick={()=>openDrill("outstanding")}/>
         <KPI label="Payroll" value={fmt(totalPayroll)} sub={`${d?.employee_count||""} employees`} color={C.blue} icon="👥"/>
         <KPI label="Net VAT" value={netVatPayable !== null ? fmt(Math.abs(netVatPayable)) : "—"} sub={vatSub} color={vatColor} icon="🏛️" onClick={()=>openDrill("vat")}/>
@@ -933,7 +935,7 @@ function Dashboard({live = {}}) {
 
       <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16,marginBottom:20}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:20}}>
-          <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Revenue vs Expenses - Last 6 months</div>
+          <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:16}}>Revenue vs Expenses - 6 months to {new Date(periodTo + "T00:00:00").toLocaleDateString("en-ZA",{month:"short",year:"numeric"})}</div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={revenueData} barGap={4}>
               <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false}/>
@@ -6374,12 +6376,15 @@ function Reports({live = {}, user = null}) {
   const firstOfMonth  = new Date(now.getFullYear(), now.getMonth(), 1);
   const firstOfLast   = new Date(now.getFullYear(), now.getMonth()-1, 1);
   const lastOfLast    = new Date(now.getFullYear(), now.getMonth(), 0);
-  // SA financial year: 1 Mar – last Feb
-  const fyStart = now.getMonth() >= 2
+  // Company financial year (from Settings → financial year end, via /reports/dashboard); falls back to the
+  // SA default 1 Mar – end Feb (leap years included — the old fallback hard-coded 28 Feb).
+  const _fyS = live.dashboard && live.dashboard.fy_start, _fyE = live.dashboard && live.dashboard.fy_end;
+  const fyStart = _fyS ? new Date(_fyS + "T00:00:00") : (now.getMonth() >= 2
     ? new Date(now.getFullYear(), 2, 1)
-    : new Date(now.getFullYear()-1, 2, 1);
-  const fyEnd   = new Date(fyStart.getFullYear()+1, 1, 28);
-  const toISO   = d => d.toISOString().slice(0,10);
+    : new Date(now.getFullYear()-1, 2, 1));
+  const fyEnd   = _fyE ? new Date(_fyE + "T00:00:00") : new Date(fyStart.getFullYear()+1, 2, 0);
+  // Local-date ISO (toISOString() shifts to UTC, which in SA turns 1 March into 28/29 February)
+  const toISO   = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   const PRESETS = [
     {label:"Current Month",  from:toISO(firstOfMonth), to:toISO(now)},
     {label:"Last Month",     from:toISO(firstOfLast),  to:toISO(lastOfLast)},
@@ -6387,9 +6392,14 @@ function Reports({live = {}, user = null}) {
     {label:"All Time",       from:"2000-01-01",         to:toISO(now)},
     {label:"Custom",         from:"",                  to:""},
   ];
-  const [preset,   setPreset]   = useState("All Time");
-  const [dateFrom, setDateFrom] = useState("2000-01-01");
-  const [dateTo,   setDateTo]   = useState(toISO(now));
+  // Default to the current financial year (was "All Time")
+  const [preset,   setPreset]   = useState("Financial Year");
+  const [dateFrom, setDateFrom] = useState(toISO(fyStart));
+  const [dateTo,   setDateTo]   = useState(toISO(fyEnd));
+  // The company's real financial year arrives with the dashboard data — re-apply it if still on that preset
+  useEffect(() => {
+    if (preset === "Financial Year" && _fyS && _fyE) { setDateFrom(_fyS); setDateTo(_fyE); }
+  }, [_fyS, _fyE]); // eslint-disable-line
   const handlePreset = (label) => {
     setPreset(label);
     const p = PRESETS.find(p => p.label === label);
@@ -6403,7 +6413,7 @@ function Reports({live = {}, user = null}) {
   // ────────────────────────────────────────────────────────────────
 
   const d   = live.dashboard;
-  const period = d ? d.period : periodLabel;
+  const period = periodLabel;
   const totalRevenue  = d ? d.total_revenue  : MOCK_INVOICES.filter(i=>i.status==="paid").reduce((s,i)=>s+i.amount,0);
   const totalExpenses = d ? d.total_expenses : MOCK_EXPENSES.reduce((s,e)=>s+e.amount,0);
   const totalPayroll  = d ? d.total_payroll  : MOCK_EMPLOYEES.reduce((s,e)=>s+calcPayroll(e.salary).totalCost,0);

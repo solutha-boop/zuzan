@@ -157,24 +157,68 @@ def _bank_import_income(db: Session, company_id: int, date_from=None, date_to=No
 
 
 def _gl_import_cutover(db: Session, company_id: int):
-    """Date of the company's earliest native ZuZan invoice/expense, or None.
-    GL-imported (source 'import') P&L lines dated on/after this are ignored so a GL import
-    that overlaps native records is not double-counted (audit fix 2026-11-05)."""
-    d1 = db.query(func.min(Invoice.issue_date)).filter(Invoice.company_id == company_id).scalar()
-    d2 = db.query(func.min(Expense.expense_date)).filter(Expense.company_id == company_id).scalar()
-    ds = [d for d in (d1, d2) if d is not None]
-    return min(ds) if ds else None
+    """Retired 2026-11-22 — always None.
+
+    It returned the date of the company's EARLIEST native invoice/expense and every GL-imported P&L line
+    dated on/after it was dropped. One test invoice or one bank-imported expense therefore hid every
+    imported month after it: Nogemane's Sept–Oct 2026 Xero sales vanished from the dashboard behind a
+    single native INV-0001. The ledger (trial balance, AFS) never applied this rule, so the dashboard and
+    the AFS disagreed. Imported lines now always count, exactly as in the ledger; months where native
+    records and imported lines overlap are flagged instead (_import_overlap_warning)."""
+    return None
+
+
+def _import_overlap_warning(db: Session, company_id: int, date_from=None, date_to=None):
+    """Months in the range that have BOTH native paid-invoice revenue and GL-imported revenue — the same
+    sale may have been captured twice (e.g. an invoice raised in ZuZan that is also in the imported GL)."""
+    rev_ids = [a.id for a in db.query(Account).filter(Account.company_id == company_id,
+                                                      Account.type == AccountType.revenue).all()]
+    if not rev_ids:
+        return None
+    iq = db.query(JournalEntry.date).join(JournalLine, JournalLine.entry_id == JournalEntry.id).filter(
+        JournalEntry.company_id == company_id,
+        JournalEntry.source == "import",
+        JournalLine.account_id.in_(rev_ids),
+    )
+    if date_from:
+        iq = iq.filter(JournalEntry.date >= date_from)
+    if date_to:
+        iq = iq.filter(JournalEntry.date < date_to)
+    imp_months = {(d.year, d.month) for (d,) in iq.distinct().all() if d}
+    if not imp_months:
+        return None
+    _eff = func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at)
+    q = db.query(_eff).filter(Invoice.company_id == company_id,
+                              Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]))
+    if date_from:
+        q = q.filter(_eff >= date_from)
+    if date_to:
+        q = q.filter(_eff < date_to)
+    native_months = {(d.year, d.month) for (d,) in q.all() if d}
+    both = sorted(imp_months & native_months)
+    if not both:
+        return None
+    names = ", ".join(_date(y, m, 1).strftime("%b %Y") for y, m in both)
+    return (f"{names}: revenue comes from both imported ledger entries and invoices paid in ZuZan. "
+            f"If the same sale is in both, it is counted twice — check the Income Statement for these months.")
+
+
+# Journal sources whose P&L lines exist ONLY in the ledger (no Invoice/Expense/Payslip row behind them):
+# GL / trial-balance imports and manual journals. Manual journals were never counted on the dashboard or
+# in the Management Pack before 2026-11-22, so an accountant's adjusting journal silently didn't show.
+_LEDGER_ONLY_PL_SOURCES = ("import", "manual")
 
 
 def _live_import_entry_ids(db: Session, company_id: int, date_from=None, date_to=None) -> list:
-    """Ids of GL/opening-balance import entries (source 'import') in the range that have NOT been reversed.
-    A replaced opening balance is reversed (source 'import_reversal'); counting the original without its
-    reversal kept replaced imports in the P&L for ever (audit fix 2026-11-15, Okwendalo)."""
+    """Ids of GL/opening-balance import entries (source 'import') and manual journals (source 'manual') in the
+    range that have NOT been reversed. A replaced opening balance is reversed (source 'import_reversal');
+    counting the original without its reversal kept replaced imports in the P&L for ever (audit fix
+    2026-11-15, Okwendalo)."""
     reversed_ids = {r[0] for r in db.query(JournalEntry.is_reversal_of).filter(
         JournalEntry.company_id == company_id, JournalEntry.is_reversal_of.isnot(None)).all()}
     eq = db.query(JournalEntry.id).filter(
         JournalEntry.company_id == company_id,
-        JournalEntry.source == "import",
+        JournalEntry.source.in_(_LEDGER_ONLY_PL_SOURCES),
     )
     if date_from:
         eq = eq.filter(JournalEntry.date >= date_from)
@@ -2498,21 +2542,42 @@ def _cipc_status(company, now: datetime) -> dict:
 
 @reports_router.get("/dashboard")
 async def dashboard(
+    date_from: Optional[str] = None,
+    date_to:   Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Dashboard KPIs for a period — by default the company's CURRENT FINANCIAL YEAR to date.
+
+    2026-11-22: the dashboard used to add up all time with its own copy of the P&L logic, while its header
+    said "November 2026" and the Management Pack used different rules — so the two disagreed and imported
+    current-year data could be missing. The P&L figures now come from the Management Pack engine
+    (management_accounts) for the same period, so Dashboard and Reports always show the same numbers."""
     cid = current_user.company_id
     now = datetime.utcnow()
+    company = db.query(Company).filter(Company.id == cid).first()
+    fy_start, fy_end = _company_fy(company, now.date())
+    if not (date_from and date_to):
+        date_from, date_to = fy_start.isoformat(), now.date().isoformat()
+    mgmt = await management_accounts(date_from=date_from, date_to=date_to, current_user=current_user, db=db)
+    pl = mgmt["pl"]
+    try:
+        _p_start = datetime.strptime(date_from, "%Y-%m-%d")
+        _p_end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+    except ValueError:
+        _p_start, _p_end = datetime.combine(fy_start, datetime.min.time()), now + timedelta(days=1)
+    if date_from == fy_start.isoformat() and date_to == now.date().isoformat():
+        period_label = f"Financial year {fy_start.year}/{str(fy_end.year)[-2:]} to date"
+    else:
+        period_label = mgmt["period"]
 
-    # All-time paid invoices — matches the Invoices tab "Paid" KPI exactly
     paid_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
         Invoice.status.in_([InvoiceStatus.paid, InvoiceStatus.partial]),
+        func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at) >= _p_start,
+        func.coalesce(Invoice.paid_date, Invoice.issue_date, Invoice.created_at) < _p_end,
     ).all()
-    total_revenue = sum(_received_net_zar(i) for i in paid_invoices)
-    # Add bank-import income (posted as journal entries, not invoices)
-    total_revenue += _bank_import_income(db, cid)
-    total_revenue += _gl_import_income(db, cid)
+    total_revenue = pl["revenue"]
 
     outstanding_invoices = db.query(Invoice).filter(
         Invoice.company_id == cid,
@@ -2520,51 +2585,25 @@ async def dashboard(
     ).all()
     total_outstanding = sum(_balance_zar(i) for i in outstanding_invoices)
 
-    # All-time expenses ex-VAT — P&L should show the net expense, not the VAT-inclusive amount
-    expenses = db.query(Expense).filter(
-        Expense.company_id == cid,
-    ).all()
-    total_expenses = sum(e.amount - (e.vat_amount or 0) for e in expenses)
-
-    # Include PO COGS: all received purchase orders — ex-VAT to match expense treatment.
-    # Delivered value only (audit fix 2026-07-02): partial POs count what was actually
-    # received, matching the incremental journal postings.
-    received_pos = db.query(PurchaseOrder).filter(
-        PurchaseOrder.company_id == cid,
-        PurchaseOrder.status.in_(["received", "partial", "paid"]),
-    ).all()
-    po_cogs = sum(_po_cost_net(po) for po in received_pos) + _stock_pl_cost(db, cid)
-    total_expenses = total_expenses + po_cogs
-
-    # Include all-time depreciation from fixed assets (IAS 16 — posted to journal acct 5800)
-    total_depreciation = db.query(func.sum(DepreciationEntry.amount)).filter(
-        DepreciationEntry.company_id == cid
-    ).scalar() or 0
-    total_expenses = total_expenses + total_depreciation
-    total_expenses = total_expenses + _gl_import_expenses(db, cid)["total"]
+    # P&L for the period — identical to the Management Pack for the same dates
+    total_expenses = pl["total_expenses"]
+    total_payroll  = pl["payroll_cost"]
+    gross_profit   = pl["gross_profit"]
+    net_profit     = pl["ebit"]            # before tax (the dashboard subtracts tax_provision itself)
+    tax_provision  = pl["tax_provision"]
 
     employees = db.query(Employee).filter(
         Employee.company_id == cid,
         Employee.is_active == True,
         _not_example_emp()
     ).all()
-    # Sum ALL payslips for the company (including terminated employees) so that historical
-    # payroll cost is never understated when headcount has changed.
-    actual_payslips_total = (
-        db.query(func.sum(Payslip.total_cost))
-        .join(Employee, Payslip.employee_id == Employee.id)
-        .filter(Employee.company_id == cid)
-        .scalar()
-    )
-    if actual_payslips_total:
-        total_payroll = actual_payslips_total
-    else:
-        # No payslips yet — estimate from currently active employees only
-        total_payroll = sum(calc_payroll(e.gross_salary)["total_cost"] for e in employees)
 
-    gross_profit = total_revenue - total_expenses
-    net_profit   = gross_profit - total_payroll
-    tax_provision = max(0, net_profit * 0.27)
+    # VAT position and the PO double-count check below stay all-time (they are balances, not period flows)
+    expenses = db.query(Expense).filter(Expense.company_id == cid).all()
+    received_pos = db.query(PurchaseOrder).filter(
+        PurchaseOrder.company_id == cid,
+        PurchaseOrder.status.in_(["received", "partial", "paid"]),
+    ).all()
 
     # VAT position — all-time output vs input VAT.
     # Exclude draft invoices: VAT liability only arises on issued (sent/overdue/paid) invoices.
@@ -2624,11 +2663,20 @@ async def dashboard(
             break
 
     # CIPC Annual Return reminder
-    company = db.query(Company).filter(Company.id == cid).first()
     cipc = _cipc_status(company, now) if company else None
 
     return {
-        "period":            now.strftime("%B %Y"),
+        "period":            period_label,
+        "date_from":         date_from,
+        "date_to":           date_to,
+        "fy_start":          fy_start.isoformat(),
+        "fy_end":            fy_end.isoformat(),
+        "revenue_basis_note": mgmt.get("revenue_basis_note"),
+        "expense_breakdown": pl.get("expense_breakdown", {}),
+        "revenue_breakdown": pl.get("revenue_breakdown", {}),
+        "total_cogs":        pl.get("total_cogs", 0),
+        "trend":             mgmt.get("trend", []),
+        "import_overlap_warning": _import_overlap_warning(db, cid, _p_start, _p_end),
         "total_revenue":     round(total_revenue, 2),
         "total_expenses":    round(total_expenses, 2),
         "total_outstanding": round(total_outstanding, 2),
@@ -3992,6 +4040,11 @@ async def management_accounts(
     )
     if period_payslips_total:
         total_payroll_cost = round(period_payslips_total, 2)
+    elif gl_exp["total"] or _gl_rev["total"]:
+        # No payslips, but the period comes from an imported ledger / manual journals: the real staff
+        # costs are already in those expense accounts. Adding a headcount estimate on top double-counted
+        # payroll for every imported company with employees on file (2026-11-22).
+        total_payroll_cost = 0.0
     else:
         # No payslips in range — estimate from currently active employees
         total_payroll_cost = round(sum(calc_payroll(e.gross_salary)["total_cost"] for e in active_employees), 2)
