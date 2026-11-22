@@ -447,7 +447,10 @@ async def clear_company_data(
             db.query(ClockEvent).filter(
                 ClockEvent.employee_id.in_(emp_ids)
             ).delete(synchronize_session=False)
-        _del(db, Payslip,  cid)
+            # Payslip has no company_id column — delete through its employees.
+            db.query(Payslip).filter(
+                Payslip.employee_id.in_(emp_ids)
+            ).delete(synchronize_session=False)
         _del(db, Employee, cid)
 
     # ── Inventory ─────────────────────────────────────────────────────────────
