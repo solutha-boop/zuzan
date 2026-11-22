@@ -16626,8 +16626,13 @@ function DataImport() {
       const rows      = lines.slice(1, 6).map(parseLine);
 
       // Auto-switch tab if we can confidently identify the data type
+      // General Ledger and Journals take the same columns (Date, Reference/Journal No,
+      // Description, Account Code, Account Name, Debit, Credit) and both import
+      // correctly, so never jump between those two — keep the tab the user chose.
       const detected = detectTab(headers);
-      if (detected && detected !== tab) setTab(detected);
+      const LEDGER_TABS = ["general_ledger", "journals"];
+      const sameFamily = LEDGER_TABS.includes(detected) && LEDGER_TABS.includes(tab);
+      if (detected && detected !== tab && !sameFamily) setTab(detected);
 
       setPreview({headers, rows, total: lines.length - 1, xlsx: false});
     };
