@@ -722,7 +722,9 @@ function Dashboard({live = {}}) {
   const [dashOverride, setDashOverride] = useState(null);
   const [dashLoading, setDashLoading] = useState(false);
   const base = live.dashboard;
-  const d = (dashPeriod !== "fy" && dashOverride) ? dashOverride : base;
+  // Every period — including the default "Financial year to date" — is fetched fresh. The FY button used to
+  // re-show the dashboard loaded when the app opened, so data imported since then (e.g. a GL import) didn't appear.
+  const d = dashOverride || base;
   const isoDay = x => { const z = new Date(x); return `${z.getFullYear()}-${String(z.getMonth()+1).padStart(2,"0")}-${String(z.getDate()).padStart(2,"0")}`; };
   const dashPeriods = (() => {
     const today = new Date();
@@ -738,13 +740,18 @@ function Dashboard({live = {}}) {
   })();
   const pickDashPeriod = async key => {
     setDashPeriod(key);
-    if (key === "fy") { setDashOverride(null); return; }
     const p = dashPeriods[key];
     setDashLoading(true);
-    try { setDashOverride(await api(`/reports/dashboard?date_from=${p.from}&date_to=${p.to}`)); }
+    try {
+      const fresh = await api(`/reports/dashboard?date_from=${p.from}&date_to=${p.to}`);
+      setDashOverride(fresh);
+      if (key === "fy" && typeof live.reload === "function" && base && fresh && base.total_revenue !== fresh.total_revenue) live.reload();
+    }
     catch (e) { setDashOverride(null); }
     finally { setDashLoading(false); }
   };
+  // Refresh the default period whenever the dashboard opens, so it always reflects the latest data
+  useEffect(() => { if (live.connected) pickDashPeriod("fy"); }, [live.connected]); // eslint-disable-line
   const periodFrom = (d && d.date_from) || dashPeriods[dashPeriod].from;
   const periodTo   = (d && d.date_to)   || dashPeriods[dashPeriod].to;
   const revenueData = (d && d.trend && d.trend.length) ? d.trend : (live.trend || REVENUE_DATA);

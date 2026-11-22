@@ -15,3 +15,22 @@ os.environ["ZUZAN_DISABLE_THROTTLE"] = "1"      # the per-IP request ceiling wou
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _release_shared_session():
+    """End any transaction a test left open on the shared helpers session (2026-11-22).
+    SQLite allows one writer: a test that wrote without committing kept the database locked, so every
+    later test that goes through the app (its own session) failed with 'database is locked' and a 500 -
+    the 7 migration-wizard failures that only appeared when the whole suite ran."""
+    yield
+    h = sys.modules.get("tests.helpers")
+    if h is None:
+        return
+    try:
+        h.db.commit()
+    except Exception:
+        h.db.rollback()

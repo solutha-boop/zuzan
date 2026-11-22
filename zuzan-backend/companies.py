@@ -2300,7 +2300,8 @@ async def import_bank_statement(
                       JournalLine.debit        == round(float(txn.amount or 0), 2),
                   )
                   try:
-                      dup_q = dup_q.filter(JournalEntry.date == _date.fromisoformat(txn.date))
+                      _d0 = datetime.combine(_date.fromisoformat(txn.date[:10]), datetime.min.time())  # day range: timestamp == date never matches on SQLite (2026-11-22)
+                      dup_q = dup_q.filter(JournalEntry.date >= _d0, JournalEntry.date < _d0 + timedelta(days=1))
                   except Exception:
                       pass
                   if dup_q.first():
@@ -2382,7 +2383,8 @@ async def import_bank_statement(
                       JournalLine.debit        == round(float(txn.amount or 0), 2),
                   )
                   try:
-                      dup_q = dup_q.filter(JournalEntry.date == _date.fromisoformat(txn.date))
+                      _d0 = datetime.combine(_date.fromisoformat(txn.date[:10]), datetime.min.time())  # day range: timestamp == date never matches on SQLite (2026-11-22)
+                      dup_q = dup_q.filter(JournalEntry.date >= _d0, JournalEntry.date < _d0 + timedelta(days=1))
                   except Exception:
                       pass  # unparseable date — post_bank_income falls back to today; match on description+amount only
                   if dup_q.first():

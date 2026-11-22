@@ -226,7 +226,7 @@ def _sync_custom_account(company_id: int, code: str, db: Session):
         is_system=False,
     )
     db.add(acct)
-    db.commit()
+    db.flush()      # not commit (2026-11-22): callers run inside a bank-import SAVEPOINT; the caller commits
     db.refresh(acct)
     return acct
 
@@ -289,7 +289,7 @@ def expense_account(company_id: int, category: str, db: Session) -> Account:
         acct = Account(company_id=company_id, code=code, name=name,
                         type=account_type_for_code(code), is_system=False)
         db.add(acct)
-        db.commit()
+        db.flush()  # not commit (2026-11-22): a commit inside the bank-import SAVEPOINT failed every line
         db.refresh(acct)
     if not acct:
         acct = get_account(company_id, "5900", db)
