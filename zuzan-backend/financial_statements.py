@@ -190,6 +190,31 @@ def income_tax_reasonability(profit_before_tax: float, posted: float, has_posted
             "needs_review": status in ("under_posted", "over_posted"), "message": msg}
 
 
+# Current / non-current split and cash-flow category by account code (audit fix 2026-11-22).
+# The code thresholds (assets < 1500 current, liabilities < 2500 current) put the bank-allocation
+# picker's PPE accounts (1211-1229) and long-term loans (2410 Long-term Loan, 2420 Mortgage Bond -
+# journal.COA_LEDGER_ALIAS) under current items, and their cash flows under operating activities.
+_NC_LIAB_CODES      = {"2410", "2420"}
+_FINANCING_CL_CODES = {"2150", "2160"}   # short-term loan / directors' loan: current, but financing cash flows (IAS 7.17)
+
+
+def _is_non_current_asset(code) -> bool:
+    c = str(code)
+    return c >= "1500" or (len(c) == 4 and "1210" <= c <= "1229")
+
+
+def _is_ppe_cost_code(code) -> bool:
+    """Picker PPE cost accounts (1210-1219): movements are investing cash flows. Accumulated
+    depreciation (1220-1229) stays in operating, where it acts as the depreciation add-back."""
+    c = str(code)
+    return len(c) == 4 and "1210" <= c <= "1219"
+
+
+def _is_non_current_liab(code) -> bool:
+    c = str(code)
+    return c >= "2500" or c in _NC_LIAB_CODES
+
+
 def _months_between(d1, d2) -> int:
     return max(0, (d2.year - d1.year) * 12 + (d2.month - d1.month))
 
@@ -373,8 +398,8 @@ def annual_financial_statements(
     ]
 
     # Separate current (1xxx–14xx) vs non-current (15xx+)
-    current_assets     = [l for l in asset_lines if l["code"] < "1500"]
-    non_current_assets = [l for l in asset_lines if l["code"] >= "1500"]
+    current_assets     = [l for l in asset_lines if not _is_non_current_asset(l["code"])]
+    non_current_assets = [l for l in asset_lines if _is_non_current_asset(l["code"])]
     total_current_assets     = _r(sum(l["amount"] for l in current_assets))
     total_non_current_assets = _r(sum(l["amount"] for l in non_current_assets))
     total_assets = _r(total_current_assets + total_non_current_assets)
@@ -385,8 +410,8 @@ def annual_financial_statements(
         {"code": c, "name": n, "amount": _r(cr - dr)}
         for c, n, dr, cr in liab_rows
     ]
-    current_liabilities     = [l for l in liab_lines if l["code"] < "2500"]
-    non_current_liabilities = [l for l in liab_lines if l["code"] >= "2500"]
+    current_liabilities     = [l for l in liab_lines if not _is_non_current_liab(l["code"])]
+    non_current_liabilities = [l for l in liab_lines if _is_non_current_liab(l["code"])]
     total_current_liabilities     = _r(sum(l["amount"] for l in current_liabilities))
     total_non_current_liabilities = _r(sum(l["amount"] for l in non_current_liabilities))
     total_liabilities = _r(total_current_liabilities + total_non_current_liabilities)
@@ -523,8 +548,8 @@ def annual_financial_statements(
     _l_start = _acct_lines(db, cid, AccountType.liability, date_to=before_start)
     def _sum_assets(rows, pred):  return sum(dr - cr for c, n, dr, cr in rows if pred(c))
     def _sum_liabs(rows, pred):   return sum(cr - dr for c, n, dr, cr in rows if pred(c))
-    _oca = lambda c: c < "1500" and c not in ("1000", "1100", "1200")
-    _ocl = lambda c: c < "2500" and c != "2000"
+    _oca = lambda c: c < "1500" and c not in ("1000", "1100", "1200") and not _is_ppe_cost_code(c)
+    _ocl = lambda c: (not _is_non_current_liab(c)) and c != "2000" and c not in _FINANCING_CL_CODES
     change_other_assets = _r(-(_sum_assets(asset_rows, _oca) - _sum_assets(_a_start, _oca)))
     change_other_liabs  = _r(_sum_liabs(liab_rows, _ocl) - _sum_liabs(_l_start, _ocl) + tax_adjustment)  # + computed tax not in the ledger (posted tax moves 2126 itself)
     # Gains/losses on disposal are not operating cash - the proceeds are shown under investing
@@ -551,12 +576,12 @@ def annual_financial_statements(
             FixedAsset.disposal_date <= end,
         ).all()
     ))
-    _onca = lambda c: c >= "1500" and c not in ("1500", "1510")
+    _onca = lambda c: (c >= "1500" and c not in ("1500", "1510")) or _is_ppe_cost_code(c)
     change_other_nca = _r(-(_sum_assets(asset_rows, _onca) - _sum_assets(_a_start, _onca)))
     cash_from_investing = _r(-fa_purchases + fa_disposals + change_other_nca)
 
     # Financing: owner contributions / drawings and movements on long-term liabilities (loans)
-    _ncl = lambda c: c >= "2500"
+    _ncl = lambda c: _is_non_current_liab(c) or c in _FINANCING_CL_CODES   # all borrowings are financing
     change_nc_liabs = _r(_sum_liabs(liab_rows, _ncl) - _sum_liabs(_l_start, _ncl))
     cash_from_financing = _r(period_contributions - period_drawings + change_nc_liabs)
     net_cash_change = _r(cash_from_operations + cash_from_investing + cash_from_financing)

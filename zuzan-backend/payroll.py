@@ -3115,13 +3115,27 @@ async def reconciliation(
             "opening balances have no invoice-level detail)"
         ) if ar_import_bal else ""
         ar_diff = round(ar_journal_bal - ar_import_bal - ar_raw_total, 2)
+        # Bank lines allocated straight to 1100 before 2026-11-22 posted a loose bank journal that
+        # settled no invoice (audit fix 2026-11-22: the import now settles the invoice instead).
+        # Name them so the user knows which entries to reverse.
+        ar_bank_alloc = round(
+            db.query(func.coalesce(func.sum(JournalLine.credit - JournalLine.debit), 0))
+            .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+            .filter(JournalEntry.company_id == cid,
+                    JournalEntry.source.in_(["bank_import_transfer", "bank_import_transfer_reversal"]),
+                    JournalLine.account_id == ar_acct.id).scalar() or 0, 2)
+        ar_bank_note = (
+            f" R {ar_bank_alloc:,.2f} of the difference comes from bank-statement lines allocated straight to Debtors "
+            "Control without settling an invoice - reverse those journal entries (source bank_import_transfer) and "
+            "mark the invoices paid instead."
+        ) if ar_bank_alloc else ""
         if abs(ar_diff) < 1.0:
             checks.append({"rule": "AR Control Account (1100)", "status": "pass",
                 "detail": f"Journal AR balance R {ar_journal_bal - ar_import_bal:,.2f} reconciles with outstanding invoices R {ar_raw_total:,.2f} ✓{ar_import_note}",
                 "amount": ar_journal_bal})
         else:
             checks.append({"rule": "AR Control Account (1100)", "status": "fail",
-                "detail": f"AR journal balance R {ar_journal_bal - ar_import_bal:,.2f} differs from outstanding invoice total R {ar_raw_total:,.2f} by R {ar_diff:,.2f}{ar_import_note}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
+                "detail": f"AR journal balance R {ar_journal_bal - ar_import_bal:,.2f} differs from outstanding invoice total R {ar_raw_total:,.2f} by R {ar_diff:,.2f}{ar_import_note}.{ar_bank_note} Otherwise likely caused by a missed journal posting. Run /journal/backfill to repair.",
                 "amount": ar_diff})
 
     # ── RULE 7: AP control account — journal 2000 vs open POs + unpaid credit expenses ──
@@ -3191,6 +3205,17 @@ async def reconciliation(
             "opening balances have no PO/expense-level detail)"
         ) if ap_import_bal else ""
         ap_diff = round(ap_journal_bal - ap_import_bal - ap_raw_total, 2)
+        ap_bank_alloc = round(
+            db.query(func.coalesce(func.sum(JournalLine.debit - JournalLine.credit), 0))
+            .join(_JE, JournalLine.entry_id == _JE.id)
+            .filter(_JE.company_id == cid,
+                    _JE.source.in_(["bank_import_transfer", "bank_import_transfer_reversal"]),
+                    JournalLine.account_id == ap_acct.id).scalar() or 0, 2)
+        ap_bank_note = (
+            f" R {ap_bank_alloc:,.2f} of the difference comes from bank-statement lines allocated straight to Creditors "
+            "Control without settling a purchase order or expense - reverse those journal entries (source "
+            "bank_import_transfer) and pay the PO / expense instead."
+        ) if ap_bank_alloc else ""
         detail_breakdown = f"Open POs R {open_po_total:,.2f}"
         if credit_exp_total:
             detail_breakdown += f" + unpaid credit expenses R {credit_exp_total:,.2f}"
@@ -3200,7 +3225,7 @@ async def reconciliation(
                 "amount": ap_journal_bal})
         else:
             checks.append({"rule": "AP Control Account (2000)", "status": "fail",
-                "detail": f"AP journal balance R {ap_journal_bal - ap_import_bal:,.2f} differs from {detail_breakdown} = R {ap_raw_total:,.2f} by R {ap_diff:,.2f}{ap_import_note}. Likely caused by a missed journal posting. Run /journal/backfill to repair.",
+                "detail": f"AP journal balance R {ap_journal_bal - ap_import_bal:,.2f} differs from {detail_breakdown} = R {ap_raw_total:,.2f} by R {ap_diff:,.2f}{ap_import_note}.{ap_bank_note} Otherwise likely caused by a missed journal posting. Run /journal/backfill to repair.",
                 "amount": ap_diff})
 
     # ── RULE 8: Inventory valuation ───────────────────────────────────────────

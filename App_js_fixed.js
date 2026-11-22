@@ -9455,7 +9455,8 @@ function BankFeeds() {
 // Learning happens server-side when the import is posted.
 const PLAIN_LABELS = {
   "1212":"Bought a vehicle", "1213":"Bought computer equipment", "1214":"Bought furniture or equipment",
-  "1100":"Customer paid what they owed", "2110":"Paid a supplier we owed",
+  "1100":"Customer paid an invoice (ZuZan marks the invoice paid)", "2110":"Paid a supplier's PO or bill (ZuZan marks it paid)",
+  "1130":"Bought stock (ledger only - stock quantities are not changed; receive stock on a purchase order to update them)",
   "2121":"PAYE paid to SARS", "2122":"UIF paid to SARS", "2123":"SDL paid to SARS",
   "2124":"VAT paid to SARS", "2125":"VAT paid to SARS", "2126":"Income tax paid to SARS", "2127":"Provisional tax paid to SARS",
   "2150":"Short-term loan", "2160":"Director's loan", "2210":"Loan repayment", "2220":"Bond repayment",
@@ -10097,10 +10098,13 @@ function BankImport({live = {}, onNavigate}) {
             {result && result.credits_recorded > 0 && <span>Recorded <strong style={{color:C.green}}>{result.credits_recorded} income entries</strong> to your P&amp;L. </span>}
             {result && result.transfers_recorded > 0 && <span>Posted <strong style={{color:C.ink}}>{result.transfers_recorded} loan, owner or SARS payment{result.transfers_recorded===1?"":"s"}</strong> to the balance sheet. </span>}
             {result && result.credits_matched_to_invoices > 0 && <span>Matched <strong style={{color:C.green}}>{result.credits_matched_to_invoices} receipts</strong> to open invoices and marked them paid. </span>}
+            {result && result.documents_settled > 0 && <span>Matched <strong style={{color:C.green}}>{result.documents_settled} customer/supplier payment{result.documents_settled===1?"":"s"}</strong> to their invoice, purchase order or bill and marked {result.documents_settled===1?"it":"them"} paid. </span>}
+            {result && result.assets_registered > 0 && <span>Added <strong style={{color:C.ink}}>{result.assets_registered} asset purchase{result.assets_registered===1?"":"s"}</strong> to the fixed-asset register - check the useful life and SARS category there. </span>}
+            {result && result.needs_matching && result.needs_matching.length > 0 && <span style={{display:"block",color:C.gold,marginTop:8}}>⚠ {result.needs_matching.length} line{result.needs_matching.length===1?" was":"s were"} NOT posted: {result.needs_matching.map(m=>`${m.description} (${fmt(m.amount)}): ${m.reason}${m.candidates && m.candidates.length ? " [" + m.candidates.join(", ") + "]" : ""}`).join("; ")}</span>}
             {result && result.credits_skipped > 0 && <span style={{color:C.gold}}>{result.credits_skipped} entries skipped as already imported. </span>}
             {result && result.ignored > 0 && <span style={{color:C.gold}}>{result.ignored} line(s) ignored (zero or negative amount). </span>}
             {result && result.possible_invoice_matches && result.possible_invoice_matches.length > 0 && <span style={{display:"block",color:C.gold,marginTop:8}}>⚠ {result.possible_invoice_matches.map(m=>`${m.description} (${fmt(m.amount)}) has the same amount as open invoice ${m.possible_invoices.join(", ")}`).join("; ")}. These were posted as NEW income - if they are invoice payments, the revenue is now counted twice: reverse the income entry and mark the invoice paid instead.</span>}
-            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0 && !(result.credits_matched_to_invoices>0) && !(result.transfers_recorded>0))) && <span>Nothing new was imported (all transactions already exist).</span>}
+            {(!result || (result.expenses_created === 0 && result.credits_recorded === 0 && !(result.credits_matched_to_invoices>0) && !(result.transfers_recorded>0) && !(result.documents_settled>0) && !(result.assets_registered>0) && !(result.needs_matching && result.needs_matching.length))) && <span>Nothing new was imported (all transactions already exist).</span>}
             {result && result.failed && result.failed.length > 0 && <span style={{display:"block",color:C.red,marginTop:8}}>{result.failed.length} line(s) could not be posted: {result.failed.map(f => f.description).join(", ")}.</span>}
           </p>
           {result && result.learned > 0 && <div style={{background:C.greenLt,borderRadius:12,padding:"12px 16px",marginBottom:20,fontSize:13,color:C.green}}>🧠 ZuZan learned from {result.learned} transaction{result.learned===1?"":"s"} — next time these will be sorted for you.</div>}
@@ -13708,7 +13712,7 @@ function AIAssistant({tab}) {
       // Fallback local answers
       const lower = q.toLowerCase();
       let reply = "I'm not connected to the AI service right now. Please try again later.";
-      if(lower.includes("paye") && lower.includes("35000")) reply = "For R35,000/month gross: Annual income R420,000. PAYE ≈ R4,673/month after the R17,235 primary rebate. Check the Payroll tab for exact figures.";
+      if(lower.includes("paye") && lower.includes("35000")) reply = "For R35,000/month gross: Annual income R420,000. PAYE ≈ R6,135/month (2026/27 tables, after the R17,820 primary rebate). Check the Payroll tab for exact figures.";
       else if(lower.includes("emp201")) reply = "EMP201 is due by the 7th of each month following the payroll period. You can download the EMP201 from the Payroll tab after running payroll.";
       else if(lower.includes("vat")) reply = "The standard VAT rate in South Africa is 15%. Some items are zero-rated (basic foods, exports). VAT201 is filed monthly or bi-monthly depending on your registration, and is due by the 25th of the month after the period (the business day before if the 25th is a weekend or public holiday).";
       else if(lower.includes("fuel") || lower.includes("petrol")) reply = "Fuel should be categorised to account 6510 - Fuel and Oil under Expenses. If the vehicle is used partly for business and partly private, only the business portion is deductible.";

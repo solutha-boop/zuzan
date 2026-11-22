@@ -2256,6 +2256,152 @@ def _desc_names_client(desc, client_name):
     d = (desc or "").lower()
     return any(t in d for t in _name_tokens(client_name))
 
+
+# ── Bank lines allocated to control accounts / PPE (audit fix 2026-11-22) ─────
+# Debtors Control (1100) and Creditors Control (2110 -> 2000) are carried by the invoice, PO and
+# on-credit expense sub-ledgers. A bank line allocated to them now settles the matching document
+# (same journal as Mark paid / Pay PO / Pay expense, dated on the bank date) or, when no single
+# document matches, is left unposted for the user to settle from the document itself - it is never
+# booked as a loose bank journal that the sub-ledger can't see. PPE purchases go into the register.
+
+def _bank_txn_day(txn):
+    try:
+        return datetime.fromisoformat(txn.date[:10])
+    except Exception:
+        return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _po_ap_outstanding(db, cid, po, ap_acct):
+    """AP still owed on a received/partial PO: reversal-aware ledger net (same lookup as pay_po)."""
+    lines = (db.query(JournalLine).join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+             .filter(JournalEntry.company_id == cid,
+                     JournalEntry.source.in_(["purchase_order", "purchase_order_reversal",
+                                              "po_payment", "po_payment_reversal"]),
+                     JournalEntry.source_id == po.id,
+                     JournalLine.account_id == ap_acct.id).all())
+    if lines:
+        return round(sum((l.credit or 0) - (l.debit or 0) for l in lines), 2)
+    return round(po.total_amount or 0, 2)
+
+
+def _pick_match(candidates, desc, name_of):
+    """One candidate named in the bank narrative wins; otherwise a single candidate overall."""
+    named = [c for c in candidates if _desc_names_client(desc, name_of(c))]
+    if len(named) == 1:
+        return named[0]
+    if len(candidates) == 1 and not named:
+        return candidates[0]
+    return None
+
+
+def _settle_bank_control_line(db, cid, txn, kind):
+    """Returns "settled", "duplicate", or a dict describing why the line was not posted."""
+    amt = round(float(txn.amount or 0), 2)
+    day = _bank_txn_day(txn)
+    d0 = day.replace(hour=0, minute=0, second=0, microsecond=0)
+    d1 = d0 + timedelta(days=1)
+    base = {"description": txn.description, "amount": amt, "date": txn.date, "account": txn.category}
+
+    if kind == "ar":
+        if txn.type != "credit":
+            return {**base, "reason": "Money paid out can't go to Debtors Control. A refund to a customer is a "
+                                      "credit note plus refund; otherwise pick the account it belongs to."}
+        paid = db.query(Invoice).filter(
+            Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
+            Invoice.paid_amount_zar == amt, Invoice.paid_date >= d0, Invoice.paid_date < d1).all()
+        if _pick_match(paid, txn.description, lambda i: i.client_name):
+            return "duplicate"                       # already settled by an earlier import of this statement
+        open_invs = [i for i in db.query(Invoice).filter(
+                        Invoice.company_id == cid,
+                        Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
+                     if (not i.currency or i.currency == "ZAR")
+                     and abs((i.total_amount or 0) - ((i.paid_amount_zar or 0) if i.status == InvoiceStatus.partial else 0) - amt) < 0.005]
+        inv = _pick_match(open_invs, txn.description, lambda i: i.client_name)
+        if inv is None:
+            return {**base, "candidates": [i.invoice_number for i in open_invs],
+                    "reason": ("More than one open invoice has this amount - open the right invoice and mark it paid."
+                               if open_invs else
+                               "No open invoice has exactly this amount. Mark the invoice paid (or part-paid) from "
+                               "Invoices, or allocate the receipt to income if no invoice was raised.")}
+        before = round(inv.paid_amount_zar or 0, 2) if inv.status == InvoiceStatus.partial else 0.0
+        inv.status, inv.paid_date = InvoiceStatus.paid, day
+        inv.paid_amount_zar = amt                     # post only what this deposit paid
+        journal_engine.post_invoice_paid(inv, db)
+        inv.paid_amount_zar = round(before + amt, 2)
+        return "settled"
+
+    # kind == "ap"
+    if txn.type != "debit":
+        return {**base, "reason": "Money received can't go to Creditors Control. Record a supplier refund "
+                                  "against the supplier, or pick the account it belongs to."}
+    bank = journal_engine.get_account(cid, "1000", db)
+    dup = (db.query(JournalEntry.id).join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+           .filter(JournalEntry.company_id == cid,
+                   JournalEntry.source.in_(["po_payment", "expense_payment"]),
+                   JournalEntry.date >= d0, JournalEntry.date < d1,
+                   JournalLine.account_id == bank.id, JournalLine.credit == amt).first())
+    if dup:
+        return "duplicate"
+    ap_acct = journal_engine.get_account(cid, "2000", db)
+    cands = []
+    for po in db.query(PurchaseOrder).filter(PurchaseOrder.company_id == cid,
+                                             PurchaseOrder.status.in_(["received", "partial"])).all():
+        owed = _po_ap_outstanding(db, cid, po, ap_acct)
+        if abs(owed - amt) < 0.005:
+            cands.append(("po", po, po.supplier_name, owed))
+    for ex in db.query(Expense).filter(Expense.company_id == cid, Expense.is_on_credit == True,  # noqa: E712
+                                       Expense.paid_at == None).all():                          # noqa: E711
+        if abs(round(ex.amount or 0, 2) - amt) < 0.005:
+            cands.append(("exp", ex, ex.vendor, amt))
+    pick = _pick_match(cands, txn.description, lambda c: c[2])
+    if pick is None:
+        labels = [c[1].po_number if c[0] == "po" else f"Expense {c[1].id} ({c[1].vendor})" for c in cands]
+        return {**base, "candidates": labels,
+                "reason": ("More than one unpaid supplier document has this amount - pay the right one from "
+                           "Purchase orders or Expenses." if cands else
+                           "No received purchase order or unpaid on-credit expense has exactly this amount. "
+                           "Pay it from Purchase orders / Expenses, or allocate it to the expense it was for.")}
+    typ, doc, _, owed = pick
+    if typ == "po":
+        doc.status = "paid"
+        journal_engine.post_po_paid(doc, db, paid_amount=owed, when=day)
+    else:
+        doc.paid_at = day
+        journal_engine.post_expense_paid(doc, db)
+    return "settled"
+
+
+def _book_bank_asset_purchase(db, cid, txn, category):
+    """Bank payment allocated to PPE -> FixedAsset register + DR 1500 (/ DR 1300 VAT) / CR 1000.
+    Returns "booked", "duplicate", or a dict describing why it was not posted."""
+    amt = round(float(txn.amount or 0), 2)
+    base = {"description": txn.description, "amount": amt, "date": txn.date, "account": txn.category}
+    if txn.type != "debit":
+        return {**base, "reason": "Money received for an asset is a sale - record it under Fixed assets -> "
+                                  "Dispose so the gain or loss and the register are right."}
+    from journal import company_vat_registered as _vatreg
+    vat = 0.0
+    if (txn.has_vat or txn.vat_applicable) and _vatreg(db, cid):
+        vat = round(float(txn.vat_amount or 0), 2) or round(amt * 0.15 / 1.15, 2)
+    cost = round(amt - vat, 2)
+    day = _bank_txn_day(txn)
+    name = (txn.description or "Asset bought")[:120]
+    if db.query(FixedAsset.id).filter(FixedAsset.company_id == cid, FixedAsset.asset_name == name,
+                                      FixedAsset.cost == cost, FixedAsset.purchase_date >= day,
+                                      FixedAsset.purchase_date < day + timedelta(days=1)).first():
+        return "duplicate"
+    from fixed_assets import DEFAULT_USEFUL_LIVES, _next_asset_number
+    asset = FixedAsset(
+        company_id=cid, asset_number=_next_asset_number(cid, db), asset_name=name, category=category,
+        description=f"Bought per bank statement ({txn.category}); check the useful life and SARS category.",
+        purchase_date=day, cost=cost, residual_value=0.0,
+        useful_life_months=DEFAULT_USEFUL_LIVES.get(category, 60), depreciation_method="straight_line",
+    )
+    db.add(asset)
+    db.flush()
+    journal_engine.post_asset_acquisition(asset, db, vat=vat, commit_accounts=False)
+    return "booked"
+
 @bank_router.post("/import")
 async def import_bank_statement(
     data: BankImportRequest,
@@ -2280,11 +2426,36 @@ async def import_bank_statement(
     posted_lines = []      # lines actually booked -> taught to the allocation memory (allocation.py)
     transfers_recorded = 0
     transfers_skipped  = 0
+    settled_documents  = 0     # receipts/payments allocated to 1100/2110 that settled an invoice / PO / expense
+    assets_registered  = 0     # payments allocated to PPE that went into the fixed-asset register
+    needs_matching     = []    # lines NOT posted: allocated to a control or PPE account with no single match
     for txn in data.transactions:
         try:
           with db.begin_nested():   # SAVEPOINT: one bad line must not discard or corrupt the rest of the import
               if txn.type not in ("debit", "credit") or not (txn.amount and txn.amount > 0):
                   ignored += 1          # zero/negative amounts or unknown type are never posted
+                  continue
+              _ctrl = journal_engine.control_account_allocation(txn.category)
+              if _ctrl:
+                  _res = _settle_bank_control_line(db, current_user.company_id, txn, _ctrl)
+                  if _res == "duplicate":
+                      transfers_skipped += 1
+                  elif _res == "settled":
+                      settled_documents += 1
+                      posted_lines.append(txn)
+                  else:
+                      needs_matching.append(_res)
+                  continue
+              _ppe_cat = journal_engine.ppe_allocation_category(txn.category)
+              if _ppe_cat:
+                  _res = _book_bank_asset_purchase(db, current_user.company_id, txn, _ppe_cat)
+                  if _res == "duplicate":
+                      transfers_skipped += 1
+                  elif _res == "booked":
+                      assets_registered += 1
+                      posted_lines.append(txn)
+                  else:
+                      needs_matching.append(_res)
                   continue
               if journal_engine.is_balance_sheet_allocation(txn.category):
                   # Allocated to an asset / liability / equity account (loan, drawings, SARS, capital,
@@ -2469,6 +2640,9 @@ async def import_bank_statement(
         "learned":          learned,
         "transfers_recorded": transfers_recorded,
         "transfers_skipped":  transfers_skipped,
+        "documents_settled":  settled_documents,
+        "assets_registered":  assets_registered,
+        "needs_matching":     needs_matching,
         "expenses_created": expenses_created,
         "expenses_skipped": expenses_skipped,
         "credits_recorded": credits_recorded,
@@ -2481,6 +2655,9 @@ async def import_bank_statement(
         "message":          (f"Imported {expenses_created} expenses and {credits_recorded} income entries; "
                              f"{credits_matched} receipts matched to open invoices and marked paid"
                              + (f"; {transfers_recorded} balance-sheet payment(s)/receipt(s) posted" if transfers_recorded else "")
+                             + (f"; {settled_documents} customer/supplier payment(s) matched to their invoice, purchase order or expense and marked paid" if settled_documents else "")
+                             + (f"; {assets_registered} asset purchase(s) added to the fixed-asset register" if assets_registered else "")
+                             + (f"; {len(needs_matching)} line(s) allocated to Debtors/Creditors Control or an asset were NOT posted because no single document matched - settle them from the invoice, purchase order or expense (see needs_matching)" if needs_matching else "")
                              + (f"; {len(possible_matches)} receipt(s) have the same amount as an open invoice but the client is not named - check they are not invoice payments recorded twice (they were posted as new income)" if possible_matches else "")
                              + (f"; {ignored} line(s) ignored (zero/negative amount)" if ignored else "")
                              + (f"; {len(failed)} line(s) could NOT be posted and were skipped - nothing partial was saved for them; fix and re-import (duplicates are skipped automatically)" if failed else "") + "."),

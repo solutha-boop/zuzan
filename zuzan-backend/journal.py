@@ -339,6 +339,42 @@ def is_balance_sheet_allocation(category) -> bool:
     return bool(code) and code[:1] in ("1", "2", "3")
 
 
+# Control accounts carried by a sub-ledger (audit fix 2026-11-22). A bank line allocated straight
+# to Debtors Control (1100) or Creditors Control (2110 picker -> 2000 ledger) used to post a plain
+# bank journal: the invoice / PO / on-credit expense stayed open, so the debtors and creditors books
+# disagreed with the ledger (Rules 6/7) and paying the document later took the money out twice.
+# The bank import now settles the matching document instead (companies.import_bank_statement).
+_CONTROL_ALLOCATIONS = {"1100": "ar", "2110": "ap", "2000": "ap"}
+
+
+def control_account_allocation(category):
+    """'ar' / 'ap' when a bank line is allocated to Debtors or Creditors Control, else None."""
+    code, _ = _split_allocation(category)
+    return _CONTROL_ALLOCATIONS.get(code or "")
+
+
+# Picker PPE codes -> fixed-asset register category (audit fix 2026-11-22). Assets bought through
+# a bank allocation now go into the register (FixedAsset + DR 1500), so they are depreciated, appear
+# in Note 2, feed deferred tax and show as an investing cash outflow.
+_PPE_ALLOCATIONS = {
+    "1211": "Land & Buildings", "1212": "Motor Vehicles", "1213": "Computer Equipment",
+    "1214": "Furniture & Fittings", "1500": "Other Fixed Assets",
+}
+
+
+def ppe_allocation_category(category):
+    """Register category for a bank line allocated to a PPE cost account (1211-1219 or 1500), else None.
+    Accumulated depreciation codes (1221-1229, 1510) are not purchases and return None."""
+    code, _ = _split_allocation(category)
+    if not code:
+        return None
+    if code in _PPE_ALLOCATIONS:
+        return _PPE_ALLOCATIONS[code]
+    if len(code) == 4 and "1215" <= code <= "1219":
+        return "Other Fixed Assets"
+    return None
+
+
 def allocation_account(company_id: int, category: str, db: Session):
     """Resolve a '{code} - {name}' allocation from ANY chart-of-accounts group to a ledger
     Account, creating it (with the type its code range implies) the first time it's used.
@@ -1030,7 +1066,7 @@ def post_expense_paid(expense, db: Session) -> JournalEntry:
     cid   = expense.company_id
     total = round(expense.amount or 0, 2)
 
-    entry = _make_entry(cid, datetime.utcnow(),
+    entry = _make_entry(cid, getattr(expense, "paid_at", None) or datetime.utcnow(),   # dated when paid (2026-11-22)
         f"Supplier payment — {expense.vendor}: {expense.description or ''}",
         f"EXPPAY-{expense.id}", "expense_payment", expense.id, db)
 
@@ -1108,7 +1144,7 @@ def post_po_received(
     return entry
 
 
-def post_po_paid(po, db: Session, paid_amount: float = None) -> JournalEntry:
+def post_po_paid(po, db: Session, paid_amount: float = None, when=None) -> JournalEntry:
     """
     Supplier invoice paid:
       DR Accounts Payable   (paid_amount or po.total_amount)
@@ -1120,7 +1156,7 @@ def post_po_paid(po, db: Session, paid_amount: float = None) -> JournalEntry:
     """
     cid = po.company_id
     total = round(paid_amount if paid_amount is not None else (po.total_amount or 0), 2)
-    entry = _make_entry(cid, datetime.utcnow(),
+    entry = _make_entry(cid, when or datetime.utcnow(),   # when: the bank date for a statement-matched payment (2026-11-22)
         f"Supplier payment — {po.supplier_name or 'Supplier'}",
         po.po_number, "po_payment", po.id, db)
 
@@ -1200,15 +1236,19 @@ def post_stock_revaluation(item, delta_amount: float, db: Session, reason: str =
 
 # ── FIXED ASSET POSTING FUNCTIONS (IAS 16) ───────────────────────────────────
 
-def post_asset_acquisition(asset, db: Session) -> JournalEntry:
+def post_asset_acquisition(asset, db: Session, vat: float = 0.0, commit_accounts: bool = True) -> JournalEntry:
     """
     Record purchase of a fixed asset (cost model, IAS 16.15):
-      DR Fixed Assets at Cost  (1500)   full cost
-      CR Bank / Cash           (1000)   full cost
+      DR Fixed Assets at Cost  (1500)   full cost (excl. VAT)
+      DR VAT Input             (1300)   vat, when claimable (bank-import purchases, 2026-11-22)
+      CR Bank / Cash           (1000)   cost + vat
+    commit_accounts=False skips init_accounts (it commits) for callers inside a SAVEPOINT.
     """
     cid = asset.company_id
-    init_accounts(cid, db)
+    if commit_accounts:
+        init_accounts(cid, db)
     cost = round(asset.cost, 2)
+    vat  = round(vat or 0.0, 2)
     entry = _make_entry(
         cid, asset.purchase_date,
         f"Asset acquisition — {asset.asset_name}",
@@ -1216,10 +1256,10 @@ def post_asset_acquisition(asset, db: Session) -> JournalEntry:
     )
     fa_acct   = get_account(cid, "1500", db)
     bank_acct = get_account(cid, "1000", db)
-    lines = [
-        _line(entry.id, fa_acct,   debit=cost,  description=asset.asset_name),
-        _line(entry.id, bank_acct, credit=cost, description=asset.asset_name),
-    ]
+    lines = [_line(entry.id, fa_acct, debit=cost, description=asset.asset_name)]
+    if vat > 0:
+        lines.append(_line(entry.id, get_account(cid, "1300", db), debit=vat, description="VAT input"))
+    lines.append(_line(entry.id, bank_acct, credit=round(cost + vat, 2), description=asset.asset_name))
     _assert_balanced(lines)
     for l in lines:
         db.add(l)

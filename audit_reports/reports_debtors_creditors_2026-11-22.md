@@ -112,3 +112,41 @@ Creditors otherwise ✓:
 **Standing reminders:**
 - After Budget Feb 2027, replace the provisional 2027/2028 `TAX_YEARS` entry.
 - Run the IFRS 18 / IFRS for SMEs 3rd ed. checklist in Jan–Feb 2027.
+
+---
+
+## Remediation (22 Nov 2026, on request; uncommitted working-tree changes on top of 3066029)
+Items 1–5 are fixed. Items 6–8 are owner actions and stay open.
+
+1. **High — 1100 / 2110 bank allocations are fixed.**
+   - **New routing.** A bank line allocated to Debtors Control (1100) or Creditors Control (2110/2000) no longer posts a loose `bank_import_transfer`. Instead, `companies._settle_bank_control_line` settles the matching document, using the same journal as Mark paid / `pay_po` / expense-pay, dated on the bank date:
+     - a receipt allocated to 1100 settles the open invoice;
+     - a payment allocated to 2110 settles the received PO (reversal-aware AP balance) or an unpaid on-credit expense.
+     - A document named in the bank narrative is matched first. Otherwise a single document with the same amount is matched.
+   - **No match:** the line is not posted. It is returned in `needs_matching` and shown in the import result.
+   - **Re-imports** are detected as duplicates.
+   - **Supporting changes:**
+     - journal.py: `control_account_allocation()`; `post_po_paid(when=)`; `post_expense_paid` is now dated `paid_at`.
+     - Rules 6/7 (payroll.py) now state how much of a difference comes from legacy `bank_import_transfer` lines on 1100/2000.
+   - **Picker labels** updated (App_js_fixed.js PLAIN_LABELS).
+   - **Allocation memory needs no purge:** learned 1100/2110 mappings now route to matching.
+2. **Medium — current/non-current split and cash-flow classification are fixed** in financial_statements.py, through `_is_non_current_asset`, `_is_ppe_cost_code` and `_is_non_current_liab`:
+   - 1210-1229 are non-current assets. Movements on 1210-1219 are investing; 1220-1229 stay in operating as the depreciation add-back.
+   - 2410/2420 are non-current liabilities, and their movements are financing.
+   - 2150/2160 stay current, but their movements are financing.
+3. **Medium — PPE allocations are fixed.** A payment allocated to 1211-1219 or 1500 now goes through `_book_bank_asset_purchase`:
+   - it creates a FixedAsset with the category from `journal.ppe_allocation_category` and the default useful life;
+   - it posts DR 1500, DR 1300 (when VAT is claimable) and CR 1000 (`post_asset_acquisition(vat=)`);
+   - it is deduplicated on re-import.
+   - Receipts allocated to PPE are not posted and are directed to Dispose.
+4. **Low — PAYE example is fixed** (App_js_fixed.js and zuzan-app/src/App.js): it now reads "≈ R6,135/month (2026/27 tables, after the R17,820 primary rebate)".
+5. **Low — the inventory warning is added.** The 1130 picker label now says that stock quantities are not changed.
+
+**Tests:**
+- New: tests/test_bank_control_allocations.py (5 tests).
+- Full suite: 320 passed, 1 skipped. One test was excluded: `test_payroll_journal_balance_runner`, which can't delete its scratch DB on the mounted folder. This is an environment limit, not a code issue.
+- The JSX parses with @babel/parser.
+
+**Data clean-up still needed in production:**
+- Reverse any existing `bank_import_transfer` entries on 1100/2000 and settle those invoices/POs. Rules 6/7 now show the amount.
+- Register any assets already booked to 1212-1214 if you want depreciation and deferred tax on them.
