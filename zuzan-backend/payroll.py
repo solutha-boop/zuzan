@@ -4656,18 +4656,35 @@ def _ledger_only_vat(db, cid: int, start, end) -> dict:
                     revenue += amt
         if not vat_lines:
             continue
-        used += 1
+        # Line-level settlement test (2026-11-22): a VAT payment can share an entry with unrelated
+        # lines (e.g. a bank fee posted under the same reference), so each VAT line is judged:
+        # - output VAT counts only where the entry carries revenue (a sale or credit note);
+        #   a debit/credit to output VAT against bank alone is a SARS payment or refund;
+        # - input VAT debits count unless the entry is VAT against bank only;
+        #   input VAT credits count only as a correction against a cost (a SARS refund is not).
+        has_rev = any(a.type == AccountType.revenue for _l, a in other)
+        only_cash = all(_is_cash(a) or _is_sars(a) for _l, a in other)
+        noncash_debit = any((l.debit or 0) > 0 and not _is_cash(a) and a.type != AccountType.revenue for l, a in other)
+        counted = False
         for l, a in vat_lines:
             n = _name(a)
             cr_less_dr = (l.credit or 0) - (l.debit or 0)
             if a.code == "2100" or "output" in n:
-                out_vat += cr_less_dr
+                kind = "out"
             elif a.code == "1300" or "input" in n:
-                in_vat -= cr_less_dr
-            elif cr_less_dr > 0:
-                out_vat += cr_less_dr
+                kind = "in"
             else:
-                in_vat -= cr_less_dr
+                kind = "out" if cr_less_dr > 0 else "in"
+            if kind == "out":
+                if has_rev:
+                    out_vat += cr_less_dr; counted = True
+            elif cr_less_dr < 0:                                 # input VAT claimed
+                if not only_cash:
+                    in_vat -= cr_less_dr; counted = True
+            elif noncash_debit:                                  # input VAT reduced against a cost
+                in_vat -= cr_less_dr; counted = True
+        if counted:
+            used += 1
     out_vat, in_vat = round(out_vat, 2), round(in_vat, 2)
     std_excl = round(out_vat / VAT_RATE, 2) if out_vat > 0 else 0.0
     zero = round(max(0.0, revenue - std_excl), 2)

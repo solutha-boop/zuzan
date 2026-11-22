@@ -7253,6 +7253,25 @@ function Reports({live = {}, user = null}) {
   const renderVat201 = () => {
     const v = vat201;
     const now = new Date();
+    // No return loaded (2026-11-22): never show an estimate built from all-time revenue/expense totals
+    // as if it were the VAT201 - ask for the period to be loaded instead.
+    if (!v) {
+      const loadVat = () => api("/reports/vat201?period="+vatPeriod+"&months="+vatMonths).then(setVat201).catch(()=>null);
+      return (
+        <div>
+          <h2 style={{fontFamily:"serif",fontSize:22,color:C.ink,margin:0}}>VAT201 Return</h2>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginTop:16}}>
+            <span style={{fontSize:12,color:C.inkMid,fontWeight:600}}>Period:</span>
+            <input type="month" value={vatPeriod} onChange={e=>setVatPeriod(e.target.value)} style={{padding:"7px 12px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}/>
+            <select value={vatMonths} onChange={e=>setVatMonths(+e.target.value)} style={{padding:"7px 8px",border:"1px solid "+C.border,borderRadius:8,fontSize:12,fontFamily:"inherit",background:C.bg,color:C.ink,outline:"none"}}><option value={1}>Monthly</option><option value={2}>Bi-monthly</option></select>
+            <button onClick={loadVat} style={{background:C.accent,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Load</button>
+          </div>
+          <div style={{marginTop:24,padding:24,border:"1px dashed "+C.border,borderRadius:14,color:C.inkMid,fontSize:13}}>
+            Choose the VAT period and press <strong>Load</strong> to calculate the return from the ledger.
+          </div>
+        </div>
+      );
+    }
     const out  = v ? v.output : {field_1a_standard_supplies_excl_vat:totalRevenue*100/115,field_4a_output_vat:totalRevenue*15/115,invoice_count:0,total_invoiced_incl_vat:totalRevenue,vat_recorded_on_invoices:0,field_1b_zero_rated_supplies:0};
     const inp  = v ? v.input  : {field_14_input_vat:totalExpenses*15/115,total_expenses_incl_vat:totalExpenses,total_expenses_excl_vat:totalExpenses*100/115,expense_count:0,expense_breakdown:{},note:""};
     const net  = v ? v.net    : {field_15_net_vat:(totalRevenue-totalExpenses)*15/115,status:(totalRevenue>totalExpenses?"payable":"refundable"),amount:Math.abs((totalRevenue-totalExpenses)*15/115)};
@@ -10767,6 +10786,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
     invoiceTemplateHtml:  user?.invoiceTemplateHtml  || "",
     cipcRegistrationDate: user?.cipcRegistrationDate || "",
     financialYearEnd:     user?.financialYearEnd     || "02-28",
+    lockDate:             "",
     // SARS e@syFile fields
     payeRef:     "",
     sdlRef:      "",
@@ -10814,6 +10834,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         invoiceTemplateHtml:  data.invoice_template_html || f.invoiceTemplateHtml,
         cipcRegistrationDate: data.cipc_registration_date ? data.cipc_registration_date.substring(0,10) : f.cipcRegistrationDate,
         financialYearEnd:     data.financial_year_end    || f.financialYearEnd,
+        lockDate:             data.lock_date || "",
       }));
       setOverdueReminders(data.overdue_reminders_enabled !== false);
       setForm(f => ({
@@ -10909,6 +10930,7 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         invoice_template_html:  form.invoiceTemplateHtml || null,
         cipc_registration_date: form.cipcRegistrationDate || null,
         financial_year_end:     form.financialYearEnd    || null,
+        lock_date:              form.lockDate || "",
         payfast_merchant_id:    form.payfastMerchantId  || null,
         payfast_merchant_key:   form.payfastMerchantKey || null,
         payfast_passphrase:     form.payfastPassphrase  || null,
@@ -11424,6 +11446,11 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
                 <option key={v} value={v}>{l}</option>
               ))}
             </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Lock date (books closed up to)</label>
+            <input type="date" value={form.lockDate||""} onChange={e=>setForm(v=>({...v,lockDate:e.target.value}))} style={inputStyle}/>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>Set this after a VAT return or month is filed. Deleting or reversing anything dated on or before it posts the reversal today instead of back-dating it. Leave empty for no lock.</div>
           </div>
           <div>
             <label style={labelStyle}>Industry</label>

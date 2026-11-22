@@ -120,3 +120,17 @@ def test_bi_monthly_period_includes_both_months():
     co, _ = _co("vj7", OCT)
     r = _vat(co, "2026-09", 2)
     assert r["output"]["field_4a_output_vat"] == 30015 and r["input"]["field_14_input_vat"] == 14500
+
+
+def test_sars_payment_sharing_an_entry_with_a_bank_fee_is_still_ignored():
+    # Okwendalo October: the VAT payment and a cash-deposit fee were imported under one reference
+    co, _ = _co("vj8", OCT.replace("2026-10-23,V1,SARS VAT payment,2100,VAT Output (Payable to SARS),9999,\n"
+                                   "2026-10-23,V1,SARS VAT payment,1000,Bank / Cash,,9999\n",
+        "2026-10-23,V1,Bank,6720,Cash Deposit fee,221.50,\n"
+        "2026-10-23,V1,Bank,1300,VAT Input (Recoverable),33.22,\n"
+        "2026-10-23,V1,Bank,1000,Bank / Cash,,254.72\n"
+        "2026-10-23,V1,Bank,2100,VAT Output (Payable to SARS),9999,\n"
+        "2026-10-23,V1,Bank,1000,Bank / Cash,,9999\n"))
+    r = _vat(co)
+    assert r["output"]["field_4a_output_vat"] == 30000             # the payment is not negative output VAT
+    assert r["input"]["field_14_input_vat"] == 14533.22             # the fee's VAT still counts
