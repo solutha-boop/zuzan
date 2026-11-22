@@ -1512,15 +1512,51 @@ def backfill_company(company_id: int, db: Session) -> dict:
 
 # ── REVERSAL HELPER ──────────────────────────────────────────────────────────
 
+def period_closed(company_id: int, when, db: Session, source: str = None) -> bool:
+    """True when `when` falls in a closed period (2026-11-22):
+    - on or before the company's lock date (books closed), or
+    - for payroll postings, in a month whose EMP201 is marked submitted to SARS."""
+    if when is None:
+        return False
+    d = when.date() if isinstance(when, datetime) else when
+    co = db.query(Company).filter(Company.id == company_id).first()
+    lock = getattr(co, "lock_date", None) if co else None
+    if lock and d <= lock:
+        return True
+    if source and source.startswith("payroll"):
+        from database import Emp201Submission
+        if db.query(Emp201Submission).filter(Emp201Submission.company_id == company_id,
+                                             Emp201Submission.period == d.strftime("%Y-%m")).first():
+            return True
+    return False
+
+
+def reversal_date(entry: JournalEntry, db: Session, preferred=None) -> datetime:
+    """Date for reversing `entry` (2026-11-22): the original date (or `preferred`), so a deleted or
+    corrected document leaves the month it was in; but today when that date is in a closed period,
+    so a filed return or closed month is never changed silently."""
+    when = preferred or entry.date or datetime.utcnow()
+    if period_closed(entry.company_id, when, db, entry.source):
+        now = datetime.utcnow()
+        co = db.query(Company).filter(Company.id == entry.company_id).first()
+        lock = getattr(co, "lock_date", None) if co else None
+        if lock and now.date() <= lock:                       # lock date set in the future: first open day
+            from datetime import timedelta as _td
+            return datetime.combine(lock + _td(days=1), datetime.min.time())
+        return now
+    return when
+
+
 def _post_reversal_for_entry(entry: JournalEntry, db: Session, reason: str = None, date=None) -> JournalEntry:
     """
     Post a single reversal entry that mirrors `entry` with debits/credits swapped.
     Sets `is_reversal_of` on the new entry so the pair can be linked in the UI.
     Internal helper — callers commit after this returns.
+    Dated by reversal_date(): the original date (or `date`) unless that period is closed, then today.
     """
     rev = JournalEntry(
         company_id    = entry.company_id,
-        date          = date or datetime.utcnow(),   # date=entry.date nets a replaced import out in its own period
+        date          = reversal_date(entry, db, date),
         description   = reason or f"Reversal — {entry.description}",
         reference     = f"REV-{entry.reference or entry.id}",
         source        = f"{entry.source}_reversal",
@@ -1575,7 +1611,7 @@ def reverse_journal_entries(
     return count
 
 
-def reverse_entry_by_id(entry_id: int, db: Session, reason: str = None, same_date: bool = False) -> JournalEntry:
+def reverse_entry_by_id(entry_id: int, db: Session, reason: str = None, same_date: bool = True) -> JournalEntry:
     """
     Post a reversal for a single JournalEntry identified by its primary key.
     Raises ValueError if the entry is not found or has already been reversed.
@@ -1588,7 +1624,7 @@ def reverse_entry_by_id(entry_id: int, db: Session, reason: str = None, same_dat
     ).first()
     if already:
         raise ValueError(f"JournalEntry {entry_id} has already been reversed (reversal entry: {already.id})")
-    return _post_reversal_for_entry(entry, db, reason=reason, date=entry.date if same_date else None)
+    return _post_reversal_for_entry(entry, db, reason=reason, date=None if same_date else datetime.utcnow())
 
 
 def process_pending_reversals(company_id: int, db: Session) -> list[int]:
@@ -1625,6 +1661,7 @@ def process_pending_reversals(company_id: int, db: Session) -> list[int]:
         _post_reversal_for_entry(
             entry, db,
             reason=f"Auto-reversal — {entry.description}",
+            date=entry.reversal_date,                 # an accrual reverses on its reversal date, not its own date
         )
         processed.append(entry.id)
 
@@ -1914,9 +1951,52 @@ async def process_reversals_endpoint(
     }
 
 
+@router.post("/redate-reversals")
+async def redate_reversals(
+    on: str,
+    apply: bool = False,
+    current_user=Depends(require_role("owner", "admin", "accountant")),
+    db: Session = Depends(get_db),
+):
+    """One-off repair (2026-11-22): reversals used to be dated the day they were posted. Move the
+    reversals posted on day `on` (YYYY-MM-DD) to the date the current rule gives them - the original
+    entry's date, or the posting day when that period is closed. Dry run unless apply=true."""
+    try:
+        day = datetime.strptime(on, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(400, "on must be a date as YYYY-MM-DD")
+    from datetime import timedelta as _td
+    start = datetime.combine(day, datetime.min.time())
+    revs = db.query(JournalEntry).filter(JournalEntry.company_id == current_user.company_id,
+                                         JournalEntry.is_reversal_of.isnot(None),
+                                         JournalEntry.date >= start, JournalEntry.date < start + _td(days=1)).all()
+    moved, kept = [], 0
+    for rev in revs:
+        orig = db.query(JournalEntry).filter(JournalEntry.id == rev.is_reversal_of,
+                                             JournalEntry.company_id == current_user.company_id).first()
+        if not orig:
+            kept += 1
+            continue
+        if orig.auto_reverse and orig.reversal_date:
+            kept += 1                                   # accrual reversals keep their own reversal date
+            continue
+        target = orig.date if not period_closed(orig.company_id, orig.date, db, orig.source) else None
+        if target is None or target.date() == rev.date.date():
+            kept += 1
+            continue
+        moved.append({"reversal_id": rev.id, "reference": rev.reference, "from": rev.date.date().isoformat(),
+                      "to": target.date().isoformat()})
+        if apply:
+            rev.date = target
+    if apply and moved:
+        db.commit()
+    return {"day": day.isoformat(), "applied": bool(apply), "moved": len(moved), "unchanged": kept, "entries": moved}
+
+
 @router.post("/reverse/{entry_id}")
 async def reverse_entry_endpoint(
     entry_id: int,
+    date_mode: str = "original",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1932,12 +2012,16 @@ async def reverse_entry_endpoint(
     if not entry:
         raise HTTPException(404, "Journal entry not found")
     try:
-        rev = reverse_entry_by_id(entry_id, db, reason=f"Manual reversal — {entry.description}")
+        if date_mode not in ("original", "today"):
+            raise HTTPException(400, "date_mode must be 'original' or 'today'")
+        rev = reverse_entry_by_id(entry_id, db, reason=f"Manual reversal — {entry.description}",
+                                  same_date=(date_mode == "original"))
         db.commit()
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {
         "status":          "ok",
         "reversal_entry_id": rev.id,
-        "message":         f"Reversal entry {rev.id} posted for original entry {entry_id}.",
+        "reversal_date":   rev.date.date().isoformat() if rev.date else None,
+        "message":         f"Reversal entry {rev.id} posted for original entry {entry_id}, dated {rev.date:%d %b %Y}.",
     }

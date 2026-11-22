@@ -62,6 +62,7 @@ class CompanyUpdate(BaseModel):
     billing_exempt:         Optional[bool] = None
     cipc_registration_date: Optional[str] = None  # ISO date — company incorporation anniversary
     financial_year_end:     Optional[str] = None  # "MM-DD" e.g. "02-28"
+    lock_date:              Optional[str] = None  # "YYYY-MM-DD"; "" clears it
     afs_enabled:            Optional[bool] = None
     payroll_enabled:        Optional[bool] = None
     payroll_employees:      Optional[int]  = None
@@ -137,6 +138,7 @@ def _company_dict(c: Company, role: str = "owner") -> dict:
         "payfast_passphrase":   _masked(decrypt_field(c.payfast_passphrase))   if (_full and c.payfast_passphrase)   else "",
         "cipc_registration_date": c.cipc_registration_date.isoformat() if c.cipc_registration_date else None,
         "financial_year_end":     c.financial_year_end or None,
+        "lock_date":              c.lock_date.isoformat() if getattr(c, "lock_date", None) else None,
         "paye_ref": c.paye_ref or "",
         "sdl_ref":  c.sdl_ref  or "",
         "uif_ref":  c.uif_ref  or "",
@@ -180,6 +182,11 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(requi
             setattr(company, field, encrypt_field(value))
         elif field == "cipc_registration_date":
             setattr(company, field, datetime.fromisoformat(value) if value else None)
+        elif field == "lock_date":
+            try:
+                company.lock_date = datetime.strptime(value.strip()[:10], "%Y-%m-%d").date() if (value or "").strip() else None
+            except ValueError:
+                raise HTTPException(status_code=400, detail="lock_date must be a date as YYYY-MM-DD (or empty to clear it)")
         elif field == "plan":
             valid_plans = {"starter", "professional", "business"}
             if value not in valid_plans:
