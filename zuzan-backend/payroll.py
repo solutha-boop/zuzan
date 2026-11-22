@@ -4549,6 +4549,83 @@ def _vat_due_day(y: int, m: int) -> _date:
 def _vat_due_date(y: int, m: int) -> str:
     return _vat_due_day(y, m).strftime("%d %B %Y")
 
+# Journal sources that carry VAT with no invoice, credit note, expense, PO or bank-import record behind
+# them: journal / general-ledger imports, manual journals, and their reversals (2026-11-22).
+_LEDGER_ONLY_VAT_SOURCES = ("import", "import_reversal", "manual", "manual_reversal")
+
+
+def _ledger_only_vat(db, cid: int, start, end) -> dict:
+    """VAT posted to the ledger by journal / general-ledger imports and manual journals in [start, end).
+
+    - VAT accounts: 2100 and anything named "output" VAT is output tax; 1300 and anything named "input"
+      VAT is input tax; a single combined VAT account (Xero 820 "VAT", "VAT Control") is read by sign:
+      credit = output, debit = input.
+    - Settlements are ignored: an entry whose only other lines are bank/cash (or a SARS account) is a
+      payment to or refund from SARS, not a supply. Entries moving VAT between VAT accounts are ignored.
+    - Opening-balance imports (OB-*) and their reversals are ignored: balances, not period activity.
+    - Supplies: standard-rated (field 1) = output VAT / 15%; revenue in these entries above that is
+      zero-rated (field 2), except interest and dividends, which are exempt (field 3).
+    """
+    rows = (db.query(JournalEntry, JournalLine, Account)
+              .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+              .join(Account, JournalLine.account_id == Account.id)
+              .filter(JournalEntry.company_id == cid,
+                      JournalEntry.source.in_(_LEDGER_ONLY_VAT_SOURCES),
+                      JournalEntry.date >= start, JournalEntry.date < end).all())
+    entries = {}
+    for e, l, a in rows:
+        ref = (e.reference or "")
+        if ref.startswith("OB-") or ref.startswith("REV-OB-"):
+            continue
+        entries.setdefault(e.id, (e, []))[1].append((l, a))
+
+    def _name(a): return (a.name or "").lower()
+    def _is_vat(a): return a.code in ("2100", "1300") or "vat" in _name(a)
+    def _is_cash(a):
+        n = _name(a)
+        return (a.type == AccountType.asset and (str(a.code).startswith("10") or
+                any(w in n for w in ("bank", "cash", "current acc", "cheque", "savings"))))
+    def _is_sars(a): return "sars" in _name(a)
+
+    out_vat = in_vat = revenue = exempt = 0.0
+    used = 0
+    for e, lines in entries.values():
+        vat_lines = [(l, a) for l, a in lines if _is_vat(a)]
+        other = [(l, a) for l, a in lines if not _is_vat(a)]
+        if vat_lines and (not other or all(_is_cash(a) or _is_sars(a) for _l, a in other)):
+            continue                                            # SARS payment / refund, or VAT-to-VAT transfer
+        for l, a in other:
+            if a.type == AccountType.revenue:
+                amt = (l.credit or 0) - (l.debit or 0)
+                if any(w in _name(a) for w in ("interest", "dividend")):
+                    exempt += amt
+                else:
+                    revenue += amt
+        if not vat_lines:
+            continue
+        used += 1
+        for l, a in vat_lines:
+            n = _name(a)
+            cr_less_dr = (l.credit or 0) - (l.debit or 0)
+            if a.code == "2100" or "output" in n:
+                out_vat += cr_less_dr
+            elif a.code == "1300" or "input" in n:
+                in_vat -= cr_less_dr
+            elif cr_less_dr > 0:
+                out_vat += cr_less_dr
+            else:
+                in_vat -= cr_less_dr
+    out_vat, in_vat = round(out_vat, 2), round(in_vat, 2)
+    std_excl = round(out_vat / VAT_RATE, 2) if out_vat > 0 else 0.0
+    zero = round(max(0.0, revenue - std_excl), 2)
+    note = (f"Includes VAT from {used} journal entr{'y' if used == 1 else 'ies'} (imports or manual journals): "
+            f"output R{out_vat:,.2f}, input R{in_vat:,.2f}. Supplies on those journals are split by the VAT posted: "
+            f"standard-rated = output VAT / 15%, the rest zero-rated (interest and dividends exempt). "
+            f"Check the split against the source records.") if used else ""
+    return {"output_vat": out_vat, "input_vat": in_vat, "standard_supplies_excl": std_excl,
+            "zero_rated_supplies": zero, "exempt_supplies": round(exempt, 2), "entries": used, "note": note}
+
+
 
 @reports_router.get("/vat201")
 async def vat201(
@@ -4704,6 +4781,14 @@ async def vat201(
             standard_supplies_incl += _v * 115 / 15
             output_vat += _v
             bi_vat_total += _v
+    # 5) VAT that exists only in the ledger (2026-11-22): journal / general-ledger imports and manual
+    #    journals. A client that migrates mid-month has no invoices or expense records for the part of the
+    #    month brought over from QuickBooks/Xero, so without this the VAT201 under-reports.
+    _lj = _ledger_only_vat(db, cid, start, end)
+    output_vat             += _lj["output_vat"]
+    standard_supplies_incl += _lj["standard_supplies_excl"] + _lj["output_vat"]
+    zero_rated_supplies    += _lj["zero_rated_supplies"]
+    exempt_supplies        += _lj["exempt_supplies"]
     standard_supplies_incl = round(standard_supplies_incl, 2)
     zero_rated_supplies    = round(zero_rated_supplies, 2)
     exempt_supplies        = round(exempt_supplies, 2)
@@ -4740,7 +4825,8 @@ async def vat201(
             _exact_in += _amt
         _use = getattr(e, "vat_use", None)
         _pool[_use if _use in ("taxable", "exempt") else "shared"] += _amt
-    input_vat_estimated = round(_exact_in + _legacy_in, 2)
+    _pool["shared"] += _lj["input_vat"]                      # ledger-only input VAT (journal imports, manual journals)
+    input_vat_estimated = round(_exact_in + _legacy_in + _lj["input_vat"], 2)
     vat_is_exact = _legacy_in == 0
     total_expenses_excl = round(total_expenses_incl - input_vat_estimated, 2)
 
@@ -4815,6 +4901,7 @@ async def vat201(
             "vat_recorded_on_invoices":              output_vat_exact,
             "credit_notes_vat_deducted":             cn_vat_total,
             "bank_import_output_vat":                bi_vat_total,
+            "journal_output_vat":                    _lj["output_vat"],
         },
         "input": {
             "field_14_input_vat":                    total_input_vat,
@@ -4826,8 +4913,13 @@ async def vat201(
             "total_expenses_incl_vat":               total_expenses_incl,
             "total_expenses_excl_vat":               total_expenses_excl,
             "expense_count":                          len(expenses),
+            "journal_input_vat":                      _lj["input_vat"],
+            "journal_entries":                        _lj["entries"],
             "expense_breakdown":                      cat_breakdown,
-            "note": ("Input VAT from stored expense records." if vat_is_exact else "Input VAT estimated at 15/115 of expenses. Adjust for any zero-rated or exempt purchases.") + (" Includes PO input VAT on goods received this period." if po_input_vat else ""),
+            "note": " ".join(filter(None, [
+                "Input VAT from stored expense records." if vat_is_exact else "Input VAT estimated at 15/115 of expenses. Adjust for any zero-rated or exempt purchases.",
+                "Includes PO input VAT on goods received this period." if po_input_vat else "",
+                _lj["note"]])),
             "is_exact": vat_is_exact,
         },
         "net": {
