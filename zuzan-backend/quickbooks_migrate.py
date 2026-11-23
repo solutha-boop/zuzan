@@ -261,13 +261,15 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
             a = chart.get(cand.lower())
             if a is not None:
                 return a.code, "", a.type
-        t = None
-        if acct_type_text:
-            t = CI._type_from_xero_name(acct_type_text) or CI._guess_account_type(acct_type_text)
-        if t is None:
-            t = CI._guess_account_type(bare)
-        if t is None and lead:
-            t = CI._infer_type_from_code(lead.group(1))
+        if lead:
+            t = (CI._type_from_xero_name(acct_type_text) or CI._guess_account_type(acct_type_text)
+                 or CI._infer_type_from_code(lead.group(1)))
+            return "", (_DESCRIPTOR[t] if t is not None else ""), t
+        # Standard QuickBooks names that are ZuZan system accounts ("Accounts Receivable (A/R)" -> 1100) and
+        # everyday account names ("Services", "Bank charges", "Subscriptions") - these used to become assets
+        code, t = CI._classify_account(db, cid, "", nm, acct_type_text)
+        if code:
+            return code, "", t
         return "", (_DESCRIPTOR[t] if t is not None else ""), t
 
     # ── Walk rows, tracking the current account ────────────────────────────
@@ -289,16 +291,18 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
             continue
 
         if first and not date_val:                             # account-name row
+            if re.search(r"(accrual|cash) basis|\bGMT\b|^(mon|tues|wednes|thurs|fri|satur|sun)day,", first, re.I):
+                continue                                       # the report's footer, not an account
             current_account_name = first
             current = _resolve(first, _col(row, "accounttype", "type") if has_type_col else "")
-            if current[2] is None:
-                unresolved.add(first)
             continue
 
         if not date_val or not current_account_name:
             continue
 
         code, descriptor, atype = current
+        if atype is None:
+            unresolved.add(current_account_name)
         if has_amount and _col(row, "amount"):
             amount = _num(_col(row, "amount"))
             if amount is None:

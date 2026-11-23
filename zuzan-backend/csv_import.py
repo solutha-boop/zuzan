@@ -39,7 +39,14 @@ router = APIRouter()
 # Each field maps to every recognised column header (lowercased, spaces→_).
 
 def _norm(s: str) -> str:
-    return s.strip().lower().replace(" ", "_").replace("-", "_").replace("/", "_")
+    """Normalise a column header for alias matching. Xero marks required columns with '*' ('*ContactName'),
+    QuickBooks writes 'No.', 'Memo/Description' and 'Account #', Excel adds non-breaking spaces - all of those
+    used to fall through and the column was ignored (import screen audit 2026-11-22)."""
+    s = (s or "").replace("\u00a0", " ").strip().lower()
+    s = re.sub(r"[*.#?:]", "", s)
+    s = re.sub(r"[\s\-/]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s
 
 
 CUSTOMER_ALIASES: dict[str, list[str]] = {
@@ -49,10 +56,13 @@ CUSTOMER_ALIASES: dict[str, list[str]] = {
     "email":         ["email", "email_address", "emailaddress", "contact_email",
                       "e_mail", "e-mail"],
     "phone":         ["phone", "phone_number", "phonenumber", "telephone",
-                      "mobile", "cell", "work_phone", "home_phone"],
+                      "mobile", "cell", "work_phone", "home_phone", "phone_numbers",
+                      "mobile_number", "ddi_number"],
     "address":       ["address", "postal_address", "postaladdress", "billing_address",
                       "billingaddress", "street_address", "postal_address_1",
-                      "billing_street", "mailing_address"],
+                      "billing_street", "mailing_address", "po_address_line_1",
+                      "poaddressline1", "sa_address_line_1", "saaddressline1",
+                      "shipping_address"],
     "vat_number":    ["vat_number", "vat", "tax_number", "taxnumber", "tax_id",
                       "taxid", "vat_reg", "vat_registration"],
     "payment_terms": ["payment_terms", "paymentterms", "terms", "credit_terms",
@@ -64,9 +74,10 @@ SUPPLIER_ALIASES: dict[str, list[str]] = {
     "name":          ["name", "supplier", "vendor", "contact_name", "contactname",
                       "company", "company_name", "payee", "account_name"],
     "email":         ["email", "email_address", "emailaddress", "contact_email"],
-    "phone":         ["phone", "phone_number", "telephone", "mobile"],
-    "address":       ["address", "postal_address", "billing_address",
-                      "postal_address_1", "street_address"],
+    "phone":         ["phone", "phone_number", "phonenumber", "telephone", "mobile",
+                      "phone_numbers", "mobile_number"],
+    "address":       ["address", "postal_address", "billing_address", "billingaddress",
+                      "postal_address_1", "street_address", "poaddressline1", "po_address_line_1"],
     "vat_number":    ["vat_number", "vat", "tax_number", "tax_id", "taxid"],
     "bank_name":     ["bank_name", "bank", "bank_institution", "financial_institution"],
     "account_number":["account_number", "account_no", "acc_number", "bank_account",
@@ -81,18 +92,18 @@ SUPPLIER_ALIASES: dict[str, list[str]] = {
 
 INVOICE_ALIASES: dict[str, list[str]] = {
     "invoice_number": ["invoice_number", "invoiceno", "invoice_no", "invoicenumber",
-                       "number", "ref", "reference", "num", "doc_number",
-                       "document_number", "transaction_number"],
+                       "number", "no", "num", "ref", "reference", "doc_number",
+                       "document_number", "transaction_number", "invoice"],
     "client_name":    ["client_name", "contact_name", "contactname", "customer",
                        "client", "company", "bill_to", "billed_to",
-                       "customer_name"],
+                       "customer_name", "customer_full_name", "display_name", "name"],
     "client_email":   ["client_email", "email", "contact_email", "customer_email"],
     "description":    ["description", "memo", "notes", "line_description",
                        "item_description", "details", "particulars"],
     "amount":         ["amount", "subtotal", "net_amount", "excl_vat", "excl",
                        "net", "line_amount", "subtotal_amount"],
     "vat_amount":     ["vat_amount", "vat", "tax", "tax_amount", "totaltax",
-                       "total_tax", "gst", "gst_amount"],
+                       "total_tax", "tax_total", "gst", "gst_amount"],
     "total_amount":   ["total_amount", "total", "gross", "incl_vat", "amount_due",
                        "grand_total", "invoice_total", "balance_due"],
     "currency":       ["currency", "currency_code", "currencycode"],
@@ -103,6 +114,9 @@ INVOICE_ALIASES: dict[str, list[str]] = {
     "due_date":       ["due_date", "duedate", "payment_due", "due",
                        "due_by", "payment_date"],
     "status":         ["status", "invoice_status", "invoicestatus", "state"],
+    # QuickBooks Invoice List: no status column, but an Open Balance - 0 means the invoice is paid
+    "open_balance":   ["open_balance", "openbalance", "amount_outstanding", "outstanding",
+                       "amount_due_outstanding", "balance"],
 }
 
 EXPENSE_ALIASES: dict[str, list[str]] = {
@@ -118,11 +132,12 @@ EXPENSE_ALIASES: dict[str, list[str]] = {
     "amount_excl":   ["subtotal", "net_amount", "excl_vat", "net", "excl", "line_amount",
                       "amount_(excl_vat)", "amount_excl_vat", "amount_excl"],
     "vat_amount":    ["vat_amount", "vat", "tax", "tax_amount", "totaltax",
-                      "total_tax", "gst"],
+                      "total_tax", "tax_total", "gst"],
+    "account_code":  ["account_code", "accountcode", "gl_code"],
     "category":      ["category", "account", "account_name", "expense_type",
                       "type", "expense_category", "chart_of_account"],
     "expense_date":  ["expense_date", "date", "transaction_date",
-                      "created_date", "invoice_date", "bill_date"],
+                      "created_date", "invoice_date", "invoicedate", "bill_date"],
 }
 
 
@@ -154,12 +169,16 @@ def _auto_backfill(db, cid: int) -> dict:
 
 def _map_headers(headers: list[str], aliases: dict) -> dict[str, int]:
     """Return {field: column_index} for every field we can match in headers."""
-    normed = [_norm(h) for h in headers]
+    normed = [_norm(h).replace("_", "") for h in headers]      # "LineAmount" == "Line Amount" == "line_amount"
     mapping: dict[str, int] = {}
     for field, alts in aliases.items():
-        for i, h in enumerate(normed):
-            if h in alts:
-                mapping[field] = i
+        # The alias list is in priority order: a QuickBooks GL has both "Name" (the customer) and "Account"
+        # columns, and "Name" comes first in the file - matching by column order sent customers into the
+        # chart of accounts (import screen audit 2026-11-22).
+        for alt in alts:
+            a = alt if alt == "" else _norm(alt).replace("_", "")
+            if a in normed:
+                mapping[field] = normed.index(a)
                 break
     return mapping
 
@@ -262,6 +281,13 @@ def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
     Detection is by magic bytes: xlsx/xls are ZIP archives (PK\\x03\\x04).
     Title/metadata rows above the real header are skipped automatically.
     """
+    rows = _read_rows(file_bytes)
+    hi = _find_header_row(rows)
+    return rows[hi], rows[hi + 1:]
+
+
+def _read_rows(file_bytes: bytes) -> list[list[str]]:
+    """Every non-blank row of a CSV or .xlsx upload, title rows included (report layouts need them)."""
     # ── Excel ─────────────────────────────────────────────────────────────────
     if file_bytes[:4] in (b"PK\x03\x04", b"\xd0\xcf\x11\xe0"):
         # xlsx (zip) or xls (OLE2 compound document)
@@ -315,9 +341,7 @@ def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
 
         if not rows_raw:
             raise HTTPException(400, "Excel file is empty or has no data on any sheet")
-
-        hi = _find_header_row(rows_raw)
-        return rows_raw[hi], rows_raw[hi + 1:]
+        return rows_raw
 
     # ── CSV ───────────────────────────────────────────────────────────────────
     # utf-8-sig handles Excel BOM; fall back to latin-1 for Windows exports
@@ -335,9 +359,7 @@ def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
 
     if not rows:
         raise HTTPException(400, "CSV file is empty or unreadable")
-
-    hi = _find_header_row(rows)
-    return rows[hi], rows[hi + 1:]
+    return rows
 
 
 # ── CUSTOMERS ─────────────────────────────────────────────────────────────────
@@ -500,6 +522,7 @@ async def import_invoices(
     imported, errors = 0, []
     # Invoice numbers already in the books (importing the same file twice must not double the revenue)
     known_numbers = {r[0] for r in db.query(Invoice.invoice_number).filter(Invoice.company_id == cid).all()}
+    rows = _merge_invoice_lines(rows, m)
 
     for i, row in enumerate(rows, start=2):
         try:
@@ -532,6 +555,14 @@ async def import_invoices(
             due_date   = _parse_date(_get(row, m, "due_date"))
             currency   = (_get(row, m, "currency", "ZAR") or "ZAR").strip().upper()
             status     = _parse_status(_get(row, m, "status"))
+            _ob_txt    = _get(row, m, "open_balance")
+            if not _get(row, m, "status") and _ob_txt:
+                _ob = _parse_float(_ob_txt)
+                if abs(_ob) < 0.005:
+                    status = InvoiceStatus.paid
+                elif _ob < total - 0.005:
+                    errors.append({"row": i, "message": f"Invoice {inv_no} is part-paid (R{_ob:,.2f} of R{total:,.2f} still open) - "
+                                                        "imported as unpaid; import the payment under Payments Received."})
 
             # Foreign currency (audit fix 2026-07-11): exchange_rate was hard-coded
             # to 1.0, so a USD invoice was valued 1:1 in every ZAR report via
@@ -588,6 +619,54 @@ async def import_invoices(
         "errors":           errors,
         "journal_backfill": {k: v for k, v in backfill.items() if k != "errors"},
     }
+
+
+def _merge_invoice_lines(rows, m):
+    """Xero (and many other systems) export one row per invoice LINE, repeating the invoice number. Only the first
+    line used to be imported - every further line was rejected as 'already exists'. Lines sharing an invoice
+    number are merged into one invoice: line amounts and VAT are added up, descriptions joined, and the invoice
+    total is taken from the Total column when every line repeats the same total (Xero) or summed otherwise."""
+    if "invoice_number" not in m:
+        return rows
+    order, groups = [], {}
+    for row in rows:
+        no = _get(row, m, "invoice_number")
+        key = no or object()
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+    if all(len(g) == 1 for g in groups.values()):
+        return rows
+    width = max(len(r) for r in rows)
+    out = []
+    for key in order:
+        g = groups[key]
+        if len(g) == 1:
+            out.append(g[0]); continue
+        merged = list(g[0]) + [""] * (width - len(g[0]))
+        amt  = sum(_parse_float(_get(r, m, "amount")) for r in g)
+        vat  = sum(_parse_float(_get(r, m, "vat_amount")) for r in g)
+        tots = [_parse_float(_get(r, m, "total_amount")) for r in g]
+        if tots and all(abs(t - tots[0]) < 0.005 for t in tots) and abs(tots[0] - (amt + vat)) < 0.05:
+            tot = tots[0]                                   # each line repeats the invoice total
+        else:
+            tot = sum(tots)
+        def _set(field, val):
+            idx = m.get(field)
+            if idx is not None:
+                merged[idx] = val
+        _set("amount", f"{amt:.2f}" if "amount" in m else "")
+        _set("vat_amount", f"{vat:.2f}")
+        _set("total_amount", f"{tot:.2f}" if tot else "")
+        descs = [d for d in (_get(r, m, "description") for r in g) if d]
+        _set("description", "; ".join(dict.fromkeys(descs))[:500])
+        obs = [_get(r, m, "open_balance") for r in g]
+        if any(obs):
+            ob = [_parse_float(x) for x in obs]
+            _set("open_balance", f"{(ob[0] if all(abs(x - ob[0]) < 0.005 for x in ob) else sum(ob)):.2f}")
+        out.append(merged)
+    return out
 
 
 # ── PAYMENTS RECEIVED ─────────────────────────────────────────────────────────
@@ -784,7 +863,7 @@ async def import_expenses(
                 description  = _get(row, m, "description"),
                 amount       = amount,
                 vat_amount   = _vat,
-                category     = _get(row, m, "category") or "Imported",
+                category     = _get(row, m, "category") or _expense_category_from_code(db, cid, _get(row, m, "account_code")) or "Imported",
                 expense_date = _date,
             ))
             imported += 1
@@ -820,8 +899,10 @@ TRIAL_BALANCE_ALIASES: dict[str, list[str]] = {
     "name":    ["name", "account_name", "account", "description", "gl_account",
                 ""],         # QB Trial Balance: account name column has no header
     "type":    ["type", "account_type", "acc_type", "category", "classification"],
-    "debit":   ["debit", "dr", "debit_balance", "debit_amount"],
-    "credit":  ["credit", "cr", "credit_balance", "credit_amount"],
+    "debit":   ["debit", "dr", "debit_balance", "debit_amount", "debit_year_to_date",
+                "ytd_debit", "debit_ytd", "closing_debit"],
+    "credit":  ["credit", "cr", "credit_balance", "credit_amount", "credit_year_to_date",
+                "ytd_credit", "credit_ytd", "closing_credit"],
     "balance": ["balance", "amount", "net_balance", "net", "closing_balance"],
 }
 
@@ -851,7 +932,7 @@ GENERAL_LEDGER_ALIASES: dict[str, list[str]] = {
     "reference":    ["reference", "ref", "journal_no", "journal_number", "journalnumber",
                      "document_no", "doc_no", "transaction_no", "batch_no", "source_ref",
                      "source_document"],
-    "description":  ["description", "narration", "memo", "notes", "details",
+    "description":  ["description", "narration", "memo", "memo_description", "notes", "details",
                      "particulars", "comment"],
     "account_code": ["account_code", "code", "acc_code", "account_no", "account_number",
                      "gl_code", "accountcode"],
@@ -859,7 +940,7 @@ GENERAL_LEDGER_ALIASES: dict[str, list[str]] = {
     # Xero GL exports a 'Name' column containing the account class/type descriptor
     # ("Bank", "Revenue", "Current Liability", "Equity", etc.). Capturing it lets us
     # assign the correct AccountType instead of guessing from the code range.
-    "xero_type":    ["name"],
+    "xero_type":    ["account_type", "accounttype", "name"],
     "debit":        ["debit", "dr", "debit_amount"],
     "credit":       ["credit", "cr", "credit_amount"],
     # Xero exports a single signed amount column instead of separate debit/credit
@@ -918,6 +999,92 @@ def _guess_account_type(s: str):
     ):
         if any(w in v for w in words):
             return typ
+    return None
+
+
+# Everyday expense words that carry no "expense"/"cost" keyword (QuickBooks and Xero default chart names).
+# Matched on word boundaries: "rent" must not fire inside "current assets".
+_EXPENSE_WORDS = re.compile(
+    r"\b(bank charges?|charges|subscriptions?|meals?|entertainment|insurance|advertising|marketing|promotion(al)?|"
+    r"repairs?|maintenance|security|printing|stationery|stationary|travel(ling)?|flights?|accommodation|"
+    r"telephone|cellphone|phone|internet|data|rent|rental|utilities|electricity|water|fuel|petrol|legal|"
+    r"professional fees|accounting fees|audit fees|consulting fees|commissions?|postage|courier|cleaning|"
+    r"training|donations?|penalt(y|ies)|bad debts?|licen[cs]es?|uniforms?|tolls?|parking|refreshments|"
+    r"staff welfare|general expenses?|sundry|sundries|wages|salaries|uif|sdl)\b", re.I)
+_REVENUE_NAMES = {"services", "service", "service income", "consulting", "consulting income", "fees received",
+                  "fee income", "commission received", "interest received", "rental income", "other income"}
+# Standard QuickBooks / Xero account names that are ZuZan system accounts: land them on the system account
+# instead of creating a look-alike ("Accounts Receivable (A/R)" next to 1100 Accounts Receivable).
+_SYSTEM_ACCOUNT_NAMES = {
+    "accounts receivable": "1100", "debtors": "1100", "debtors control": "1100", "trade debtors": "1100",
+    "trade receivables": "1100", "trade and other receivables": "1100",
+    "accounts payable": "2000", "creditors": "2000", "creditors control": "2000", "trade creditors": "2000",
+    "trade payables": "2000", "trade and other payables": "2000",
+    "opening balance equity": "3999", "opening balances": "3999",
+    "retained earnings": "3000", "retained income": "3000", "accumulated profit": "3000",
+    "inventory": "1200", "inventory asset": "1200", "stock on hand": "1200",
+    "paye payable": "2200", "uif payable": "2210", "sdl payable": "2220",
+}
+
+
+def _classify_account(db, cid: int, code: str, name: str, type_text: str = ""):
+    """(account code to post to, AccountType or None) for an imported account.
+    Order: an explicit type column -> an account of that name already in the chart (any type) -> a standard
+    QuickBooks/Xero name that is a ZuZan system account -> a numeric code -> words in the name.
+    Returns type None when nothing says what the account is, so the caller can warn instead of silently
+    calling it an asset."""
+    code = (code or "").strip()
+    nm = (name or "").strip()
+    bare = re.sub(r"\s*\([^)]*\)\s*$", "", nm).strip()            # "Accounts Receivable (A/R)", "Sales (200)"
+    t = _type_from_xero_name(type_text) or _guess_account_type(type_text)
+    if not code:
+        for cand in (nm, bare):
+            if not cand:
+                continue
+            a = db.query(Account).filter(Account.company_id == cid,
+                                         func.lower(func.trim(Account.name)) == cand.lower()).first()
+            if a is not None:
+                return a.code, (t or a.type)
+        sys_code = _SYSTEM_ACCOUNT_NAMES.get(bare.lower())
+        if sys_code:
+            a = (_ob_equity_account(db, cid) if sys_code == "3999" else
+                 db.query(Account).filter(Account.company_id == cid, Account.code == sys_code).first())
+            if a is not None:
+                return a.code, (t or a.type)
+    if t is not None:
+        return code, t
+    if code and code[:1].isdigit():
+        return code, _infer_type_from_code(code)
+    return code, (_guess_name_type(nm) or _guess_name_type(bare))
+
+
+def _expense_category_from_code(db, cid: int, code: str) -> str:
+    """Xero bills carry an AccountCode, not a category name: post to that account ("5200 - Utilities")."""
+    code = (code or "").strip()
+    if not code:
+        return ""
+    a = db.query(Account).filter(Account.company_id == cid, Account.code == code).first()
+    return f"{a.code} - {a.name}" if a else code
+
+
+_ASSET_WORDS = re.compile(r"\b(cheque|savings|current account|call account|petty cash|money market|fixed deposit|"
+                          r"undeposited funds|deposits? paid|prepayments?|loan to)\b", re.I)
+
+
+def _guess_name_type(name: str):
+    """Account type from an account NAME alone (no type column, no code)."""
+    v = (name or "").strip().lower()
+    if not v:
+        return None
+    if v in _REVENUE_NAMES:
+        return AccountType.revenue
+    t = _guess_account_type(v)
+    if t is not None:
+        return t
+    if _ASSET_WORDS.search(v):
+        return AccountType.asset
+    if _EXPENSE_WORDS.search(v):
+        return AccountType.expense
     return None
 
 
@@ -1176,6 +1343,102 @@ def _add_ob_offset(db, entry_id: int, acct_id: int, ob_offset: float) -> None:
 _TOTAL_LINE = re.compile(r"^\s*(grand\s*)?totals?\b", re.I)
 
 
+_COMPUTED_LINE = re.compile(r"^\s*(gross\s+profit|net\s+(operating\s+)?(income|earnings|profit|loss|other\s+income|assets)|"
+                            r"operating\s+profit|profit\s+(before|after)|total\b|net\s+profit)", re.I)
+_NET_INCOME_LINE = re.compile(r"^\s*(net\s+(income|earnings|profit|loss)|profit\s+for\s+the\s+(year|period)|current\s+year\s+earnings)\b", re.I)
+
+
+def _report_section_type(label: str, kind: str):
+    v = (label or "").strip().lower()
+    if kind == "pl":
+        if re.search(r"cost of (sales|goods)|direct cost|cogs|purchases", v):
+            return AccountType.cogs
+        if re.search(r"income|revenue|sales|turnover|trading", v):
+            return AccountType.revenue
+        if re.search(r"expense|overhead|operating|admin", v):
+            return AccountType.expense
+        return None
+    if re.search(r"liabilit", v) and not re.search(r"equity", v):
+        return AccountType.liability
+    if re.search(r"equity|capital", v) and not re.search(r"liabilit", v):
+        return AccountType.equity
+    if re.search(r"asset", v):
+        return AccountType.asset
+    return None
+
+
+def _looks_like_report(rows: list[list[str]]) -> bool:
+    """A formatted report (QuickBooks/Xero P&L or Balance Sheet export) rather than a flat table: it has
+    section-heading rows with no amount and 'Total ...' rows."""
+    sections = totals = 0
+    for r in rows:
+        cells = [c.strip() for c in r]
+        filled = [c for c in cells if c]
+        if not filled:
+            continue
+        if _TOTAL_LINE.match(filled[0]):
+            totals += 1
+        elif len(filled) == 1 and not _parse_float(filled[0]) and not re.match(r"^[\d\s,.()R-]+$", filled[0]):
+            sections += 1
+    return sections >= 1 and totals >= 1
+
+
+def _report_lines(rows: list[list[str]], kind: str):
+    """Turn a formatted P&L (kind='pl') or Balance Sheet (kind='bs') report into
+    [(row_no, code, name, AccountType or None, amount)]. Section headings set the type of the lines under
+    them; Total / Gross Profit / Net ... lines are skipped (a balance sheet's Net Income line is returned so it
+    can go to retained income). With several amount columns the one headed 'Total' is used, else the first."""
+    amt_col = None
+    for r in rows[:15]:
+        for j, c in enumerate(r):
+            if c.strip().lower() == "total":
+                amt_col = j
+    stack: list[tuple[int, AccountType]] = []
+    out = []
+    for i, r in enumerate(rows, start=1):
+        cells = [str(c) for c in r]
+        if not any(c.strip() for c in cells):
+            continue
+        name_j = next((j for j, c in enumerate(cells) if c.strip()), None)
+        raw_name = cells[name_j]
+        name = raw_name.strip()
+        indent = len(raw_name) - len(raw_name.lstrip(" ")) + name_j * 3
+        nums = [(j, c) for j, c in enumerate(cells) if j > name_j and c.strip() and re.match(r"^[\sR(]*-?[\d\s,.]+\)?-?$", c.strip())]
+        if not nums:                                         # a section heading
+            t = _report_section_type(name, kind)
+            while stack and stack[-1][0] >= indent:
+                stack.pop()
+            if t is not None:
+                stack.append((indent, t))
+            elif stack:
+                stack.append((indent, stack[-1][1]))      # "Bank Accounts" inherits "Current Assets"
+            continue
+        if _TOTAL_LINE.match(name):
+            continue
+        if kind == "bs" and _NET_INCOME_LINE.match(name):
+            pass
+        elif _COMPUTED_LINE.match(name):
+            continue
+        val_txt = None
+        if amt_col is not None and amt_col < len(cells) and cells[amt_col].strip():
+            val_txt = cells[amt_col]
+        if val_txt is None:
+            val_txt = nums[0][1]
+        amount = _parse_float(val_txt)
+        code = ""
+        mm = re.match(r"^(\d[\d/.-]{1,11})\s*[-–]?\s+(.+)$", name) or None
+        if mm:
+            code, name = mm.group(1), mm.group(2).strip()
+        else:
+            mm = re.match(r"^(.+?)\s*\((\d[\d/.-]{1,11})\)$", name)
+            if mm:
+                name, code = mm.group(1).strip(), mm.group(2)
+        while stack and stack[-1][0] > indent:              # a line at the heading's own indent stays under it (Xero)
+            stack.pop()
+        out.append((i, code, name, stack[-1][1] if stack else None, amount))
+    return out
+
+
 def _is_report_total(name: str, code: str) -> bool:
     """A report's 'Total' / 'TOTALS' / 'Grand total' line, not an account. A real account always has a numeric
     code or no total-word name (audit fix 2026-11-15: Okwendalo's TOTALS row was imported as an account with
@@ -1207,6 +1470,7 @@ async def import_trial_balance(
     cid           = cu.company_id
     headers, rows = _read_csv(await file.read())
     m             = _map_headers(headers, TRIAL_BALANCE_ALIASES)
+    unclassified: list[str] = []
 
     if "name" not in m:
         raise HTTPException(
@@ -1254,11 +1518,14 @@ async def import_trial_balance(
                 skipped += 1
                 continue
 
-            atype = _resolve_type(_get(row, m, "type"), code)
+            if code and _get(row, m, "name") and re.search(r"\(\s*" + re.escape(code) + r"\s*\)\s*$", name):
+                name = re.sub(r"\s*\(\s*" + re.escape(code) + r"\s*\)\s*$", "", name)   # Xero: "Sales (200)"
+            code, atype = _classify_account(db, cid, code, name, _get(row, m, "type"))
             if atype is None and (debit == 0.0 and credit == 0.0):
                 raise ValueError(f"Cannot tell what kind of account '{name}' is (no recognisable Type and no numeric code) - row not imported.")
             if atype is None:
                 atype = AccountType.asset   # explicit Debit/Credit given: the side is known, so the type only labels a new account
+                unclassified.append(name)
 
             # Balance column only: the sign says which side (a negative asset is a credit)
             if debit == 0.0 and credit == 0.0:
@@ -1278,6 +1545,10 @@ async def import_trial_balance(
     res = {"entity": "trial_balance", "total_rows": len(rows),
            "imported": imported, "skipped": skipped, "errors": errors,
            "balancing_to_opening_equity": out_of_balance}
+    if unclassified:
+        res["warnings"] = [f"{len(unclassified)} account(s) have no type, code or recognisable name and were created as assets: "
+                           + ", ".join(unclassified[:10]) + (" ..." if len(unclassified) > 10 else "")
+                           + ". Add a Type column (or account codes), or fix them in Chart of Accounts."]
     if total_lines:
         res["total_lines_skipped"] = total_lines
     if abs(out_of_balance) >= 0.01:
@@ -1305,8 +1576,19 @@ async def import_balance_sheet(
     Accepted columns: Classification, Code, Account Name, Balance (or Debit/Credit).
     """
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    _raw          = _read_rows(await file.read())
+    _hi           = _find_header_row(_raw)
+    headers, rows = _raw[_hi], _raw[_hi + 1:]
     m             = _map_headers(headers, BALANCE_SHEET_ALIASES)
+    if "classification" not in m and _looks_like_report(_raw):
+        # QuickBooks / Xero Balance Sheet report: sections instead of a Classification column
+        headers = ["Classification", "Code", "Account Name", "Balance"]
+        rows = []
+        for _i, _code, _name, _t, _amt in _report_lines(_raw, "bs"):
+            if _NET_INCOME_LINE.match(_name):
+                _code, _t, _name = "3000", AccountType.equity, "Retained Income"
+            rows.append([_t.value if _t else "", _code, _name, f"{_amt:.2f}"])
+        m = _map_headers(headers, BALANCE_SHEET_ALIASES)
 
     if "name" not in m:
         raise HTTPException(
@@ -1349,7 +1631,10 @@ async def import_balance_sheet(
                 skipped += 1
                 continue
 
-            atype = _resolve_type(_get(row, m, "classification"), code)
+            if _is_report_total(name, code):
+                skipped += 1
+                continue
+            code, atype = _classify_account(db, cid, code, name, _get(row, m, "classification"))
             if atype is None and (debit == 0.0 and credit == 0.0):
                 raise ValueError(f"Cannot tell whether '{name}' is an asset, liability or equity (no recognisable Classification and no numeric code) - row not imported.")
             if atype is None:
@@ -1397,8 +1682,16 @@ async def import_profit_loss(
     Accepted columns: Type (Revenue/Expense), Code, Account Name, Amount.
     """
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    _raw          = _read_rows(await file.read())
+    _hi           = _find_header_row(_raw)
+    headers, rows = _raw[_hi], _raw[_hi + 1:]
     m             = _map_headers(headers, PROFIT_LOSS_ALIASES)
+    if ("name" not in m or "type" not in m) and _looks_like_report(_raw):
+        # QuickBooks / Xero Profit and Loss report: Income / Cost of Sales / Expenses sections, indented lines,
+        # Total and Gross Profit / Net Earnings lines (it used to fail with "No account name column found")
+        headers = ["Type", "Code", "Account Name", "Amount"]
+        rows = [[_t.value if _t else "", _code, _name, f"{_amt:.2f}"] for _i, _code, _name, _t, _amt in _report_lines(_raw, "pl")]
+        m = _map_headers(headers, PROFIT_LOSS_ALIASES)
 
     if "name" not in m:
         raise HTTPException(
@@ -1446,7 +1739,10 @@ async def import_profit_loss(
                 skipped += 1
                 continue
 
-            atype = _resolve_type(tp, code)
+            if _is_report_total(name, code) or (not code and _COMPUTED_LINE.match(name)):
+                skipped += 1
+                continue
+            code, atype = _classify_account(db, cid, code, name, tp)
             if atype not in (AccountType.revenue, AccountType.cogs, AccountType.expense):
                 raise ValueError(f"Cannot tell whether '{name}' is income or an expense (Type '{tp}') - row not imported.")
             acct  = _find_or_create_account(db, cid, code, name, atype)
@@ -1494,11 +1790,19 @@ def _import_journal_rows(
     # One journal = same reference AND same date (a reference such as "JNL1" reused in a later month
     # is a different journal, not more lines of the first one).
     groups: dict[tuple, list[tuple[int, list[str]]]] = defaultdict(list)
+    _has_ref = "reference" in m
     for i, row in enumerate(rows, start=2):
-        ref = _get(row, m, "reference") or f"IMP-{i:04d}"
+        ref = _get(row, m, "reference")
+        if not ref and not _has_ref and _get(row, m, "description"):
+            # No reference column at all (Xero manual-journal export): the lines of one journal share its
+            # Narration and date. Keying every line on its own row number made each line an "unbalanced journal".
+            ref = "MJ-" + re.sub(r"\s+", " ", _get(row, m, "description"))[:40]
+        ref = ref or f"IMP-{i:04d}"
         groups[(ref, _get(row, m, "date"))].append((i, row))
 
     imported, skipped, errors = 0, 0, []
+    unclassified: set[str] = set()
+    _known_codes = {r[0] for r in db.query(Account.code).filter(Account.company_id == cid).all()}
 
     # Journals already imported (same reference, date and total) are skipped, so re-uploading the same file
     # cannot double the ledger.
@@ -1529,11 +1833,17 @@ def _import_journal_rows(
             # Unbalanced groups are now rejected with a clear per-row error.
             pending_lines = []
             total_dr = total_cr = 0.0
+            _unknown_code = None
             for row_i, row in group_rows:
                 code  = _get(row, m, "account_code")
                 name  = _get(row, m, "account_name")
                 if not code and not name:
                     continue
+                if code and not name and code not in _known_codes:
+                    # A code-only line (Xero manual journal) for a code that is not in the chart used to create an
+                    # account literally named "800", typed by its first digit (800 Accounts Payable -> expense)
+                    _unknown_code = code
+                    break
                 debit  = _parse_float(_get(row, m, "debit"))
                 credit = _parse_float(_get(row, m, "credit"))
                 if debit == 0.0 and credit == 0.0 and "net_amount" in m:
@@ -1550,6 +1860,13 @@ def _import_journal_rows(
                 pending_lines.append((code, name, debit, credit, line_desc, xero_type))
                 total_dr += debit
                 total_cr += credit
+
+            if _unknown_code:
+                skipped += 1
+                errors.append({"row": group_rows[0][0], "message": (
+                    f"Journal '{ref}': account code {_unknown_code} is not in your chart of accounts and the file has no "
+                    "account name for it - group NOT imported. Import the chart of accounts first, or add an Account Name column.")})
+                continue
 
             if not pending_lines:
                 skipped += 1
@@ -1591,7 +1908,17 @@ def _import_journal_rows(
                 # chart). Xero code-range inference is NOT used here: it conflicts with
                 # ZuZan's GAAP codes (audit fix 2026-11-05).
                 _xt   = _type_from_xero_name(xero_type)
-                atype = _xt or _infer_type_from_code(code)
+                if _xt:
+                    atype = _xt
+                elif code and code[:1].isdigit():
+                    atype = _infer_type_from_code(code)
+                else:
+                    # No code (or a non-numeric one): use the chart, standard QuickBooks/Xero names and the
+                    # account name - every such line used to become an asset
+                    code, atype = _classify_account(db, cid, code, name)
+                    if atype is None:
+                        atype = AccountType.asset
+                        unclassified.add(name or code)
                 acct  = _find_or_create_account(db, cid, code, name, atype, retype=bool(_xt))
                 db.add(JournalLine(entry_id=entry.id, account_id=acct.id,
                                    debit=debit, credit=credit, description=line_desc))
@@ -1602,8 +1929,16 @@ def _import_journal_rows(
             errors.append({"row": group_rows[0][0], "message": str(e)})
 
     db.commit()
-    return {"entity": entity, "total_rows": len(rows),
-            "imported": imported, "skipped": skipped, "errors": errors}
+    res = {"entity": entity, "total_rows": len(rows),
+           "imported": imported, "skipped": skipped, "errors": errors}
+    if unclassified:
+        res["warnings"] = [f"{len(unclassified)} account(s) could not be classified and were created as assets: "
+                           + ", ".join(sorted(unclassified)[:10]) + (" ..." if len(unclassified) > 10 else "")
+                           + ". Fix them in Chart of Accounts (or use account codes in the file)."]
+    if imported == 0 and not errors and rows:
+        raise HTTPException(400, "No journal lines were found in this file. Each line needs a Date, an Account "
+                                 "(name or code) and a Debit or Credit amount.")
+    return res
 
 
 # ── GENERAL LEDGER ────────────────────────────────────────────────────────────
@@ -1622,8 +1957,16 @@ async def import_general_ledger(
     Debit, Credit.
     """
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    content       = await file.read()
+    headers, rows = _read_csv(content)
     m             = _map_headers(headers, GENERAL_LEDGER_ALIASES)
+
+    if _is_qbo_gl_report(headers, rows, m):
+        # A QuickBooks General Ledger report (account headings, a Transaction Type column, no reference per
+        # journal): every line used to be its own one-sided "journal" and the whole file was rejected.
+        from quickbooks_migrate import import_qbo_general_ledger
+        return await import_qbo_general_ledger(file=UploadFile(file=io.BytesIO(content), filename=file.filename or "gl.csv"),
+                                               current_user=cu, db=db)
 
     if "debit" not in m and "credit" not in m and "net_amount" not in m:
         raise HTTPException(
@@ -1632,6 +1975,13 @@ async def import_general_ledger(
         )
 
     return _import_journal_rows(db, cid, rows, m, entity="general_ledger")
+
+
+def _is_qbo_gl_report(headers, rows, m) -> bool:
+    """QuickBooks GL report layout: a Transaction Type column and account-heading rows (text in the first column only)."""
+    if "transaction_type" not in {_norm(h) for h in headers}:
+        return False
+    return any((r and str(r[0]).strip() and not any(str(c).strip() for c in r[1:])) for r in rows[:50])
 
 
 # ── RECLASSIFY EXISTING GL ACCOUNTS ──────────────────────────────────────────

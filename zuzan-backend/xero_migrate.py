@@ -116,6 +116,9 @@ def result(res: dict, warnings=None, **extra) -> dict:
     warns = list(warnings or [])
     if res.get("warning"):
         warns.append(res["warning"])
+    for w in res.get("warnings") or []:                  # csv_import results carry a list too - it was dropped
+        if w not in warns:
+            warns.append(w)
     out = {"imported": int(res.get("imported", 0) or 0), "skipped": int(res.get("skipped", 0) or 0),
            "errors": fmt_errors(res.get("errors")), "warnings": warns}
     out.update(extra)
@@ -166,7 +169,16 @@ def import_chart(db: Session, cu, rows: list[dict], code_cols, name_cols, type_c
         if atype is None:
             errors.append(f"Row {i}: account '{name}' - cannot tell what kind of account it is (no recognisable Type); not imported.")
             continue
+        if not code:
+            # QuickBooks lists have no account numbers: "Accounts Receivable (A/R)" / "Opening Balance Equity" are
+            # ZuZan's own 1100 / 3999 - don't create look-alikes beside them
+            sys_code, _t = CI._classify_account(db, cid, "", name, pick(row, *type_cols))
+            if sys_code:
+                code = sys_code
         acct = CI._find_or_create_account(db, cid, code, name, atype)
+        if code and acct.code != code and acct.is_system:
+            warnings.append(f"'{code} {name}' is ZuZan's {acct.code} {acct.name}. Journal or GL files that use code {code} "
+                            f"must use {acct.code} (or carry the account name) so they post to it.")
         if acct.id in existing_ids:
             skipped += 1
         else:

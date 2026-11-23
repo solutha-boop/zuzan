@@ -16563,36 +16563,47 @@ function DataImport({live = {}}) {
     URL.revokeObjectURL(url);
   }
 
-  // Auto-detect the correct import tab from CSV column headers
+  // Auto-detect the correct import tab from CSV column headers.
+  // Headers are normalised like the backend does (Xero's "*ContactName", QuickBooks' "No." and
+  // "Memo/Description"). Rewritten 2026-11-22: the old rules sent the Income Statement template to
+  // Trial Balance, Payroll Adjustments to Employees, Xero contacts to Employees and QuickBooks
+  // invoice lists and General Ledgers to Customers.
   function detectTab(headers) {
-    const norm = headers.map(h => h.trim().toLowerCase().replace(/[\s_-]+/g, ""));
+    const norm = headers.map(h => String(h || "").toLowerCase().replace(/[\s_\-*.#/?:()]+/g, ""));
     const has  = (...keys) => keys.some(k => norm.includes(k));
-    if (has("firstname","first_name","firstname"))            return "employees";
-    // A payments file has an invoice number + an amount received but no client/customer name
-    if (has("invoicenumber","invoiceno","invoicenum","invoice","inv_no") && !has("clientname","client","contactname","customer","customername","name") &&
-        has("amount","amountreceived","paymentamount","payment","amountpaid","paymentdate","datereceived","datepaid")) return "payments";
-    if (has("invoicenumber","invoiceno","inv_no"))            return "invoices";
-    if (has("expensedate","expense_date"))                    return "expenses";
-    if (has("idnumber","id_number","employeenumber","emp_no"))return "payroll_adjustments";
-    // General Ledger: has a date column + a journal/reference column (before trial_balance check,
-    // because Xero GL files also have AccountName which would otherwise match trial_balance).
-    if (has("journaldate","journalnumber","journalno","journalnum") &&
-        has("accountname","accountcode","account_name","account_code")) return "general_ledger";
-    if (has("date") && has("journalnumber","journalno","journalnum","reference","ref") &&
-        (has("debit","credit","netamount","net_amount")))     return "general_ledger";
-    if (has("classification"))                                return "balance_sheet";
-    // Trial Balance: account names/codes with debit/credit but NO date column
-    if (has("accountname","account_name") && !has("date","journaldate") &&
-        has("debit","credit"))                                return "trial_balance";
-    if (has("code","accountname","account_name") &&
-        has("accountname","account_name") &&
-        !has("date","journaldate"))                           return "trial_balance";
-    if (has("journalno","journalnum"))                        return "journals";
-    // suppliers have bank columns; customers don't
-    if (has("bankname","bank_name","accountnumber","account_number")) return "suppliers";
-    if (has("name","contactname","customer","company"))       return "customers";
+    const hasDate   = has("date","transactiondate","journaldate","postingdate","invoicedate","expensedate");
+    const hasDrCr   = has("debit","credit","dr","cr") || norm.some(h => h.startsWith("debit") || h.startsWith("credit"));
+    const hasAcct   = has("account","accountname","accountcode","code","gl","glaccount","glcode");
+    const hasInvNo  = has("invoicenumber","invoiceno","invno","invoicenum","no","num");
+    const hasParty  = has("customer","clientname","client","contactname","customername","vendor","supplier","name");
+
+    if (has("assetname","assetnumber","usefullife","usefullifeyears","purchaseprice","wearandtearrate","accumulateddepreciation")) return "fixed_assets";
+    // Ledgers: a date, an account and debit/credit (or one signed amount)
+    if (hasDate && hasAcct && (hasDrCr || has("amount","netamount"))) {
+      if (has("journalno","journalnumber","journalnum","narration")) return "journals";
+      return "general_ledger";
+    }
+    if (has("classification") && !hasDate)                                     return "balance_sheet";
+    // Income statement template: Type + Account Name + Amount, no debit/credit
+    if (has("type","accounttype","section") && has("amount","total","ytdamount") && !hasDrCr && !hasDate &&
+        has("accountname","account","name"))                                  return "profit_loss";
+    // Trial balance: accounts (or QuickBooks' blank first column) with debit/credit and no date
+    if (hasDrCr && !hasDate)                                                  return "trial_balance";
+    // Payroll adjustments update existing staff only: no appointment/start date, no bank details
+    if (has("grosssalary","pensionemployeepct","medicalaidemployee") && has("idnumber","employeenumber") &&
+        !has("appointmentdate","startdate","bankname","dateofbirth","accountnumber"))   return "payroll_adjustments";
+    if (has("firstname") && has("lastname") && has("idnumber","employeenumber","grosssalary","startdate","appointmentdate","taxnumber"))
+                                                                               return "employees";
+    if (hasInvNo && !hasParty && has("amount","amountreceived","paymentamount","amountpaid") &&
+        has("paymentdate","datereceived","datepaid","date"))                  return "payments";
+    if (has("expensedate"))                                                    return "expenses";
+    if (has("invoicenumber","invoiceno","invno") || (hasInvNo && has("customer","clientname","customername") && hasDate))
+                                                                               return "invoices";
+    if (has("bankname","accountnumber","branchcode") || has("vendor","supplier")) return "suppliers";
+    if (has("name","contactname","customer","company","customername","displayname")) return "customers";
     return null; // no confident match — leave tab as-is
   }
+
 
   // Client-side parse for preview only
   function handleFileChange(e) {
@@ -16622,19 +16633,25 @@ function DataImport({live = {}}) {
                   : "\t";
 
       const parseLine = l => l.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
-      const headers   = parseLine(lines[0]);
-      const rows      = lines.slice(1, 6).map(parseLine);
+      // Accounting exports put title rows (company, report name, period) above the real headers:
+      // use the first line with at least two filled cells, as the backend does.
+      const hi        = Math.max(0, lines.findIndex(l => parseLine(l).filter(c => c && !/^[,;|_-]$/.test(c)).length >= 2));
+      const headers   = parseLine(lines[hi]);
+      const rows      = lines.slice(hi + 1, hi + 6).map(parseLine);
 
       // Auto-switch tab if we can confidently identify the data type
       // General Ledger and Journals take the same columns (Date, Reference/Journal No,
       // Description, Account Code, Account Name, Debit, Credit) and both import
       // correctly, so never jump between those two — keep the tab the user chose.
+      // Never jump between tabs that take the same file: General Ledger / Journals, Customers /
+      // Suppliers (a contact list can be either) and Invoices / Expenses (Xero bills and sales
+      // invoices export identical columns) — keep the tab the user chose.
       const detected = detectTab(headers);
-      const LEDGER_TABS = ["general_ledger", "journals"];
-      const sameFamily = LEDGER_TABS.includes(detected) && LEDGER_TABS.includes(tab);
+      const FAMILIES = [["general_ledger", "journals"], ["customers", "suppliers"], ["invoices", "expenses"]];
+      const sameFamily = FAMILIES.some(f => f.includes(detected) && f.includes(tab));
       if (detected && detected !== tab && !sameFamily) setTab(detected);
 
-      setPreview({headers, rows, total: lines.length - 1, xlsx: false});
+      setPreview({headers, rows, total: lines.length - hi - 1, xlsx: false});
     };
     reader.readAsText(f);
   }
