@@ -8,6 +8,9 @@ _TMP = tempfile.mkdtemp(prefix="zuzan_tests_")
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 os.environ["DATABASE_URL"] = f"sqlite:///{_TMP}/zuzan_test.db"
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
+# Field encryption ON in tests (security audit 2026-11-23) so encrypted columns are exercised everywhere.
+# Throwaway key generated for the test suite only - never used anywhere else.
+os.environ.setdefault("FIELD_ENCRYPTION_KEY", "8rde6yUOKB5F2G1Qm4G355ps1woQymEzRpeLtJbjDTQ=")
 os.environ.pop("RENDER", None)
 os.environ.pop("CORS_ORIGINS", None)
 os.environ["ZUZAN_DISABLE_THROTTLE"] = "1"      # the per-IP request ceiling would trip on the big route sweeps; tests/test_security_hardening.py switches it on

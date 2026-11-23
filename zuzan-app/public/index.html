@@ -2,6 +2,9 @@
 <html lang="en-ZA">
   <head>
     <meta charset="utf-8" />
+    <!-- Content-Security-Policy (security audit 2026-11-23): scripts only from this site, API calls only to the
+         ZuZan backend and Sentry - limits what an injected script could load or where it could send a token. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://zuzan-backend.onrender.com https://*.sentry.io; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'">
     <script>
       // The Render address is only a fallback: send everyone to the real domain, keeping the path (client portal
       // links, password-reset links), query string and hash. Exact host match, so app.zuzan.co.za never loops.

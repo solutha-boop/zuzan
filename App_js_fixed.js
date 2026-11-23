@@ -13,8 +13,17 @@ Sentry.init({
   // Session Replay deliberately disabled — financial data privacy (POPIA)
   replaysSessionSampleRate: 0,
   replaysOnErrorSampleRate: 0,
+  sendDefaultPii: false,
   beforeSend(event) {
     if (window.location.hostname === "localhost") return null; // silence local dev noise
+    // POPIA (security audit 2026-11-23): strip tokens, request bodies and long digit runs (ID/account numbers)
+    try {
+      const scrub = (v) => typeof v === "string" ? v.replace(/\b\d{6,}\b/g, "[Filtered]").replace(/Bearer\s+[\w.-]+/g, "Bearer [Filtered]") : v;
+      if (event.request) { delete event.request.data; delete event.request.cookies; if (event.request.headers) delete event.request.headers.Authorization; if (event.request.url) event.request.url = event.request.url.replace(/([?&](token|key|full)=)[^&]*/gi, "$1[Filtered]"); }
+      delete event.user;
+      (event.breadcrumbs || []).forEach(b => { if (b.message) b.message = scrub(b.message); if (b.data) { delete b.data.body; if (b.data.url) b.data.url = scrub(String(b.data.url)); } });
+      ((event.exception && event.exception.values) || []).forEach(x => { if (x.value) x.value = scrub(x.value); });
+    } catch (e) { /* never block error reporting */ }
     return event;
   },
 });
@@ -3128,6 +3137,16 @@ function BatchPaymentModal({employees, payroll, period, ym, onClose}) {
       .catch(err => { if (!dead) setSrvErr(err.message || "could not load processed payslips"); });
     return () => { dead = true; };
   }, [ym]);
+  // Bank account numbers are masked in the normal employee list (security audit 2026-11-23); the bank
+  // file needs the full numbers, so fetch them once here (owner/admin/payroll only, audit-logged server-side).
+  const [bankById, setBankById] = useState({});
+  useEffect(() => {
+    let dead = false;
+    api(`/employees/?full=1`)
+      .then(list => { if (!dead) setBankById(Object.fromEntries((list||[]).map(x => [x.id, x]))); })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, []);
   const missing = srv ? employees.filter(e => !srv[e.id]) : [];
   const ready = !!srv && missing.length === 0;
   const sum = (k) => employees.reduce((s,e) => s + ((srv && srv[e.id] && srv[e.id][k]) || 0), 0);
@@ -3137,8 +3156,8 @@ function BatchPaymentModal({employees, payroll, period, ym, onClose}) {
   const sarsTotal = totalPAYE + totalUIF + totalSDL;
 
   const empRows = employees.map(e => ({
-    branch:  e.branchCode  || e.branch_code || "250655",
-    account: e.accountNumber || e.account_number || "000000000",
+    branch:  (bankById[e.id] && bankById[e.id].branch_code) || e.branchCode  || e.branch_code || "250655",
+    account: (bankById[e.id] && bankById[e.id].account_number) || (String(e.accountNumber || e.account_number || "").startsWith("\u2022") ? "" : (e.accountNumber || e.account_number)) || "000000000",
     type:    e.accountType  || e.account_type || "Cheque",
     name:    e.name,
     amount:  (srv && srv[e.id] && srv[e.id].net_pay) || 0,
@@ -11346,6 +11365,24 @@ function AppSettings({user, onLogout, onUserUpdate, docTemplate, onTemplateChang
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
           <button onClick={onLogout} style={{padding:"11px 22px",background:C.redLt,border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Sign Out</button>
           {!user?.billingExempt && <button onClick={handleCancelSub} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel Subscription</button>}
+          {user?.role === "owner" && <button onClick={async()=>{
+            // POPIA: download everything this company has in ZuZan (security audit 2026-11-23)
+            try {
+              const r = await fetch(`${BASE_URL}/companies/me/data-export`, {headers:{Authorization:"Bearer "+localStorage.getItem("zuzan_token")}});
+              if (!r.ok) throw new Error((await r.json().catch(()=>({}))).detail || "Export failed");
+              const blob = await r.blob(); const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob); a.download = "zuzan-company-data-export.json"; a.click();
+              setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+            } catch(e) { alert("Could not export data: " + (e.message || "please try again")); }
+          }} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.inkMid,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Download all company data</button>}
+          {user?.role === "owner" && <button onClick={async()=>{
+            const name = window.prompt("Closing the account stops all access to this company straight away. Records are kept for the 5-year SARS retention period and then deleted. Download your data first.\n\nType the company name to confirm:");
+            if (!name) return;
+            try {
+              const res = await api("/companies/me/close-account", {method:"POST", body:JSON.stringify({confirm_company_name:name})});
+              alert(res.message || "Account closed."); onLogout();
+            } catch(e) { alert("Could not close the account: " + (e.message || "please try again")); }
+          }} style={{padding:"11px 22px",background:"transparent",border:`1px solid ${C.red}40`,borderRadius:10,color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Close account</button>}
         </div>
       </div>
       </>}
@@ -16773,7 +16810,7 @@ function DataImport({live = {}}) {
                   <button onClick={async () => {
                     // Fetch live employee list and export as pre-filled Excel
                     try {
-                      const r = await fetch(`${BASE_URL}/employees`, {
+                      const r = await fetch(`${BASE_URL}/employees/?full=1`, {
                         headers: {Authorization: "Bearer " + token}
                       });
                       if (!r.ok) throw new Error("Could not load employees");

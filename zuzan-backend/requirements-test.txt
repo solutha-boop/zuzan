@@ -1,6 +1,6 @@
 # Test dependencies - minimum versions only (not the exact production pins), so pip can use prebuilt
 # wheels on newer Python versions. psycopg2-binary is left out on purpose: tests run on SQLite.
-fastapi>=0.111
+fastapi>=0.115
 sentry-sdk[fastapi]>=2.8
 uvicorn>=0.30
 sqlalchemy>=2.0.30
@@ -8,7 +8,7 @@ pydantic>=2.7
 python-dotenv>=1.0
 passlib>=1.7.4
 bcrypt>=4.0.1,<5
-python-jose>=3.3
+PyJWT>=2.10
 cryptography>=41
 httpx>=0.27
 python-multipart>=0.0.9

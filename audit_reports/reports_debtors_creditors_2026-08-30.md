@@ -7,7 +7,7 @@
 
 This run's code review of the new commits surfaced **one new High-severity finding**: the new multi-line invoice-items feature has a VAT-calculation bug (§2, "New finding"). Full detail below.
 
-**Out-of-scope but flagged (Critical, security, carried over, still unresolved):** `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` (a plaintext-looking GitHub personal access token) is still present in the repo root, untracked, unchanged since 24 August. Still unresolved — see Action Items.
+**Out-of-scope but flagged (Critical, security, carried over, still unresolved):** `C:\Zuzan\ghp_[REDACTED].txt` (a plaintext-looking GitHub personal access token) is still present in the repo root, untracked, unchanged since 24 August. Still unresolved — see Action Items.
 
 Fresh web searches this run for IFRS standards and SARS tax law found no changes: IFRS 18 and IFRS for SMEs 3rd edition both remain confirmed for periods beginning 1 January 2027. The 2026 TLAB/TALAB public comment period closed 28 August 2026 as scheduled; Treasury's post-comment review/finalisation has not yet produced bill text or Parliamentary introduction as of this run.
 
@@ -103,7 +103,7 @@ Finance costs (2026-07-13 fix): interest-below-EBIT split and tax/net-profit der
 
 ## 8. Action items
 
-1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked. Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
+1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_[REDACTED].txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked. Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
 2. **High (NEW this run):** the multi-line invoice-items feature (`App_js_fixed.js:899-1090`, `companies.py:392-396`) does not make the backend's VAT calculation respect per-line `vat_applicable` flags — every invoice is charged flat 15% (or the manual foreign-currency override) on the whole subtotal, regardless of which lines were marked VAT-exempt in the UI. Recommend either removing the per-line VAT checkbox until the backend honours it, or having `create_invoice`/`update_invoice` derive `vat_amount`/`total_amount` from `items_json` when present. Also note the "Pick from Catalog" shortcut (`:927-937`) can silently overwrite `data.amount`/`vatApplicable` out from under an in-progress line-items table — the two entry modes should be mutually exclusive or reconciled.
 3. **High (carried over, unfixed):** expense "Account" dropdown value (`"{code} - {name}"`) doesn't match `CATEGORY_TO_CODE`'s bare-name keys in `journal.py:88-149`, so manually-entered expenses AND bank-import-categorised expenses (`companies.py:1252-1319`) both post to account 5900 "General Expenses" regardless of the account selected in the UI. Recommend `expense_account()` parse the leading code from `category` and look up `Account` by code directly (see §2).
 4. **Medium (carried over):** `/reports/cash-flow-13week` (`payroll.py:1991-2098`) still does not model outstanding creditor (PO) payments or VAT201 liabilities as distinct weekly outflows (`other_payments`/`vat_payment` hard-coded `0.0`).

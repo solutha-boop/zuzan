@@ -185,7 +185,7 @@ async def onboard_client(
 </div>""",
         ))
     except Exception as e:
-        logger.warning(f"Onboard invite email failed for {data.contact_email}: {e}")
+        logger.warning(f"Onboard invite email failed for company {getattr(data, 'company_name', '')!r}: {type(e).__name__}")   # no email address in logs (POPIA, audit 2026-11-23)
         email_sent = False
 
     log_action(db, new_company.id, current_user.id, "onboard_client",

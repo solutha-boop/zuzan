@@ -19,6 +19,7 @@ Currency values may include R, $, £ and thousands commas — all stripped.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from security import public_error
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
@@ -29,7 +30,7 @@ from database import (
     get_db, Customer, Supplier, Invoice, Expense, InvoiceStatus,
     Account, AccountType, JournalEntry, JournalLine, Employee, FixedAsset,
 )
-from crypto import encrypt_field
+from crypto import blind_index, encrypt_field
 from auth import require_role, get_current_user
 
 router = APIRouter()
@@ -275,6 +276,23 @@ def _find_header_row(rows_raw: list[list[str]], max_scan: int = 15) -> int:
     return 0  # fallback: use the first row
 
 
+# ── Upload limits (security audit 2026-11-23) ────────────────────────────────────────────────────────
+MAX_IMPORT_BYTES = 10 * 1024 * 1024          # 10 MB per import file
+_IMPORT_EXTENSIONS = (".csv", ".txt", ".tsv", ".xlsx", ".xlsm", ".xls")
+
+
+async def read_upload(file: UploadFile, max_bytes: int = MAX_IMPORT_BYTES) -> bytes:
+    """Read an import upload safely: only spreadsheet/CSV file types and at most max_bytes (never the whole
+    stream into memory)."""
+    name = (getattr(file, "filename", "") or "").lower().strip()
+    if name and "." in name and not name.endswith(_IMPORT_EXTENSIONS):
+        raise HTTPException(400, "Unsupported file type - upload a CSV or Excel file (.csv, .txt, .tsv, .xlsx, .xls).")
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(413, f"File too large - the maximum import size is {max_bytes // (1024 * 1024)} MB.")
+    return content
+
+
 def _read_csv(file_bytes: bytes) -> tuple[list[str], list[list[str]]]:
     """
     Parse a CSV *or* Excel (.xlsx/.xls) upload into (headers, data_rows).
@@ -303,7 +321,7 @@ def _read_rows(file_bytes: bytes) -> list[list[str]]:
         try:
             wb = openpyxl.load_workbook(_io.BytesIO(file_bytes), read_only=True, data_only=True)
         except Exception as e:
-            raise HTTPException(400, f"Could not open this Excel file ({e}). It may be corrupt or password-protected - save it as .xlsx or CSV and try again.")
+            raise HTTPException(400, f"Could not open this Excel file ({public_error(e)}). It may be corrupt or password-protected - save it as .xlsx or CSV and try again.")
 
         def _cell_text(c) -> str:
             v = c.value
@@ -371,7 +389,7 @@ async def import_customers(
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
     cid             = cu.company_id
-    headers, rows   = _read_csv(await file.read())
+    headers, rows   = _read_csv(await read_upload(file))
     m               = _map_headers(headers, CUSTOMER_ALIASES)
 
     if "name" not in m:
@@ -437,7 +455,7 @@ async def import_suppliers(
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m             = _map_headers(headers, SUPPLIER_ALIASES)
 
     if "name" not in m:
@@ -506,7 +524,7 @@ async def import_invoices(
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m             = _map_headers(headers, INVOICE_ALIASES)
 
     if "client_name" not in m:
@@ -711,7 +729,7 @@ async def import_payments(
     """
     from companies import update_invoice, InvoiceUpdate       # lazy: companies imports are heavy
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m             = _map_headers(headers, PAYMENT_ALIASES)
     if "invoice_number" not in m or "amount" not in m:
         raise HTTPException(
@@ -809,7 +827,7 @@ async def import_expenses(
     cu               = Depends(require_role("owner", "admin", "accountant")),
 ):
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m             = _map_headers(headers, EXPENSE_ALIASES)
 
     if "vendor" not in m and "description" not in m and "amount" not in m and "amount_excl" not in m:
@@ -1468,7 +1486,7 @@ async def import_trial_balance(
     (asset/expense → debit; liability/equity/revenue → credit).
     """
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m             = _map_headers(headers, TRIAL_BALANCE_ALIASES)
     unclassified: list[str] = []
 
@@ -1576,7 +1594,7 @@ async def import_balance_sheet(
     Accepted columns: Classification, Code, Account Name, Balance (or Debit/Credit).
     """
     cid           = cu.company_id
-    _raw          = _read_rows(await file.read())
+    _raw          = _read_rows(await read_upload(file))
     _hi           = _find_header_row(_raw)
     headers, rows = _raw[_hi], _raw[_hi + 1:]
     m             = _map_headers(headers, BALANCE_SHEET_ALIASES)
@@ -1682,7 +1700,7 @@ async def import_profit_loss(
     Accepted columns: Type (Revenue/Expense), Code, Account Name, Amount.
     """
     cid           = cu.company_id
-    _raw          = _read_rows(await file.read())
+    _raw          = _read_rows(await read_upload(file))
     _hi           = _find_header_row(_raw)
     headers, rows = _raw[_hi], _raw[_hi + 1:]
     m             = _map_headers(headers, PROFIT_LOSS_ALIASES)
@@ -1957,7 +1975,7 @@ async def import_general_ledger(
     Debit, Credit.
     """
     cid           = cu.company_id
-    content       = await file.read()
+    content       = await read_upload(file)
     headers, rows = _read_csv(content)
     m             = _map_headers(headers, GENERAL_LEDGER_ALIASES)
 
@@ -2150,7 +2168,7 @@ async def import_journals(
     Debit, Credit.
     """
     cid           = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m             = _map_headers(headers, JOURNAL_ALIASES)
 
     if "debit" not in m and "credit" not in m and "net_amount" not in m:
@@ -2303,7 +2321,7 @@ async def import_employees(
     All other columns are optional — only columns present in the file are updated.
     """
     cid = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m = _map_headers(headers, EMPLOYEE_ALIASES)
 
     if "first_name" not in m or "last_name" not in m:
@@ -2384,7 +2402,7 @@ async def import_employees(
         if emp_no:
             emp = db.query(Employee).filter_by(company_id=cid, employee_number=emp_no).first()
         if not emp and id_no:
-            emp = db.query(Employee).filter_by(company_id=cid, id_number=id_no).first()
+            emp = db.query(Employee).filter_by(company_id=cid, id_number_hash=blind_index(id_no)).first()
         if not emp:
             emp = db.query(Employee).filter_by(company_id=cid, first_name=first, last_name=last).first()
             # Same name but a different ID number (or employee number) is a different person - never overwrite them
@@ -2561,7 +2579,7 @@ async def import_payroll_adjustments(
     Only columns present in the CSV are updated (partial updates).
     """
     cid = cu.company_id
-    headers, rows = _read_csv(await file.read())
+    headers, rows = _read_csv(await read_upload(file))
     m = _map_headers(headers, PAYROLL_ADJ_ALIASES)
 
     updated = not_found = errors = 0
@@ -2575,7 +2593,7 @@ async def import_payroll_adjustments(
 
         emp = None
         if id_no:
-            emp = db.query(Employee).filter_by(company_id=cid, id_number=id_no).first()
+            emp = db.query(Employee).filter_by(company_id=cid, id_number_hash=blind_index(id_no)).first()
         if not emp and emp_no:
             emp = db.query(Employee).filter_by(company_id=cid, employee_number=emp_no).first()
         if not emp and first and last:
@@ -2836,7 +2854,7 @@ async def import_fixed_assets(
       status, sars_category, wear_and_tear_rate
     """
     cid = cu.company_id
-    raw = await file.read()
+    raw = await read_upload(file)
     text = raw.decode("utf-8-sig", errors="replace")
 
     # Accept both tab-separated (Xero) and comma-separated
@@ -3024,7 +3042,7 @@ async def preview_fixed_assets(
       rows  — per-row preview: action, asset_name, cost, useful_life_years, warnings[]
     """
     cid = cu.company_id
-    raw = await file.read()
+    raw = await read_upload(file)
     text = raw.decode("utf-8-sig", errors="replace")
 
     delimiter = "\t" if text.count("\t") > text.count(",") else ","

@@ -45,6 +45,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from security import public_error
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -265,7 +266,7 @@ def _absa_get_token(conn: AbsaConnection, db: Session) -> str:
         db.commit()
         return tok["access_token"]
     except Exception as e:
-        raise HTTPException(502, f"ABSA token refresh failed: {e}")
+        raise HTTPException(502, f"ABSA token refresh failed: {public_error(e)}")
 
 
 def _absa_sync_accounts(company_id: int, db: Session):
@@ -525,7 +526,7 @@ def _nedbank_get_token(conn: NedbankConnection, db: Session) -> str:
         db.commit()
         return tok["access_token"]
     except Exception as e:
-        raise HTTPException(502, f"Nedbank token refresh failed: {e}")
+        raise HTTPException(502, f"Nedbank token refresh failed: {public_error(e)}")
 
 
 def _nedbank_sync_accounts(company_id: int, db: Session):
@@ -785,7 +786,7 @@ def _investec_get_token(conn: InvestecConnection, db: Session) -> str:
         db.commit()
         return tok["access_token"]
     except Exception as e:
-        raise HTTPException(502, f"Investec token refresh failed: {e}")
+        raise HTTPException(502, f"Investec token refresh failed: {public_error(e)}")
 
 
 def _investec_sync_accounts(company_id: int, db: Session):
@@ -1060,7 +1061,7 @@ def _standardbank_get_token(conn: StandardBankConnection, db: Session) -> str:
         db.commit()
         return tok["access_token"]
     except Exception as e:
-        raise HTTPException(502, f"Standard Bank token refresh failed: {e}")
+        raise HTTPException(502, f"Standard Bank token refresh failed: {public_error(e)}")
 
 
 def _standardbank_sync_accounts(company_id: int, db: Session):

@@ -128,6 +128,12 @@ _HEADERS = [
 ]
 
 
+_CSP_API = b"default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+_CSP_HTML = (b"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+             b"img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; "
+             b"base-uri 'none'; form-action 'self'")
+
+
 class SecurityMiddleware:
     def __init__(self, app):
         self.app = app
@@ -173,9 +179,30 @@ class SecurityMiddleware:
                 for k, v in _HEADERS:
                     if k not in present:
                         headers.append((k, v))
+                # Content-Security-Policy (security audit 2026-11-23): API responses may load nothing at all;
+                # the server-rendered admin page may only talk to this origin. Swagger docs keep their CDN assets.
+                if b"content-security-policy" not in present and not path.startswith(("/docs", "/redoc")):
+                    ctype = dict((k.lower(), v) for k, v in headers).get(b"content-type", b"")
+                    headers.append((b"content-security-policy", _CSP_HTML if ctype.startswith(b"text/html") else _CSP_API))
                 if b"cache-control" not in present and not path.startswith(("/docs", "/redoc", "/openapi.json")):
                     headers.append((b"cache-control", b"no-store"))        # financial data must never sit in a shared/browser cache
                 message["headers"] = headers
             await send(message)
 
         await self.app(scope, receive, send_wrapped)
+
+
+# ── Safe error messages (security audit 2026-11-23) ──────────────────────────────────────────────────
+_err_log = __import__("logging").getLogger("zuzan.errors")
+
+
+def public_error(e) -> str:
+    """Text of an exception that is safe to show a user. Business-rule errors (ValueError / PermissionError,
+    e.g. "the period is locked") are shown as they are; anything else (database, network, library errors)
+    is logged server-side with a reference and the user only sees that reference - no internals, SQL or data."""
+    if isinstance(e, (ValueError, PermissionError)) and not e.__class__.__module__.startswith(("sqlalchemy", "psycopg2")):
+        return str(e)[:300]
+    import secrets as _s
+    ref = _s.token_hex(4).upper()
+    _err_log.error("error ref %s: %s: %s", ref, type(e).__name__, e, exc_info=e)
+    return f"an internal error occurred (reference {ref})"

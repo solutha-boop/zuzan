@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from database import get_db, Supplier
 from auth import get_current_user, User
-from crypto import encrypt_field, decrypt_field
+from crypto import encrypt_field, decrypt_field, mask_tail, is_masked
 
 def clean(value, max_len=500):
     if value is None: return value
@@ -46,7 +46,7 @@ def to_dict(s):
         "email": s.email, "phone": s.phone, "address": s.address,
         "vat_number": s.vat_number,
         "bank_name":      decrypt_field(s.bank_name),
-        "account_number": decrypt_field(s.account_number),
+        "account_number": mask_tail(decrypt_field(s.account_number)),   # masked (security audit 2026-11-23)
         "branch_code":    decrypt_field(s.branch_code),
         "account_type": s.account_type, "payment_terms": s.payment_terms,
         "notes": s.notes, "created_at": s.created_at.isoformat(),
@@ -84,6 +84,8 @@ async def update_supplier(sid: int, data: SupplierUpdate, current_user: User = D
     if "payment_terms" in changes and not (0 <= changes["payment_terms"] <= 365):
         raise HTTPException(400, "payment_terms must be between 0 and 365 days")
     for k, v in changes.items():
+        if is_masked(v):
+            continue                     # unchanged masked account number sent back by the edit form
         if isinstance(v, str):
             v = clean(v, 500)
         setattr(s, k, encrypt_field(v) if (k in _SUPPLIER_BANK_FIELDS and v) else v)

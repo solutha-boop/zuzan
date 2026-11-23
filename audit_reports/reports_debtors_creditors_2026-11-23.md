@@ -207,3 +207,84 @@ Creditors otherwise ✓:
 - After Budget Feb 2027, replace the provisional 2027/2028 `TAX_YEARS` entry.
 - Run the IFRS 18 / IFRS for SMEs 3rd ed. checklist in Jan–Feb 2027.
 - Next security full sweep: 1 Dec 2026.
+
+---
+
+## Remediation (23 Nov 2026, on request; uncommitted working-tree changes on top of 226d544)
+Decisions made by the owner:
+- **History:** I rewrite the history locally and the owner force-pushes it.
+- **Accountant access:** accountants keep journal reversal, redate and lock-date access, and those actions are now audit-logged.
+
+**Critical 1–2: history cleaned (waiting for the owner's push).**
+- I made a cleaned copy of the history with git filter-repo:
+  - `zuzan-backend/zuzan.db` (and any `*.db.bak*`) is removed from all 696 commits;
+  - every `ghp_…` token prefix is replaced with `ghp_[REDACTED]`.
+- It is saved as `_history_clean/zuzan-clean-history.bundle`, which is gitignored. The new tip is `eac3243`. Its tree is identical to 226d544 except for the redacted reports.
+- The 18 Aug/Sep reports are also redacted in the working tree.
+- **Owner:**
+  1. Revoke the GitHub token in GitHub settings.
+  2. Run `_history_clean\push_clean_history.ps1`. It checks that GitHub main is still 226d544, force-pushes, then re-points the working copy with a mixed reset, so no working files change.
+  3. Ask GitHub Support to purge cached views and refs.
+  4. Re-clone any other copies of the repository.
+  5. If zuzan.db ever held real client data, assess POPIA s22 notification.
+
+**High 3: done.**
+- `Employee.id_number` / `tax_number` now use the `EncryptedString` column type (crypto.py), so they are Fernet-encrypted at rest and decrypted transparently on read.
+- A new `id_number_hash` keyed blind index (`crypto.blind_index`) is used for import matching (csv_import.py) and kept in sync by mapper events (database.py).
+- A start-up backfill encrypts existing plaintext rows and fills the hash.
+
+**Medium items**
+
+4. **SECRET_KEY.** `/health` now reports `secret_key_configured` (true/false only). **Owner:** set a random SECRET_KEY of 32+ characters in Render. The runtime fallback is unchanged, to avoid an outage.
+5. **Field encryption.** On Render, crypto.py now refuses to start if FIELD_ENCRYPTION_KEY is missing or invalid. The emergency override is `ZUZAN_ALLOW_PLAINTEXT_FIELDS=1`. `/health` reports `field_encryption`.
+6. **Masking.**
+   - Employee ID, tax and bank account numbers and supplier account numbers are masked to the last 4 digits in API responses.
+   - Masked values sent back from edit forms are ignored.
+   - `GET /employees/?full=1` (owner/admin/payroll only, audit-logged) feeds the salary bank file and the employee Excel export.
+   - The IRP5/e@syFile export keeps full values, because SARS requires them.
+7. **Audit log.** `log_action` now records:
+   - clear-data;
+   - employee create, update, terminate and reinstate;
+   - full-number views;
+   - company profile and lock-date changes;
+   - bank imports;
+   - journal reversal and redate;
+   - data export;
+   - account closure.
+8. **Dependencies.** python-jose is replaced by PyJWT. Pins are now fastapi 0.165.0, starlette 1.10.0, pydantic 2.14.4, sentry-sdk 2.75.0, cryptography 50.0.2, pillow 13.0.0 and python-multipart 0.0.34. **pip-audit reports no known vulnerabilities.**
+9. **POPIA, errors and CSP.**
+   - `GET /companies/me/data-export`: owner only, this company's rows only, secrets excluded.
+   - `POST /companies/me/close-account`: owner only and name-confirmed. It deactivates the company's users, removes outside memberships, cancels the subscription and records a retention date 5 years ahead.
+   - Both have buttons under Settings → Account.
+   - 33 handlers now use `security.public_error`: business-rule messages are shown, anything else gets a logged reference.
+   - CSP is set on API responses and the admin page (security.py), the React index.html and the Netlify landing page. Tokens stay in localStorage (an architectural change), and the CSP limits where a script could send them.
+10. **Upload limits.** All CSV/Excel/QuickBooks/Xero imports go through `csv_import.read_upload`: CSV/Excel types only, 10 MB maximum.
+
+**Low items**
+
+11. **Payroll-zero rule:** reviewed and **kept by design**. The 22 Nov behaviour is covered by test_dashboard_period, so it is not changed.
+12. **Duplicate guards.** A narrative that names a customer or supplier who still has an open document of that amount is never treated as a duplicate. Skipped lines are listed in the new `duplicates_skipped` field.
+13. **Sentry and hygiene.**
+    - The Sentry DSN now comes from the `SENTRY_DSN` env var (**owner:** set it in Render).
+    - A `before_send` scrubber is added in the backend and the React app, with local variables off.
+    - The CORS flag is in `/health`.
+    - netlify.toml has security headers.
+    - .gitignore now covers uploads, exports, bundles, keys and `_history_clean/`.
+    - An email address is no longer logged (accountant.py).
+14. **Tokens.**
+    - Portal links expire 365 days after issue, or 90 days after payment, with a 410 response. A fresh token is issued when the invoice is sent again.
+    - Password-reset codes are stored as SHA-256 hashes.
+
+**Tests:**
+- New: tests/test_security_audit_2026_11_23.py (10 tests).
+- conftest.py now turns field encryption on for the whole suite.
+- test_auth_security.py is updated for hashed reset codes.
+- **Full suite on Python 3.11 with the new pins: 350 passed**, including test_payroll_journal_balance_runner.
+- The JSX parses.
+
+**Deploy checklist (owner, in this order):**
+1. Confirm in Render that FIELD_ENCRYPTION_KEY is set. Without it the new build will not start.
+2. Set SECRET_KEY and SENTRY_DSN, and optionally CORS_ORIGINS.
+3. Run push_clean_history.ps1.
+4. Run commit_and_push.bat.
+5. Check that `/health` shows `field_encryption: true` and `secret_key_configured: true`.

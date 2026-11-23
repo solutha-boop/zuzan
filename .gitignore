@@ -235,3 +235,13 @@ zuzan.db.bak-*
 
 # Local scratch moved aside for deletion (never deploy)
 zuzan-backend/_to_delete/
+
+# Client data exports / uploads / history-rewrite artefacts (security audit 2026-11-23)
+uploads/
+exports/
+*export*.json
+*.bundle
+_history_clean/
+.env.*
+*.pem
+*.key

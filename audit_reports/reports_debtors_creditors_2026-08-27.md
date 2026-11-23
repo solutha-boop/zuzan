@@ -11,7 +11,7 @@ While reviewing the new Chart-of-Accounts feature's interaction with expense pos
 
 Re-verified high-risk anchors via Grep — all unchanged: `"deferred_tax": 0.0` → no matches in `financial_statements.py`; `wear_and_tear_rate` present in `database.py`; `purchase_order_reversal` present in `payroll.py`, `financial_statements.py`, `journal.py`, `purchase_orders.py`; `source == "import"` exclusion present in `payroll.py`; `TAX_YEARS["2026/2027"]`, `VAT_RATE = 0.15`, `S11F_CAP = 430_000` present and unchanged in `payroll.py`.
 
-**Out-of-scope but flagged (Critical, security, carried over):** `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` (a plaintext-looking GitHub personal access token) is still present in the repo root, untracked, unchanged from yesterday. Still unresolved — see Action Items.
+**Out-of-scope but flagged (Critical, security, carried over):** `C:\Zuzan\ghp_[REDACTED].txt` (a plaintext-looking GitHub personal access token) is still present in the repo root, untracked, unchanged from yesterday. Still unresolved — see Action Items.
 
 ---
 
@@ -98,7 +98,7 @@ Finance costs (2026-07-13 fix): interest still presented below EBIT, tax/net pro
 
 ## 8. Action items
 
-1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked. Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
+1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_[REDACTED].txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked. Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
 2. **High (new):** expense "Account" dropdown value (`"{code} - {name}"`) doesn't match `CATEGORY_TO_CODE`'s bare-name keys in `journal.py:88-149`, so essentially all manually-entered expenses post to account 5900 "General Expenses" regardless of the account selected in the UI (`App_js_fixed.js:2013-2018`, `companies.py:692`). Understates Cost of Sales / overstates Gross Profit when a user tags an expense as Cost of Sales; keeps interest/finance-cost expenses above EBIT instead of below; makes expense-by-account reporting meaningless. Recommend `expense_account()` parse the leading code from `category` and look up `Account` by code directly (see §2 for detail). Likely also explains the unexplained R17,327.37-to-5900 posting flagged in yesterday's `reconciliation_2026-08-26.md`.
 3. **Medium (carried over):** `/reports/cash-flow-13week` (`payroll.py:1991-2098`) still does not model outstanding creditor (PO) payments or VAT201 liabilities as distinct weekly outflows (`other_payments`/`vat_payment` hard-coded `0.0`).
 4. **Low (new, awareness):** the new `/coa` custom-account feature lets users add accounts to the `CompanyAccount` table and select them in expense dropdowns, but nothing in `journal.py` posts to a custom account by code (it only knows the fixed `Account` table seeded by `init_accounts()`/`DEFAULT_ACCOUNTS`). A user-created custom account is effectively decorative until item 2 above is fixed the recommended way (which would also make custom accounts postable, since it resolves by code against the real `Account` table — worth confirming a corresponding `Account` row also gets created for custom codes, not just the `CompanyAccount` display row).

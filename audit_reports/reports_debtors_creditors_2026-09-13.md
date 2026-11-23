@@ -11,7 +11,7 @@
 
 All three fixes were verified correct at the code level (see §2 and Action Items below). `financial_statements.py`, `journal.py`, `purchase_orders.py`, `companies.py`, `database.py`, `integrations.py`, `csv_import.py`, `accountant.py`, `main.py` are untouched and byte-identical to 09-12 (re-verified via `Grep`/`Read`, not `bash cat`).
 
-Also since 09-12: the previously-flagged stray files are gone — `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` (leaked GitHub token) and `C:\Zuzan\companies_py_fixed.py` no longer exist in the working tree. `cleanup_untracked.bat` and `netlify-drop/` are also gone. This resolves the Critical security item and the Low repo-clutter item from every prior report.
+Also since 09-12: the previously-flagged stray files are gone — `C:\Zuzan\ghp_[REDACTED].txt` (leaked GitHub token) and `C:\Zuzan\companies_py_fixed.py` no longer exist in the working tree. `cleanup_untracked.bat` and `netlify-drop/` are also gone. This resolves the Critical security item and the Low repo-clutter item from every prior report.
 
 ---
 
@@ -93,7 +93,7 @@ Finance costs (2026-07-13 fix): interest lines (account 6700 or name-matched) co
 ## 8. Action items
 
 1. **High (process, new this run):** three verified-correct fixes — `payroll.py`'s cash-flow-13week `creditor_payments`/`vat_payment` (action item 3), `billing.py`'s duplicate-line cleanup (action item 2), and `App_js_fixed.js`'s linked-client badge (action item 4) — are sitting as **uncommitted working-tree changes** (`git status --short` shows `M` on all three files). Per the deploy-pipeline pitfall, `commit_and_push.bat` runs autonomously outside this audit's sandbox, but as of this run these edits have not yet been picked up (`HEAD` is still `e44fb1b` from 10 Sep). Recommend running the commit/push step (or confirming why it hasn't fired) so these fixes actually reach production rather than sitting only on disk.
-2. **Critical (security) — RESOLVED:** the leaked GitHub token file (`ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt`) no longer exists in the project root as of this run. No further action from this audit; if it was ever committed to git history, confirm separately that the token itself was revoked in GitHub settings (out of this audit's technical scope to verify).
+2. **Critical (security) — RESOLVED:** the leaked GitHub token file (`ghp_[REDACTED].txt`) no longer exists in the project root as of this run. No further action from this audit; if it was ever committed to git history, confirm separately that the token itself was revoked in GitHub settings (out of this audit's technical scope to verify).
 3. **Low (repo clutter) — RESOLVED:** `companies_py_fixed.py`, `cleanup_untracked.bat`, and `netlify-drop/` are all gone from the working tree.
 4. **Medium (carried over, unaffected by today's fix):** even with the 13-week forecast now modeling `creditor_payments` and `vat_payment`, the forecast still does not model provisional tax (IRP6) payments as a distinct weekly outflow — worth a follow-up if provisional tax becomes a tracked liability elsewhere in the app.
 5. **Low (carried over):** with the expense-account routing fix in place (2026-09-06), custom `/coa` accounts should resolve correctly via the numeric-code path in `expense_account()` — still recommend a quick functional test adding one custom account and posting an expense against it to confirm end-to-end.

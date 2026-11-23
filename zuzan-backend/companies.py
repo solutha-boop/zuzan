@@ -3,6 +3,7 @@ ZuZan - Invoices, Expenses, Employees, Companies Routers
 """
 
 from fastapi import APIRouter, HTTPException, Depends
+from security import public_error
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -24,7 +25,7 @@ from database import (
     StandardBankConnection, StandardBankBankAccount, StandardBankTransaction,
 )
 from auth import get_current_user, require_role, log_action, User
-from crypto import encrypt_field, decrypt_field
+from crypto import encrypt_field, decrypt_field, mask_tail, is_masked
 from passlib.context import CryptContext
 import logging
 import os
@@ -232,6 +233,14 @@ async def update_company(data: CompanyUpdate, current_user: User = Depends(requi
         else:
             setattr(company, field, value)
     db.commit()
+    _fields = sorted(k for k, v in data.dict(exclude_none=True).items()
+                     if not (isinstance(v, str) and v.startswith(_MASK)) and k not in not_saved)
+    if _fields:
+        log_action(db, current_user.company_id, current_user,
+                   "company.lock_date_changed" if _fields == ["lock_date"] else "company.updated",
+                   target_type="company", target_id=current_user.company_id,
+                   detail=("lock_date=" + (company.lock_date.isoformat() if company.lock_date else "cleared") + "; " if "lock_date" in _fields else "")
+                          + "Fields: " + ", ".join(_fields)[:400])
     out = _company_dict(company, current_user.role)
     if not_saved:
         out["not_saved"] = not_saved
@@ -283,6 +292,114 @@ async def payroll_pin_status(current_user: User = Depends(get_current_user), db:
 
 _CLEARABLE = {"sales", "expenses", "customers", "suppliers", "employees",
               "inventory", "banking", "budgets_assets", "documents"}
+
+# ── POPIA: whole-company data export + account closure (security audit 2026-11-23) ─────────────────────
+_EXPORT_SECRET_COLUMNS = {
+    "hashed_password", "reset_token", "reset_token_expires", "verify_token", "payroll_pin", "payroll_pin_hash",
+    "payfast_passphrase", "payfast_merchant_key", "payfast_token", "access_token", "refresh_token", "key_hash",
+    "kiosk_token", "portal_token", "token", "secret", "client_secret", "id_number_hash",
+}
+
+
+def _export_value(v):
+    import base64 as _b64, decimal as _dec, enum as _enum
+    from datetime import date as _date
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, (datetime, _date)):
+        return v.isoformat()
+    if isinstance(v, _dec.Decimal):
+        return float(v)
+    if isinstance(v, _enum.Enum):
+        return v.value
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return {"base64": _b64.b64encode(bytes(v)).decode()}
+    return decrypt_field(str(v))
+
+
+def build_company_export(db: Session, cid: int) -> dict:
+    """Every row that belongs to company `cid`: tables with a company_id column, plus child tables reached by a
+    foreign key from an exported row (journal lines, PO items, payslips...). Secrets are left out."""
+    from database import Base as _Base
+    exported: dict = {}            # table name -> set of primary keys exported
+    out: dict = {}
+    for table in _Base.metadata.sorted_tables:
+        cols = table.columns
+        q = None
+        if "company_id" in cols:
+            q = table.select().where(cols["company_id"] == cid)
+        elif table.name == "companies":
+            q = table.select().where(cols["id"] == cid)
+        else:
+            for fk in table.foreign_keys:
+                parent = fk.column.table.name
+                if exported.get(parent):
+                    q = table.select().where(fk.parent.in_(list(exported[parent])))
+                    break
+        if q is None:
+            continue
+        rows = db.execute(q).mappings().all()
+        if not rows:
+            continue
+        pk = [c.name for c in table.primary_key.columns]
+        exported[table.name] = {r[pk[0]] for r in rows} if len(pk) == 1 else set()
+        out[table.name] = [{k: _export_value(v) for k, v in r.items() if k not in _EXPORT_SECRET_COLUMNS} for r in rows]
+    return out
+
+
+@router.get("/me/data-export")
+async def export_company_data(current_user: User = Depends(require_role("owner")), db: Session = Depends(get_db)):
+    """POPIA s23 access / portability: download ALL of this company's data as one JSON file (owner only).
+    Only this company's rows are included; passwords, tokens and payment-gateway secrets are never exported."""
+    from fastapi.responses import Response as _Resp
+    cid = current_user.company_id
+    data = build_company_export(db, cid)
+    log_action(db, cid, current_user, "company.data_export", target_type="company", target_id=cid,
+               detail=f"{sum(len(v) for v in data.values())} rows from {len(data)} tables")
+    body = json.dumps({"exported_at": datetime.utcnow().isoformat() + "Z", "company_id": cid, "tables": data},
+                      default=str, ensure_ascii=False).encode("utf-8")
+    return _Resp(content=body, media_type="application/json",
+                 headers={"Content-Disposition": f'attachment; filename="zuzan-company-{cid}-export.json"',
+                          "Cache-Control": "no-store"})
+
+
+class CloseAccountRequest(BaseModel):
+    confirm_company_name: str
+
+
+RECORD_RETENTION_YEARS = 5       # Tax Administration Act s29 / SARS: keep records for 5 years
+
+
+@router.post("/me/close-account")
+async def close_account(req: CloseAccountRequest, current_user: User = Depends(require_role("owner")),
+                        db: Session = Depends(get_db)):
+    """POPIA account closure (owner only). Stops all access to THIS company straight away: its users are
+    deactivated, outside accountants lose access and the subscription is cancelled. Business, tax and payroll
+    records are kept for the 5-year SARS retention period and then deleted - download the data export first."""
+    from database import User as _User, SubscriptionStatus as _SS
+    cid = current_user.company_id
+    company = db.query(Company).filter(Company.id == cid).first()
+    if not company:
+        raise HTTPException(404, "Company not found")
+    if (req.confirm_company_name or "").strip().lower() != (company.name or "").strip().lower():
+        raise HTTPException(400, "Type the company name exactly to confirm closing the account.")
+    if company.closed_at:
+        raise HTTPException(400, "This account is already closed.")
+    company.closed_at = datetime.utcnow()
+    company.subscription_status = _SS.cancelled
+    users = db.query(_User).filter(_User.company_id == cid).all()
+    for u in users:
+        u.is_active = False
+    removed = db.query(CompanyMembership).filter(CompanyMembership.company_id == cid).delete(synchronize_session=False)
+    db.commit()
+    log_action(db, cid, current_user, "company.closed", target_type="company", target_id=cid,
+               detail=f"{len(users)} user(s) deactivated, {removed} outside membership(s) removed; records retained "
+                      f"until {(company.closed_at + timedelta(days=365 * RECORD_RETENTION_YEARS + 1)).date().isoformat()}")
+    return {"status": "closed", "closed_at": company.closed_at.isoformat(),
+            "records_retained_until": (company.closed_at + timedelta(days=365 * RECORD_RETENTION_YEARS + 1)).date().isoformat(),
+            "message": "The account is closed and nobody can sign in to it any more. Records are kept for the "
+                       "5-year SARS retention period and then deleted."}
+
 
 class ClearDataRequest(BaseModel):
     categories: List[str]
@@ -363,7 +480,7 @@ async def cancel_subscription(
     try:
         result = cancel_payfast_subscription(company, db)
     except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=public_error(e))
     return {"ok": True, "message": "Subscription cancelled. You retain access until the end of your current billing period."}
 
 
@@ -490,6 +607,8 @@ async def clear_company_data(
     db.commit()
     logger.info("clear-data: company_id=%s cleared categories=%s by user_id=%s",
                 cid, sorted(cats), current_user.id)
+    log_action(db, cid, current_user, "company.clear_data", target_type="company", target_id=cid,
+               detail="Cleared: " + ", ".join(sorted(cats)))
     return {
         "cleared":  sorted(cats),
         "message":  f"Cleared: {', '.join(sorted(cats))}.",
@@ -856,7 +975,7 @@ async def create_invoice(data: InvoiceCreate, current_user: User = Depends(get_c
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Invoice created but journal entry failed: {e}. Invoice has been rolled back — please retry.",
+            detail=f"Invoice created but journal entry failed: {public_error(e)}. Invoice has been rolled back — please retry.",
         )
     return invoice
 
@@ -995,7 +1114,7 @@ async def write_off_bad_debt(invoice_id: int, data: BadDebtWriteOff, current_use
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Write-off failed and nothing was saved: {e}")
+        raise HTTPException(status_code=500, detail=f"Write-off failed and nothing was saved: {public_error(e)}")
     return {"status": "written_off", "invoice_id": inv.id,
             "message": "Invoice written off. The VAT on it is deducted on the VAT201 for the month of the write-off. Keep your evidence of recovery steps."}
 
@@ -1026,7 +1145,7 @@ async def recover_bad_debt(invoice_id: int, data: BadDebtRecovery, current_user:
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Recovery failed and nothing was saved: {e}")
+        raise HTTPException(status_code=500, detail=f"Recovery failed and nothing was saved: {public_error(e)}")
     return {"status": inv.status.value, "recovered_zar": inv.bad_debt_recovered_zar, "message": "Recovery recorded. Output VAT on it falls in this month's VAT201."}
 
 
@@ -1234,7 +1353,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate, current_user: Use
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Invoice update failed — journal entry could not be posted: {e}. Please retry.",
+            detail=f"Invoice update failed — journal entry could not be posted: {public_error(e)}. Please retry.",
         )
     return invoice
 
@@ -1261,7 +1380,7 @@ async def delete_invoice(invoice_id: int, current_user: User = Depends(require_r
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Invoice deletion aborted — journal reversal failed: {e}. Please retry.",
+            detail=f"Invoice deletion aborted — journal reversal failed: {public_error(e)}. Please retry.",
         )
     db.delete(invoice)
     db.commit()
@@ -1286,7 +1405,8 @@ async def send_invoice(invoice_id: int, current_user: User = Depends(require_rol
         raise HTTPException(status_code=400, detail="Invoice is already paid.")
 
     # Generate portal token if missing
-    if not invoice.portal_token:
+    from portal import portal_token_expired as _pt_expired
+    if not invoice.portal_token or _pt_expired(invoice):      # expired links get a fresh token (audit 2026-11-23)
         invoice.portal_token = _uuid.uuid4().hex
         invoice.portal_token_created_at = _dt.utcnow()
 
@@ -1307,7 +1427,7 @@ async def send_invoice(invoice_id: int, current_user: User = Depends(require_rol
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Invoice send failed — journal entry could not be posted: {e}. Please retry.",
+            detail=f"Invoice send failed — journal entry could not be posted: {public_error(e)}. Please retry.",
         )
     db.refresh(invoice)
 
@@ -1409,7 +1529,7 @@ async def create_expense(data: ExpenseCreate, current_user: User = Depends(get_c
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Expense saved but journal entry failed: {e}. Expense has been rolled back — please retry.",
+            detail=f"Expense saved but journal entry failed: {public_error(e)}. Expense has been rolled back — please retry.",
         )
     return expense
 
@@ -1504,7 +1624,7 @@ async def update_expense(expense_id: int, data: ExpenseUpdate, current_user: Use
                 # field update was saved anyway, silently desyncing the ledger.
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Expense update failed — journal correction could not be posted: {e}. Please retry.",
+                    detail=f"Expense update failed — journal correction could not be posted: {public_error(e)}. Please retry.",
                 )
 
         expense.amount     = new_total
@@ -1555,7 +1675,7 @@ async def pay_expense(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Payment recording failed — journal entry could not be posted: {e}. Please retry.",
+            detail=f"Payment recording failed — journal entry could not be posted: {public_error(e)}. Please retry.",
         )
     return expense
 
@@ -1583,7 +1703,7 @@ async def delete_expense(expense_id: int, current_user: User = Depends(require_r
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Expense deletion aborted — journal reversal failed: {e}. Please retry.",
+            detail=f"Expense deletion aborted — journal reversal failed: {public_error(e)}. Please retry.",
         )
     db.delete(expense)
     db.commit()
@@ -1931,8 +2051,10 @@ class EmployeeUpdate(BaseModel):
     employment_category:       Optional[str]   = None  # "permanent"|"fixed_term"|"temp_labour"|"learnership"|"public_servant"|"foreign_national"
 
 
-def _employee_dict(e: Employee, company_industry: str = None) -> dict:
-    """Return employee as dict with bank fields decrypted."""
+def _employee_dict(e: Employee, company_industry: str = None, full: bool = False) -> dict:
+    """Return employee as dict. ID/tax numbers and bank account numbers are MASKED (last 4) unless full=True
+    (security audit 2026-11-23): only the salary bank file and the employee export ask for full values."""
+    _m = (lambda v: v or "") if full else mask_tail
     from payroll import bcea_hourly_rate
     _is_sec_co = (company_industry or "").lower().replace(" ", "_").replace("-", "_") == "private_security"
     _has_grade  = bool(getattr(e, "security_grade", None))
@@ -1951,7 +2073,7 @@ def _employee_dict(e: Employee, company_industry: str = None) -> dict:
         "id": e.id, "company_id": e.company_id,
         "employee_number": e.employee_number,
         "first_name": e.first_name, "last_name": e.last_name,
-        "id_number": e.id_number, "tax_number": e.tax_number,
+        "id_number": _m(e.id_number), "tax_number": _m(e.tax_number),
         "date_of_birth": e.date_of_birth.isoformat() if e.date_of_birth else None,
         "appointment_date": e.appointment_date.isoformat() if e.appointment_date else None,
         "address": e.address, "position": e.position, "department": e.department,
@@ -1961,8 +2083,8 @@ def _employee_dict(e: Employee, company_industry: str = None) -> dict:
         "hourly_rate_bcea": round(bcea_hourly_rate(e.gross_salary, e.hourly_rate), 4),
         "gross_salary": e.gross_salary,
         "bank_name":      decrypt_field(e.bank_name),
-        "bank_account":   decrypt_field(e.bank_account),
-        "account_number": decrypt_field(e.account_number),
+        "bank_account":   _m(decrypt_field(e.bank_account)),
+        "account_number": _m(decrypt_field(e.account_number)),
         "branch_code":    decrypt_field(e.branch_code),
         "account_type": e.account_type,
         "start_date": e.start_date.isoformat() if e.start_date else None,
@@ -2002,14 +2124,20 @@ def _employee_dict(e: Employee, company_industry: str = None) -> dict:
 
 
 @employees_router.get("/")
-async def list_employees(include_inactive: bool = False, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def list_employees(include_inactive: bool = False, full: bool = False, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """full=1 returns unmasked ID/tax/bank numbers (salary bank file, employee export) - owner/admin/payroll only, audit-logged."""
     q = db.query(Employee).filter(Employee.company_id == current_user.company_id)
     if not include_inactive:
         q = q.filter(Employee.is_active == True)
     emps = q.all()
     _co = db.query(Company).filter(Company.id == current_user.company_id).first()
     _industry = _co.industry if _co else None
-    return [_employee_dict(e, _industry) for e in emps]
+    if full:
+        if current_user.role not in ("owner", "admin", "payroll"):
+            raise HTTPException(status_code=403, detail="Only the owner, an admin or payroll can see full bank and ID numbers.")
+        log_action(db, current_user.company_id, current_user, "employees.sensitive_view",
+                   target_type="employee", detail=f"Full ID/tax/bank numbers viewed for {len(emps)} employee(s)")
+    return [_employee_dict(e, _industry, full=full) for e in emps]
 
 
 @employees_router.post("/")
@@ -2079,6 +2207,8 @@ async def create_employee(data: EmployeeCreate, current_user: User = Depends(req
     db.add(emp)
     db.commit()
     db.refresh(emp)
+    log_action(db, current_user.company_id, current_user, "employee.created", target_type="employee",
+               target_id=emp.id, detail=f"{emp.first_name} {emp.last_name}")
     return _employee_dict(emp, company.industry)
 
 
@@ -2090,7 +2220,11 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
     _DATE_FIELDS = {"date_of_birth", "appointment_date"}
+    _changed = []
     for field, value in data.dict(exclude_none=True).items():
+        if is_masked(value):
+            continue                 # the edit form sent back the masked value: keep what is stored
+        _changed.append(field)
         if field in _DATE_FIELDS:
             setattr(emp, field, datetime.fromisoformat(value) if value else None)
         elif field in _EMPLOYEE_BANK_FIELDS:
@@ -2098,6 +2232,8 @@ async def update_employee(employee_id: int, data: EmployeeUpdate, current_user: 
         else:
             setattr(emp, field, value)
     db.commit()
+    log_action(db, current_user.company_id, current_user, "employee.updated", target_type="employee",
+               target_id=emp.id, detail="Fields changed: " + ", ".join(sorted(_changed))[:400])
     _co = db.query(Company).filter(Company.id == current_user.company_id).first()
     return _employee_dict(emp, _co.industry if _co else None)
 
@@ -2144,6 +2280,8 @@ async def terminate_employee(
     emp.termination_reason = data.reason
     emp.termination_date = term_date
     db.commit()
+    log_action(db, current_user.company_id, current_user, "employee.terminated", target_type="employee",
+               target_id=emp.id, detail=f"Reason code {data.reason}")
     _co = db.query(Company).filter(Company.id == current_user.company_id).first()
     return _employee_dict(emp, _co.industry if _co else None)
 
@@ -2163,6 +2301,7 @@ async def reinstate_employee(
     emp.termination_reason = None
     emp.termination_date = None
     db.commit()
+    log_action(db, current_user.company_id, current_user, "employee.reinstated", target_type="employee", target_id=emp.id)
     _co = db.query(Company).filter(Company.id == current_user.company_id).first()
     return _employee_dict(emp, _co.industry if _co else None)
 
@@ -2315,13 +2454,16 @@ def _settle_bank_control_line(db, cid, txn, kind):
         paid = db.query(Invoice).filter(
             Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
             Invoice.paid_amount_zar == amt, Invoice.paid_date >= d0, Invoice.paid_date < d1).all()
-        if _pick_match(paid, txn.description, lambda i: i.client_name):
-            return "duplicate"                       # already settled by an earlier import of this statement
         open_invs = [i for i in db.query(Invoice).filter(
                         Invoice.company_id == cid,
                         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
                      if (not i.currency or i.currency == "ZAR")
                      and abs((i.total_amount or 0) - ((i.paid_amount_zar or 0) if i.status == InvoiceStatus.partial else 0) - amt) < 0.005]
+        # Already settled by an earlier import of this statement? Not when the narrative names a customer who
+        # still has an open invoice for this amount - then it is a second, genuine payment (audit 2026-11-23).
+        _named_open = [i for i in open_invs if _desc_names_client(txn.description, i.client_name)]
+        if not _named_open and _pick_match(paid, txn.description, lambda i: i.client_name):
+            return "duplicate"
         inv = _pick_match(open_invs, txn.description, lambda i: i.client_name)
         if inv is None:
             return {**base, "candidates": [i.invoice_number for i in open_invs],
@@ -2341,13 +2483,6 @@ def _settle_bank_control_line(db, cid, txn, kind):
         return {**base, "reason": "Money received can't go to Creditors Control. Record a supplier refund "
                                   "against the supplier, or pick the account it belongs to."}
     bank = journal_engine.get_account(cid, "1000", db)
-    dup = (db.query(JournalEntry.id).join(JournalLine, JournalLine.entry_id == JournalEntry.id)
-           .filter(JournalEntry.company_id == cid,
-                   JournalEntry.source.in_(["po_payment", "expense_payment"]),
-                   JournalEntry.date >= d0, JournalEntry.date < d1,
-                   JournalLine.account_id == bank.id, JournalLine.credit == amt).first())
-    if dup:
-        return "duplicate"
     ap_acct = journal_engine.get_account(cid, "2000", db)
     cands = []
     for po in db.query(PurchaseOrder).filter(PurchaseOrder.company_id == cid,
@@ -2359,6 +2494,16 @@ def _settle_bank_control_line(db, cid, txn, kind):
                                        Expense.paid_at == None).all():                          # noqa: E711
         if abs(round(ex.amount or 0, 2) - amt) < 0.005:
             cands.append(("exp", ex, ex.vendor, amt))
+    # A same-day, same-amount supplier payment already in the ledger means "already imported" - unless the
+    # narrative names a supplier that still has an unpaid document for this amount (audit 2026-11-23).
+    _named_open = [c for c in cands if _desc_names_client(txn.description, c[2])]
+    dup = None if _named_open else (db.query(JournalEntry.id).join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+           .filter(JournalEntry.company_id == cid,
+                   JournalEntry.source.in_(["po_payment", "expense_payment"]),
+                   JournalEntry.date >= d0, JournalEntry.date < d1,
+                   JournalLine.account_id == bank.id, JournalLine.credit == amt).first())
+    if dup:
+        return "duplicate"
     pick = _pick_match(cands, txn.description, lambda c: c[2])
     if pick is None:
         labels = [c[1].po_number if c[0] == "po" else f"Expense {c[1].id} ({c[1].vendor})" for c in cands]
@@ -2435,6 +2580,7 @@ async def import_bank_statement(
     settled_documents  = 0     # receipts/payments allocated to 1100/2110 that settled an invoice / PO / expense
     assets_registered  = 0     # payments allocated to PPE that went into the fixed-asset register
     needs_matching     = []    # lines NOT posted: allocated to a control or PPE account with no single match
+    duplicates_skipped = []    # control-account lines treated as already settled - listed so a false match is visible
     for txn in data.transactions:
         try:
           with db.begin_nested():   # SAVEPOINT: one bad line must not discard or corrupt the rest of the import
@@ -2446,6 +2592,8 @@ async def import_bank_statement(
                   _res = _settle_bank_control_line(db, current_user.company_id, txn, _ctrl)
                   if _res == "duplicate":
                       transfers_skipped += 1
+                      duplicates_skipped.append({"description": txn.description, "amount": round(float(txn.amount or 0), 2),
+                                                 "date": txn.date, "account": txn.category})
                   elif _res == "settled":
                       settled_documents += 1
                       posted_lines.append(txn)
@@ -2640,6 +2788,10 @@ async def import_bank_statement(
         db.rollback()
         logger.warning(f"Allocation learning skipped after bank import: {_lerr}")
 
+    log_action(db, current_user.company_id, current_user, "bank.import", target_type="company",
+               target_id=current_user.company_id,
+               detail=f"{data.bank}: {len(data.transactions)} line(s); {expenses_created} expenses, {credits_recorded} income, "
+                      f"{settled_documents} settled, {transfers_recorded} transfers, {len(needs_matching)} need matching")
     return {
         "status":           "success",
         "bank":             data.bank,
@@ -2649,6 +2801,7 @@ async def import_bank_statement(
         "documents_settled":  settled_documents,
         "assets_registered":  assets_registered,
         "needs_matching":     needs_matching,
+        "duplicates_skipped": duplicates_skipped,
         "expenses_created": expenses_created,
         "expenses_skipped": expenses_skipped,
         "credits_recorded": credits_recorded,
@@ -2664,6 +2817,7 @@ async def import_bank_statement(
                              + (f"; {settled_documents} customer/supplier payment(s) matched to their invoice, purchase order or expense and marked paid" if settled_documents else "")
                              + (f"; {assets_registered} asset purchase(s) added to the fixed-asset register" if assets_registered else "")
                              + (f"; {len(needs_matching)} line(s) allocated to Debtors/Creditors Control or an asset were NOT posted because no single document matched - settle them from the invoice, purchase order or expense (see needs_matching)" if needs_matching else "")
+                             + (f"; {len(duplicates_skipped)} Debtors/Creditors line(s) were skipped as already settled the same day - check the list (duplicates_skipped) if a second payment of the same amount was real" if duplicates_skipped else "")
                              + (f"; {len(possible_matches)} receipt(s) have the same amount as an open invoice but the client is not named - check they are not invoice payments recorded twice (they were posted as new income)" if possible_matches else "")
                              + (f"; {ignored} line(s) ignored (zero/negative amount)" if ignored else "")
                              + (f"; {len(failed)} line(s) could NOT be posted and were skipped - nothing partial was saved for them; fix and re-import (duplicates are skipped automatically)" if failed else "") + "."),

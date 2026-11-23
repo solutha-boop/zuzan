@@ -25,6 +25,17 @@ if _key_raw:
 else:
     logger.warning("FIELD_ENCRYPTION_KEY not set — bank fields stored in plaintext (set this in Render env vars)")
 
+# Production must never silently store sensitive fields in plaintext (security audit 2026-11-23, crypto fail-open).
+# On Render (RENDER env var set) a missing or invalid key now stops the app from starting, unless the operator
+# explicitly opts out with ZUZAN_ALLOW_PLAINTEXT_FIELDS=1 (an emergency switch, logged at CRITICAL level).
+if os.environ.get("RENDER") and _fernet is None:
+    if os.environ.get("ZUZAN_ALLOW_PLAINTEXT_FIELDS") == "1":
+        logger.critical("SECURITY: FIELD_ENCRYPTION_KEY missing/invalid - sensitive fields are being stored in PLAINTEXT "
+                        "because ZUZAN_ALLOW_PLAINTEXT_FIELDS=1. Set a valid key and remove that override.")
+    else:
+        raise RuntimeError("FIELD_ENCRYPTION_KEY is missing or invalid. Set a valid Fernet key in Render env vars "
+                           "(or, in an emergency only, set ZUZAN_ALLOW_PLAINTEXT_FIELDS=1).")
+
 
 def encrypt_field(value: str | None) -> str | None:
     """Encrypt a sensitive string field before saving to DB."""
@@ -59,3 +70,59 @@ def _is_fernet_token(value: str) -> bool:
 
 def encryption_enabled() -> bool:
     return _fernet is not None
+
+
+# ── Blind index + masking helpers (security audit 2026-11-23) ────────────────────────────────────────
+import hmac as _hmac, hashlib as _hashlib
+
+
+def _blind_key() -> bytes:
+    k = os.environ.get("FIELD_ENCRYPTION_KEY", "").strip() or "zuzan-blind-index-v1"
+    return _hashlib.sha256(("blind-index|" + k).encode()).digest()
+
+
+def blind_index(value) -> str | None:
+    """Deterministic keyed hash (HMAC-SHA256) of a sensitive value, so an encrypted field can still be matched
+    exactly (e.g. find an employee by SA ID number) without storing it in plaintext. Spaces/dashes are ignored."""
+    if value is None:
+        return None
+    norm = "".join(ch for ch in str(value) if ch.isalnum()).upper()
+    if not norm:
+        return None
+    return _hmac.new(_blind_key(), norm.encode(), _hashlib.sha256).hexdigest()
+
+
+MASK_PREFIX = "••••"
+
+
+def mask_tail(value, keep: int = 4) -> str:
+    """'1234567890' -> '••••7890'. Empty in, empty out."""
+    if not value:
+        return ""
+    v = str(value).strip()
+    return MASK_PREFIX + v[-keep:] if len(v) > keep else MASK_PREFIX + v[-1:] if v else ""
+
+
+def is_masked(value) -> bool:
+    """True for a value produced by mask_tail - an edit form sent the mask back, so the stored value must be kept."""
+    return isinstance(value, str) and value.startswith(MASK_PREFIX)
+
+
+try:
+    from sqlalchemy.types import TypeDecorator, String as _SAString
+
+    class EncryptedString(TypeDecorator):
+        """A String column that is transparently encrypted at rest with encrypt_field/decrypt_field.
+        Legacy plaintext values still read correctly (decrypt_field returns them unchanged)."""
+        impl = _SAString
+        cache_ok = True
+
+        def process_bind_param(self, value, dialect):
+            if value is None or value == "":
+                return value
+            return encrypt_field(str(value))
+
+        def process_result_value(self, value, dialect):
+            return decrypt_field(value) if value else value
+except ImportError:          # pragma: no cover
+    EncryptedString = None

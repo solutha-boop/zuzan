@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
+from security import public_error
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -93,7 +94,7 @@ async def create_item(data: ItemCreate, current_user: User = Depends(get_current
     except Exception as e:
         db.rollback()
         logger.error(f"Journal post failed for new inventory item: {e}")
-        raise HTTPException(status_code=500, detail=f"Item not saved - the stock journal failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Item not saved - the stock journal failed: {public_error(e)}")
     db.refresh(item)
     return item_to_dict(item)
 
@@ -121,7 +122,7 @@ async def update_item(item_id: int, data: ItemUpdate, current_user: User = Depen
     except Exception as e:
         db.rollback()
         logger.error(f"Journal post failed for inventory edit {item_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Item not saved - the stock journal failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Item not saved - the stock journal failed: {public_error(e)}")
     db.refresh(item)
     return item_to_dict(item)
 
@@ -142,7 +143,7 @@ async def adjust_stock(item_id: int, data: StockAdjust, current_user: User = Dep
     except Exception as e:
         db.rollback()
         logger.error(f"Journal post failed for stock adjustment on item {item.id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Stock adjustment not saved - the journal failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Stock adjustment not saved - the journal failed: {public_error(e)}")
     db.refresh(item)
     return item_to_dict(item)
 

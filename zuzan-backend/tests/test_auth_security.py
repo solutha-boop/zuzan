@@ -32,12 +32,20 @@ def test_forgot_password_is_case_insensitive_and_does_not_reveal_who_has_an_acco
     app, c = _client()
     co = company("authA", "general")
     u = _user(co, "Mixed.Case@Example.com")                      # stored as typed, as older accounts are
-    known = c.post("/auth/forgot-password", json={"email": "mixed.case@example.com"})
+    sent = {}
+    _orig_send = AU.send_password_reset_email
+    AU.send_password_reset_email = lambda first, email, code: sent.update(code=code)   # capture the emailed code
+    try:
+        known = c.post("/auth/forgot-password", json={"email": "mixed.case@example.com"})
+    finally:
+        AU.send_password_reset_email = _orig_send
     unknown = c.post("/auth/forgot-password", json={"email": "nobody@example.com"})
     assert known.status_code == unknown.status_code == 200 and known.json() == unknown.json()
     db.expire_all()
-    code = db.query(User).filter_by(id=u.id).one().reset_token
-    assert code                                                    # a code really was issued to the mixed-case account
+    stored = db.query(User).filter_by(id=u.id).one().reset_token
+    code = sent.get("code")
+    assert code and stored                                         # a code really was issued to the mixed-case account
+    assert code not in stored and stored.startswith("sha256:")    # only a hash of the code is stored (audit 2026-11-23)
     assert c.post("/auth/reset-password", json={"token": code, "new_password": "short"}).status_code == 400
     assert c.post("/auth/reset-password", json={"token": code, "new_password": "BrandNewPass1"}).status_code == 200
     assert c.post("/auth/reset-password", json={"token": code, "new_password": "BrandNewPass2"}).status_code == 400   # code is single use

@@ -4,6 +4,7 @@ Mounted at /credit-notes.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from security import public_error
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -261,7 +262,7 @@ async def create_credit_note(
     except Exception as e:
         logger.error(f"Credit note journal post failed: {e}")
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Credit note NOT saved - the journal entry failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Credit note NOT saved - the journal entry failed: {public_error(e)}")
 
     db.commit()
     db.refresh(cn)
@@ -321,7 +322,7 @@ async def delete_credit_note(
     except Exception as e:
         logger.error(f"Credit note reversal failed: {e}")
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Credit note NOT deleted - its journal reversal failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Credit note NOT deleted - its journal reversal failed: {public_error(e)}")
     db.delete(cn)
     db.commit()
     return {"ok": True}

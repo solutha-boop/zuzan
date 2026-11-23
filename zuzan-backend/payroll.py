@@ -3,6 +3,7 @@ ZuZan - Payroll Engine, Reports and PayFast Payment Gateway
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Request
+from security import public_error
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
@@ -1530,7 +1531,7 @@ async def run_payroll(
             db.rollback()
             raise HTTPException(
                 status_code=500,
-                detail=f"Payroll processed but journal entry failed for {emp.first_name} {emp.last_name}: {e}. Payroll has been rolled back — please retry.",
+                detail=f"Payroll processed but journal entry failed for {emp.first_name} {emp.last_name}: {public_error(e)}. Payroll has been rolled back — please retry.",
             )
 
     db.commit()
@@ -1784,7 +1785,7 @@ async def delete_payroll_period(
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Could not reverse payroll journal entries: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not reverse payroll journal entries: {public_error(e)}")
     return {"deleted": count, "period": period, "journal_entries_reversed": reversed_entries}
 
 
@@ -4069,6 +4070,7 @@ async def management_accounts(
         # No payslips, but the period comes from an imported ledger / manual journals: the real staff
         # costs are already in those expense accounts. Adding a headcount estimate on top double-counted
         # payroll for every imported company with employees on file (2026-11-22).
+        # (Audit 2026-11-23 Low item reviewed: kept by design - covered by test_dashboard_period.)
         total_payroll_cost = 0.0
     else:
         # No payslips in range — estimate from currently active employees
@@ -4443,7 +4445,7 @@ async def creditors_aging(
     if not has_plan(db.query(Company).filter(Company.id == current_user.company_id).first(), "professional"):
         raise plan_error("professional", "The creditors book")
     from database import Supplier as SupplierModel, Expense as ExpenseModel, Account as _Account, JournalEntry as _JE, JournalLine as _JL
-    from crypto import decrypt_field
+    from crypto import decrypt_field, mask_tail
     cid = current_user.company_id
     now = datetime.utcnow()
 
@@ -4512,7 +4514,7 @@ async def creditors_aging(
                 "vendor":        vendor_name,
                 "supplier_id":   po.supplier_id,
                 "bank_name":     decrypt_field(sup.bank_name)      if sup else None,
-                "account_number":decrypt_field(sup.account_number) if sup else None,
+                "account_number":mask_tail(decrypt_field(sup.account_number)) if sup else None,   # masked (audit 2026-11-23)
                 "branch_code":   decrypt_field(sup.branch_code)    if sup else None,
                 "account_type":  sup.account_type                  if sup else None,
                 "invoices": [],

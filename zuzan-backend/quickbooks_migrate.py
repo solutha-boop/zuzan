@@ -171,7 +171,8 @@ async def import_qbo_general_ledger(file: UploadFile = File(...), current_user=D
     """
     from database import Account, AccountType
 
-    content = await file.read()
+    from csv_import import read_upload
+    content = await read_upload(file)
     if not content or not content.strip():
         raise HTTPException(400, "The file is empty.")
     if len(content) > MAX_UPLOAD_BYTES:

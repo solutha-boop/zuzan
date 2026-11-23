@@ -2030,6 +2030,8 @@ async def redate_reversals(
             rev.date = target
     if apply and moved:
         db.commit()
+        log_action(db, current_user.company_id, current_user, "journal.reversals_redated", target_type="company",
+                   target_id=current_user.company_id, detail=f"{len(moved)} reversal(s) redated for {day.isoformat()}")
     return {"day": day.isoformat(), "applied": bool(apply), "moved": len(moved), "unchanged": kept, "entries": moved}
 
 
@@ -2057,6 +2059,8 @@ async def reverse_entry_endpoint(
         rev = reverse_entry_by_id(entry_id, db, reason=f"Manual reversal — {entry.description}",
                                   same_date=(date_mode == "original"))
         db.commit()
+        log_action(db, current_user.company_id, current_user, "journal.reversed", target_type="journal_entry",
+                   target_id=entry_id, detail=f"Reversal entry {rev.id} ({date_mode} date)")
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {

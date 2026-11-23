@@ -7,7 +7,7 @@
 
 Re-verified high-risk anchors via Grep — all unchanged: `"deferred_tax": 0.0` → no matches in `financial_statements.py`; `wear_and_tear_rate` present in `database.py`; `purchase_order_reversal` present in `payroll.py`, `financial_statements.py`, `journal.py`, `purchase_orders.py`; `source == "import"` exclusion present in `payroll.py`; `CURRENT_TAX_YEAR`/`VAT_RATE`/`S11F_CAP` present and unchanged in `payroll.py`.
 
-**Out-of-scope but flagged (Critical, security):** a plaintext file named `ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` sits in the repo root (`C:\Zuzan\`, untracked) and its contents are a live-looking GitHub personal access token (`ghp_` + 36 chars — standard classic-PAT format) matching the filename. This is not part of the Reports/Debtors/Creditors/AFS/tax checklist, but a credential sitting in a synced project folder is a real exposure risk — see Action Items §8(0).
+**Out-of-scope but flagged (Critical, security):** a plaintext file named `ghp_[REDACTED].txt` sits in the repo root (`C:\Zuzan\`, untracked) and its contents are a live-looking GitHub personal access token (`ghp_` + 36 chars — standard classic-PAT format) matching the filename. This is not part of the Reports/Debtors/Creditors/AFS/tax checklist, but a credential sitting in a synced project folder is a real exposure risk — see Action Items §8(0).
 
 ---
 
@@ -86,7 +86,7 @@ Re-verified high-risk anchors via Grep — all unchanged: `"deferred_tax": 0.0` 
 
 ## 8. Action items
 
-1. **Critical (security, out-of-scope but urgent):** `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` contains what appears to be a live GitHub personal access token in plaintext, sitting untracked in the project root of a folder synced via OneDrive. Recommend revoking the token in GitHub settings immediately and deleting the file, regardless of whether it was ever committed to git history (check history too — if it was ever committed, treat it as compromised even after deletion).
+1. **Critical (security, out-of-scope but urgent):** `C:\Zuzan\ghp_[REDACTED].txt` contains what appears to be a live GitHub personal access token in plaintext, sitting untracked in the project root of a folder synced via OneDrive. Recommend revoking the token in GitHub settings immediately and deleting the file, regardless of whether it was ever committed to git history (check history too — if it was ever committed, treat it as compromised even after deletion).
 2. **Medium:** `/reports/cash-flow-13week` (`payroll.py:1991-2098`) does not model outstanding creditor (PO) payments or VAT201 liabilities as distinct weekly outflows (`other_payments`/`vat_payment` hard-coded `0.0`) — consider pulling due-date-bucketed outstanding POs and the next VAT201 due amount the same way invoice receipts are modeled, so the forecast's outflow side has the same fidelity as its inflow side.
 
 **Standing reminders (not defects, carried from prior reports):**

@@ -42,7 +42,8 @@ def key(h) -> str:
 
 async def read_table(file: UploadFile) -> list[dict]:
     """The upload as a list of {header-key: value} rows (CSV or Excel). Rejects empty, huge or unreadable files."""
-    content = await file.read()
+    from csv_import import read_upload
+    content = await read_upload(file)
     if not content or not content.strip():
         raise HTTPException(400, "The file is empty.")
     if len(content) > MAX_UPLOAD_BYTES:

@@ -16,7 +16,7 @@ Every anchor from the 09-03 report was re-verified directly against current file
 - `payroll.py:132-146` — `TAX_YEARS["2026/2027"]` brackets, primary rebate R17,820, secondary R9,765, tertiary R3,249, UIF ceiling R17,712 unchanged; `"2027/2028"` provisional copy still flagged `"provisional": True`.
 - `payroll.py:1609,2802` — `VAT_RATE = 0.15` unchanged in both locations.
 - `App_js_fixed.js:899-1090` — per-line VAT checkbox (`vat_applicable`) still computes a correct-looking preview client-side but the backend still doesn't consume `items_json` for VAT/total.
-- `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` — still present in the repo root, untracked, unchanged (last modified 24 Aug 2026).
+- `C:\Zuzan\ghp_[REDACTED].txt` — still present in the repo root, untracked, unchanged (last modified 24 Aug 2026).
 
 Fresh web searches this run found no changes to IFRS or SARS positions: IFRS for SMEs third edition (issued Feb 2025) remains effective for periods beginning on/after 1 January 2027, with a September 2026 consultation only proposing an SME consolidation-exception extension aligned to the same 1 Jan 2027 date — no acceleration. The 2026 draft TLAB/TALAB remain in the post-comment-period review phase (comment period closed 28 August 2026); no evidence of Parliamentary introduction yet. SARS 2026/2027 PAYE brackets, primary rebate (R17,820), UIF ceiling (R17,712 at 1%/1%), SDL (1%, exempt below R500,000 payroll), and VAT (15%) independently re-confirmed via web search and all match the code exactly.
 
@@ -101,7 +101,7 @@ Finance costs (2026-07-13 fix): interest-below-EBIT split and tax/net-profit der
 
 ## 8. Action items
 
-1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked. Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
+1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_[REDACTED].txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked. Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
 2. **High (carried over, unfixed):** the multi-line invoice-items feature (`App_js_fixed.js:899-1090`, `companies.py:395-399`) still does not make the backend's VAT calculation respect per-line `vat_applicable` flags. Recommend either removing the per-line VAT checkbox until the backend honours it, or having `create_invoice`/`update_invoice` derive `vat_amount`/`total_amount` from `items_json` when present.
 3. **High (carried over, unfixed):** expense "Account" dropdown value (`"{code} - {name}"`) doesn't match `CATEGORY_TO_CODE`'s bare-name keys in `journal.py:88-149`, so manually-entered and bank-import-categorised expenses both post to account 5900 regardless of the account selected. Recommend `expense_account()` parse the leading code from `category` and look up `Account` by code directly.
 4. **Medium (carried over):** `/reports/cash-flow-13week` (`payroll.py:1991-2098`) still does not model outstanding creditor (PO) payments or VAT201 liabilities as distinct weekly outflows.

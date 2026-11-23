@@ -87,7 +87,7 @@ Finance costs (2026-07-13 fix): interest-below-EBIT split and tax/net-profit der
 
 ## 8. Action items
 
-1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_w0vWd0jgV1yFdHb9NODeqLMx5jlKOz3.txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked (confirmed still present, unchanged, this run — 40 bytes, dated 24 Aug). Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
+1. **Critical (security, out-of-scope but urgent, carried over unresolved):** `C:\Zuzan\ghp_[REDACTED].txt` still contains what appears to be a live GitHub personal access token in plaintext in the project root, untracked (confirmed still present, unchanged, this run — 40 bytes, dated 24 Aug). Recommend revoking it in GitHub settings and deleting the file; check git history in case it was ever committed.
 2. **Medium (carried over, unchanged):** `billing.py`'s `resp = None` duplicate-line pattern and `main.py`'s disabled-middleware comment remain from the repeated commit-generation tooling. Functionally harmless; worth a cleanup pass whenever that tooling is next touched.
 3. **Medium (carried over):** `/reports/cash-flow-13week` (`payroll.py:1991-2098`, unchanged) still does not model outstanding creditor (PO) payments or VAT201 liabilities as distinct weekly outflows.
 4. **Low (carried over):** with the expense-account routing fix in place (fixed 2026-09-06), custom `/coa` accounts should resolve correctly via the numeric-code path in `expense_account()` — still recommend a quick functional test adding one custom account and posting an expense against it to confirm end-to-end, since this hasn't been explicitly exercised.

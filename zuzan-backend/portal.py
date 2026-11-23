@@ -65,10 +65,29 @@ def _pf_validate_remote(data: dict) -> bool:
     return r.text.strip().upper() == "VALID"
 
 
+PORTAL_LINK_DAYS = 365            # a payment link works for a year after it was issued (security audit 2026-11-23)
+PORTAL_PAID_GRACE_DAYS = 90       # ...and for 90 days after the invoice was paid (receipt / proof of payment)
+
+
+def portal_token_expired(inv, now=None) -> bool:
+    from datetime import datetime as _dt, timedelta as _td
+    now = now or _dt.utcnow()
+    created = getattr(inv, "portal_token_created_at", None)
+    if created and now - created > _td(days=PORTAL_LINK_DAYS):
+        return True
+    paid = getattr(inv, "paid_date", None)
+    status = getattr(getattr(inv, "status", None), "value", getattr(inv, "status", None))
+    if status == "paid" and paid and now - paid > _td(days=PORTAL_PAID_GRACE_DAYS):
+        return True
+    return False
+
+
 def _get_invoice_by_token(token: str, db: Session) -> Invoice:
-    inv = db.query(Invoice).filter(Invoice.portal_token == token).first()
+    inv = db.query(Invoice).filter(Invoice.portal_token == token).first() if token else None
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found.")
+    if portal_token_expired(inv):
+        raise HTTPException(status_code=410, detail="This payment link has expired. Please ask the business for a new link.")
     return inv
 
 

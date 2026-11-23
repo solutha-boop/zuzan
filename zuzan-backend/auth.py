@@ -5,7 +5,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from passlib.context import CryptContext
-from jose import JWTError, jwt
+import jwt                                   # PyJWT (replaced python-jose, security audit 2026-11-23)
+from jwt import PyJWTError as JWTError
 from datetime import datetime, timedelta
 import secrets
 from typing import Optional
@@ -754,7 +755,7 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
         return _same_reply
 
     token = secrets.token_hex(4).upper()  # 8-char code e.g. A3F9B21C
-    user.reset_token = token
+    user.reset_token = _reset_code_hash(token)    # only a hash is stored (security audit 2026-11-23)
     user.reset_token_expires = datetime.utcnow() + timedelta(minutes=30)
     db.commit()
 
@@ -765,6 +766,12 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
     return _same_reply
 
 
+def _reset_code_hash(code: str) -> str:
+    """Reset codes are stored hashed, so a database leak does not hand out live reset codes."""
+    import hashlib as _h
+    return "sha256:" + _h.sha256(("zuzan-reset|" + (code or "").upper().strip()).encode()).hexdigest()
+
+
 @router.post("/reset-password")
 @limiter.limit("5/minute")
 async def reset_password(request: Request, data: ResetPasswordRequest, db: Session = Depends(get_db)):
@@ -772,7 +779,7 @@ async def reset_password(request: Request, data: ResetPasswordRequest, db: Sessi
     _ip = _client_ip(request)
     if _reset_fail_ip.blocked(_ip) or _reset_fail_all.blocked("all"):
         raise HTTPException(status_code=429, detail="Too many attempts. Please wait a while and try again.")
-    user = db.query(User).filter(User.reset_token == token).first() if len(token) >= 6 else None
+    user = db.query(User).filter(User.reset_token == _reset_code_hash(token)).first() if len(token) >= 6 else None
     if not user:
         _reset_fail_ip.hit(_ip); _reset_fail_all.hit("all")
         raise HTTPException(status_code=400, detail="Invalid reset code.")

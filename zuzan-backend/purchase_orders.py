@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
+from security import public_error
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 from typing import Optional, List
@@ -106,7 +107,7 @@ async def list_pos(
         return [to_dict(p) for p in pos]
     except Exception as e:
         logger.error(f"list_pos error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=public_error(e))
 
 @router.post("/")
 async def create_po(data: POCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -137,7 +138,7 @@ async def create_po(data: POCreate, current_user: User = Depends(get_current_use
     except Exception as e:
         logger.error(f"create_po error: {e}")
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=public_error(e))
 
 @router.put("/{po_id}")
 async def update_po(po_id: int, data: POUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -273,7 +274,7 @@ async def delete_po(po_id: int, current_user: User = Depends(get_current_user), 
             db.rollback()
             raise HTTPException(
                 status_code=500,
-                detail=f"PO deletion aborted — journal reversal failed: {e}. Please retry.",
+                detail=f"PO deletion aborted — journal reversal failed: {public_error(e)}. Please retry.",
             )
     db.delete(po)
     db.commit()
@@ -423,7 +424,7 @@ async def receive_po(po_id: int, data: POReceive, current_user: User = Depends(g
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"PO receipt failed — journal entry could not be posted: {e}. No changes were saved — please retry.",
+            detail=f"PO receipt failed — journal entry could not be posted: {public_error(e)}. No changes were saved — please retry.",
         )
     db.refresh(po)
 
@@ -530,7 +531,7 @@ async def pay_po(po_id: int, current_user: User = Depends(get_current_user), db:
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"PO payment failed — journal entry could not be posted: {e}. No changes were saved — please retry.",
+            detail=f"PO payment failed — journal entry could not be posted: {public_error(e)}. No changes were saved — please retry.",
         )
     db.refresh(po)
 

@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import enum
+from crypto import EncryptedString
 
 import os
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./zuzan.db")
@@ -56,6 +57,7 @@ class Company(Base):
     id=Column(Integer,primary_key=True,index=True)
     name=Column(String,nullable=False)
     reg_number=Column(String); vat_number=Column(String); industry=Column(String)
+    closed_at=Column(DateTime,nullable=True)          # POPIA account closure requested (security audit 2026-11-23)
     vat_registered=Column(Boolean,default=True)   # False = not a VAT vendor: no VAT charged on sales, none claimed on purchases
     address=Column(Text); phone=Column(String); email=Column(String)
     bank_name=Column(String); bank_account=Column(String); bank_branch=Column(String)
@@ -200,8 +202,12 @@ class Employee(Base):
     id=Column(Integer,primary_key=True,index=True)
     company_id=Column(Integer,ForeignKey("companies.id"))
     employee_number=Column(String); first_name=Column(String,nullable=False)
-    last_name=Column(String,nullable=False); id_number=Column(String)
-    tax_number=Column(String); date_of_birth=Column(DateTime)
+    last_name=Column(String,nullable=False)
+    # SA ID and income-tax numbers are encrypted at rest (security audit 2026-11-23); id_number_hash is a keyed
+    # blind index (crypto.blind_index) so imports can still match an employee by ID number.
+    id_number=Column(EncryptedString)
+    id_number_hash=Column(String,nullable=True,index=True)
+    tax_number=Column(EncryptedString); date_of_birth=Column(DateTime)
     appointment_date=Column(DateTime); address=Column(String)
     position=Column(String); department=Column(String)
     grade=Column(String,nullable=True)                # e.g. "A", "B", "Senior", "Grade 7"
@@ -1247,6 +1253,19 @@ class ClockEvent(Base):
     employee    = relationship("Employee")
 
 
+# Keep the employee ID-number blind index in step with the (encrypted) value on every insert/update.
+from sqlalchemy import event as _sa_event
+
+
+def _sync_employee_id_hash(mapper, connection, target):
+    from crypto import blind_index as _bi, decrypt_field as _df
+    target.id_number_hash = _bi(_df(target.id_number) if target.id_number else None)
+
+
+_sa_event.listen(Employee, "before_insert", _sync_employee_id_hash)
+_sa_event.listen(Employee, "before_update", _sync_employee_id_hash)
+
+
 def init_db():
     # Enable WAL mode for SQLite — far more resilient to crashes than the default
     # rollback-journal mode, and safe to run on every startup (no-op for PostgreSQL).
@@ -1875,6 +1894,11 @@ def init_db():
             """UPDATE journal_entries SET date = (SELECT o.date FROM journal_entries o
                                                   WHERE o.id = journal_entries.is_reversal_of)
                WHERE source = 'import_reversal' AND is_reversal_of IS NOT NULL AND reference LIKE 'REV-OB-%'""",
+            # 2026-11-23 security audit: blind index for the (now encrypted) employee SA ID number
+            "ALTER TABLE employees ADD COLUMN id_number_hash VARCHAR",
+            "CREATE INDEX IF NOT EXISTS ix_employees_id_number_hash ON employees (id_number_hash)",
+            # 2026-11-23 security audit: client-portal links expire; POPIA account closure
+            "ALTER TABLE companies ADD COLUMN closed_at TIMESTAMP",
         ]:
             try:
                 conn.execute(text(sql))
@@ -1893,6 +1917,21 @@ def init_db():
         except Exception:
             conn.rollback()
 
+
+        # Backfill (security audit 2026-11-23): encrypt legacy plaintext employee ID / tax numbers and fill the
+        # ID-number blind index. Idempotent - encrypt_field leaves already-encrypted values alone.
+        try:
+            from crypto import encrypt_field as _ef, decrypt_field as _df, blind_index as _bi
+            _rows = conn.execute(text("SELECT id, id_number, tax_number, id_number_hash FROM employees")).fetchall()
+            for (_eid, _idn, _tax, _h) in _rows:
+                _plain = _df(_idn) if _idn else None
+                _new_id, _new_tax, _new_h = (_ef(_idn) if _idn else _idn), (_ef(_tax) if _tax else _tax), _bi(_plain)
+                if (_new_id, _new_tax, _new_h) != (_idn, _tax, _h):
+                    conn.execute(text("UPDATE employees SET id_number = :i, tax_number = :t, id_number_hash = :h WHERE id = :e"),
+                                 {"i": _new_id, "t": _new_tax, "h": _new_h, "e": _eid})
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
         # Backfill: generate portal_token for any invoices missing one.
         # Raw SQL on the SAME connection (no ORM session): the ORM query selected columns that a legacy

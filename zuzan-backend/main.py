@@ -1,16 +1,56 @@
+import os as _os_sentry
+import re as _re_sentry
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
-sentry_sdk.init(
-    dsn="https://845e5daf86c2d7efa1a3e44d3c412a46@o4511737932021760.ingest.de.sentry.io/4511737977241680",
-    integrations=[FastApiIntegration(), SqlalchemyIntegration()],
-    traces_sample_rate=0.1,
-    environment="production",
-    send_default_pii=False,   # never send request bodies — financial data privacy
-)
+_SENTRY_SCRUB_KEYS = ("password", "token", "secret", "passphrase", "authorization", "api_key", "apikey",
+                      "id_number", "tax_number", "account_number", "bank_account", "branch_code", "email", "phone",
+                      "cookie", "x-admin-secret", "x-api-key")
+_SENTRY_DIGITS = _re_sentry.compile(r"\b\d{6,}\b")       # ID / account / tax numbers in free text
+
+
+def _sentry_scrub(obj):
+    if isinstance(obj, dict):
+        return {k: ("[Filtered]" if any(t in str(k).lower() for t in _SENTRY_SCRUB_KEYS) else _sentry_scrub(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sentry_scrub(v) for v in obj]
+    if isinstance(obj, str):
+        return _SENTRY_DIGITS.sub("[Filtered]", obj)
+    return obj
+
+
+def _sentry_before_send(event, hint):
+    """Strip personal data before an error leaves for Sentry (POPIA; security audit 2026-11-23)."""
+    try:
+        for key in ("request", "extra", "contexts", "breadcrumbs", "user"):
+            if key in event:
+                event[key] = _sentry_scrub(event[key])
+        for exc in (event.get("exception") or {}).get("values") or []:
+            if exc.get("value"):
+                exc["value"] = _SENTRY_DIGITS.sub("[Filtered]", str(exc["value"]))
+            for fr in ((exc.get("stacktrace") or {}).get("frames") or []):
+                fr.pop("vars", None)              # local variables can hold client records
+    except Exception:
+        pass
+    return event
+
+
+# DSN from the environment (security audit 2026-11-23); unset = Sentry off (local dev, tests).
+if _os_sentry.environ.get("SENTRY_DSN"):
+    sentry_sdk.init(
+        dsn=_os_sentry.environ["SENTRY_DSN"],
+        integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+        traces_sample_rate=0.1,
+        environment=_os_sentry.environ.get("SENTRY_ENVIRONMENT", "production"),
+        send_default_pii=False,   # never send request bodies — financial data privacy
+        include_local_variables=False,
+        before_send=_sentry_before_send,
+    )
 
 from fastapi import FastAPI, Request
+from security import public_error
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -291,7 +331,8 @@ app.add_middleware(_SecurityMiddleware)   # security headers, size cap, per-IP t
 app.add_middleware(_CORSMiddleware)
 
 import json as _json
-from jose import jwt as _jwt, JWTError as _JWTError
+import jwt as _jwt                      # PyJWT
+from jwt import PyJWTError as _JWTError
 
 # Paths exempt from subscription gating (must be accessible even when expired)
 _SUB_EXEMPT_EXACT   = {"/", "/health", "/docs", "/openapi.json", "/redoc"}
@@ -383,7 +424,15 @@ class _SubscriptionGateMiddleware:
 # app.add_middleware(_SubscriptionGateMiddleware)  # disabled — re-enable when PayFast live
 
 @app.get("/health")
-async def health(): return {"status": "ok"}
+async def health():
+    # Security self-check flags (audit 2026-11-23) - booleans only, never the values themselves.
+    import os as _o
+    from crypto import encryption_enabled as _enc_on
+    _sk = _o.environ.get("SECRET_KEY", "")
+    return {"status": "ok",
+            "field_encryption": _enc_on(),
+            "secret_key_configured": len(_sk) >= 32 and _sk != "zuzan-dev-key-change-in-production",
+            "cors_restricted": bool(_o.environ.get("CORS_ORIGINS", "").strip())}
 
 from auth import router as auth_router
 from companies import (
@@ -896,7 +945,7 @@ async def admin_clients(db: Session = Depends(get_db_session), _=Depends(_check_
         return result
     except Exception as e:
         logger.error(f"Admin clients error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=public_error(e))
 
 
 @app.post("/admin/api/clients/{company_id}/extend-trial", tags=["Admin"])
@@ -1066,7 +1115,7 @@ async def admin_subscriptions(db: Session = Depends(get_db_session), _=Depends(_
         } for r in rows]
     except Exception as e:
         logger.error(f"Admin subscriptions error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=public_error(e))
 
 
 @app.post("/admin/api/subscriptions", tags=["Admin"])
@@ -1091,7 +1140,7 @@ async def admin_add_subscription(request: Request, db: Session = Depends(get_db_
         return {"id": sp.id, "status": "created"}
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=public_error(e))
 
 
 @app.get("/admin/api/mrr", tags=["Admin"])
@@ -1152,7 +1201,7 @@ async def admin_mrr(db: Session = Depends(get_db_session), _=Depends(_check_admi
         }
     except Exception as e:
         logger.error(f"Admin MRR error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=public_error(e))
 
 
 @app.get("/admin/api/analytics", tags=["Admin"])
@@ -1211,7 +1260,7 @@ async def admin_analytics(db: Session = Depends(get_db_session), _=Depends(_chec
         }
     except Exception as e:
         logger.error(f"Admin analytics error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=public_error(e))
 
 
 @app.get("/admin/api/bank-interest", tags=["Admin"])
