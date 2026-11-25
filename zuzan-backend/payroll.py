@@ -2086,6 +2086,10 @@ async def get_irp5(
     """Annual IRP5 certificates for all active employees (aggregated from payslips)."""
     cid = current_user.company_id
     ty = tax_year or _default_tax_year()
+    # IRP5 data carries full ID and tax numbers (SARS needs them) - record who viewed it (POPIA, audit 2026-11-24).
+    from auth import log_action as _log_action
+    _log_action(db, cid, current_user, "payroll.irp5_view", target_type="company", target_id=cid,
+                detail=f"IRP5 certificates viewed for tax year {ty}")
     periods = _tax_year_periods(ty)
 
     # Everyone who was paid in the tax year gets a certificate - including people who have since left
@@ -2243,6 +2247,10 @@ async def get_easyfile_export(
     interim: True = interim EMP501 (1 Mar – 31 Aug, due end of October); False = annual.
     """
     import math
+    # The e@syFile export carries full ID and tax numbers - record who downloaded it (POPIA, audit 2026-11-24).
+    from auth import log_action as _log_action
+    _log_action(db, current_user.company_id, current_user, "payroll.easyfile_export", target_type="company",
+                target_id=current_user.company_id, detail=f"e@syFile export, tax year {tax_year or 'current'}, mode {mode}")
 
     cid = current_user.company_id
     ty = tax_year or _default_tax_year()

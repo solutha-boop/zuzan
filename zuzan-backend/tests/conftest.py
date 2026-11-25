@@ -37,3 +37,27 @@ def _release_shared_session():
         h.db.commit()
     except Exception:
         h.db.rollback()
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _reset_rate_limits_per_module():
+    """Start every test module with empty login/reset rate limits (audit 2026-11-24).
+    The limits live in process memory, so logins made by one security test file used to push a later file
+    over the per-minute login limit and it got 429 instead of the 401 it was testing for."""
+    def _reset():
+        for mod in list(sys.modules.values()):
+            lim = getattr(mod, "limiter", None)
+            if lim is not None and hasattr(lim, "reset"):
+                try:
+                    lim.reset()
+                except Exception:
+                    pass
+        auth = sys.modules.get("auth")
+        sec = sys.modules.get("security")
+        if auth is not None and sec is not None and hasattr(sec, "Throttle"):
+            for v in vars(auth).values():
+                if isinstance(v, sec.Throttle):
+                    with getattr(v, "_lock", __import__("contextlib").nullcontext()):
+                        v._hits.clear()
+    _reset()
+    yield

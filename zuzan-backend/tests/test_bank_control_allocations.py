@@ -133,3 +133,54 @@ def test_afs_legacy_picker_ppe_is_non_current_and_investing():
     cf = afs["cash_flow"]
     assert abs(cf["investing"]["other"] + 200000) < 0.01, cf["investing"]
     assert abs(cf["operating"]["change_in_other_assets"]) < 0.01, cf["operating"]
+
+
+# ── Re-importing an overlapping statement must not settle the NEXT recurring document (audit 2026-11-24, High) ──
+
+def test_reimport_does_not_settle_next_recurring_invoice():
+    co = company("ctrl_ar_recur", "general"); cid = co.id
+    invs = []
+    for n in ("INV-J", "INV-F"):
+        inv = Invoice(company_id=cid, invoice_number=n, client_name="Dlamini Retail", amount=1000,
+                      vat_amount=150, total_amount=1150, status=InvoiceStatus.sent,
+                      issue_date=dt.datetime.now(), due_date=dt.datetime.now())
+        db.add(inv); db.commit(); db.refresh(inv); J.post_invoice_raised(inv, db); db.commit()
+        invs.append(inv)
+    line = dict(date="2026-11-05", description="DLAMINI RETAIL EFT", amount=1150, type="credit",
+                category="1100 - Trade Receivables (Debtors)")
+    # Two open invoices of the same amount -> ambiguous, the user settles January by hand on the bank date.
+    r0 = _run(co, [T(**line)])
+    assert r0["documents_settled"] == 0 and len(r0["needs_matching"]) == 1, r0
+    invs[0].status, invs[0].paid_date, invs[0].paid_amount_zar = InvoiceStatus.paid, dt.datetime(2026, 11, 5), 1150
+    J.post_invoice_paid(invs[0], db); db.commit()
+    # The same statement is imported again: February must stay open and no second receipt may be booked.
+    r = _run(co, [T(**line)])
+    db.refresh(invs[1])
+    assert r["documents_settled"] == 0 and r["transfers_skipped"] == 1, r
+    assert len(r["duplicates_skipped"]) == 1
+    assert invs[1].status == InvoiceStatus.sent
+    assert abs(_bal(cid, "1000") - 1150) < 0.01
+
+
+def test_reimport_does_not_pay_next_recurring_bill_but_other_supplier_still_settles():
+    co = company("ctrl_ap_recur", "general"); cid = co.id
+    exs = []
+    for d in (1, 2):
+        ex = Expense(company_id=cid, vendor="Sandton Properties", description=f"Rent {d}", amount=5750,
+                     vat_amount=750, category="Rent", expense_date=dt.datetime(2026, 10 + d - 1, 1), is_on_credit=True)
+        db.add(ex); db.commit(); db.refresh(ex); J.post_expense(ex, db); db.commit()
+        exs.append(ex)
+    other = Expense(company_id=cid, vendor="Karoo Cleaning", description="Cleaning", amount=5750, vat_amount=750,
+                    category="Cleaning", expense_date=dt.datetime(2026, 11, 1), is_on_credit=True)
+    db.add(other); db.commit(); db.refresh(other); J.post_expense(other, db); db.commit()
+    # October rent paid by hand on the bank date.
+    exs[0].paid_at = dt.datetime(2026, 11, 3); J.post_expense_paid(exs[0], db); db.commit()
+    r = _run(co, [T(date="2026-11-03", description="SANDTON PROPERTIES RENT", amount=5750, type="debit",
+                    category="2110 - Trade Payables (Creditors)"),
+                  T(date="2026-11-03", description="KAROO CLEANING", amount=5750, type="debit",
+                    category="2110 - Trade Payables (Creditors)")])
+    db.refresh(exs[1]); db.refresh(other)
+    assert r["transfers_skipped"] == 1 and r["documents_settled"] == 1, r
+    assert exs[1].paid_at is None                     # November rent still unpaid
+    assert other.paid_at is not None                  # a different supplier's genuine same-day payment settles
+    assert unbal(co) == 0

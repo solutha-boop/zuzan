@@ -45,7 +45,7 @@ def test_forgot_password_is_case_insensitive_and_does_not_reveal_who_has_an_acco
     stored = db.query(User).filter_by(id=u.id).one().reset_token
     code = sent.get("code")
     assert code and stored                                         # a code really was issued to the mixed-case account
-    assert code not in stored and stored.startswith("sha256:")    # only a hash of the code is stored (audit 2026-11-23)
+    assert code not in stored and stored.startswith("hmac:")    # only a keyed hash of the code is stored (audit 2026-11-23/24)
     assert c.post("/auth/reset-password", json={"token": code, "new_password": "short"}).status_code == 400
     assert c.post("/auth/reset-password", json={"token": code, "new_password": "BrandNewPass1"}).status_code == 200
     assert c.post("/auth/reset-password", json={"token": code, "new_password": "BrandNewPass2"}).status_code == 400   # code is single use

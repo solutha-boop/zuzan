@@ -767,7 +767,16 @@ async def forgot_password(request: Request, data: ForgotPasswordRequest, backgro
 
 
 def _reset_code_hash(code: str) -> str:
-    """Reset codes are stored hashed, so a database leak does not hand out live reset codes."""
+    """Reset codes are stored as a keyed hash (HMAC-SHA256 with SECRET_KEY), so a database leak alone neither
+    hands out live reset codes nor lets the short 8-character code be brute-forced offline (audit 2026-11-24)."""
+    import hmac as _hm, hashlib as _h
+    norm = (code or "").upper().strip()
+    return "hmac:" + _hm.new(("zuzan-reset|" + SECRET_KEY).encode(), norm.encode(), _h.sha256).hexdigest()
+
+
+def _legacy_reset_code_hash(code: str) -> str:
+    """Unkeyed format used 23-24 Nov 2026; still accepted so codes issued just before a deploy keep working
+    (they expire within 30 minutes anyway)."""
     import hashlib as _h
     return "sha256:" + _h.sha256(("zuzan-reset|" + (code or "").upper().strip()).encode()).hexdigest()
 
@@ -779,7 +788,8 @@ async def reset_password(request: Request, data: ResetPasswordRequest, db: Sessi
     _ip = _client_ip(request)
     if _reset_fail_ip.blocked(_ip) or _reset_fail_all.blocked("all"):
         raise HTTPException(status_code=429, detail="Too many attempts. Please wait a while and try again.")
-    user = db.query(User).filter(User.reset_token == _reset_code_hash(token)).first() if len(token) >= 6 else None
+    user = (db.query(User).filter(User.reset_token.in_([_reset_code_hash(token), _legacy_reset_code_hash(token)])).first()
+            if len(token) >= 6 else None)
     if not user:
         _reset_fail_ip.hit(_ip); _reset_fail_all.hit("all")
         raise HTTPException(status_code=400, detail="Invalid reset code.")

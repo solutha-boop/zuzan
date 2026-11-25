@@ -3,7 +3,7 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 sentry_sdk.init(
-    dsn="https://845e5daf86c2d7efa1a3e44d3c412a46@o4511737932021760.ingest.de.sentry.io/4511737977241680",
+    dsn="SENTRY_DSN_REDACTED",
     integrations=[FastApiIntegration(), SqlalchemyIntegration()],
     traces_sample_rate=0.1,
     environment="production",

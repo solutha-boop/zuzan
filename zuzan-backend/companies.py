@@ -298,6 +298,7 @@ _EXPORT_SECRET_COLUMNS = {
     "hashed_password", "reset_token", "reset_token_expires", "verify_token", "payroll_pin", "payroll_pin_hash",
     "payfast_passphrase", "payfast_merchant_key", "payfast_token", "access_token", "refresh_token", "key_hash",
     "kiosk_token", "portal_token", "token", "secret", "client_secret", "id_number_hash",
+    "email_verify_token", "clock_pin_hash",          # audit 2026-11-24: verification token and kiosk PIN hash
 }
 
 
@@ -2439,6 +2440,49 @@ def _pick_match(candidates, desc, name_of):
     return None
 
 
+def _already_settled_today(db, cid, txn, kind, amt, d0, d1, open_names):
+    """Has an earlier import (or a manual Mark paid / Pay) already settled a document for this bank line?
+    Looks for a settlement journal on the same bank date for the same amount (audit fix 2026-11-24):
+      - the narrative names the counterparty of such a settlement  -> duplicate (a re-imported line);
+      - the narrative names nobody, but such a settlement exists     -> duplicate (fail safe: listed to the user);
+      - the narrative names a counterparty with an open document of this amount, and no settlement today
+        for that counterparty                                         -> NOT a duplicate (a genuine payment).
+    The old test only looked at "is there another open document" - re-importing an overlapping statement
+    then settled the NEXT recurring invoice/bill and booked the cash twice (audit 2026-11-24, High)."""
+    bank = journal_engine.get_account(cid, "1000", db)
+    if kind == "ar":
+        sources, amount_col = ["invoice_payment"], JournalLine.debit
+    else:
+        sources, amount_col = ["po_payment", "expense_payment"], JournalLine.credit
+    rows = (db.query(JournalEntry.source, JournalEntry.source_id)
+            .join(JournalLine, JournalLine.entry_id == JournalEntry.id)
+            .filter(JournalEntry.company_id == cid, JournalEntry.source.in_(sources),
+                    JournalEntry.date >= d0, JournalEntry.date < d1,
+                    JournalLine.account_id == bank.id, amount_col >= amt - 0.005, amount_col <= amt + 0.005)
+            .all())
+    settled_names = []
+    for src, sid in rows:
+        if src == "invoice_payment":
+            doc = db.query(Invoice).filter(Invoice.id == sid, Invoice.company_id == cid).first()
+            if doc and doc.status in (InvoiceStatus.paid, InvoiceStatus.partial):
+                settled_names.append(doc.client_name)
+        elif src == "po_payment":
+            doc = db.query(PurchaseOrder).filter(PurchaseOrder.id == sid, PurchaseOrder.company_id == cid).first()
+            if doc and doc.status in ("paid", "partial"):
+                settled_names.append(doc.supplier_name)
+        else:
+            doc = db.query(Expense).filter(Expense.id == sid, Expense.company_id == cid).first()
+            if doc and doc.paid_at is not None:
+                settled_names.append(doc.vendor)
+    if not settled_names:
+        return False
+    if any(_desc_names_client(txn.description, n) for n in settled_names):
+        return True
+    if any(_desc_names_client(txn.description, n) for n in open_names):
+        return False
+    return True
+
+
 def _settle_bank_control_line(db, cid, txn, kind):
     """Returns "settled", "duplicate", or a dict describing why the line was not posted."""
     amt = round(float(txn.amount or 0), 2)
@@ -2451,18 +2495,13 @@ def _settle_bank_control_line(db, cid, txn, kind):
         if txn.type != "credit":
             return {**base, "reason": "Money paid out can't go to Debtors Control. A refund to a customer is a "
                                       "credit note plus refund; otherwise pick the account it belongs to."}
-        paid = db.query(Invoice).filter(
-            Invoice.company_id == cid, Invoice.status == InvoiceStatus.paid,
-            Invoice.paid_amount_zar == amt, Invoice.paid_date >= d0, Invoice.paid_date < d1).all()
         open_invs = [i for i in db.query(Invoice).filter(
                         Invoice.company_id == cid,
                         Invoice.status.in_([InvoiceStatus.sent, InvoiceStatus.overdue, InvoiceStatus.partial])).all()
                      if (not i.currency or i.currency == "ZAR")
                      and abs((i.total_amount or 0) - ((i.paid_amount_zar or 0) if i.status == InvoiceStatus.partial else 0) - amt) < 0.005]
-        # Already settled by an earlier import of this statement? Not when the narrative names a customer who
-        # still has an open invoice for this amount - then it is a second, genuine payment (audit 2026-11-23).
-        _named_open = [i for i in open_invs if _desc_names_client(txn.description, i.client_name)]
-        if not _named_open and _pick_match(paid, txn.description, lambda i: i.client_name):
+        # Already settled by an earlier import of this statement line? (audit fix 2026-11-24)
+        if _already_settled_today(db, cid, txn, "ar", amt, d0, d1, [i.client_name for i in open_invs]):
             return "duplicate"
         inv = _pick_match(open_invs, txn.description, lambda i: i.client_name)
         if inv is None:
@@ -2494,15 +2533,8 @@ def _settle_bank_control_line(db, cid, txn, kind):
                                        Expense.paid_at == None).all():                          # noqa: E711
         if abs(round(ex.amount or 0, 2) - amt) < 0.005:
             cands.append(("exp", ex, ex.vendor, amt))
-    # A same-day, same-amount supplier payment already in the ledger means "already imported" - unless the
-    # narrative names a supplier that still has an unpaid document for this amount (audit 2026-11-23).
-    _named_open = [c for c in cands if _desc_names_client(txn.description, c[2])]
-    dup = None if _named_open else (db.query(JournalEntry.id).join(JournalLine, JournalLine.entry_id == JournalEntry.id)
-           .filter(JournalEntry.company_id == cid,
-                   JournalEntry.source.in_(["po_payment", "expense_payment"]),
-                   JournalEntry.date >= d0, JournalEntry.date < d1,
-                   JournalLine.account_id == bank.id, JournalLine.credit == amt).first())
-    if dup:
+    # Already settled by an earlier import of this statement line? (audit fix 2026-11-24)
+    if _already_settled_today(db, cid, txn, "ap", amt, d0, d1, [c[2] for c in cands]):
         return "duplicate"
     pick = _pick_match(cands, txn.description, lambda c: c[2])
     if pick is None:
